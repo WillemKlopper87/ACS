@@ -1,0 +1,8 @@
+# Runtime storage — firmware images and device-uploaded files land here;
+# they are operational data, not source.
+backend/firmware-storage/*.bin
+backend/upload-storage/*.bin
+
+# Local logs and editor cruft
+*.log
+.DS_Store

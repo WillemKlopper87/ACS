@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cwmp:cwmpDataModel vendor="Nokia" model="FastMile 5G" specVersion="TR-181 i2">
+  <object name="Device." access="readOnly">
+    <object name="DeviceInfo." access="readOnly">
+      <parameter name="Manufacturer" type="string" access="readOnly"/>
+      <parameter name="ProductClass" type="string" access="readOnly"/>
+      <parameter name="SerialNumber" type="string" access="readOnly"/>
+    </object>
+
+    <!-- Nokia Extended RF Diagnostics & Beam Alignment -->
+    <object name="X_NOKIA_5G_Diagnostics." access="readOnly">
+      <parameter name="SS_RSRP" type="int" access="readOnly"/>
+      <parameter name="SS_RSRQ" type="int" access="readOnly"/>
+      <parameter name="SS_SINR" type="int" access="readOnly"/>
+      <parameter name="BeamID" type="unsignedInt" access="readOnly"/>
+      <parameter name="GNB_ID" type="unsignedInt" access="readOnly"/>
+      <parameter name="NR_ARFCN" type="unsignedInt" access="readOnly"/>
+    </object>
+
+    <object name="X_NOKIA_COM_Cellular." access="readOnly">
+      <parameter name="NetworkMode" type="string" access="readWrite"/> <!-- Auto / 5G Only / 4G Only -->
+      <parameter name="APN_5G" type="string" access="readWrite"/>
+    </object>
+  </object>
+</cwmp:cwmpDataModel>

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cwmp:cwmpDataModel vendor="Teltonika" model="RUTX50" specVersion="TR-069">
+  <!-- Core Device Metadata -->
+  <object name="DeviceInfo." access="readOnly">
+    <parameter name="Manufacturer" type="string" access="readOnly"/>
+    <parameter name="ManufacturerOUI" type="string" access="readOnly"/>
+    <parameter name="ModelName" type="string" access="readOnly"/>
+    <parameter name="HardwareVersion" type="string" access="readOnly"/>
+    <parameter name="SoftwareVersion" type="string" access="readOnly"/>
+  </object>
+  
+  <!-- Teltonika Cellular & Modem Extension -->
+  <object name="Modem.1." access="readOnly">
+    <parameter name="IMEI" type="string" access="readOnly"/>
+    <parameter name="IMSI" type="string" access="readOnly"/>
+    <parameter name="ICCID" type="string" access="readOnly"/>
+    <parameter name="SimState" type="string" access="readOnly"/>
+    <parameter name="ConnType" type="string" access="readOnly"/> <!-- e.g., 5G-NR / LTE -->
+    <parameter name="RSRP" type="int" access="readOnly"/>
+    <parameter name="RSRQ" type="int" access="readOnly"/>
+    <parameter name="SINR" type="int" access="readOnly"/>
+    <parameter name="RSSI" type="int" access="readOnly"/>
+    <parameter name="CellID" type="unsignedInt" access="readOnly"/>
+    <parameter name="PCI" type="unsignedInt" access="readOnly"/>
+    <parameter name="TAC" type="unsignedInt" access="readOnly"/>
+    <parameter name="EARFCN" type="unsignedInt" access="readOnly"/>
+    <parameter name="Operator" type="string" access="readOnly"/>
+    <parameter name="Temperature" type="int" access="readOnly"/>
+  </object>
+
+  <!-- Network Interfaces -->
+  <object name="Interface.1." access="readOnly">
+    <parameter name="Name" type="string" access="readOnly"/>
+    <parameter name="Type" type="string" access="readOnly"/>
+    <object name="IPv4Address.1." access="readWrite">
+      <parameter name="IPAddress" type="string" access="readWrite"/>
+      <parameter name="SubnetMask" type="string" access="readWrite"/>
+    </object>
+  </object>
+</cwmp:cwmpDataModel>

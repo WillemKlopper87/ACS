@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cwmp:cwmpDataModel vendor="Zyxel" model="NR7101" specVersion="TR-181 i2">
+  <object name="Device." access="readOnly">
+    <!-- TR-181 Standard Cellular Interface -->
+    <object name="Cellular.Interface.1." access="readOnly">
+      <parameter name="Enable" type="boolean" access="readWrite"/>
+      <parameter name="Status" type="string" access="readOnly"/>
+      <parameter name="IMEI" type="string" access="readOnly"/>
+      <parameter name="SupportedAccessTechnologies" type="string" access="readOnly"/>
+      
+      <object name="USIM.1." access="readOnly">
+        <parameter name="MSISDN" type="string" access="readOnly"/>
+        <parameter name="IMSI" type="string" access="readOnly"/>
+        <parameter name="ICCID" type="string" access="readOnly"/>
+      </object>
+      
+      <object name="Stats." access="readOnly">
+        <parameter name="RSRP" type="int" access="readOnly"/>
+        <parameter name="RSRQ" type="int" access="readOnly"/>
+        <parameter name="SNR" type="int" access="readOnly"/>
+      </object>
+    </object>
+
+    <!-- Zyxel Proprietary Management -->
+    <object name="X_ZYXEL_Cellular." access="readOnly">
+      <parameter name="NR5G_Band" type="string" access="readOnly"/>
+      <parameter name="CarrierAggregation" type="boolean" access="readOnly"/>
+      <parameter name="ModulationDL" type="string" access="readOnly"/>
+      <parameter name="ModulationUL" type="string" access="readOnly"/>
+    </object>
+  </object>
+</cwmp:cwmpDataModel>

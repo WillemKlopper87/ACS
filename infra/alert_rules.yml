@@ -1,0 +1,39 @@
+# Evaluated by Prometheus itself (build plan §4 Phase 7 "Alerting").
+# There is deliberately no Alertmanager/notification channel wired up in
+# this pass — that would mean sending real alerts somewhere (Slack,
+# email, PagerDuty) without being asked to configure a destination.
+# These rules demonstrate the alerting mechanism actually works: they
+# evaluate on real metrics and show up as firing under
+# Prometheus's own /alerts UI, which is the buildable, verifiable slice
+# of "alerting" for a lab-scope deployment with no real on-call to page.
+groups:
+  - name: acs-fleet
+    rules:
+      - alert: NoDevicesOnline
+        expr: acs_devices_online{service="acs",online_status="ONLINE"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No devices reporting ONLINE"
+          description: "acs_devices_online{online_status=\"ONLINE\"} has been 0 for at least a minute."
+
+      - alert: HighJobFailureRate
+        expr: >
+          (sum(rate(acs_jobs_completed_total{status="FAILED"}[5m]))
+            / sum(rate(acs_jobs_completed_total[5m]))) > 0.2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job failure rate above 20%"
+          description: "More than 20% of jobs completed over the last 5 minutes ended FAILED."
+
+      - alert: RateLimitRejectionsFiring
+        expr: increase(acs_rate_limit_rejected_total[1m]) > 0
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "cmd/bssadapter is rejecting requests due to rate limiting"
+          description: "At least one request was rejected by the per-token rate limiter in the last minute."

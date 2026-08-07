@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap-env:Envelope xmlns:soap-env="http://schemas.xmlsoap.org/soap/envelope/" xmlns:soap-enc="http://schemas.xmlsoap.org/soap/encoding/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:cwmp="urn:dslforum-org:cwmp-1-0">
+  <soap-env:Header>
+    <cwmp:ID soap-env:mustUnderstand="1">acs-0002</cwmp:ID>
+  </soap-env:Header>
+  <soap-env:Body>
+    <cwmp:GetParameterNamesResponse>
+      <ParameterList soap-enc:arrayType="cwmp:ParameterInfoStruct[2]">
+        <ParameterInfoStruct>
+          <Name>Device.DeviceInfo.SoftwareVersion</Name>
+          <Writable>0</Writable>
+        </ParameterInfoStruct>
+        <ParameterInfoStruct>
+          <Name>Device.WiFi.SSID.1.SSID</Name>
+          <Writable>1</Writable>
+        </ParameterInfoStruct>
+      </ParameterList>
+    </cwmp:GetParameterNamesResponse>
+  </soap-env:Body>
+</soap-env:Envelope>

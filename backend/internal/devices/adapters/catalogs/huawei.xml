@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cwmp:cwmpDataModel vendor="Huawei" model="5G CPE Pro" specVersion="TR-098/TR-181">
+  <object name="InternetGatewayDevice." access="readOnly">
+    <object name="DeviceInfo." access="readOnly">
+      <parameter name="Manufacturer" type="string" access="readOnly"/>
+      <parameter name="HardwareVersion" type="string" access="readOnly"/>
+      <parameter name="SoftwareVersion" type="string" access="readOnly"/>
+      <parameter name="ProvisioningCode" type="string" access="readWrite"/>
+    </object>
+
+    <!-- Huawei Vendor Extensions -->
+    <object name="X_HUAWEI_MobileNetwork." access="readOnly">
+      <parameter name="PLMN" type="string" access="readOnly"/>
+      <parameter name="NetworkType" type="string" access="readOnly"/> <!-- 5G SA / NSA -->
+      <parameter name="SignalStrength" type="int" access="readOnly"/>
+      <parameter name="NR_RSRP" type="int" access="readOnly"/>
+      <parameter name="NR_RSRQ" type="int" access="readOnly"/>
+      <parameter name="NR_SINR" type="int" access="readOnly"/>
+      <parameter name="PrimaryCellID" type="string" access="readOnly"/>
+      <parameter name="Band" type="string" access="readOnly"/>
+      <parameter name="DL_Frequency" type="unsignedInt" access="readOnly"/>
+    </object>
+
+    <object name="X_HUAWEI_Cellular." access="readOnly">
+      <object name="APN.1." access="readWrite">
+        <parameter name="APNName" type="string" access="readWrite"/>
+        <parameter name="Username" type="string" access="readWrite"/>
+        <parameter name="Password" type="string" access="readWrite"/>
+        <parameter name="AuthMode" type="string" access="readWrite"/>
+      </object>
+    </object>
+  </object>
+</cwmp:cwmpDataModel>

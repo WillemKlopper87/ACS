@@ -1,0 +1,89 @@
+{
+  "title": "ACS Fleet Health",
+  "uid": "acs-fleet-health",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Devices Online",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-ds" },
+      "targets": [
+        {
+          "expr": "sum(acs_devices_online{service=\"acs\",online_status=\"ONLINE\"})",
+          "legendFormat": "online",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "Devices Offline / Unreachable",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-ds" },
+      "targets": [
+        {
+          "expr": "sum(acs_devices_online{service=\"acs\",online_status=~\"OFFLINE|UNREACHABLE\"})",
+          "legendFormat": "offline/unreachable",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "title": "CWMP Informs & Sessions (rate/min)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-ds" },
+      "targets": [
+        { "expr": "rate(acs_cwmp_informs_total{service=\"acs\"}[5m]) * 60", "legendFormat": "informs/min", "refId": "A" },
+        { "expr": "rate(acs_cwmp_sessions_opened_total{service=\"acs\"}[5m]) * 60", "legendFormat": "sessions opened/min", "refId": "B" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Job Completions by Type & Status (rate/min)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-ds" },
+      "targets": [
+        { "expr": "sum by (type, status) (rate(acs_jobs_completed_total{service=\"acs\"}[5m])) * 60", "legendFormat": "{{type}} / {{status}}", "refId": "A" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "HTTP Requests by Service & Route (rate/min)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-ds" },
+      "targets": [
+        { "expr": "sum by (service, route, status) (rate(acs_http_requests_total[5m])) * 60", "legendFormat": "{{service}} {{route}} [{{status}}]", "refId": "A" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "cmd/bssadapter Rate Limit Rejections (rate/min)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-ds" },
+      "targets": [
+        { "expr": "rate(acs_rate_limit_rejected_total{service=\"bssadapter\"}[5m]) * 60", "legendFormat": "rejections/min", "refId": "A" }
+      ]
+    }
+  ]
+}

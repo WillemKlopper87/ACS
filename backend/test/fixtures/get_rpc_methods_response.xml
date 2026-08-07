@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap-env:Envelope xmlns:soap-env="http://schemas.xmlsoap.org/soap/envelope/" xmlns:soap-enc="http://schemas.xmlsoap.org/soap/encoding/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:cwmp="urn:dslforum-org:cwmp-1-0">
+  <soap-env:Header>
+    <cwmp:ID soap-env:mustUnderstand="1">acs-0001</cwmp:ID>
+  </soap-env:Header>
+  <soap-env:Body>
+    <cwmp:GetRPCMethodsResponse>
+      <MethodList soap-enc:arrayType="xsd:string[6]">
+        <string>Inform</string>
+        <string>GetRPCMethods</string>
+        <string>GetParameterValues</string>
+        <string>SetParameterValues</string>
+        <string>GetParameterNames</string>
+        <string>Download</string>
+      </MethodList>
+    </cwmp:GetRPCMethodsResponse>
+  </soap-env:Body>
+</soap-env:Envelope>

@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: acs
+      POSTGRES_PASSWORD: acs
+      POSTGRES_DB: acs
+    ports:
+      - "5432:5432"
+    volumes:
+      - acs_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acs -d acs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Build plan §4 Phase 7 (Dashboards, Alerting). Scrapes cmd/acs,
+  # cmd/api, and cmd/bssadapter's /metrics endpoints — those three run on
+  # the host (via `go run`), not in this compose network, so
+  # prometheus.yml targets host.docker.internal, which Docker Desktop
+  # resolves to the host machine.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - acs_prometheus_data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - acs_grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  acs_postgres_data:
+  acs_prometheus_data:
+  acs_grafana_data:

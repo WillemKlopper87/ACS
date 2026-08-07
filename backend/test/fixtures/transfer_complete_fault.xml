@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap-env:Envelope xmlns:soap-env="http://schemas.xmlsoap.org/soap/envelope/" xmlns:cwmp="urn:dslforum-org:cwmp-1-0">
+  <soap-env:Header>
+    <cwmp:ID soap-env:mustUnderstand="1">cpe-0005</cwmp:ID>
+  </soap-env:Header>
+  <soap-env:Body>
+    <cwmp:TransferComplete>
+      <CommandKey>fw_20260804_test0002</CommandKey>
+      <FaultStruct>
+        <FaultCode>9016</FaultCode>
+        <FaultString>Download failure: unable to complete download</FaultString>
+      </FaultStruct>
+      <StartTime>2026-08-04T10:20:00Z</StartTime>
+      <CompleteTime>2026-08-04T10:20:05Z</CompleteTime>
+    </cwmp:TransferComplete>
+  </soap-env:Body>
+</soap-env:Envelope>

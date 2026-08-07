@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+rule_files:
+  - /etc/prometheus/alert_rules.yml
+
+scrape_configs:
+  - job_name: acs
+    static_configs:
+      - targets: ['host.docker.internal:7547']
+  - job_name: api
+    static_configs:
+      - targets: ['host.docker.internal:8080']
+  - job_name: bssadapter
+    static_configs:
+      - targets: ['host.docker.internal:8090']
