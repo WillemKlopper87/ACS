@@ -65,14 +65,20 @@ detect_public_ip() {
   # against the metadata endpoint gets silently rejected without a
   # session token, and `curl -s` swallows the failure as empty output
   # rather than an error, so this used to "succeed" with nothing).
+  # `|| true` on every curl below is deliberate: off of EC2 (or with IMDS
+  # unreachable) these fail fast with connection-refused, and under
+  # `set -e` an unguarded failure here kills the whole script right here
+  # — silently, before the empty-PUBLIC_IP check below ever runs, and
+  # before it can print the "set ACS_PUBLIC_IP=..." hint. We only care
+  # about captured stdout, never curl's own exit status.
   local token
-  token="$(curl -s -m 2 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)"
+  token="$(curl -s -m 2 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)" || true
   if [ -n "$token" ]; then
-    curl -s -m 2 -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null
+    curl -s -m 2 -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true
     return
   fi
   # IMDSv1 fallback, for instances/AMIs that still allow it.
-  curl -s -m 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null
+  curl -s -m 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true
 }
 
 PUBLIC_IP="$(detect_public_ip)"

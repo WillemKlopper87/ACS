@@ -4,8 +4,28 @@ This guide walks through deploying the TR-069 ACS system on an Ubuntu EC2 instan
 
 ## Quick start (recommended — single SSH session, no tmux needed)
 
-Once you've done §1 (EC2 setup) and §2 (Ubuntu packages), everything else
-is one command:
+### Brand new instance, nothing installed yet
+
+Once you've done §1 (launched the instance and opened the security group
+ports), SSH in and run one command — it installs every package in §2,
+clones the repo (§3), and builds + starts the whole stack (§4-§6):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WillemKlopper87/ACS/main/scripts/quickstart.sh | bash
+```
+
+Safe to rerun (e.g. after a `git pull`) — every step skips work that's
+already done, and it ends by calling `scripts/start.sh`, which always
+stops whatever was running first. See the comment block at the top of
+`scripts/quickstart.sh` for the environment variables that control it
+(`REPO_URL`, `GIT_REF`, `GO_VERSION`, `ACS_PUBLIC_IP`, etc.) — in
+particular, if the repo is private, set `REPO_URL` per §3 before running
+this.
+
+If you'd rather run the steps yourself (or the one-liner above doesn't
+fit your setup), §2 and §3 below cover the same ground manually.
+
+### Already cloned, packages already installed
 
 ```bash
 cd ~/ACS
@@ -120,20 +140,60 @@ Copy the script to the instance and run it, or paste the commands one by one.
 
 ## 3. Clone the Repository from GitHub
 
-From your home directory:
+The repo (`WillemKlopper87/ACS`) is **private**, so plain `git clone` over
+HTTPS with no credentials will fail with a 404/permission error. Use one of
+the two options below.
 
-```bash
-cd ~
-git clone https://github.com/<your-org>/ACS.git
-cd ACS
-```
+### Option A: SSH deploy key (recommended)
 
-If using SSH keys (recommended for automated deployments):
-```bash
-git clone git@github.com:<your-org>/ACS.git
-```
+A deploy key is a repo-scoped SSH key with no expiry, so it's the best fit
+for a long-lived EC2 instance — you don't need a personal token sitting on
+the box.
 
-Verify the clone:
+1. Generate a key pair on the instance (no passphrase, so it can be used
+   non-interactively):
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/acs_deploy_key -N ""
+   cat ~/.ssh/acs_deploy_key.pub
+   ```
+2. Copy the printed public key. On GitHub, go to the `ACS` repo →
+   **Settings → Deploy keys → Add deploy key**, paste it in, leave
+   "Allow write access" unchecked (read-only is enough to pull), and save.
+3. Tell SSH to use that key for GitHub:
+   ```bash
+   cat >> ~/.ssh/config <<'EOF'
+   Host github.com
+     IdentityFile ~/.ssh/acs_deploy_key
+     IdentitiesOnly yes
+   EOF
+   chmod 600 ~/.ssh/config
+   ssh -T git@github.com   # should say "Hi WillemKlopper87/ACS! You've successfully authenticated"
+   ```
+4. Clone:
+   ```bash
+   cd ~
+   git clone git@github.com:WillemKlopper87/ACS.git
+   cd ACS
+   ```
+
+### Option B: HTTPS with a personal access token
+
+Simpler to set up but the token needs to be rotated/renewed and grants
+whatever scope you gave it, so prefer Option A for anything long-lived.
+
+1. Create a fine-grained PAT at github.com → **Settings → Developer
+   settings → Personal access tokens**, scoped to just the `ACS` repo with
+   read-only Contents access.
+2. Clone using the token in place of a password:
+   ```bash
+   cd ~
+   git clone https://<token>@github.com/WillemKlopper87/ACS.git
+   cd ACS
+   ```
+   (Or clone with the plain HTTPS URL and let `git` prompt — enter your
+   GitHub username and the token as the password.)
+
+Either way, verify the clone:
 ```bash
 ls -la
 # Should show: backend/, frontend/, infra/, deployment-testing-onboarding-guide.md, etc.
