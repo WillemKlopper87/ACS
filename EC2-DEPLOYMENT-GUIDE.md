@@ -625,13 +625,18 @@ Before going to production:
 
 - [ ] Enable TLS on CWMP (set `ACS_TLS_CERT` and `ACS_TLS_KEY` to valid certificates — Let's Encrypt works)
 - [ ] Enable JWT signing (`ACS_JWT_SIGNING_SECRET` is set)
-- [ ] Enable credential encryption (`ACS_CREDENTIAL_ENCRYPTION_KEY` is set)
+- [ ] **If running `cmd/bssadapter`, set `ACS_INTERNAL_SERVICE_TOKEN`** — the same value on both `cmd/api` and `cmd/bssadapter`. Enabling `ACS_JWT_SIGNING_SECRET` (above) without this breaks BSS order dispatch and job-status lookups with `401`s the moment bssadapter calls back into the API — both processes log a `WARN` at startup if this is unset, easy to miss if you're not watching logs on first deploy.
+- [ ] If running `cmd/bssadapter` for real BSS/CRM integrations, set `ACS_BSS_OAUTH_SIGNING_SECRET` and move integrations onto OAuth2 client-credentials (`bss-integration-guide.md` §3) rather than the legacy shared `ACS_BSS_API_TOKEN`
+- [ ] Enable credential encryption (`ACS_CREDENTIAL_ENCRYPTION_KEY` is set) — this also covers device CLI/SSH credentials and VPN peer private keys, not just Connection Request credentials
+- [ ] If using self-service password reset, configure `ACS_SMTP_HOST`/`_PORT`/`_USERNAME`/`_PASSWORD`/`_FROM` — unset, reset links are only ever written to the `cmd/api` log, not emailed
 - [ ] Rotate the `ACS_BOOTSTRAP_ADMIN_PASSWORD` after initial login
 - [ ] Restrict `:8080` security group to your operator IPs (not `0.0.0.0/0`)
 - [ ] Set up CloudWatch logs or syslog forwarding for audit trail
 - [ ] Configure RDS PostgreSQL instead of local Docker (for HA)
 - [ ] Set up auto-scaling or a second instance as warm standby
 - [ ] Document your deployment, credentials handling, and backup strategy
+
+See `deployment-testing-onboarding-guide.md` §7 for the full environment variable reference (all three binaries) — this checklist only calls out the ones easy to miss.
 
 ---
 

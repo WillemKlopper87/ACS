@@ -1,11 +1,13 @@
 # TR-069 ACS Platform — Build Plan
 
 Status: Draft  
-Date: 2026-08-04  
+Date: 2026-08-04 (§§1-8 below); **updated 2026-08-11 to add §9 and §10 — see those for everything built since**  
 Source of truth: `tr069-acs-application-design-v3.md`  
 Scope: How to actually build the platform described in v3 — repo layout, UI design direction, phase-by-phase deliverables, and the decisions that need to be made before code starts.
 
 This document does not repeat protocol/architecture rationale already covered in v3. It translates v3 into buildable work.
+
+**Reading this document today**: §§1-8 are the original Phase 0-8 build narrative (CWMP core through BSS/CRM integration) and are still accurate as history, but they stop at migration `0026_config_templates.sql`. A further "admin platform backlog" — RBAC tiers, multi-tenancy, per-user dashboards, device CLI/VPN/web-GUI remote access, BSS OAuth2, Excel reporting — was built after this doc was last touched (migrations `0027`-`0039`) and was undocumented here until this pass. §9 covers it. §10 is the corrected, current outstanding-items list — read that instead of §8's "Immediate next actions" (historical, Phase-0-era, effectively all done) and instead of chasing "flagged as an open item" callouts scattered through §§1-8, some of which §9 has since closed.
 
 ---
 
@@ -539,6 +541,8 @@ Two independent poll loops (`cmd/bssadapter/webhook_worker.go`): a **notify loop
 
 **Real bug found during this verification, not introduced by it**: with `cmd/api`'s operator JWT auth enabled, `cmd/bssadapter`'s calls to the internal ACS REST API (`SetParameters`, `GetJobStatus`) get `401`'d — `ACSClient` has never carried any operator credential, because bssadapter's own auth (a shared bearer token, §5.5) and cmd/api's operator JWT are different, unconnected credential classes, and nothing bridges them. This isn't new in this pass; it just wasn't exercised end-to-end against an auth-enabled `cmd/api` until webhook verification needed real order completion detection. **Flagged as an open item below**, not fixed here — it's a real design question (does bssadapter get a service-account JWT? a separate service-to-service auth bypass keyed on source, like `/metrics` gets?) worth its own decision, not a one-line patch.
 
+**Resolved 2026-08-06, see §9**: `ACS_INTERNAL_SERVICE_TOKEN` — a shared secret, set identically on both processes — is checked by `cmd/api`'s `withJWTAuth` (grants a synthetic `service:bssadapter` superadmin identity, bypassing the operator-login path entirely) and sent by `cmd/bssadapter`'s `ACSClient` on every internal-API call. Neither side treats it as optional-and-silently-fine: both log a loud `WARN` at startup if it's unset while JWT auth is otherwise enabled, the same "off unless configured, loud warning when it isn't" convention as everything else security-relevant in this codebase.
+
 #### Configurable walled-garden SUSPEND/ACTIVATE — done
 
 `internal/bss/template.go`'s `Translate` now accepts a `WalledGardenConfig{Parameter, SuspendValue, ActiveValue}`, sourced from `ACS_WALLED_GARDEN_PARAMETER`/`ACS_WALLED_GARDEN_SUSPEND_VALUE`/`ACS_WALLED_GARDEN_ACTIVE_VALUE` — the same "off unless configured, loud warning when it isn't" convention every other credential/feature gate in this codebase already uses (Digest auth, JWT auth, mTLS, Connection Request credentials). This is deliberately **not** a guess at which parameter isolates a device on any real vendor's CPE — build plan §5.3's concern stands exactly as written (there's no universal safe parameter across vendors; picking one here would be inventing a product/network decision, not building it). What this closes is the *mechanism*: once a deployer has verified a real walled-garden parameter against their fleet, wiring it in is three environment variables, not a code change. Left unconfigured, `SUSPEND`/`ACTIVATE` are still rejected with a clear error, exactly as before.
@@ -592,7 +596,9 @@ Backend: `go build`/`vet`/`test` clean throughout (68 tests). Frontend: `tsc --n
 
 ---
 
-## 8. Immediate next actions
+## 8. Immediate next actions (historical — Phase 0 kickoff, 2026-08-04)
+
+Kept verbatim for the record. Every item below is long since done — the codebase is well past Phase 0. **Do not use this as the current punch list — see §10.**
 
 ```text
 1. Confirm or override the defaults in §1 (Go, React+TypeScript, TanStack Table, Docker Compose, monorepo).
@@ -608,3 +614,91 @@ Backend: `go build`/`vet`/`test` clean throughout (68 tests). Frontend: `tsc --n
 7. Fix the unbounded-body gap on cmd/bssadapter (§7.2) — cheap, independent,
    no need to wait for the rest of §7.
 ```
+
+---
+
+## 9. Admin Platform Backlog (2026-08-06) — undocumented until this pass
+
+A distinct batch of work, requested directly by the user rather than derived from v3 (v3 is a CWMP/TR-069 protocol design doc and has no section covering any of this — same relationship Phase 8's BSS/CRM integration had to v3, per §4's Phase 8 intro). Landed as migrations `0027`-`0039`, all present in the repo's single initial import commit, so there's no per-feature commit history — dates below come from the migrations' own comments ("confirmed with the user, 2026-08-06"), not git.
+
+Two things distinguish this batch from Phases 0-8's earlier gap-filling passes, worth stating up front:
+
+1. **Three features are real, working code that is deliberately not yet functional end-to-end** — SSH/Telnet console, device web-GUI embed, and the WireGuard VPN concentrator. Each was scoped by the user's own explicit call: "build now, functional later." That's not a euphemism for a stub — the SSH dial, the Curve25519 keypair generation, the xterm.js-to-WebSocket bridge are all real. What's missing is a way to actually *reach* a CGNAT'd device on ports other than the CWMP gateway's own 7547 (see §10's CGNAT item — the same underlying blocker as Annex G).
+2. **Closes two items this document itself previously left open**: the bssadapter→cmd/api auth bridge gap (§5.4's "flagged as an open item below" — resolved, see the note at that paragraph and below) and the BSS shared-token-only auth (§5.5 listed it as the interim state; OAuth2 client-credentials now supersedes it).
+
+### RBAC tier expansion
+
+Migration `0032`. The user asked for `superadmin`/`Manager`/`NOC`/`Read-only(ISP)` with superadmin-configurable per-role capabilities. Scope decision confirmed with the user 2026-08-06: rather than replace all ~72 routes' simple rank check with individually configurable permissions (large diff, high regression risk on a security-critical surface), the existing rank gate stays for routine read/write routes (`superadmin` > `manager` > `noc` > `readonly`, direct rename of the old `admin`/`operator`/`readonly` three-tier scheme — existing operators migrated in place by the migration itself), and a new `role_permissions` table adds a genuinely configurable layer only for the ~13 highest-stakes capabilities (bulk actions, credential management, CLI/VPN access, firmware/rollout management, template/policy/schedule/group management, tenancy management, diagnostics, connection requests — the full catalog lives in `internal/operators`'s permission constants, e.g. `PermCLIAccess`, `PermTenancyManage`). `superadmin` is never a row in `role_permissions` — it always has every permission, enforced in code (`internal/operators.HasPermission`), not editable even by another superadmin, so there's no path to a fleet with zero permission-configurable superadmin. `GET`/`PUT /api/v1/auth/role-permissions` (superadmin-only) manage the table; the `Operators` screen gained a permissions matrix. Also added: an `operators.email` column and a full self-service password-reset flow (`POST /api/v1/auth/password-reset/request` / `.../confirm`, `password_reset_tokens` table, tokens single-use with an expiry) — email delivery goes through the new `internal/mailer` package (below).
+
+### Multi-tenancy
+
+Migration `0033`. Shape confirmed with the user 2026-08-06: a single-owner hierarchy — `regions` → `customers` → `devices.customer_id` — for ISP/customer organization, with `projects` as a separate cross-cutting many-to-many tag a device can carry several of (not part of the ownership hierarchy; a device can be one customer's but tagged into several projects at once). Operator accounts are scoped by assignment (`operator_scopes`: `(operator_id, scope_type, scope_id)` where `scope_type` is `region` or `customer`) — no scope rows means unrestricted (backward-compatible default for every operator that existed before this migration), one or more rows means restricted to just those regions/customers, with a region scope implicitly covering every customer under it, resolved at query time rather than denormalized. `h.deviceScope(r)` (referenced by the Excel export handler below, and by every device-list/read endpoint) is the one place this filter is actually applied — every device read in the app respects the calling operator's tenancy scope. REST: `POST/GET/DELETE /api/v1/regions`, `/customers`, `/projects` (structural CRUD is superadmin-only — "the org chart"), `PUT /api/v1/devices/{id}/customer`, `PUT/GET /api/v1/devices/{id}/projects` (assignment is the narrower `tenancy.manage` permission, not full superadmin). New `Tenancy` screen (org-chart CRUD) and a `DeviceTenancy` panel in Device Detail (assign customer/projects).
+
+### Per-user dashboards
+
+Migration `0034`. One `dashboard_layouts` row per operator — `widgets` is an ordered JSONB array of `{id, enabled}`, deliberately freeform (not one column per widget) so a new widget type never needs a migration, only a new `id` the frontend recognizes. `GET /api/v1/dashboard` (live aggregated fleet figures) and `GET`/`PUT /api/v1/dashboard/layout` (the per-operator arrangement). New `Dashboard` screen and `internal/dashboard` package.
+
+### Device location + Excel reporting
+
+Migration `0035`, plus the unrelated-in-schema-but-same-pass Excel import/export. `devices.location` is free text (no structured address/GPS fields — real-world entries range from "Rack 4, POP-West" to a full street address, and TR-069 has no standard parameter for physical location; it's operator-entered metadata, same category as `tags`) — `PUT /api/v1/devices/{id}/location`. Paired with two report-shaped endpoints that shipped in the same pass: `GET /api/v1/reports/devices/export` streams a real `.xlsx` workbook (`github.com/xuri/excelize/v2`) — serial, manufacturer, model, MAC, status, firmware version, current SSID, location, customer, region — filterable by region/customer/project and always further filtered by the calling operator's own tenancy scope; `POST /api/v1/devices/import?format=json|csv|xml` bulk-creates/updates devices from an uploaded file (capped at 5,000 rows/request). New `Reports` screen.
+
+### Parameter discovery
+
+Migrations `0027`-`0028`. A `GetParameterNames(root, false)` sweep, run automatically on a device's first connect (`0 BOOTSTRAP` Inform — the same genuine-first-contact event config templates' auto-apply already keys on) and available on demand thereafter (`POST /api/v1/devices/{id}/discover-parameters`, `GET .../parameter-names`). Two purposes: lets the console show what a CPE actually supports instead of relying solely on the static vendor registry (`internal/devices/adapters`), and — the more structural payoff — the ACS now *learns* each device's real data model root (`devices.data_model_root`, `data_model_root_confirmed_at`) instead of leaving it `UNKNOWN` forever, which was true of every device before this migration regardless of Phase. Results land in `device_parameter_names` (one JSONB blob per device, name → writable bool) — replaced wholesale on each discovery run, not merged, since a stale entry here (a parameter the firmware no longer exposes) is actively misleading in a way a stale cached *value* isn't. `0028` is a same-day bugfix: `0027` added the `PARAMETER_DISCOVERY` job type in Go but missed widening `jobs_type_check`, caught live on the first BOOTSTRAP-triggered discovery job.
+
+**This is a real mitigation for, but not a resolution of, design-v3 prerequisite P1** (Device:2 vs IGD:1 data model support) — see §10.
+
+### STUN NAT traversal — partial
+
+Migration `0029`. `internal/stun` is a real RFC 5389 Binding-Response server (`ACS_STUN_ADDR`, default `:3478` UDP, runs inside `cmd/acs`). Once a STUN-capable CPE binds against it, its next Inform reports `udp_connection_request_address` (the reflexive host:port from the Binding Response) and `nat_detected` — both now captured on `devices`. This is deliberately scoped as *detection only*: recording these two fields is separate from actually sending a TR-069 Annex G UDP Connection Request datagram to wake a NAT'd device instantly, which is **not built** — the Annex G signature/wire format couldn't be sourced from an authoritative spec (every mirror of the real ITU/BBF document found was blocked or paywalled), and shipping a guessed HMAC scheme would look done while silently failing against real hardware. `internal/connreq` still only performs a plain HTTP GET to `ConnectionRequestURL`; it does not yet consume `udp_connection_request_address` or attempt a UDP send. Confirmed still true as of this pass — see §10.
+
+### Device CLI/SSH/Telnet console — scaffolded, functional later
+
+Migration `0030`, `internal/cliaccess` (`bridge.go`, `cliaccess.go`, `telnet.go`, `webgui.go`), frontend `RemoteShell.tsx`/`DeviceConsole.tsx`. Real code: a genuine SSH dial (`golang.org/x/crypto/ssh`) and Telnet client, bridged to the browser over `GET /api/v1/devices/{id}/cli/connect` — a long-lived WebSocket deliberately *not* wrapped in the usual `route()`/metrics-instrumentation helper (a terminal session isn't a request/response call; the duration histogram would just accumulate one unbounded bucket for as long as the session stays open), though `requireRole` + the `cli.access` permission still gate it exactly as tightly as everything else. Credentials are per-device (`device_cli_credentials` — protocol/host/port/username/password, encrypted at rest under the same `enc:`-prefix convention as `internal/credentials` when `ACS_CREDENTIAL_ENCRYPTION_KEY` is set), not shared, because unlike the CWMP Connection Request password (one shared secret works fleet-wide, since the ACS itself chose it), SSH/Telnet credentials are whatever the device's own OS-level account already is.
+
+**Explicitly scaffolding, per the user's own framing**: the ACS reaching a device's shell port (22/23) has the identical CGNAT reachability constraint as Connection Request/Annex G, just on a different port than 7547 — unusable against a real NAT'd device until a VPN/tunnel path exists. The code is real; the reachability it depends on is not.
+
+### Device web-GUI embed — scaffolded, functional later
+
+Migration `0031`, `cmd/api/webgui_handlers.go`, frontend `DeviceWebGUI.tsx`. Same "scaffold now, functional later" call, same CGNAT blocker as CLI access above. One `device_webgui_config` row per device (base URL + optional HTTP Basic Auth pair — not versioned/rotated like `device_cli_credentials`, since a device's own web-UI URL and credentials change rarely enough that a single overwritten row is simpler and matches the lower churn). `PUT`/`GET`/`DELETE /api/v1/devices/{id}/webgui` manage the config; `/api/v1/devices/{id}/webgui/proxy/{path...}` is the actual embed — deliberately not wrapped by the standard `route()` helper and registered with no HTTP method prefix, because a device's own admin UI needs `POST` (its forms, settings changes) as much as `GET` (page loads/assets) — gated by the same `cli.access` permission as configuring it, since this is a write-capable channel to the device, not a read-only view.
+
+### WireGuard VPN concentrator
+
+Migrations `0036` (peer registry), `0037`/`0038` (bugfixes), `internal/vpn`, frontend `VPNTunnel.tsx`. Deliberately built last in this backlog, and the most partial of the three "scaffold now" pieces. What's real: Curve25519 keypair generation (`internal/vpn/keys.go` — unambiguous, unlike Annex G's undocumented signature format) and overlay-IP allocation (`internal/vpn/overlay.go`, subnet from `ACS_VPN_OVERLAY_SUBNET`) against a `device_vpn_peers` registry (`POST /api/v1/devices/{id}/vpn/enroll`, `GET .../vpn/config`, `GET /api/v1/vpn/peers`, `DELETE /api/v1/vpn/peers/{peer_id}`). What this table explicitly does **not** do on its own: stand up an actual OS-level WireGuard interface. TR-069 has no native "here's your VPN config" RPC, and most consumer/rebranded CPE firmware (the ZOWEE test unit from `deployment-testing-onboarding-guide.md` included) can't enroll in an operator-controlled VPN at all — a real concentrator needs a separate process (`wireguard-go` or the kernel module) applying this table via `wg syncconf`, which `go.mod` confirms was never added (only `golang.org/x/crypto` and `golang.org/x/net` — no WireGuard library). `vpn.RevokePeer`'s own comment states plainly that revoking a peer updates the database but "does not (cannot, from this process) tear down a live tunnel."
+
+`0037`/`0038` are same-class live-caught bugs: `device_vpn_peers.device_id` and `.overlay_ip` were both blanket `UNIQUE` columns, so a `REVOKED` peer's row (kept for audit history, not deleted) permanently blocked that device from re-enrolling and permanently claimed its IP even though the application-level logic only ever meant to count `ENROLLED` peers as occupying either. Fixed with partial unique indexes scoped to `status = 'ENROLLED'`.
+
+### BSS OAuth2 client-credentials
+
+Migration `0039`, replacing the single shared `ACS_BSS_API_TOKEN` this document's §5.5/§7 always flagged as an interim mechanism. `bss_oauth_clients` — one row per registered BSS/CRM integration, `client_secret` bcrypt-hashed, never stored or returned in plaintext after creation (same posture as `operators.password_hash`). `POST /bss/v1/oauth/token` (RFC 6749 §4.4 client-credentials grant, `client_id`/`client_secret` via HTTP Basic or form body) issues a 1-hour bearer JWT; every `/bss/v1/*` route accepts either that token or the legacy shared token, so existing integrations don't break mid-migration. `GET/POST /api/v1/bss/oauth-clients`, `DELETE .../{id}` (superadmin-only) manage clients — revoking blocks new token issuance immediately, but already-issued tokens remain valid until their own (max 1-hour) expiry. See `bss-integration-guide.md` §3 for the integration-facing documentation of this, now corrected to match.
+
+### BSS integration admin panel
+
+New `cmd/api` routes, `admin` (superadmin) gated: `GET/POST /api/v1/bss/mappings`, the OAuth-client and webhook-subscription CRUD above, `GET /api/v1/bss/stats`, `GET /api/v1/bss/health`, and four troubleshooting endpoints (`POST /api/v1/bss/troubleshoot/{mapping-lookup,auth-check,job-status,order-dispatch}`) that let an operator debug a BSS integration issue (e.g. "why is this order failing") from the console instead of needing direct database/log access. New `BSSIntegration` screen ties the whole surface together — onboarding a new OAuth2 client, viewing webhook subscriptions, running the troubleshooting checks.
+
+### Mailer
+
+`internal/mailer` — operator-facing transactional email (currently just password-reset links), stdlib `net/smtp` only, no new dependency. `ACS_SMTP_HOST`/`_PORT`/`_USERNAME`/`_PASSWORD`/`_FROM`; the same "off unless configured, loud warning when it isn't" convention as everything else — with no SMTP host configured, `Send` logs the message instead of emailing it, which doubles as a convenient dev-mode (the reset link is right there in the server log).
+
+---
+
+## 10. Current status & outstanding items — corrected 2026-08-11
+
+Supersedes §8 and every scattered "flagged as an open item" callout in §§1-9 above; this is the accurate current list, cross-checked against the actual code (not just prior documentation) as of 2026-08-11. `go build ./...`, `go vet ./...` (backend) and `tsc -b` (frontend) all pass clean.
+
+**Genuinely outstanding:**
+
+- **CGNAT reachability for anything beyond periodic Inform — the one real blocker, and the load-bearing gap behind several "done" items above.** TR-069 Annex G's UDP Connection Request wire format is still unsourced from an authoritative spec (§9's STUN section); SSH/Telnet console, web-GUI embed, and the VPN concentrator are all real code waiting on the same underlying problem (reaching a device that only ever dials out). The plan, per `deployment-testing-onboarding-guide.md` §9, is to determine Annex G's real format from a packet capture of actual device STUN/keep-alive traffic once a real device is on the network reporting `udp_connection_request_address`, rather than continue guessing.
+- **`data_model_root` branching across hardcoded `Device.*` write paths** (TR-181 vs legacy TR-098 `InternetGatewayDevice.`) is still not built. Parameter discovery (§9) mitigates this by *detecting* which root a device actually uses instead of leaving it `UNKNOWN`, but every write path in this codebase still hardcodes the `Device.` (TR-181) prefix — a genuine IGD:1-only device's writes would go to the wrong tree. This remains a systemic refactor across most of the write surface, not a rider on any single pass.
+- **SUSPEND/ACTIVATE walled-garden parameter** is mechanism-complete (`ACS_WALLED_GARDEN_PARAMETER`/`_SUSPEND_VALUE`/`_ACTIVE_VALUE`, §5.3/§5's "Configurable walled-garden SUSPEND/ACTIVATE" pass) but deliberately unconfigured by default — `bss-integration-guide.md` correctly documents both actions as returning `400` until a real per-vendor safe parameter is set. Still correct, still not something to guess.
+- **Per-vendor canonical-parameter registry** (gap analysis item 13, §"Nice-to-have feature backlog") — still not built; needs real vendor documentation this project doesn't have. Parameter discovery is a related, shipped mitigation, not a substitute.
+- **`SetParameterAttributes`/`GetParameterAttributes`** — REST endpoints exist, no frontend UI.
+- **OpenAPI spec** — still deferred.
+- **`ParameterKey`/Inform event-code correlation** — `SetParameterValues` sets `ParameterKey` to the job's `CommandKey` on the outbound request, but it's never consumed when a CPE reports it back on a `4 VALUE CHANGE` Inform event (`internal/cwmp/rpc.go`). Small, real, previously unflagged.
+- **No OS-level WireGuard interface process** for the VPN concentrator (§9) — the peer registry and crypto are real, nothing applies them to an actual tunnel yet.
+
+**Resolved since this document was last accurate (do not treat these as open anymore):**
+
+- The bssadapter→cmd/api internal auth bridge (§5.4) — `ACS_INTERNAL_SERVICE_TOKEN`, §9.
+- BSS-facing auth being shared-token-only (§5.5/§7) — OAuth2 client-credentials, §9, migration `0039`.
+- `bss-integration-guide.md` §0/§4 previously (before this pass) said webhooks were "not implemented yet" — they were, as of the Phase 8 firm-up pass documented earlier in this file (`webhook_subscriptions`/`webhook_deliveries`, migration `0021`, `cmd/bssadapter/webhook_worker.go`). That guide is corrected in this same update pass.

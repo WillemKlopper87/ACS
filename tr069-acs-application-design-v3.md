@@ -1697,6 +1697,8 @@ Root detection logic
 REST parameter translation
 ```
 
+**Status update, 2026-08-11**: root *detection* is built — a `GetParameterNames(root, false)` sweep runs automatically on each device's first `BOOTSTRAP` Inform and on demand thereafter, writing a confirmed `Device:2`/`IGD:1` root to `devices.data_model_root` instead of leaving it `UNKNOWN` (`tr069-acs-build-plan.md` §9, migrations `0027`-`0028`). Root *branching* is not: every write path in the codebase still hardcodes the `Device.` (TR-181) prefix, so a genuine IGD:1-only device's writes would go to the wrong tree. This gate is therefore partially, not fully, resolved — see build plan §10 for the current framing.
+
 ---
 
 ### P2. CWMP Amendment Version
@@ -1787,6 +1789,8 @@ Connection Request service
 NAT traversal design
 Operational reachability expectations
 ```
+
+**Status update, 2026-08-11**: the STUN half is built and real — an RFC 5389 Binding-Response server runs inside `cmd/acs` (`ACS_STUN_ADDR`), and a bound CPE's `udp_connection_request_address`/`nat_detected` are captured from its Inform (`tr069-acs-build-plan.md` §9, migration `0029`). The Annex G half — actually sending the UDP Connection Request datagram to wake a NAT'd device instantly — is not built: the signature/wire format couldn't be sourced from an authoritative spec (every mirror of the real document found was blocked or paywalled), and a guessed HMAC scheme was deliberately not shipped in its place. `internal/connreq` still only does a plain HTTP GET, which only reaches directly-addressable devices. Plan (per `deployment-testing-onboarding-guide.md` §9): derive the real format from a packet capture of a real device's STUN/keep-alive traffic once one is on the network, rather than continue guessing. This gate remains open for instant/on-demand actions; periodic-Inform-triggered dispatch (the fallback this design always assumed CGNAT would require) works today regardless.
 
 ---
 

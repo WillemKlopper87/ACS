@@ -188,24 +188,50 @@ Diagnostics → Ping, or the raw API `POST
 
 ## 7. Full environment variable reference
 
-Everything `cmd/acs`/`cmd/api` read, for when you move past the minimal
-set in §3:
+Updated 2026-08-11 — the previous list here predated the admin-platform backlog (RBAC, tenancy, VPN/CLI/web-GUI, BSS OAuth2, mailer) and was missing everything it added. This list is grepped directly from every `os.Getenv`/`envOr*` call in `cmd/acs`, `cmd/api`, and `cmd/bssadapter` as of this date, grouped by which binary reads it:
 
 ```
+# cmd/acs (CWMP gateway + STUN server)
 ACS_POSTGRES_DSN, ACS_ADDR, ACS_STUN_ADDR, ACS_TLS_CERT, ACS_TLS_KEY,
-ACS_MTLS_CA_CERT, ACS_DIGEST_USERNAME, ACS_DIGEST_PASSWORD,
-ACS_CONNECTION_REQUEST_USERNAME, ACS_CONNECTION_REQUEST_PASSWORD,
-ACS_RATE_LIMIT_IP_PER_SECOND, ACS_RATE_LIMIT_IP_BURST,
-ACS_RATE_LIMIT_DEVICE_PER_SECOND, ACS_RATE_LIMIT_DEVICE_BURST,
+ACS_TLS_MIN_VERSION, ACS_MTLS_CA_CERT, ACS_DIGEST_USERNAME,
+ACS_DIGEST_PASSWORD, ACS_AUTH_ALLOW_BASIC, ACS_CONNECTION_REQUEST_USERNAME,
+ACS_CONNECTION_REQUEST_PASSWORD, ACS_RATE_LIMIT_IP_PER_SECOND,
+ACS_RATE_LIMIT_IP_BURST, ACS_RATE_LIMIT_DEVICE_PER_SECOND,
+ACS_RATE_LIMIT_DEVICE_BURST, ACS_WALLED_GARDEN_PARAMETER,
+ACS_WALLED_GARDEN_ACTIVE_VALUE, ACS_WALLED_GARDEN_SUSPEND_VALUE, ACS_DEBUG
+
+# cmd/api (REST API — operators, tenancy, dashboards, BSS admin panel, CLI/VPN/webgui)
 ACS_API_ADDR, ACS_API_CORS_ORIGIN, ACS_API_RATE_LIMIT_PER_SECOND,
 ACS_API_RATE_LIMIT_BURST, ACS_BOOTSTRAP_ADMIN_USERNAME,
 ACS_BOOTSTRAP_ADMIN_PASSWORD, ACS_JWT_SIGNING_SECRET,
+ACS_INTERNAL_SERVICE_TOKEN (bridges cmd/bssadapter's calls into this API —
+  set identically on both processes, see §9 of the build plan; without it,
+  bssadapter gets 401'd once ACS_JWT_SIGNING_SECRET is set),
 ACS_CREDENTIAL_ENCRYPTION_KEY, ACS_FIRMWARE_STORAGE_ROOT,
 ACS_FIRMWARE_BASE_URL, ACS_UPLOAD_STORAGE_ROOT, ACS_UPLOAD_BASE_URL,
-ACS_WALLED_GARDEN_PARAMETER, ACS_WALLED_GARDEN_ACTIVE_VALUE,
-ACS_WALLED_GARDEN_SUSPEND_VALUE, ACS_DEBUG, ACS_RESULTS_FILE (cmd/probe only),
-ACS_BSS_ADDR, ACS_BSS_API_TOKEN, ACS_BSS_RATE_LIMIT_PER_SECOND,
-ACS_BSS_RATE_LIMIT_BURST, ACS_INTERNAL_API_URL (cmd/bssadapter only)
+ACS_FRONTEND_BASE_URL (default http://localhost:5173 — used to build the
+  link in password-reset emails), ACS_BSS_ADAPTER_URL (default
+  http://localhost:8090 — cmd/api's BSS admin panel proxies troubleshooting
+  calls to bssadapter through this), ACS_BSS_API_TOKEN (shared with
+  bssadapter, used by the admin panel proxy),
+ACS_SMTP_HOST, ACS_SMTP_PORT, ACS_SMTP_USERNAME, ACS_SMTP_PASSWORD,
+ACS_SMTP_FROM (all optional — unset means password-reset emails are
+  logged, not sent; see internal/mailer),
+ACS_VPN_OVERLAY_SUBNET, ACS_VPN_SERVER_ENDPOINT, ACS_VPN_SERVER_PUBLIC_KEY
+  (VPN concentrator peer config — see build plan §9; no OS-level tunnel
+  process consumes these yet)
+
+# cmd/bssadapter (BSS/CRM adapter)
+ACS_BSS_ADDR, ACS_BSS_API_TOKEN (legacy shared token, deprecated),
+ACS_BSS_OAUTH_SIGNING_SECRET (enables the OAuth2 client-credentials token
+  endpoint — recommended over the shared token, see bss-integration-guide.md §3),
+ACS_BSS_TLS_CERT, ACS_BSS_TLS_KEY, ACS_BSS_MTLS_CA_CERT,
+ACS_BSS_RATE_LIMIT_PER_SECOND, ACS_BSS_RATE_LIMIT_BURST,
+ACS_INTERNAL_API_URL (where cmd/api lives, default http://localhost:8080),
+ACS_INTERNAL_SERVICE_TOKEN (same value as cmd/api's, above)
+
+# cmd/probe only
+ACS_RESULTS_FILE
 ```
 
 ## 8. Why periodic interval matters right now

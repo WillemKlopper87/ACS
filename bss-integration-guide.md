@@ -1,8 +1,8 @@
 # BSS & Customer Management Integration Guide
 
-Status: Draft — reflects the actual implementation as of 2026-08-04, verified live against a running stack (not speculative).  
+Status: reflects the actual implementation as of 2026-08-11, verified against the running code (not speculative). Originally written 2026-08-04; updated 2026-08-11 to correct the webhooks status below, which shipped in the interim and was previously (wrongly) documented here as not implemented.  
 Audience: BSS/CRM integration teams (Salesforce Comm Cloud, Amdocs, Netcracker, custom operator CRM).  
-Implementation: `backend/cmd/bssadapter`, `backend/internal/bss` — see `tr069-acs-build-plan.md` §5 for the design rationale and open items.
+Implementation: `backend/cmd/bssadapter`, `backend/internal/bss` — see `tr069-acs-build-plan.md` §5 for the design rationale and §9-§10 for everything built since, including the OAuth2 client-credentials rollout.
 
 ---
 
@@ -14,10 +14,10 @@ Read this section first — it tells you what you can integrate against today ve
 |---|---|
 | Account-device mapping (Workflow A) | **Live** |
 | Order dispatch — `MODIFY_WIFI` | **Live** |
-| Order dispatch — `SUSPEND` / `ACTIVATE` | **Not implemented.** Returns `400 ErrInvalidRequest`. See §2.2. |
+| Order dispatch — `SUSPEND` / `ACTIVATE` | **Not configured by default.** Returns `400 ErrInvalidRequest` until an operator sets a real per-vendor walled-garden parameter. See §2.2. |
 | Job status polling (Workflow C) | **Live** |
 | Idempotent order retry | **Live** |
-| Webhook notifications (§4) | **Not implemented yet.** Do not build against this section — it documents the target design, not a working endpoint. |
+| Webhook notifications (§4) | **Live.** Corrected 2026-08-11 — this section previously said "not implemented"; it was, by the time that was written. Subscribe via `POST /bss/v1/webhooks`. |
 | Authentication | **Live**: OAuth2 client-credentials (recommended, per-integration) + optional mTLS. Legacy shared token still accepted but deprecated. See §3. |
 
 ---
@@ -244,21 +244,84 @@ isn't needed for standard internet-facing B2B integrations.
 
 ---
 
-## 4. Webhook Notifications — planned, not implemented
+## 4. Webhook Notifications
 
-The original design intent (still the target) is push-based job completion callbacks instead of polling Workflow C:
+Push-based job completion callbacks, as an alternative to polling Workflow C. Two independent background loops in `cmd/bssadapter` drive this: a notify loop (every 10s) checks each order's job status the same way Workflow C does and enqueues a delivery per matching subscription once the job goes terminal; a delivery loop (every 10s) drains due deliveries with exponential backoff.
 
-```json
+### 4.1 Subscribe
+
+```http
+POST /bss/v1/webhooks
+Authorization: Bearer <token>
+Content-Type: application/json
+
 {
-  "event": "JOB_COMPLETED",
-  "external_order_id": "ORD-2026-0804-12",
-  "command_key": "setparam_20260804_00921",
-  "status": "SUCCESS",
-  "completed_at": "2026-08-04T14:30:08Z"
+  "account_id": "ACC-88203",
+  "target_url": "https://your-bss.example.com/webhooks/acs",
+  "secret": "a-shared-secret-you-choose",
+  "event_types": ["JOB_COMPLETED"]
 }
 ```
 
-There is no subscription endpoint yet and no delivery worker running. **Poll Workflow C for now.** This section will be updated with real request/response examples once it's built.
+`account_id` is optional — omit it for a fleet-wide subscription (every account's completed orders). `secret` is yours to generate and store; it's never returned by any endpoint after creation and is used to sign every delivery (§4.3). `event_types` currently supports only `JOB_COMPLETED`.
+
+Response (`201 Created`):
+
+```json
+{
+  "id": "3fa2e6c1-...",
+  "account_id": "ACC-88203",
+  "target_url": "https://your-bss.example.com/webhooks/acs",
+  "event_types": ["JOB_COMPLETED"],
+  "created_at": "2026-08-06T10:12:00Z"
+}
+```
+
+### 4.2 List / unsubscribe
+
+```http
+GET /bss/v1/webhooks
+Authorization: Bearer <token>
+```
+
+```http
+DELETE /bss/v1/webhooks/{id}
+Authorization: Bearer <token>
+```
+
+`204 No Content` on success, `404` if the subscription doesn't exist.
+
+### 4.3 Delivery
+
+Once an order's underlying job reaches a terminal status (`SUCCESS`, `FAILED`, or `TIMEOUT`), every matching subscription (fleet-wide, or scoped to that order's `account_id`) receives one `POST` to its `target_url`:
+
+```json
+{
+  "event_type": "JOB_COMPLETED",
+  "external_order_id": "ORD-2026-0804-12",
+  "account_id": "ACC-88203",
+  "action": "MODIFY_WIFI",
+  "command_key": "setparam_20260804_00921",
+  "status": "SUCCESS",
+  "completed_at": "2026-08-06T14:30:08Z"
+}
+```
+
+(`fault_code`/`fault_string` are also present, `null` unless `status` is `FAILED`.)
+
+Every delivery carries:
+
+```
+Content-Type: application/json
+X-Webhook-Event: JOB_COMPLETED
+X-Webhook-Signature: <hex HMAC-SHA256 of the raw body, keyed on your subscription's secret>
+```
+
+Verify it the standard way: `hex(HMAC-SHA256(secret, request_body))` should equal `X-Webhook-Signature`. Reject anything that doesn't match.
+
+Your endpoint must respond `2xx` to acknowledge. A non-2xx or a failed request is retried with exponential backoff (2^attempts minutes) up to 8 attempts, after which the delivery is left `FAILED` — there's no operator-facing UI onto individual delivery status yet, so a persistently-failing `target_url` needs to be diagnosed from `cmd/bssadapter`'s own logs for now.
+
+**Still poll-safe**: Workflow C (`GET /bss/v1/jobs/{command_key}`) keeps working exactly as before — webhooks are an addition, not a replacement, and a missed/delayed delivery doesn't strand you without a way to check status.
 
 ---
 
@@ -285,4 +348,5 @@ Every error response has the shape:
 
 - **One primary device per account.** Order dispatch resolves the account's most recently active mapping. An account genuinely managing multiple devices needs a different order shape (not yet designed) to name which device.
 - **Idempotency is best-effort under a rare failure window.** If the ACS successfully queues a job but then fails to persist the order's idempotency record (a narrow DB-write failure right after success), a retry with the same `external_order_id` could dispatch a second job. This is logged loudly on the ACS side when it happens; a fully exactly-once guarantee would need an outbox pattern, which is a future hardening item, not current behavior.
-- **No rate limiting yet** on `/bss/v1/*`. Under active design — see the build plan for the planned approach before assuming unlimited throughput is safe to rely on.
+- **Rate limiting is live**, per-token (or per-IP when auth is disabled): a token-bucket limiter keyed on your bearer token, defaulting to 5 req/s with a burst of 10 (`ACS_BSS_RATE_LIMIT_PER_SECOND`/`ACS_BSS_RATE_LIMIT_BURST`, set server-side). A `429` means you've exceeded your bucket, not an auth problem — back off and retry rather than treating it as a hard failure.
+- **Request bodies are capped at 1 MiB.** An oversized `POST /bss/v1/orders` or `/mappings` body is rejected with `400` before it reaches mapping/order logic.
