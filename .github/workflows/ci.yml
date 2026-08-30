@@ -137,7 +137,7 @@ jobs:
       - name: build frontend image
         run: docker build -t acs-frontend:ci frontend
       - name: scan images (Trivy, fail on HIGH/CRITICAL fixable)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: acs-api:ci
           format: table
