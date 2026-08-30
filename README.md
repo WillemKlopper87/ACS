@@ -106,7 +106,8 @@ a Trivy scan, and gitleaks. Make every job required in branch protection.
 | Download/Upload with expiring signed transfer URLs, TransferComplete | Supported |
 | TR-181 and TR-098 reads, TR-181 writes, parameter discovery | Supported |
 | Multi-tenant operator scoping (region/customer), RBAC permissions | Supported, enforced centrally |
-| Annex G / XMPP connection requests, TR-098 writes | Not implemented |
+| Annex G UDP connection requests (STUN-learned address, signed datagram, EventCode 6 confirmation) | Implemented from the spec text; not yet validated against real CPE hardware |
+| XMPP connection requests, TR-098 writes | Not implemented |
 | Per-device CPE→ACS Digest credentials (`CWMP_DIGEST` rotation, self-activating on first Inform) | Supported, alongside the shared credential and mTLS |
 | Object storage (S3) for firmware/uploads, multi-node HA | Not implemented (local disk) |
 | Real-device compatibility matrix, load/soak evidence | Not yet recorded |

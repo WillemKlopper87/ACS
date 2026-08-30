@@ -33,6 +33,11 @@ const (
 	OutcomeTCPFailure  = "TCP_FAILURE"
 	OutcomeTLSFailure  = "TLS_FAILURE"
 	OutcomeUnavailable = "UNAVAILABLE"
+
+	// Annex G UDP outcomes (annexg.go).
+	OutcomeUDPSendFailed     = "UDP_SEND_FAILED"
+	OutcomeUDPInformReceived = "UDP_SENT_INFORM_RECEIVED"
+	OutcomeUDPNoInform       = "UDP_SENT_NO_INFORM"
 )
 
 // Attempt performs the Connection Request GET, retrying once with Digest

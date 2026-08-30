@@ -95,15 +95,25 @@ func (w *connectionRequestWorker) process(ctx context.Context, job *jobs.Job) {
 		return
 	}
 
+	username, password := w.credentialFor(ctx, device.ID)
+	udpAddr := ""
+	if device.UDPConnectionRequestAddress != nil {
+		udpAddr = *device.UDPConnectionRequestAddress
+	}
+
 	if device.ConnectionRequestURL == nil || *device.ConnectionRequestURL == "" {
+		if udpAddr != "" {
+			// No TCP path at all, but STUN gave us a reflexive address —
+			// Annex G is the only option.
+			w.attemptAnnexG(ctx, device, job, udpAddr, username, password, wait)
+			return
+		}
 		w.logger.Warn("connection request has no URL to call", "device_id", device.ID, "job_id", job.ID)
 		_ = w.jobs.MarkFailed(ctx, job.ID, "", connreq.OutcomeUnavailable)
 		_ = w.devices.RecordConnectionRequestAttempt(ctx, device.ID, connreq.OutcomeUnavailable, "")
 		w.audit(ctx, device.ID, job, connreq.OutcomeUnavailable)
 		return
 	}
-
-	username, password := w.credentialFor(ctx, device.ID)
 
 	attemptedAt := time.Now().UTC()
 	getCtx, cancel := context.WithTimeout(ctx, connReqGETTimeout)
@@ -113,6 +123,14 @@ func (w *connectionRequestWorker) process(ctx context.Context, job *jobs.Job) {
 	w.logger.Info("connection request GET completed", "device_id", device.ID, "job_id", job.ID, "outcome", outcome)
 
 	if outcome != connreq.OutcomeHTTP200 {
+		if udpAddr != "" {
+			// The direct GET didn't get through (CGNAT, firewall, stale
+			// URL) but the device advertised a STUN-learned UDP address:
+			// fall through to a TR-069 Annex G UDP Connection Request.
+			w.logger.Info("direct connection request failed; trying Annex G UDP", "device_id", device.ID, "job_id", job.ID, "http_outcome", outcome, "udp_addr", udpAddr)
+			w.attemptAnnexG(ctx, device, job, udpAddr, username, password, wait)
+			return
+		}
 		_ = w.devices.RecordConnectionRequestAttempt(ctx, device.ID, outcome, "")
 		_ = w.jobs.MarkFailed(ctx, job.ID, "", outcome)
 		w.audit(ctx, device.ID, job, outcome)
@@ -149,6 +167,48 @@ func (w *connectionRequestWorker) process(ctx context.Context, job *jobs.Job) {
 	_ = w.jobs.MarkTimeout(ctx, job.ID, "HTTP_200_NO_INFORM: no Inform with EventCode 6 within the wait window")
 	w.logger.Warn("connection request timed out waiting for inform", "device_id", device.ID, "job_id", job.ID)
 	w.audit(ctx, device.ID, job, "HTTP_200_NO_INFORM")
+}
+
+// attemptAnnexG sends the Annex G UDP wake-up (internal/connreq.SendUDP)
+// and waits for the CPE's EventCode 6 Inform, the only delivery signal
+// UDP offers. Success records ModeSTUNAnnexG so later requests know this
+// device is reached that way.
+func (w *connectionRequestWorker) attemptAnnexG(ctx context.Context, device *devices.Device, job *jobs.Job, udpAddr, username, password string, wait time.Duration) {
+	attemptedAt := time.Now().UTC()
+	sendCtx, cancel := context.WithTimeout(ctx, connReqGETTimeout)
+	err := connreq.SendUDP(sendCtx, udpAddr, username, password)
+	cancel()
+	if err != nil {
+		w.logger.Warn("annex g udp connection request failed to send", "err", err, "device_id", device.ID, "job_id", job.ID)
+		_ = w.devices.RecordConnectionRequestAttempt(ctx, device.ID, connreq.OutcomeUDPSendFailed, "")
+		_ = w.jobs.MarkFailed(ctx, job.ID, "", connreq.OutcomeUDPSendFailed)
+		w.audit(ctx, device.ID, job, connreq.OutcomeUDPSendFailed)
+		return
+	}
+	w.logger.Info("annex g udp connection request sent", "device_id", device.ID, "job_id", job.ID, "udp_addr", udpAddr)
+
+	deadline := time.Now().Add(wait)
+	for time.Now().Before(deadline) {
+		informed, err := w.devices.InformedWithEventSince(ctx, device.ID, attemptedAt, "6")
+		if err != nil {
+			w.logger.Error("failed to check for post-connection-request inform", "err", err, "device_id", device.ID)
+		} else if informed {
+			_ = w.devices.RecordConnectionRequestAttempt(ctx, device.ID, connreq.OutcomeUDPInformReceived, devices.ModeSTUNAnnexG)
+			_ = w.jobs.MarkSuccess(ctx, job.ID)
+			w.logger.Info("annex g connection request succeeded", "device_id", device.ID, "job_id", job.ID)
+			w.audit(ctx, device.ID, job, connreq.OutcomeUDPInformReceived)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(connReqWaitPoll):
+		}
+	}
+	_ = w.devices.RecordConnectionRequestAttempt(ctx, device.ID, connreq.OutcomeUDPNoInform, devices.ModePeriodicFallback)
+	_ = w.jobs.MarkTimeout(ctx, job.ID, connreq.OutcomeUDPNoInform+": no Inform with EventCode 6 within the wait window after the UDP wake-up")
+	w.logger.Warn("annex g connection request timed out waiting for inform", "device_id", device.ID, "job_id", job.ID)
+	w.audit(ctx, device.ID, job, connreq.OutcomeUDPNoInform)
 }
 
 // audit records the ConnectionRequest action (design doc v3 §11.8 lists
