@@ -415,7 +415,7 @@ type handler struct {
 	auditor *observability.Auditor
 
 	firmware     *firmware.Repository
-	firmwareFS   *firmware.Storage
+	firmwareFS   firmware.Storage
 	firmwareBase string // base URL the CPE fetches Download URLs from (design doc v3 §9.4's "HTTPS static file host", local-disk stand-in — see internal/firmware doc comment)
 
 	operators *operators.Repository
@@ -443,7 +443,7 @@ type handler struct {
 	policies    *policy.Repository
 
 	uploads     *uploads.Repository
-	uploadsFS   *uploads.Storage
+	uploadsFS   uploads.Storage
 	uploadsBase string // base URL the CPE PUTs Upload'd files back to, mirrors firmwareBase
 
 	templates       *templates.Repository
