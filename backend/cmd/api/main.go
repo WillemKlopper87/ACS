@@ -44,6 +44,7 @@ import (
 	"acs/internal/store"
 	"acs/internal/templates"
 	"acs/internal/tenancy"
+	"acs/internal/transfer"
 	"acs/internal/uploads"
 	"acs/internal/vpn"
 )
@@ -142,6 +143,20 @@ func main() {
 
 	metrics := observability.NewMetrics("api")
 
+	var transferKey []byte
+	if len(jwtSecret) > 0 {
+		transferKey = transfer.DeriveKey(jwtSecret)
+	}
+	uploadMaxBytes := int64(256 << 20) // 256 MiB default ceiling per CPE upload
+	if v := os.Getenv("ACS_UPLOAD_MAX_BYTES"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n <= 0 {
+			logger.Error("invalid ACS_UPLOAD_MAX_BYTES", "value", v)
+			os.Exit(1)
+		}
+		uploadMaxBytes = n
+	}
+
 	h := &handler{
 		logger:       logger,
 		devices:      devices.NewRepository(db),
@@ -154,6 +169,8 @@ func main() {
 		firmwareBase: envOr("ACS_FIRMWARE_BASE_URL", "http://localhost:8080"),
 		operators:    operators.NewRepository(db),
 		jwtSecret:    jwtSecret,
+		transferKey:    transferKey,
+		uploadMaxBytes: uploadMaxBytes,
 		metrics:      metrics,
 		groups:       devices.NewGroupRepository(db),
 		credentials:  credentialsRepo,
@@ -473,6 +490,12 @@ type handler struct {
 
 	operators *operators.Repository
 	jwtSecret []byte // empty means operator auth is disabled — see main()'s ACS_JWT_SIGNING_SECRET warning
+
+	// transferKey signs the expiring tokens on public firmware-download
+	// and upload-receipt URLs (audit P0.3, internal/transfer). Derived
+	// from the JWT secret; empty (dev mode only) disables enforcement.
+	transferKey    []byte
+	uploadMaxBytes int64
 
 	metrics     *observability.Metrics
 	groups      *devices.GroupRepository

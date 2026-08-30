@@ -69,12 +69,15 @@ func (r *Repository) Create(ctx context.Context, deviceID, fileType, createdBy s
 
 // MarkReceived records that the file actually arrived — called by the
 // upload-receipt HTTP handler once the CPE's PUT has streamed to disk.
+// The status predicate makes the PENDING->RECEIVED transition atomic
+// and single-use (audit P0.3): a second PUT racing on the same slot
+// gets ErrNotFound instead of silently overwriting the recorded file.
 func (r *Repository) MarkReceived(ctx context.Context, id, filename, sha256hex string, size int64) (*UploadedFile, error) {
 	row := r.db.QueryRowContext(ctx, `
 		UPDATE uploaded_files SET status = $2, filename = $3, file_size_bytes = $4, sha256 = $5, received_at = now()
-		WHERE id = $1
+		WHERE id = $1 AND status = $6
 		RETURNING `+columns,
-		id, StatusReceived, filename, size, sha256hex)
+		id, StatusReceived, filename, size, sha256hex, StatusPending)
 	f, err := scan(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -189,6 +192,13 @@ func (s *Storage) Open(id string) (*os.File, error) {
 		return nil, fmt.Errorf("open uploaded file: %w", err)
 	}
 	return f, nil
+}
+
+// Remove deletes the stored file for id — used when a fully-written
+// upload turns out to be unwanted (e.g. it lost the PENDING->RECEIVED
+// race to a concurrent PUT and must not shadow the recorded file).
+func (s *Storage) Remove(id string) {
+	os.Remove(s.path(id))
 }
 
 func (s *Storage) path(id string) string {

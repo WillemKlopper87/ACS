@@ -13,7 +13,28 @@ import (
 
 	"acs/internal/firmware"
 	"acs/internal/jobs"
+	"acs/internal/transfer"
 )
+
+// Expiring transfer-token lifetimes (audit P0.3). Firmware download
+// URLs live long enough to survive a delayed Download RPC plus an
+// offline window; upload receipt URLs only need to cover one Upload
+// RPC round trip.
+const (
+	firmwareTokenTTL = 24 * time.Hour
+	uploadTokenTTL   = 4 * time.Hour
+)
+
+// signedFirmwareURL builds the public download URL for a firmware
+// image, carrying an expiring purpose-bound token when transfer
+// signing is enabled (it always is outside dev mode).
+func (h *handler) signedFirmwareURL(imageID string) string {
+	url := fmt.Sprintf("%s/api/v1/firmware/images/%s/file", h.firmwareBase, imageID)
+	if len(h.transferKey) > 0 {
+		url += "?token=" + transfer.Sign(h.transferKey, "firmware", imageID, time.Now().Add(firmwareTokenTTL))
+	}
+	return url
+}
 
 // firmwareImageResponse is the v3 §7.6 firmware_images shape.
 type firmwareImageResponse struct {
@@ -33,7 +54,7 @@ func (h *handler) toFirmwareImageResponse(img *firmware.Image) firmwareImageResp
 	return firmwareImageResponse{
 		ID: img.ID, Vendor: img.Vendor, Model: img.Model, Version: img.Version, Channel: img.Channel,
 		Filename: img.Filename, FileSizeBytes: img.FileSizeBytes, SHA256: img.SHA256,
-		URL:       fmt.Sprintf("%s/api/v1/firmware/images/%s/file", h.firmwareBase, img.ID),
+		URL:       h.signedFirmwareURL(img.ID),
 		CreatedAt: img.CreatedAt.Format(time.RFC3339),
 	}
 }
@@ -118,6 +139,15 @@ func (h *handler) uploadFirmwareImage(w http.ResponseWriter, r *http.Request) {
 // support for free, which v3 §9.4 recommends.
 func (h *handler) serveFirmwareFile(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// This route is public (a CPE's Download RPC has no JWT), so the
+	// expiring token on the URL is the entire authorization (audit
+	// P0.3) — without it a firmware image ID is a permanent public URL.
+	if len(h.transferKey) > 0 {
+		if err := transfer.Verify(h.transferKey, "firmware", id, r.URL.Query().Get("token"), time.Now()); err != nil {
+			http.Error(w, "missing, invalid, or expired download token", http.StatusForbidden)
+			return
+		}
+	}
 	img, err := h.firmware.Get(r.Context(), id)
 	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -196,7 +226,7 @@ func (h *handler) queueFirmwareDownload(ctx context.Context, deviceID, firmwareI
 	payload := jobs.FirmwareDownloadPayload{
 		FirmwareImageID: img.ID,
 		FileType:        "1 Firmware Upgrade Image",
-		URL:             fmt.Sprintf("%s/api/v1/firmware/images/%s/file", h.firmwareBase, img.ID),
+		URL:             h.signedFirmwareURL(img.ID),
 		FileSize:        img.FileSizeBytes,
 		TargetFilename:  img.Filename,
 		DelaySeconds:    delaySeconds,

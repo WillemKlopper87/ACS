@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"acs/internal/jobs"
+	"acs/internal/transfer"
 	"acs/internal/uploads"
 )
 
@@ -74,6 +75,9 @@ func (h *handler) createDeviceUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	url := fmt.Sprintf("%s/api/v1/uploads/%s/receive", h.uploadsBase, slot.ID)
+	if len(h.transferKey) > 0 {
+		url += "?token=" + transfer.Sign(h.transferKey, "upload", slot.ID, time.Now().Add(uploadTokenTTL))
+	}
 	job, err := h.jobs.Create(r.Context(), id, jobs.TypeUpload, jobs.UploadPayload{FileType: req.FileType, URL: url}, operator)
 	if err != nil {
 		h.logger.Error("failed to queue upload", "err", err, "device_id", id)
@@ -92,7 +96,17 @@ func (h *handler) createDeviceUpload(w http.ResponseWriter, r *http.Request) {
 // buffered in memory regardless of file size.
 func (h *handler) receiveUpload(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.uploads.ByID(r.Context(), id); errors.Is(err, uploads.ErrNotFound) {
+	// This route is public (a CPE's Upload RPC PUT has no JWT), so the
+	// expiring token issued with the slot is the entire authorization
+	// (audit P0.3) — knowledge of a slot UUID alone is not a credential.
+	if len(h.transferKey) > 0 {
+		if err := transfer.Verify(h.transferKey, "upload", id, r.URL.Query().Get("token"), time.Now()); err != nil {
+			http.Error(w, "missing, invalid, or expired upload token", http.StatusForbidden)
+			return
+		}
+	}
+	slot, err := h.uploads.ByID(r.Context(), id)
+	if errors.Is(err, uploads.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	} else if err != nil {
@@ -100,9 +114,25 @@ func (h *handler) receiveUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	if slot.Status != uploads.StatusPending {
+		// One slot receives exactly one file — a second PUT (replayed
+		// token, retransmit, or overwrite attempt) is rejected.
+		http.Error(w, "upload slot already used", http.StatusConflict)
+		return
+	}
 
-	sha256hex, size, err := h.uploadsFS.Save(id, r.Body)
+	// Cap the body (audit P0.3: unbounded stream to disk). MaxBytesReader
+	// fails the read once the ceiling is crossed, so at most the ceiling
+	// plus one buffer ever lands on disk before cleanup.
+	body := http.MaxBytesReader(w, r.Body, h.uploadMaxBytes)
+	sha256hex, size, err := h.uploadsFS.Save(id, body)
 	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			// Save already removed the partial file on the write error.
+			http.Error(w, fmt.Sprintf("upload exceeds the %d-byte limit", h.uploadMaxBytes), http.StatusRequestEntityTooLarge)
+			return
+		}
 		h.logger.Error("failed to save uploaded file", "err", err, "id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -113,6 +143,13 @@ func (h *handler) receiveUpload(w http.ResponseWriter, r *http.Request) {
 		filename = id
 	}
 	f, err := h.uploads.MarkReceived(r.Context(), id, filename, sha256hex, size)
+	if errors.Is(err, uploads.ErrNotFound) {
+		// Lost the PENDING->RECEIVED race to a concurrent PUT — this
+		// request's file must not overwrite the recorded one.
+		h.uploadsFS.Remove(id)
+		http.Error(w, "upload slot already used", http.StatusConflict)
+		return
+	}
 	if err != nil {
 		h.logger.Error("failed to mark upload received", "err", err, "id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
