@@ -1,13 +1,7 @@
-import { createContext, useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { getAuthState, setAuthenticated, clearAuth, subscribe, type AuthState } from "./tokenStore";
 import { api } from "../api/client";
-
-export interface AuthContextValue extends AuthState {
-  login: (username: string, password: string) => Promise<void>;
-  logout: () => void;
-}
-
-export const AuthContext = createContext<AuthContextValue | null>(null);
+import { AuthContext } from "./context";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>(getAuthState());

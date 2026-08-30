@@ -1,5 +1,5 @@
 import { useContext } from "react";
-import { AuthContext, type AuthContextValue } from "./AuthContext";
+import { AuthContext, type AuthContextValue } from "./context";
 
 // Kept apart from AuthContext.tsx so that file exports only a component
 // and React Fast Refresh can hot-swap it (lint: react/only-export-components).
