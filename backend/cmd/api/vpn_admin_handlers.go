@@ -17,6 +17,9 @@ import (
 
 func (h *handler) enrollVPNPeer(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
+	if _, ok := h.getScopedDevice(w, r, deviceID); !ok {
+		return
+	}
 	peer, err := h.vpnPeers.EnrollDevice(r.Context(), deviceID)
 	if err == vpn.ErrAlreadyEnrolled {
 		http.Error(w, "device already has an enrolled vpn peer — revoke it first to re-enroll", http.StatusConflict)
@@ -60,6 +63,9 @@ func (h *handler) listVPNPeers(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) getVPNPeerConfig(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
+	if _, ok := h.getScopedDevice(w, r, deviceID); !ok {
+		return
+	}
 	peer, err := h.vpnPeers.GetPeerConfig(r.Context(), deviceID)
 	if err == vpn.ErrNotFound {
 		http.Error(w, "device has no enrolled vpn peer", http.StatusNotFound)

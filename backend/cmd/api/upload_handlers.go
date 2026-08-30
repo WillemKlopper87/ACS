@@ -6,7 +6,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,12 +51,7 @@ func toUploadedFileResponse(f *uploads.UploadedFile) uploadedFileResponse {
 // session that dispatched the RPC.
 func (h *handler) createDeviceUpload(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
 		return
 	}
 
@@ -152,6 +146,9 @@ func sanitizeUploadFilename(name string) string {
 
 func (h *handler) listDeviceUploads(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
+		return
+	}
 	list, err := h.uploads.ListByDevice(r.Context(), id)
 	if err != nil {
 		h.logger.Error("failed to list uploads", "err", err, "device_id", id)
@@ -178,6 +175,11 @@ func (h *handler) serveUploadedFile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Error("failed to look up upload", "err", err, "id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	// The upload belongs to a device; the caller must be in that
+	// device's tenancy scope (audit P0.2).
+	if _, ok := h.getScopedDevice(w, r, f.DeviceID); !ok {
 		return
 	}
 	if f.Status != uploads.StatusReceived {

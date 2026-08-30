@@ -88,7 +88,11 @@ func computeAlarms(informRecency map[string]int, jobSuccessRatePct float64, jobT
 // scope in one response.
 func (h *handler) getDashboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	customerIDs, scoped := h.deviceScope(r)
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	byStatus, err := h.devices.CountByOnlineStatus(ctx, customerIDs, scoped)
 	if err != nil {
@@ -133,7 +137,7 @@ func (h *handler) getDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobStats, err := h.jobs.StatusCountsSince(ctx, time.Now().UTC().Add(-24*time.Hour))
+	jobStats, err := h.jobs.StatusCountsSince(ctx, time.Now().UTC().Add(-24*time.Hour), customerIDs, scoped)
 	if err != nil {
 		h.logger.Error("failed to count job statuses", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -182,20 +186,22 @@ func (h *handler) getDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Blocked rollouts aren't scoped to the operator's devices (rollouts
-	// span the fleet by model filter, not by customer) — this is a
-	// fleet-operations signal every operator with rollout visibility
-	// should see, same reasoning as job stats above.
-	rollouts, err := h.rollouts.List(ctx)
-	if err != nil {
-		h.logger.Error("failed to list rollouts", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
+	// Rollouts span the fleet by model filter, not by customer, so their
+	// counts can't be narrowed to a tenancy scope — a scoped operator
+	// simply doesn't get the fleet-operations signal (audit P0.2: no
+	// fleet-wide aggregates across a tenancy boundary).
 	blockedRollouts := 0
-	for _, ro := range rollouts {
-		if ro.Status == rollout.StatusBlocked {
-			blockedRollouts++
+	if !scoped {
+		rollouts, err := h.rollouts.List(ctx)
+		if err != nil {
+			h.logger.Error("failed to list rollouts", "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		for _, ro := range rollouts {
+			if ro.Status == rollout.StatusBlocked {
+				blockedRollouts++
+			}
 		}
 	}
 

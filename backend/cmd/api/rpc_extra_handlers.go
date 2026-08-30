@@ -3,9 +3,7 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"net/http"
 
 	"acs/internal/jobs"
@@ -20,12 +18,7 @@ type scheduleInformRequest struct {
 // ACS-initiated Connection Request.
 func (h *handler) createScheduleInform(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
 		return
 	}
 
@@ -61,12 +54,7 @@ type setParameterAttributesRequest struct {
 // (1), or neither (0), rather than the ACS having to poll for it.
 func (h *handler) createSetParameterAttributes(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
 		return
 	}
 
@@ -107,12 +95,7 @@ type getParameterAttributesRequest struct {
 // every other job type.
 func (h *handler) createGetParameterAttributes(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
 		return
 	}
 

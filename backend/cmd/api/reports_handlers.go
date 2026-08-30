@@ -17,6 +17,9 @@ type updateLocationRequest struct {
 
 func (h *handler) updateDeviceLocation(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
+		return
+	}
 	var req updateLocationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -41,7 +44,11 @@ var reportColumns = []string{
 // project on top of the calling operator's own multi-tenancy scope
 // (always applied, same as every other device read in this app).
 func (h *handler) exportDevicesExcel(w http.ResponseWriter, r *http.Request) {
-	customerIDs, scoped := h.deviceScope(r)
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	var filterCustomer, filterRegion, filterProject *string
 	if v := r.URL.Query().Get("customer_id"); v != "" {

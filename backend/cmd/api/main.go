@@ -567,31 +567,71 @@ func toResponse(d devices.Device) deviceResponse {
 // is superadmin, or the operator has no scope rows assigned (the default,
 // backward-compatible for every operator until a superadmin explicitly
 // scopes one).
-func (h *handler) deviceScope(r *http.Request) (customerIDs []string, scoped bool) {
+//
+// Lookup failures return an error and the caller must fail the request
+// (audit P0.2): the previous behavior of treating a failed scope
+// resolution as "unrestricted" turned transient DB errors into a
+// cross-tenant data exposure.
+func (h *handler) deviceScope(r *http.Request) (customerIDs []string, scoped bool, err error) {
 	if len(h.jwtSecret) == 0 {
-		return nil, false
+		return nil, false, nil
 	}
 	claims, ok := operatorClaims(r.Context())
 	if !ok || claims.Role == operators.RoleSuperAdmin {
-		return nil, false
+		return nil, false, nil
 	}
 	op, err := h.operators.ByUsername(r.Context(), claims.Subject)
 	if err != nil {
 		h.logger.Error("failed to resolve operator for scoping", "err", err, "username", claims.Subject)
-		return nil, false
+		return nil, false, fmt.Errorf("resolve operator for scoping: %w", err)
 	}
 	ids, isScoped, err := h.tenancy.AccessibleCustomerIDs(r.Context(), op.ID)
 	if err != nil {
 		h.logger.Error("failed to resolve operator scope", "err", err, "operator_id", op.ID)
+		return nil, false, fmt.Errorf("resolve operator scope: %w", err)
+	}
+	return ids, isScoped, nil
+}
+
+// getScopedDevice loads a device and enforces the calling operator's
+// tenancy scope in one place (audit P0.2) — every device-addressed
+// handler goes through here instead of calling h.devices.Get directly.
+// It writes the HTTP response itself on failure: 404 both when the
+// device doesn't exist and when it is outside the caller's scope (a 403
+// would confirm the device exists across a tenant boundary), 500 when
+// the device or scope lookup errors — a failed scope resolution denies
+// access, it no longer falls open.
+func (h *handler) getScopedDevice(w http.ResponseWriter, r *http.Request, id string) (*devices.Device, bool) {
+	d, err := h.devices.Get(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "not found", http.StatusNotFound)
 		return nil, false
 	}
-	return ids, isScoped
+	if err != nil {
+		h.logger.Error("failed to get device", "err", err, "id", id)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, false
+	}
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, false
+	}
+	if scoped && !deviceInScope(d.CustomerID, customerIDs) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return nil, false
+	}
+	return d, true
 }
 
 func (h *handler) listDevices(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	customerIDs, scoped := h.deviceScope(r)
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	result, err := h.devices.List(r.Context(), devices.ListParams{Page: page, PageSize: pageSize, CustomerIDs: customerIDs, Scoped: scoped})
 	if err != nil {
@@ -617,7 +657,12 @@ func (h *handler) listDevices(w http.ResponseWriter, r *http.Request) {
 // device to count client-side) is exactly the thing pagination above
 // exists to avoid.
 func (h *handler) listDevicesSummary(w http.ResponseWriter, r *http.Request) {
-	groups, err := h.devices.Summary(r.Context())
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	groups, err := h.devices.Summary(r.Context(), customerIDs, scoped)
 	if err != nil {
 		h.logger.Error("failed to summarize devices", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -644,7 +689,12 @@ func (h *handler) listMatchingDeviceIDs(w http.ResponseWriter, r *http.Request) 
 		ConnectionRequestMode: r.URL.Query().Get("connection_request_mode"),
 		Search:                r.URL.Query().Get("search"),
 	}
-	ids, err := h.devices.MatchingIDs(r.Context(), filter)
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	ids, err := h.devices.MatchingIDs(r.Context(), filter, customerIDs, scoped)
 	if err != nil {
 		h.logger.Error("failed to list matching device ids", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -660,7 +710,11 @@ func (h *handler) listMatchingDeviceIDs(w http.ResponseWriter, r *http.Request) 
 // here is a live SQL aggregate, not a cached/estimated figure.
 func (h *handler) fleetHealth(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	customerIDs, scoped := h.deviceScope(r)
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	byStatus, err := h.devices.CountByOnlineStatus(ctx, customerIDs, scoped)
 	if err != nil {
 		h.logger.Error("failed to count devices by online status", "err", err)
@@ -684,7 +738,7 @@ func (h *handler) fleetHealth(w http.ResponseWriter, r *http.Request) {
 	// read isn't worth it yet (build plan note, not a security gap: job
 	// stats reveal fleet-wide operational health, not any specific
 	// customer's device identities or data).
-	jobStats, err := h.jobs.StatusCountsSince(ctx, time.Now().UTC().Add(-24*time.Hour))
+	jobStats, err := h.jobs.StatusCountsSince(ctx, time.Now().UTC().Add(-24*time.Hour), customerIDs, scoped)
 	if err != nil {
 		h.logger.Error("failed to count job statuses", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -712,23 +766,8 @@ func (h *handler) fleetHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) getDevice(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	d, err := h.devices.Get(r.Context(), id)
-	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if customerIDs, scoped := h.deviceScope(r); scoped && !deviceInScope(d.CustomerID, customerIDs) {
-		// A scoped operator asking for a device outside their scope gets
-		// the same 404 as a genuinely nonexistent ID — a 403 here would
-		// confirm the device exists at all, leaking information across a
-		// tenancy boundary a 404 doesn't.
-		http.Error(w, "not found", http.StatusNotFound)
+	d, ok := h.getScopedDevice(w, r, r.PathValue("id"))
+	if !ok {
 		return
 	}
 	writeJSON(w, http.StatusOK, toResponse(*d))
@@ -767,12 +806,7 @@ type cachedValueResponse struct {
 // An optional ?paths=a,b,c filters to just those parameter names.
 func (h *handler) getParameters(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
 		return
 	}
 
@@ -812,12 +846,7 @@ func (h *handler) getParameterHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name query parameter is required", http.StatusBadRequest)
 		return
 	}
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
 		return
 	}
 
@@ -869,12 +898,7 @@ type putParametersRequest struct {
 // device's next session).
 func (h *handler) putParameters(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
 		return
 	}
 
@@ -967,11 +991,30 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-device tenancy enforcement (audit P0.2): a scoped operator's
+	// bulk request must not fan out to devices outside their scope —
+	// out-of-scope IDs report the same "not found" a single-device
+	// endpoint would return, without blocking the in-scope remainder.
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	operator := operatorFromRequest(r)
 	results := make([]bulkActionResult, 0, len(req.DeviceIDs))
 
 	for _, deviceID := range req.DeviceIDs {
 		result := bulkActionResult{DeviceID: deviceID}
+
+		if scoped {
+			d, err := h.devices.Get(r.Context(), deviceID)
+			if err != nil || !deviceInScope(d.CustomerID, customerIDs) {
+				result.Error = "not found"
+				results = append(results, result)
+				continue
+			}
+		}
 
 		switch req.Action {
 		case jobs.TypeSetParameter:
@@ -1070,14 +1113,8 @@ const (
 // attempt's outcome, which is still pending when this responds.
 func (h *handler) createConnectionRequest(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	device, err := h.devices.Get(r.Context(), id)
-	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	device, ok := h.getScopedDevice(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -1127,14 +1164,8 @@ func (h *handler) createConnectionRequest(w http.ResponseWriter, r *http.Request
 // unrecognized vendor rather than failing.
 func (h *handler) refreshCellularDiagnostics(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	device, err := h.devices.Get(r.Context(), id)
-	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	device, ok := h.getScopedDevice(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -1160,13 +1191,8 @@ func (h *handler) refreshCellularDiagnostics(w http.ResponseWriter, r *http.Requ
 // mirroring refreshCellularDiagnostics' shape.
 func (h *handler) refreshWifiClients(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	device, err := h.devices.Get(r.Context(), id)
-	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	device, ok := h.getScopedDevice(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -1194,13 +1220,8 @@ func (h *handler) refreshWifiClients(w http.ResponseWriter, r *http.Request) {
 // CONNECTION_REQUEST and FIRMWARE_DOWNLOAD.
 func (h *handler) createDiagnosticsPing(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	device, err := h.devices.Get(r.Context(), id)
-	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	device, ok := h.getScopedDevice(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -1269,13 +1290,8 @@ const (
 
 func (h *handler) createDiagnosticsTraceroute(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	device, err := h.devices.Get(r.Context(), id)
-	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	device, ok := h.getScopedDevice(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -1359,7 +1375,12 @@ func toJobResponse(job *jobs.Job) jobResponse {
 // listJobs backs the Jobs screen — every job across the fleet, most
 // recent first, capped at jobs.listLimit since there's no pagination yet.
 func (h *handler) listJobs(w http.ResponseWriter, r *http.Request) {
-	list, err := h.jobs.List(r.Context(), "")
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	list, err := h.jobs.List(r.Context(), "", customerIDs, scoped)
 	if err != nil {
 		h.logger.Error("failed to list jobs", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -1376,16 +1397,11 @@ func (h *handler) listJobs(w http.ResponseWriter, r *http.Request) {
 // device's jobs, most recent first.
 func (h *handler) listDeviceJobs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
 		return
 	}
 
-	list, err := h.jobs.List(r.Context(), id)
+	list, err := h.jobs.List(r.Context(), id, nil, false)
 	if err != nil {
 		h.logger.Error("failed to list device jobs", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -1408,6 +1424,11 @@ func (h *handler) getJob(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Error("failed to get job", "err", err, "command_key", commandKey)
 		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	// A job belongs to a device; the caller must be in that device's
+	// tenancy scope (audit P0.2) — same 404-not-403 shape as devices.
+	if _, ok := h.getScopedDevice(w, r, job.DeviceID); !ok {
 		return
 	}
 

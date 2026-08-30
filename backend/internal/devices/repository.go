@@ -181,13 +181,18 @@ type GroupCount struct {
 // — a SQL GROUP BY, not "fetch everything and count in the frontend", so
 // it stays cheap regardless of fleet size. This is what a mass-review
 // view can render immediately without paging through every device first.
-func (r *Repository) Summary(ctx context.Context) ([]GroupCount, error) {
+func (r *Repository) Summary(ctx context.Context, customerIDs []string, scoped bool) ([]GroupCount, error) {
+	clause, arg := scopeFilter(scoped, customerIDs)
+	var args []any
+	if arg != nil {
+		args = append(args, arg)
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT manufacturer, online_status, connection_request_mode, COUNT(*)
-		FROM devices
+		FROM devices `+clause+`
 		GROUP BY manufacturer, online_status, connection_request_mode
 		ORDER BY manufacturer, online_status, connection_request_mode
-	`)
+	`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("summarize devices: %w", err)
 	}
@@ -292,12 +297,15 @@ type MatchingFilter struct {
 // row selection accumulated across pages but had no way to select
 // everything matching a filter without paging through it by hand — this
 // is that "real further step".
-func (r *Repository) MatchingIDs(ctx context.Context, filter MatchingFilter) ([]string, error) {
+func (r *Repository) MatchingIDs(ctx context.Context, filter MatchingFilter, customerIDs []string, scoped bool) ([]string, error) {
 	var conditions []string
 	var args []any
 	arg := func(v any) string {
 		args = append(args, v)
 		return fmt.Sprintf("$%d", len(args))
+	}
+	if scoped {
+		conditions = append(conditions, "customer_id::text = ANY("+arg(store.StringArray(customerIDs))+")")
 	}
 	if filter.Manufacturer != "" {
 		conditions = append(conditions, "manufacturer = "+arg(filter.Manufacturer))

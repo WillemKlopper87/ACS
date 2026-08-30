@@ -6,9 +6,7 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"net/http"
 
 	"acs/internal/tenancy"
@@ -159,12 +157,7 @@ func (h *handler) deleteProject(w http.ResponseWriter, r *http.Request) {
 // curated tenancy.manage permission rather than superadmin-only.
 func (h *handler) assignDeviceCustomer(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
 		return
 	}
 	var req struct {
@@ -188,12 +181,7 @@ func (h *handler) assignDeviceCustomer(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) setDeviceProjects(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
 		return
 	}
 	var req struct {
@@ -212,7 +200,11 @@ func (h *handler) setDeviceProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) getDeviceProjects(w http.ResponseWriter, r *http.Request) {
-	projects, err := h.tenancy.DeviceProjects(r.Context(), r.PathValue("id"))
+	id := r.PathValue("id")
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
+		return
+	}
+	projects, err := h.tenancy.DeviceProjects(r.Context(), id)
 	if err != nil {
 		h.logger.Error("failed to get device projects", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

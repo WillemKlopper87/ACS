@@ -6,8 +6,6 @@
 package main
 
 import (
-	"database/sql"
-	"errors"
 	"net/http"
 	"time"
 
@@ -20,13 +18,8 @@ import (
 // TR-181 (Device.) first for a device that has never been discovered.
 func (h *handler) createParameterDiscovery(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	device, err := h.devices.Get(r.Context(), id)
-	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	device, ok := h.getScopedDevice(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -53,12 +46,7 @@ func (h *handler) createParameterDiscovery(w http.ResponseWriter, r *http.Reques
 // never run for this device, not a 404, since the device itself does exist.
 func (h *handler) getParameterNames(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
 		return
 	}
 

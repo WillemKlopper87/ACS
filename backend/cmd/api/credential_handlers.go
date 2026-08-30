@@ -6,7 +6,6 @@
 package main
 
 import (
-	"database/sql"
 	"errors"
 	"net/http"
 	"time"
@@ -51,13 +50,8 @@ func toCredentialResponse(c *credentials.Credential) credentialResponse {
 // before switching the ACS's own Connection Request client over.
 func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	device, err := h.devices.Get(r.Context(), id)
-	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	device, ok := h.getScopedDevice(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -102,6 +96,9 @@ func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request)
 
 func (h *handler) listDeviceCredentials(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
+		return
+	}
 	list, err := h.credentials.ListByDevice(r.Context(), id)
 	if err != nil {
 		h.logger.Error("failed to list device credentials", "err", err, "device_id", id)
@@ -124,6 +121,9 @@ func (h *handler) listDeviceCredentials(w http.ResponseWriter, r *http.Request) 
 // should exist, not an instant cutover.
 func (h *handler) activateDeviceCredential(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
+	if _, ok := h.getScopedDevice(w, r, deviceID); !ok {
+		return
+	}
 	credID := r.PathValue("credential_id")
 
 	cred, err := h.credentials.Activate(r.Context(), credID)
@@ -151,6 +151,9 @@ func (h *handler) activateDeviceCredential(w http.ResponseWriter, r *http.Reques
 // PENDING rotation that was never activated).
 func (h *handler) revokeDeviceCredential(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
+	if _, ok := h.getScopedDevice(w, r, deviceID); !ok {
+		return
+	}
 	credID := r.PathValue("credential_id")
 
 	cred, err := h.credentials.Revoke(r.Context(), credID)

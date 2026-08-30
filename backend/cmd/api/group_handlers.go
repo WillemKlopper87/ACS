@@ -21,6 +21,9 @@ type updateTagsRequest struct {
 
 func (h *handler) updateDeviceTags(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
+		return
+	}
 	var req updateTagsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)

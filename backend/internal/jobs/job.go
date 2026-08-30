@@ -13,7 +13,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"acs/internal/store"
 
 	"github.com/google/uuid"
 )
@@ -257,6 +260,16 @@ func NewRepository(db *sql.DB) *Repository {
 const jobColumns = `id, command_key, device_id, type, status, payload, attempts, max_attempts,
 	created_by, created_at, updated_at, started_at, completed_at, fault_code, fault_string, result_detail`
 
+// prefixedJobColumns qualifies jobColumns with a table alias for queries
+// that join jobs against another table.
+func prefixedJobColumns(prefix string) string {
+	cols := strings.Split(jobColumns, ",")
+	for i, c := range cols {
+		cols[i] = prefix + strings.TrimSpace(c)
+	}
+	return strings.Join(cols, ", ")
+}
+
 // Create queues a new job in status QUEUED. payload is marshaled to JSON
 // as-is (typically a SetParameterPayload or GetParameterPayload).
 func (r *Repository) Create(ctx context.Context, deviceID, jobType string, payload any, createdBy string) (*Job, error) {
@@ -498,8 +511,20 @@ func (r *Repository) ByCommandKey(ctx context.Context, commandKey string) (*Job,
 // §16.1), computed over a real recent window rather than all-time so a
 // fleet that used to be unhealthy but has since recovered isn't dragged
 // down by history.
-func (r *Repository) StatusCountsSince(ctx context.Context, since time.Time) (map[string]int, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM jobs WHERE created_at >= $1 GROUP BY status`, since)
+// customerIDs/scoped restrict the count to jobs belonging to devices in
+// the operator's tenancy scope (audit P0.2) — pass scoped=false for the
+// unrestricted fleet-wide view.
+func (r *Repository) StatusCountsSince(ctx context.Context, since time.Time, customerIDs []string, scoped bool) (map[string]int, error) {
+	query := `SELECT status, COUNT(*) FROM jobs WHERE created_at >= $1 GROUP BY status`
+	args := []any{since}
+	if scoped {
+		query = `SELECT j.status, COUNT(*) FROM jobs j
+			JOIN devices d ON d.id = j.device_id
+			WHERE j.created_at >= $1 AND d.customer_id::text = ANY($2)
+			GROUP BY j.status`
+		args = append(args, store.StringArray(customerIDs))
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("count job statuses since: %w", err)
 	}
@@ -526,11 +551,20 @@ const listLimit = 200
 // List returns the most recently created jobs, optionally filtered to one
 // device. deviceID == "" lists across the whole fleet (the Jobs screen);
 // a non-empty deviceID scopes it to one device (Device Detail's recent
-// jobs panel).
-func (r *Repository) List(ctx context.Context, deviceID string) ([]Job, error) {
+// jobs panel). customerIDs/scoped restrict fleet-wide listing to devices
+// in the operator's tenancy scope (audit P0.2) — the single-device path
+// relies on the caller having already authorized that device.
+func (r *Repository) List(ctx context.Context, deviceID string, customerIDs []string, scoped bool) ([]Job, error) {
 	var rows *sql.Rows
 	var err error
-	if deviceID == "" {
+	if deviceID == "" && scoped {
+		rows, err = r.db.QueryContext(ctx, `
+			SELECT `+prefixedJobColumns("j.")+` FROM jobs j
+			JOIN devices d ON d.id = j.device_id
+			WHERE d.customer_id::text = ANY($1)
+			ORDER BY j.created_at DESC LIMIT $2
+		`, store.StringArray(customerIDs), listLimit)
+	} else if deviceID == "" {
 		rows, err = r.db.QueryContext(ctx, `
 			SELECT `+jobColumns+` FROM jobs ORDER BY created_at DESC LIMIT $1
 		`, listLimit)

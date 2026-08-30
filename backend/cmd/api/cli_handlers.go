@@ -5,7 +5,6 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -42,12 +41,7 @@ func toCLICredentialResponse(c cliaccess.Credential) cliCredentialResponse {
 
 func (h *handler) createCLICredential(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		h.logger.Error("failed to get device", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
 		return
 	}
 
@@ -81,6 +75,9 @@ func (h *handler) createCLICredential(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) listCLICredentials(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
+		return
+	}
 	creds, err := h.cli.ListByDevice(r.Context(), id)
 	if err != nil {
 		h.logger.Error("failed to list cli credentials", "err", err, "device_id", id)
