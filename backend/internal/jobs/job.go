@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -46,6 +47,25 @@ const (
 	StatusFailed                   = "FAILED"
 	StatusTimeout                  = "TIMEOUT"
 )
+
+// Lease durations (audit P1.1). A session-dispatched RPC completes
+// within one CWMP session, so its lease is short; connection requests
+// are bounded by their own timeout; a firmware transfer waiting on
+// TransferComplete may legitimately take hours, so it has a generous
+// separate deadline rather than a lease. Expired leases are recovered
+// by RecoverExpiredLeases.
+const (
+	sessionLease     = 15 * time.Minute
+	workerLease      = 5 * time.Minute
+	transferDeadline = 24 * time.Hour
+)
+
+// LeaseOwner identifies this process on every lease it takes, so an
+// operator inspecting a stranded job can tell which instance held it.
+var LeaseOwner = func() string {
+	host, _ := os.Hostname()
+	return fmt.Sprintf("%s/%d", host, os.Getpid())
+}()
 
 // sessionDispatchableTypes are the job types cmd/acs's per-device Lease
 // hands out — types that make sense as a CWMP RPC sent within an open
@@ -342,9 +362,10 @@ func (r *Repository) Lease(ctx context.Context, deviceID string) (*Job, error) {
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE jobs SET status = 'RPC_SENT', started_at = now(), updated_at = now(), attempts = attempts + 1
+		UPDATE jobs SET status = 'RPC_SENT', started_at = now(), updated_at = now(), attempts = attempts + 1,
+			lease_owner = $2, leased_until = now() + $3 * interval '1 second'
 		WHERE id = $1
-	`, job.ID); err != nil {
+	`, job.ID, LeaseOwner, int(sessionLease.Seconds())); err != nil {
 		return nil, fmt.Errorf("mark job leased: %w", err)
 	}
 
@@ -387,9 +408,10 @@ func (r *Repository) LeaseNextByType(ctx context.Context, jobType string) (*Job,
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE jobs SET status = 'IN_PROGRESS', started_at = now(), updated_at = now(), attempts = attempts + 1
+		UPDATE jobs SET status = 'IN_PROGRESS', started_at = now(), updated_at = now(), attempts = attempts + 1,
+			lease_owner = $2, leased_until = now() + $3 * interval '1 second'
 		WHERE id = $1
-	`, job.ID); err != nil {
+	`, job.ID, LeaseOwner, int(workerLease.Seconds())); err != nil {
 		return nil, fmt.Errorf("mark job leased: %w", err)
 	}
 
@@ -483,13 +505,104 @@ func (r *Repository) MarkAwaitingTransferComplete(ctx context.Context, id string
 // of spawning a new job per poll (build plan §4 Phase 5).
 func (r *Repository) Requeue(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `
-		UPDATE jobs SET status = 'QUEUED', updated_at = now()
+		UPDATE jobs SET status = 'QUEUED', updated_at = now(), lease_owner = NULL, leased_until = NULL
 		WHERE id = $1
 	`, id)
 	if err != nil {
 		return fmt.Errorf("requeue job: %w", err)
 	}
 	return nil
+}
+
+// ExtendLease pushes a leased job's deadline out by d from now — the
+// heartbeat for work that legitimately outlives its initial lease.
+func (r *Repository) ExtendLease(ctx context.Context, id string, d time.Duration) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE jobs SET leased_until = now() + $2 * interval '1 second', updated_at = now()
+		WHERE id = $1 AND status IN ('RPC_SENT', 'IN_PROGRESS')
+	`, id, int(d.Seconds()))
+	if err != nil {
+		return fmt.Errorf("extend job lease: %w", err)
+	}
+	return nil
+}
+
+// RecoveryResult reports what one RecoverExpiredLeases pass did.
+type RecoveryResult struct {
+	Requeued     int // lease expired, attempts remained -> back to QUEUED
+	DeadLettered int // lease expired, attempts exhausted -> FAILED
+	TimedOut     int // AWAITING_TRANSFER_COMPLETE past the transfer deadline -> FAILED
+}
+
+// RecoverExpiredLeases is the stale-lease reaper (audit P1.1). A job
+// whose holder died mid-flight would otherwise sit in RPC_SENT /
+// IN_PROGRESS forever, invisible to every Lease query. Expired leases
+// go back to QUEUED while attempts remain (Lease increments attempts on
+// the next pickup, so a job that keeps stranding is bounded by
+// max_attempts) and are dead-lettered as FAILED otherwise, with the
+// reason recorded in fault_string. Legacy rows leased before the lease
+// columns existed (leased_until IS NULL) are recovered on their
+// started_at instead, so nothing already stranded stays stranded.
+func (r *Repository) RecoverExpiredLeases(ctx context.Context) (RecoveryResult, error) {
+	var res RecoveryResult
+
+	dead, err := r.db.ExecContext(ctx, `
+		UPDATE jobs SET status = 'FAILED', completed_at = now(), updated_at = now(),
+			fault_code = 'LEASE_EXPIRED',
+			fault_string = 'job lease expired after ' || attempts || ' attempt(s); last holder ' || COALESCE(lease_owner, 'unknown'),
+			lease_owner = NULL, leased_until = NULL
+		WHERE status IN ('RPC_SENT', 'IN_PROGRESS')
+		  AND COALESCE(leased_until, started_at + $1 * interval '1 second') < now()
+		  AND attempts >= max_attempts
+	`, int(sessionLease.Seconds()))
+	if err != nil {
+		return res, fmt.Errorf("dead-letter expired leases: %w", err)
+	}
+	if n, err := dead.RowsAffected(); err == nil {
+		res.DeadLettered = int(n)
+	}
+
+	requeued, err := r.db.ExecContext(ctx, `
+		UPDATE jobs SET status = 'QUEUED', updated_at = now(), lease_owner = NULL, leased_until = NULL
+		WHERE status IN ('RPC_SENT', 'IN_PROGRESS')
+		  AND COALESCE(leased_until, started_at + $1 * interval '1 second') < now()
+		  AND attempts < max_attempts
+	`, int(sessionLease.Seconds()))
+	if err != nil {
+		return res, fmt.Errorf("requeue expired leases: %w", err)
+	}
+	if n, err := requeued.RowsAffected(); err == nil {
+		res.Requeued = int(n)
+	}
+
+	timedOut, err := r.db.ExecContext(ctx, `
+		UPDATE jobs SET status = 'FAILED', completed_at = now(), updated_at = now(),
+			fault_code = 'TRANSFER_TIMEOUT',
+			fault_string = 'no TransferComplete received within ' || $1 || ' hours'
+		WHERE status = 'AWAITING_TRANSFER_COMPLETE'
+		  AND COALESCE(started_at, created_at) < now() - $1 * interval '1 hour'
+	`, int(transferDeadline.Hours()))
+	if err != nil {
+		return res, fmt.Errorf("time out stale transfers: %w", err)
+	}
+	if n, err := timedOut.RowsAffected(); err == nil {
+		res.TimedOut = int(n)
+	}
+	return res, nil
+}
+
+// CountStaleLeases counts leased jobs already past their deadline — the
+// gauge that says the reaper is falling behind (or not running).
+func (r *Repository) CountStaleLeases(ctx context.Context) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM jobs
+		WHERE status IN ('RPC_SENT', 'IN_PROGRESS') AND leased_until < now()
+	`).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count stale leases: %w", err)
+	}
+	return n, nil
 }
 
 // ByID fetches a job by its internal ID (used by the session dispatcher,

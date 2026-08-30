@@ -184,6 +184,7 @@ func main() {
 		"device_per_second", deviceRate, "device_burst", deviceBurst)
 
 	go pollDevicesOnlineGauge(ctx, h.devices, metrics, logger)
+	go runLeaseReaper(ctx, h.jobs, metrics, logger)
 
 	mux := http.NewServeMux()
 	// Catch-all rather than exact "/cwmp": CPEs in the field get provisioned
@@ -405,6 +406,37 @@ func pollDevicesOnlineGauge(ctx context.Context, repo *devices.Repository, metri
 			}
 		}
 		<-ticker.C
+	}
+}
+
+// leaseReaperInterval paces the stale-lease reaper (audit P1.1). Well
+// under the shortest lease so a stranded job is requeued promptly; each
+// pass is three indexed UPDATEs, so it is cheap at any fleet size.
+const leaseReaperInterval = 30 * time.Second
+
+func runLeaseReaper(ctx context.Context, repo *jobs.Repository, metrics *observability.Metrics, logger *slog.Logger) {
+	ticker := time.NewTicker(leaseReaperInterval)
+	defer ticker.Stop()
+	for {
+		res, err := repo.RecoverExpiredLeases(ctx)
+		if err != nil {
+			logger.Error("lease reaper pass failed", "err", err)
+		} else {
+			if res.Requeued+res.DeadLettered+res.TimedOut > 0 {
+				logger.Warn("recovered stranded jobs", "requeued", res.Requeued, "dead_lettered", res.DeadLettered, "transfer_timeout", res.TimedOut)
+			}
+			metrics.JobsRecoveredTotal.WithLabelValues("requeued").Add(float64(res.Requeued))
+			metrics.JobsRecoveredTotal.WithLabelValues("dead_lettered").Add(float64(res.DeadLettered))
+			metrics.JobsRecoveredTotal.WithLabelValues("transfer_timeout").Add(float64(res.TimedOut))
+		}
+		if n, err := repo.CountStaleLeases(ctx); err == nil {
+			metrics.JobsStaleLeases.Set(float64(n))
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 

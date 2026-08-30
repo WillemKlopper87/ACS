@@ -30,6 +30,8 @@ type Metrics struct {
 
 	JobsCreatedTotal   *prometheus.CounterVec
 	JobsCompletedTotal *prometheus.CounterVec
+	JobsRecoveredTotal *prometheus.CounterVec // audit P1.1: stale-lease reaper outcomes
+	JobsStaleLeases    prometheus.Gauge
 
 	SessionsOpenedTotal prometheus.Counter
 	InformsTotal        prometheus.Counter
@@ -69,6 +71,16 @@ func NewMetrics(service string) *Metrics {
 			Help:        "Jobs completed, by type and terminal status.",
 			ConstLabels: constLabels,
 		}, []string{"type", "status"}),
+		JobsRecoveredTotal: factory.NewCounterVec(prometheus.CounterOpts{
+			Name:        "acs_jobs_recovered_total",
+			Help:        "Jobs recovered by the stale-lease reaper, by outcome (requeued, dead_lettered, transfer_timeout).",
+			ConstLabels: constLabels,
+		}, []string{"outcome"}),
+		JobsStaleLeases: factory.NewGauge(prometheus.GaugeOpts{
+			Name:        "acs_jobs_stale_leases",
+			Help:        "Leased jobs currently past their lease deadline (should stay near zero when the reaper is healthy).",
+			ConstLabels: constLabels,
+		}),
 		SessionsOpenedTotal: factory.NewCounter(prometheus.CounterOpts{
 			Name:        "acs_cwmp_sessions_opened_total",
 			Help:        "CWMP sessions opened.",
