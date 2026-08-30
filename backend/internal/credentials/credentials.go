@@ -29,7 +29,18 @@ import (
 	"github.com/google/uuid"
 )
 
-const TypeConnectionRequest = "CONNECTION_REQUEST"
+const (
+	TypeConnectionRequest = "CONNECTION_REQUEST"
+	// TypeCWMPDigest is the CPE->ACS direction: the username/password the
+	// device presents on every CWMP session (ManagementServer.Username /
+	// .Password). Unlike CONNECTION_REQUEST it activates itself — the
+	// first Inform authenticated with a PENDING credential is the proof
+	// the CPE applied it (see cmd/acs's Digest lookup hook).
+	TypeCWMPDigest = "CWMP_DIGEST"
+)
+
+// ValidType reports whether t is a credential_type this package manages.
+func ValidType(t string) bool { return t == TypeConnectionRequest || t == TypeCWMPDigest }
 
 const (
 	StatusPending = "PENDING"
@@ -246,6 +257,23 @@ func (r *Repository) ActiveForDevice(ctx context.Context, deviceID, credType str
 	cred, err := r.scanCredential(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoActiveCredential
+	}
+	return cred, err
+}
+
+// LookupCWMPDigest finds the live (PENDING, ACTIVE, or GRACE) CWMP_DIGEST
+// credential a CPE is presenting by username — the per-Inform lookup
+// behind per-device Digest auth. Usernames are random and unique across
+// the fleet (GenerateUsernamePassword), so one row at most matches.
+func (r *Repository) LookupCWMPDigest(ctx context.Context, username string) (*Credential, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT `+credColumns+` FROM device_credentials
+		WHERE credential_type = $1 AND username = $2 AND status IN ($3, $4, $5)
+		ORDER BY version DESC LIMIT 1`,
+		TypeCWMPDigest, username, StatusPending, StatusActive, StatusGrace)
+	cred, err := r.scanCredential(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
 	}
 	return cred, err
 }

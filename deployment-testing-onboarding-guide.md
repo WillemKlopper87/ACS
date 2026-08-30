@@ -254,6 +254,8 @@ ACS_INSECURE_DEV_MODE (literal "true" disables secret enforcement — isolated
 ACS_DEVICE_NET_ALLOWED_CIDRS (cmd/api — comma-separated device networks the
   web-GUI proxy and SSH/Telnet bridge may dial; loopback/link-local/metadata
   are always refused),
+ACS_CREDENTIAL_ENCRYPTION_KEY is now also read by cmd/acs (decrypts per-device
+  CWMP_DIGEST credentials — set the same value on both processes),
 ACS_UPLOAD_MAX_BYTES (cmd/api — CPE upload receipt ceiling, default 256 MiB),
 ACS_DB_MAX_OPEN_CONNS, ACS_DB_MAX_IDLE_CONNS, ACS_DB_CONN_MAX_LIFETIME,
 ACS_DB_CONN_MAX_IDLE_TIME (all services — pool limits; defaults 20/5/30m/5m),

@@ -25,6 +25,7 @@ import (
 
 	"acs/internal/auth"
 	"acs/internal/config"
+	"acs/internal/credentials"
 	"acs/internal/cwmp"
 	"acs/internal/devices"
 	"acs/internal/devices/adapters"
@@ -127,6 +128,13 @@ func main() {
 		{Env: "ACS_DIGEST_PASSWORD", MinBytes: 16, Purpose: "authenticates CPE CWMP sessions via HTTP Digest"},
 		{Env: "ACS_MTLS_CA_CERT", MinBytes: 1, Purpose: "authenticates CPE CWMP sessions via client certificates"},
 	}
+	// Per-device Digest credentials are read from device_credentials,
+	// which cmd/api encrypts with this key; without it, rows written by
+	// an encrypting cmd/api cannot be decrypted here.
+	if err := config.Validate(logger, config.Secret{Env: "ACS_CREDENTIAL_ENCRYPTION_KEY", MinBytes: 16, Purpose: "decrypts per-device CWMP Digest credentials", Optional: true}); err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
 	if err := config.RequireOneOf(logger, "the CWMP endpoint would otherwise accept unauthenticated devices", cpeAuthSecrets...); err != nil {
 		logger.Error("refusing to start", "err", err)
 		os.Exit(1)
@@ -147,10 +155,47 @@ func main() {
 	}
 	logger.Info("migrations applied")
 
+	credRepo, err := credentials.NewRepository(db, os.Getenv("ACS_CREDENTIAL_ENCRYPTION_KEY"))
+	if err != nil {
+		logger.Error("failed to initialize credential decryption", "err", err)
+		os.Exit(1)
+	}
+	if os.Getenv("ACS_CREDENTIAL_ENCRYPTION_KEY") == "" {
+		logger.Warn("ACS_CREDENTIAL_ENCRYPTION_KEY not set on cmd/acs — per-device CWMP Digest credentials encrypted by cmd/api will not verify here")
+	}
 	authr := auth.DigestAuthenticator{
 		Username:   os.Getenv("ACS_DIGEST_USERNAME"),
 		Password:   os.Getenv("ACS_DIGEST_PASSWORD"),
 		AllowBasic: envBool("ACS_AUTH_ALLOW_BASIC"),
+		// Per-device credentials (audit P0.5): a username that isn't the
+		// shared one is looked up in device_credentials; the first
+		// successful use of a PENDING credential activates it.
+		Lookup: func(username string) (string, bool) {
+			cred, err := credRepo.LookupCWMPDigest(context.Background(), username)
+			if err != nil {
+				return "", false
+			}
+			return cred.Password, true
+		},
+		OnAuthenticated: func(username string) {
+			ctx := context.Background()
+			cred, err := credRepo.LookupCWMPDigest(ctx, username)
+			if err != nil || cred.Status != credentials.StatusPending {
+				return
+			}
+			if _, err := credRepo.Activate(ctx, cred.ID); err != nil {
+				logger.Error("failed to auto-activate per-device digest credential", "err", err, "credential_id", cred.ID)
+				return
+			}
+			logger.Info("per-device CWMP Digest credential activated on first use", "device_id", cred.DeviceID, "version", cred.Version)
+			_ = observability.NewAuditor(db).Record(ctx, "system", cred.DeviceID, "CredentialRotation", map[string]any{
+				"credential_id": cred.ID, "version": cred.Version, "type": credentials.TypeCWMPDigest, "phase": "activated-on-first-use",
+			})
+		},
+	}
+	if authr.Password == "" {
+		// Per-device-only (or mTLS) fleets: nonces still need a key.
+		authr.NonceSecret = []byte(os.Getenv("ACS_CREDENTIAL_ENCRYPTION_KEY"))
 	}
 	if !authr.Enabled() {
 		logger.Warn("ACS_DIGEST_USERNAME/ACS_DIGEST_PASSWORD not set — CWMP endpoint is running WITHOUT authentication (design doc v3 §11.1/§11.2).")

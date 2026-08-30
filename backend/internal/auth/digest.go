@@ -75,6 +75,19 @@ type DigestAuthenticator struct {
 	// (ACS_AUTH_ALLOW_BASIC=1) when onboarding such devices, ideally only
 	// together with TLS since Basic sends the password in cleartext.
 	AllowBasic bool
+
+	// Lookup, when set, resolves a presented username that is not the
+	// shared Username to its per-device password (audit P0.5: unique
+	// per-device credentials). Returning ok=false rejects the request.
+	Lookup func(username string) (password string, ok bool)
+	// OnAuthenticated is invoked after a per-device credential verifies —
+	// the hook that auto-activates a PENDING rotation.
+	OnAuthenticated func(username string)
+	// NonceSecret keys the nonce HMAC. When empty the shared Password is
+	// used, which is fine for the common single-credential fleet; set it
+	// explicitly when the shared credential is absent (per-device only)
+	// so nonces are still unforgeable.
+	NonceSecret []byte
 }
 
 // Enabled reports whether a credential has been configured. When it
@@ -82,7 +95,21 @@ type DigestAuthenticator struct {
 // that fact loudly — this is a lab harness, not production (v3 §11.1:
 // "No plaintext CWMP in production").
 func (d DigestAuthenticator) Enabled() bool {
-	return d.Username != "" && d.Password != ""
+	return (d.Username != "" && d.Password != "") || d.Lookup != nil
+}
+
+// passwordFor resolves the password to verify a presented username
+// against: the shared credential, or a per-device one via Lookup.
+func (d DigestAuthenticator) passwordFor(username string) (password string, perDevice bool, ok bool) {
+	if d.Username != "" && username == d.Username {
+		return d.Password, false, true
+	}
+	if d.Lookup != nil && username != "" {
+		if pw, found := d.Lookup(username); found {
+			return pw, true, true
+		}
+	}
+	return "", false, false
 }
 
 // Challenge sends a 401 with a fresh Digest challenge (and, when
@@ -137,7 +164,9 @@ func (d DigestAuthenticator) Verify(r *http.Request) (ok bool, stale bool) {
 // qop=auth, single-use for legacy non-qop responses.
 func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time.Time) (ok bool, stale bool) {
 	params := parseDigestParams(rest)
-	if params["username"] != d.Username {
+	username := params["username"]
+	password, perDevice, found := d.passwordFor(username)
+	if !found {
 		return false, false
 	}
 	if rl, present := params["realm"]; present && rl != realm {
@@ -153,7 +182,7 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 		return false, false
 	}
 
-	ha1 := md5Hex(d.Username + ":" + realm + ":" + d.Password)
+	ha1 := md5Hex(username + ":" + realm + ":" + password)
 	ha2 := md5Hex(r.Method + ":" + params["uri"])
 
 	var expected string
@@ -177,7 +206,13 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 	if now.After(issued.Add(nonceTTL)) {
 		return false, true
 	}
-	return d.checkReplay(nonce, qop, params["nc"], issued.Add(nonceTTL), now), false
+	if !d.checkReplay(nonce, qop, params["nc"], issued.Add(nonceTTL), now) {
+		return false, false
+	}
+	if perDevice && d.OnAuthenticated != nil {
+		d.OnAuthenticated(username)
+	}
+	return true, false
 }
 
 // checkReplay records this (nonce, nc) use and reports whether it is
@@ -217,7 +252,11 @@ func (d DigestAuthenticator) checkReplay(nonce, qop, ncHex string, expires, now 
 // so every ACS replica sharing the credential also accepts each other's
 // nonces, with nothing extra to configure.
 func (d DigestAuthenticator) nonceKey() []byte {
-	mac := hmac.New(sha256.New, []byte(d.Password))
+	secret := d.NonceSecret
+	if len(secret) == 0 {
+		secret = []byte(d.Password)
+	}
+	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte("acs-digest-nonce-v1"))
 	return mac.Sum(nil)
 }
@@ -264,9 +303,17 @@ func (d DigestAuthenticator) verifyBasic(encoded string) bool {
 	if !ok {
 		return false
 	}
-	userOK := subtle.ConstantTimeCompare([]byte(user), []byte(d.Username)) == 1
-	passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(d.Password)) == 1
-	return userOK && passOK
+	expected, perDevice, found := d.passwordFor(user)
+	if !found {
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(pass), []byte(expected)) != 1 {
+		return false
+	}
+	if perDevice && d.OnAuthenticated != nil {
+		d.OnAuthenticated(user)
+	}
+	return true
 }
 
 func md5Hex(s string) string {

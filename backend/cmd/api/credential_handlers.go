@@ -6,6 +6,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -55,6 +56,27 @@ func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Optional body selects the direction: CONNECTION_REQUEST (default,
+	// ACS->CPE) or CWMP_DIGEST (CPE->ACS, per-device Digest identity —
+	// activates itself on the CPE's first authenticated Inform).
+	credType := credentials.TypeConnectionRequest
+	if r.ContentLength != 0 {
+		var req struct {
+			CredentialType string `json:"credential_type"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if req.CredentialType != "" {
+			if !credentials.ValidType(req.CredentialType) {
+				http.Error(w, "credential_type must be CONNECTION_REQUEST or CWMP_DIGEST", http.StatusBadRequest)
+				return
+			}
+			credType = req.CredentialType
+		}
+	}
+
 	username, password, err := credentials.GenerateUsernamePassword()
 	if err != nil {
 		h.logger.Error("failed to generate credential", "err", err, "device_id", id)
@@ -62,8 +84,12 @@ func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	usernamePath, _ := adapters.ResolvePath(device.DataModelRoot, adapters.ManagementServerConnectionRequestUser)
-	passwordPath, _ := adapters.ResolvePath(device.DataModelRoot, adapters.ManagementServerConnectionRequestPass)
+	userParam, passParam := adapters.ManagementServerConnectionRequestUser, adapters.ManagementServerConnectionRequestPass
+	if credType == credentials.TypeCWMPDigest {
+		userParam, passParam = adapters.ManagementServerUsername, adapters.ManagementServerPassword
+	}
+	usernamePath, _ := adapters.ResolvePath(device.DataModelRoot, userParam)
+	passwordPath, _ := adapters.ResolvePath(device.DataModelRoot, passParam)
 
 	job, err := h.jobs.Create(r.Context(), id, jobs.TypeSetParameter, jobs.SetParameterPayload{
 		Parameters: []jobs.ParameterWrite{
@@ -77,7 +103,7 @@ func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	cred, err := h.credentials.Create(r.Context(), id, credentials.TypeConnectionRequest, username, password, job.CommandKey)
+	cred, err := h.credentials.Create(r.Context(), id, credType, username, password, job.CommandKey)
 	if err != nil {
 		h.logger.Error("failed to record new credential", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -85,7 +111,7 @@ func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := h.auditor.Record(r.Context(), operatorFromRequest(r), id, "CredentialRotation", map[string]any{
-		"credential_id": cred.ID, "version": cred.Version, "command_key": job.CommandKey,
+		"credential_id": cred.ID, "version": cred.Version, "command_key": job.CommandKey, "type": credType,
 		"phase": "started", "username": "***", "password": "***",
 	}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)

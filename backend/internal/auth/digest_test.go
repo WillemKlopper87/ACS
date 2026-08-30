@@ -193,3 +193,51 @@ func TestDigestAuthenticator_Challenge(t *testing.T) {
 		t.Error("ChallengeStale() did not set stale=true")
 	}
 }
+
+// --- per-device credentials (audit P0.5 remainder) ---------------------
+
+func TestDigest_PerDeviceLookup(t *testing.T) {
+	var activated []string
+	d := DigestAuthenticator{
+		Username: "cpe-device", Password: "s3cret",
+		Lookup: func(u string) (string, bool) {
+			if u == "cr-device-1" {
+				return "device-1-password", true
+			}
+			return "", false
+		},
+		OnAuthenticated: func(u string) { activated = append(activated, u) },
+	}
+	nonce := issuedNonce(t, d, time.Now())
+	mk := func(user, pass, nc string) *http.Request {
+		req := httptest.NewRequest(http.MethodPost, "/cwmp", nil)
+		req.Header.Set("Authorization", buildAuthHeader(user, pass, http.MethodPost, "/cwmp", nonce, nc, "c"))
+		return req
+	}
+	if ok, _ := d.Verify(mk("cr-device-1", "device-1-password", "00000001")); !ok {
+		t.Fatal("per-device credential rejected, want accepted")
+	}
+	if len(activated) != 1 || activated[0] != "cr-device-1" {
+		t.Errorf("OnAuthenticated calls = %v, want [cr-device-1]", activated)
+	}
+	if ok, _ := d.Verify(mk("cr-device-1", "wrong", "00000002")); ok {
+		t.Error("per-device credential with wrong password accepted")
+	}
+	if ok, _ := d.Verify(mk("cr-unknown", "device-1-password", "00000003")); ok {
+		t.Error("unknown per-device username accepted")
+	}
+	// The shared credential keeps working alongside, without the hook.
+	if ok, _ := d.Verify(mk("cpe-device", "s3cret", "00000004")); !ok {
+		t.Error("shared credential rejected once Lookup is set")
+	}
+	if len(activated) != 1 {
+		t.Errorf("OnAuthenticated fired for the shared credential: %v", activated)
+	}
+}
+
+func TestDigest_EnabledWithLookupOnly(t *testing.T) {
+	d := DigestAuthenticator{Lookup: func(string) (string, bool) { return "", false }, NonceSecret: []byte("k")}
+	if !d.Enabled() {
+		t.Error("Enabled() = false with only a per-device Lookup, want true")
+	}
+}

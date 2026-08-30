@@ -32,6 +32,8 @@ const (
 	ManagementServerConnectionRequestURL  CanonicalParameter = "management_server.connection_request_url"
 	ManagementServerConnectionRequestUser CanonicalParameter = "management_server.connection_request_username"
 	ManagementServerConnectionRequestPass CanonicalParameter = "management_server.connection_request_password"
+	ManagementServerUsername              CanonicalParameter = "management_server.username" // CPE->ACS Digest identity
+	ManagementServerPassword              CanonicalParameter = "management_server.password"
 	WiFiSSID                              CanonicalParameter = "wifi.ssid"
 	WiFiKeyPassphrase                     CanonicalParameter = "wifi.key_passphrase"
 )
@@ -44,6 +46,8 @@ var device2Paths = map[CanonicalParameter]string{
 	ManagementServerConnectionRequestURL:  "Device.ManagementServer.ConnectionRequestURL",
 	ManagementServerConnectionRequestUser: "Device.ManagementServer.ConnectionRequestUsername",
 	ManagementServerConnectionRequestPass: "Device.ManagementServer.ConnectionRequestPassword",
+	ManagementServerUsername:              "Device.ManagementServer.Username",
+	ManagementServerPassword:              "Device.ManagementServer.Password",
 	WiFiSSID:                              "Device.WiFi.SSID.1.SSID",
 	WiFiKeyPassphrase:                     "Device.WiFi.AccessPoint.1.Security.KeyPassphrase",
 }
@@ -63,6 +67,8 @@ var igd1Paths = map[CanonicalParameter]string{
 	ManagementServerConnectionRequestURL:  "InternetGatewayDevice.ManagementServer.ConnectionRequestURL",
 	ManagementServerConnectionRequestUser: "InternetGatewayDevice.ManagementServer.ConnectionRequestUsername",
 	ManagementServerConnectionRequestPass: "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword",
+	ManagementServerUsername:              "InternetGatewayDevice.ManagementServer.Username",
+	ManagementServerPassword:              "InternetGatewayDevice.ManagementServer.Password",
 	WiFiSSID:                              "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
 	WiFiKeyPassphrase:                     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase",
 }

@@ -904,6 +904,22 @@ paths:
     post:
       tags: [Credentials]
       summary: Generate + queue a new Connection Request credential, recorded PENDING (credential.manage permission)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                credential_type:
+                  type: string
+                  enum: [CONNECTION_REQUEST, CWMP_DIGEST]
+                  default: CONNECTION_REQUEST
+                  description: >
+                    CONNECTION_REQUEST rotates the ACS->CPE Connection Request credential (activate explicitly
+                    once the SetParameterValues job succeeds). CWMP_DIGEST provisions a per-device CPE->ACS
+                    Digest identity (ManagementServer.Username/Password); it activates itself on the device's
+                    first Inform authenticated with it.
       parameters: [{ $ref: "#/components/parameters/DeviceId" }]
       responses:
         "202": { description: Queued, content: { application/json: { schema: { $ref: "#/components/schemas/Credential" } } } }
