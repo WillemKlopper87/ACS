@@ -116,10 +116,10 @@ jobs:
             curl -fsS "http://localhost:$port/readyz" || { echo "readiness failed on $port"; exit 1; }
           done
           kill $p1 $p2 $p3; wait || true
-      - name: DB-backed integration tests (two-tenant isolation, transfer tokens, service identity)
+      - name: DB-backed integration tests (two-tenant isolation, transfer tokens, service identity, mock-CPE session)
         env:
           ACS_TEST_POSTGRES_DSN: postgres://acs:acs@localhost:5432/acs?sslmode=disable
-        run: go test -race -count=1 -run Integration ./cmd/api/
+        run: go test -race -count=1 -run Integration ./cmd/api/ ./cmd/acs/
       - name: placeholder secrets are refused (fail-closed)
         run: |
           set +e
