@@ -1,5 +1,7 @@
 # Enterprise TR-069 ACS Platform — Application Design
 
+> **Historical document.** Written before the 2026-08-30 audit hardening pass; the code, the root README, and `ACS_CODEBASE_AUDIT_2026-08-28.md` are the source of truth where this differs.
+
 Status: Draft  
 Date: 2026-08-04  
 Scope: Implementation design for an enterprise TR-069 / CWMP ACS platform managing Huawei 5G CPE, Nokia FastMile, Teltonika 5G CPE, and Zyxel 5G CPE devices.

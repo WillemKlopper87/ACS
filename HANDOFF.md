@@ -56,12 +56,12 @@ Domain packages (`internal/`, 25): `jobs` (DB queue, `FOR UPDATE SKIP LOCKED` le
 
 17 screens, all wired to real endpoints (no mock data, no TODOs): Dashboard (customizable widgets), Device Fleet, Fleet Control (bulk actions incl. "select all N matching"), Fleet Health, Jobs, Groups, Templates, Scheduled Jobs, Rollouts, Policies, Audit Log, Operators (+ RBAC matrix, scopes), Tenancy (+ bulk device import json/csv/xml), Reports (xlsx export), BSS Integration (+ 4 troubleshoot probes), Login (+ forgot/reset), and a 548-line Device Detail panel (parameters, history, live GET, discovery, tags, location, jobs, credentials, ping/traceroute, add/delete object, schedule-inform, reboot, factory reset, and embedded Console / RemoteShell (xterm.js) / WebGUI iframe / VPN / Tenancy sub-panels).
 
-Shared `DataTable` (TanStack Table + virtual), `StatusBadge`, toast, hand-rolled CSS token system with 4 themes, `useLive` 6 s polling that pauses on hidden tab. **No router, no server-state library, no tests, no error boundaries, ~zero a11y.**
+Shared `DataTable` (TanStack Table + virtual), `StatusBadge`, toast, hand-rolled CSS token system with 4 themes, `useLive` 6 s polling that pauses on hidden tab. **No router, no server-state library, ~zero a11y.** Since the 2026-08-30 hardening pass: screens are lazy-loaded chunks with an error boundary, and there is a small Vitest suite (auth, roles, format, StatusBadge).
 
 ### 2.3 Infra / deploy
 
 - `infra/docker-compose.yml`: Postgres 16 + Prometheus + Grafana (provisioned "ACS Fleet Health" dashboard, 3 alert rules, **no Alertmanager**). This is a *monitoring* stack — the Go services are **not containerized**.
-- Real deploy path = `scripts/quickstart.sh` → `start.sh` on an Ubuntu EC2 host: `go build`, `nohup` the two binaries with PID files, `python3 -m http.server` for the built SPA, secrets generated once by `gen-env.sh` into `~/.acs-secrets.env` (chmod 600). nginx and systemd units exist only as heredocs inside `EC2-DEPLOYMENT-GUIDE.md`. No Dockerfiles, no IaC, no CI.
+- Real deploy path = `scripts/quickstart.sh` → `start.sh` on an Ubuntu EC2 host: `go build`, `nohup` the two binaries with PID files, `python3 -m http.server` for the built SPA, secrets generated once by `gen-env.sh` into `~/.acs-secrets.env` (chmod 600). nginx and systemd units exist only as heredocs inside `EC2-DEPLOYMENT-GUIDE.md`. Dockerfiles for all four services plus a `containerized` compose profile, and a GitHub Actions gate (`.github/workflows/ci.yml`) now exist; still no IaC beyond the EC2 shell scripts.
 - It **has been deployed to EC2 with real CPEs** (a ZTE-family "ZOWEE 5G CPE Max 6" behind CGNAT — see `deployment-testing-onboarding-guide.md`). Commit `df309c5` was driven by devices failing to connect: cwmp:ID echo, whitespace-only POST = empty request, accept any path, TLS floor 1.0 + legacy suites, Basic auth fallback, drain body before 401. Whether the device ultimately onboarded end-to-end is not recorded anywhere.
 
 ### 2.4 Things that exist in code but the build plan never mentions
@@ -72,7 +72,7 @@ The "admin-platform backlog" (migrations 0027–0039, ~Aug 6–7): parameter dis
 
 - **Instant device actions don't work behind CGNAT.** HTTP Connection Request only reaches devices with a routable IP; the TR-069 Annex G UDP Connection Request datagram is **not** implemented (spec for the HMAC signature couldn't be sourced — `deployment-testing-onboarding-guide.md` §9). Everything else reaches a device on its next periodic Inform.
 - BSS `SUSPEND`/`ACTIVATE` refused by design pending a per-vendor walled-garden answer; BSS webhooks documented as target design, `/bss/v1/*` has no rate limiting per the guide (adapter code has an in-process limiter — reconcile).
-- No TR-098 write paths; no per-vendor canonical parameter registry beyond the embedded catalog; no OpenAPI spec (deferred); `SetParameterAttributes` has no UI.
+- No TR-098 write paths; no per-vendor canonical parameter registry beyond the embedded catalog; OpenAPI specs exist (`backend/openapi.yaml`, `backend/openapi-bssadapter.yaml`) and a Go test fails on drift from the registered routes; `SetParameterAttributes` has no UI.
 - Prerequisites P1–P5 (data-model root, CWMP amendment, mTLS at factory, NAT/STUN, third-party license) were never confirmed against real units — the compatibility matrix `docs/device-compatibility-matrix.md` the plan calls for was never produced.
 - Production hardening checklist in `EC2-DEPLOYMENT-GUIDE.md` §12: all 9 boxes unticked.
 
@@ -91,7 +91,7 @@ The "admin-platform backlog" (migrations 0027–0039, ~Aug 6–7): parameter dis
 10. Infra: Grafana `admin/admin` + anonymous Viewer enabled; Postgres `acs/acs`; all three compose services bind `0.0.0.0`. `scripts/reset-admin-password.sh:20` interpolates the hash into SQL; hardcoded container name `infra-postgres-1`; `start.sh` builds/starts everything *before* failing on IP detection.
 
 ### Test coverage
-- **Zero tests** in `cmd/acs` (the 1.2k-line CWMP state machine), `cmd/api`, `internal/jobs`, `sessions`, `devices`, `firmware`, `rollout`, `scheduler`, `policy`, `tenancy`, `operators`, `parameters`, `templates`, `uploads`. Tests exist for wire format, auth, bss, connreq, credentials, ratelimit, stun, vpn, cliaccess, store, adapters.
+- **Thin tests** in `cmd/acs` (the 1.2k-line CWMP state machine — still zero), `sessions`, `devices`, `scheduler`, `policy`, `tenancy`, `parameters`, `templates` (zero). Tests exist for wire format, auth (incl. Digest replay/expiry), jwt, bss, connreq, credentials, ratelimit, stun, vpn, cliaccess, store, adapters, config, transfer, netguard, jobs, rollout, firmware/uploads storage, mailer, operators, and `cmd/api` (auth route policy, scope predicate, OpenAPI drift). No DB-backed integration harness or mock CPE yet — see ACS_CODEBASE_AUDIT_2026-08-28.md P2.1/P3.3.
 - Frontend: none. `playwright` is a dead devDependency.
 
 ### Frontend

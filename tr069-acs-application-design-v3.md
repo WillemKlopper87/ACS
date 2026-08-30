@@ -1,5 +1,7 @@
 # Enterprise TR-069 ACS Platform — Application Design v3
 
+> **Historical document.** Written before the 2026-08-30 audit hardening pass; the code, the root README, and `ACS_CODEBASE_AUDIT_2026-08-28.md` are the source of truth where this differs.
+
 Status: Draft v3  
 Date: 2026-08-04  
 Replaces: v2 application design  

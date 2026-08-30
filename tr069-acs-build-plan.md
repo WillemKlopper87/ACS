@@ -1,5 +1,7 @@
 # TR-069 ACS Platform — Build Plan
 
+> **Historical document.** Written before the 2026-08-30 audit hardening pass; the code, the root README, and `ACS_CODEBASE_AUDIT_2026-08-28.md` are the source of truth where this differs.
+
 Status: Draft  
 Date: 2026-08-04 (§§1-8 below); **updated 2026-08-11 to add §9 and §10 — see those for everything built since**  
 Source of truth: `tr069-acs-application-design-v3.md`  

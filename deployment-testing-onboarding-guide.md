@@ -200,7 +200,7 @@ Diagnostics → Ping, or the raw API `POST
 
 ## 7. Full environment variable reference
 
-Updated 2026-08-11 — the previous list here predated the admin-platform backlog (RBAC, tenancy, VPN/CLI/web-GUI, BSS OAuth2, mailer) and was missing everything it added. This list is grepped directly from every `os.Getenv`/`envOr*` call in `cmd/acs`, `cmd/api`, and `cmd/bssadapter` as of this date, grouped by which binary reads it:
+Updated 2026-08-30 for the audit hardening pass (see the `# hardening` block at the end, and note that every service now **fails closed** on missing/placeholder secrets unless `ACS_INSECURE_DEV_MODE=true`). The 2026-08-11 list predated the admin-platform backlog (RBAC, tenancy, VPN/CLI/web-GUI, BSS OAuth2, mailer) and was missing everything it added. This list is grepped directly from every `os.Getenv`/`envOr*` call in `cmd/acs`, `cmd/api`, and `cmd/bssadapter` as of this date, grouped by which binary reads it:
 
 ```
 # cmd/acs (CWMP gateway + STUN server)
@@ -244,6 +244,29 @@ ACS_INTERNAL_SERVICE_TOKEN (same value as cmd/api's, above)
 
 # cmd/probe only
 ACS_RESULTS_FILE
+
+# hardening (added 2026-08-30 — ACS_CODEBASE_AUDIT_2026-08-28.md)
+ACS_INSECURE_DEV_MODE (literal "true" disables secret enforcement — isolated
+  local development ONLY; otherwise JWT/encryption/service-token secrets are
+  required on cmd/api, Digest password or mTLS CA on cmd/acs, OAuth secret or
+  shared token plus service token on cmd/bssadapter; placeholders like
+  change-me and too-short values are refused at startup),
+ACS_DEVICE_NET_ALLOWED_CIDRS (cmd/api — comma-separated device networks the
+  web-GUI proxy and SSH/Telnet bridge may dial; loopback/link-local/metadata
+  are always refused),
+ACS_UPLOAD_MAX_BYTES (cmd/api — CPE upload receipt ceiling, default 256 MiB),
+ACS_DB_MAX_OPEN_CONNS, ACS_DB_MAX_IDLE_CONNS, ACS_DB_CONN_MAX_LIFETIME,
+ACS_DB_CONN_MAX_IDLE_TIME (all services — pool limits; defaults 20/5/30m/5m),
+ACS_RETENTION_SESSIONS_DAYS, ACS_RETENTION_AUDIT_LOG_DAYS,
+ACS_RETENTION_PARAMETER_HISTORY_DAYS, ACS_RETENTION_WEBHOOK_DELIVERIES_DAYS,
+ACS_RETENTION_FINISHED_JOBS_DAYS, ACS_RETENTION_STALE_UPLOAD_SLOTS_DAYS,
+ACS_RETENTION_RESET_TOKENS_DAYS (cmd/api — pruning windows, 0 disables;
+  defaults 30/365/90/30/90/7/1),
+ACS_API_CORS_ORIGIN now defaults to ACS_FRONTEND_BASE_URL rather than "*"
+
+# docker compose (infra/docker-compose.yml) — shell/.env, not the app env file
+GRAFANA_ADMIN_PASSWORD (required), ACS_POSTGRES_PASSWORD (default acs),
+ACS_ALERT_WEBHOOK_URL (Alertmanager receiver)
 ```
 
 ## 8. Why periodic interval matters right now
