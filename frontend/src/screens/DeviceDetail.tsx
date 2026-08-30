@@ -8,7 +8,7 @@ import { DeviceWebGUI } from "../components/DeviceWebGUI";
 import { VPNTunnel } from "../components/VPNTunnel";
 import { DeviceTenancy } from "../components/DeviceTenancy";
 import { timeAgo } from "../lib/format";
-import { useAuth } from "../auth/AuthContext";
+import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { useLive } from "../lib/useLive";
 import { useEscape } from "../lib/hotkeys";

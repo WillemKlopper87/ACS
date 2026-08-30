@@ -1,21 +1,8 @@
-import { useState, type ComponentType } from "react";
-import { DeviceFleet } from "./screens/DeviceFleet";
-import { FleetControl } from "./screens/FleetControl";
-import { Jobs } from "./screens/Jobs";
+import { Suspense, lazy, useState, type ComponentType } from "react";
 import { Login } from "./screens/Login";
-import { DeviceGroups } from "./screens/DeviceGroups";
-import { ScheduledJobs } from "./screens/ScheduledJobs";
-import { Policies } from "./screens/Policies";
-import { FirmwareRollouts } from "./screens/FirmwareRollouts";
-import { AuditLog } from "./screens/AuditLog";
-import { FleetHealthScreen } from "./screens/FleetHealthScreen";
-import { Operators } from "./screens/Operators";
-import { ConfigTemplates } from "./screens/ConfigTemplates";
-import { Tenancy } from "./screens/Tenancy";
-import { Dashboard } from "./screens/Dashboard";
-import { Reports } from "./screens/Reports";
-import { BSSIntegration } from "./screens/BSSIntegration";
-import { AuthProvider, useAuth } from "./auth/AuthContext";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { AuthProvider } from "./auth/AuthContext";
+import { useAuth } from "./auth/useAuth";
 import { canAdmin } from "./auth/roles";
 import { ToastHost } from "./components/Toast";
 import { useTheme, type Theme } from "./theme/useTheme";
@@ -46,22 +33,28 @@ const NAV: { id: Screen; label: string; adminOnly?: boolean }[] = [
   { id: "bss", label: "BSS Integration", adminOnly: true },
 ];
 
+// Every screen is a lazy chunk (audit P2.4: one 750 kB bundle). The
+// first paint only loads the shell plus the active screen; the rest
+// arrive on demand. Screens are named exports, hence the .then() shim.
+const screen = <T extends Record<string, ComponentType>>(load: () => Promise<T>, name: keyof T) =>
+  lazy(() => load().then((m) => ({ default: m[name] })));
+
 const SCREEN_COMPONENT: Record<Screen, ComponentType> = {
-  dashboard: Dashboard,
-  fleet: DeviceFleet,
-  control: FleetControl,
-  health: FleetHealthScreen,
-  jobs: Jobs,
-  groups: DeviceGroups,
-  templates: ConfigTemplates,
-  schedules: ScheduledJobs,
-  rollouts: FirmwareRollouts,
-  policies: Policies,
-  audit: AuditLog,
-  operators: Operators,
-  tenancy: Tenancy,
-  reports: Reports,
-  bss: BSSIntegration,
+  dashboard: screen(() => import("./screens/Dashboard"), "Dashboard"),
+  fleet: screen(() => import("./screens/DeviceFleet"), "DeviceFleet"),
+  control: screen(() => import("./screens/FleetControl"), "FleetControl"),
+  health: screen(() => import("./screens/FleetHealthScreen"), "FleetHealthScreen"),
+  jobs: screen(() => import("./screens/Jobs"), "Jobs"),
+  groups: screen(() => import("./screens/DeviceGroups"), "DeviceGroups"),
+  templates: screen(() => import("./screens/ConfigTemplates"), "ConfigTemplates"),
+  schedules: screen(() => import("./screens/ScheduledJobs"), "ScheduledJobs"),
+  rollouts: screen(() => import("./screens/FirmwareRollouts"), "FirmwareRollouts"),
+  policies: screen(() => import("./screens/Policies"), "Policies"),
+  audit: screen(() => import("./screens/AuditLog"), "AuditLog"),
+  operators: screen(() => import("./screens/Operators"), "Operators"),
+  tenancy: screen(() => import("./screens/Tenancy"), "Tenancy"),
+  reports: screen(() => import("./screens/Reports"), "Reports"),
+  bss: screen(() => import("./screens/BSSIntegration"), "BSSIntegration"),
 };
 
 function AppShell() {
@@ -129,7 +122,11 @@ function AppShell() {
 
       <div className="shell-main">
         <main className="view">
-          <ActiveScreen />
+          <ErrorBoundary key={screen}>
+            <Suspense fallback={<p className="dim">Loading…</p>}>
+              <ActiveScreen />
+            </Suspense>
+          </ErrorBoundary>
         </main>
       </div>
       <ToastHost />

@@ -1,10 +1,10 @@
 import type { ColumnDef } from "@tanstack/react-table";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { ConfigTemplate, TemplateParameter } from "../api/types";
 import { DataTable } from "../components/DataTable";
 import { fmtTime, timeAgo } from "../lib/format";
-import { useAuth } from "../auth/AuthContext";
+import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
 import { useEscape } from "../lib/hotkeys";
@@ -115,6 +115,12 @@ export function ConfigTemplates() {
     }
   }
 
+  // The column definitions are memoized on `writable` only; the delete
+  // handler is read through a ref so a fresh closure per render doesn't
+  // rebuild the table columns (lint: react-hooks/exhaustive-deps).
+  const onDeleteRef = useRef(onDelete);
+  onDeleteRef.current = onDelete;
+
   async function onApply() {
     if (!selected) return;
     setApplying(true);
@@ -181,7 +187,7 @@ export function ConfigTemplates() {
             disabled={!writable}
             onClick={(e) => {
               e.stopPropagation();
-              onDelete(row.original.id);
+              onDeleteRef.current(row.original.id);
             }}
           >
             Delete

@@ -4,7 +4,7 @@ import { api, ApiError } from "../api/client";
 import type { Policy } from "../api/types";
 import { DataTable } from "../components/DataTable";
 import { fmtTime, timeAgo } from "../lib/format";
-import { useAuth } from "../auth/AuthContext";
+import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
 

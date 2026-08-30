@@ -5,7 +5,7 @@ import type { BulkActionResponse, ConfigTemplate, Device, DeviceGroupCount } fro
 import { DataTable } from "../components/DataTable";
 import { StatusBadge } from "../components/StatusBadge";
 import { timeAgo } from "../lib/format";
-import { useAuth } from "../auth/AuthContext";
+import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { useLive } from "../lib/useLive";
 import { useSlashFocus } from "../lib/hotkeys";
@@ -153,7 +153,8 @@ export function FleetControl() {
   function toggle(id: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
@@ -162,7 +163,8 @@ export function FleetControl() {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       for (const d of visible) {
-        checked ? next.add(d.id) : next.delete(d.id);
+        if (checked) next.add(d.id);
+        else next.delete(d.id);
       }
       return next;
     });
