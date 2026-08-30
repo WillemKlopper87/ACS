@@ -109,7 +109,7 @@ a Trivy scan, and gitleaks. Make every job required in branch protection.
 | Annex G UDP connection requests (STUN-learned address, signed datagram, EventCode 6 confirmation) | Implemented from the spec text; not yet validated against real CPE hardware |
 | XMPP connection requests, TR-098 writes | Not implemented |
 | Per-device CPE→ACS Digest credentials (`CWMP_DIGEST` rotation, self-activating on first Inform) | Supported, alongside the shared credential and mTLS |
-| Object storage (S3) for firmware/uploads, multi-node HA | Not implemented (local disk) |
+| Object storage for firmware/uploads (`ACS_OBJECT_STORE=s3`: AWS S3, MinIO, any S3-compatible) | Supported; local disk remains the default |
 | Real-device compatibility matrix, load/soak evidence | Not yet recorded |
 
 ## Documents

@@ -9,18 +9,13 @@
 package uploads
 
 import (
+	"acs/internal/objstore"
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
-	"time"
-
 	"github.com/google/uuid"
+	"time"
 )
 
 const (
@@ -151,56 +146,12 @@ func nullIfEmpty(s string) any {
 	return s
 }
 
-// Storage is local-disk uploaded-file storage — the same deliberate
-// lab-scope stand-in for S3/MinIO internal/firmware.Storage already is,
-// for the same reason (this build's interesting part is the CWMP
-// Upload/TransferComplete protocol handling, not which object store sits
-// behind the receipt URL).
-type Storage struct {
-	root string
-}
+// Storage is the uploaded-file object store — local disk by default, S3
+// when ACS_OBJECT_STORE=s3 (see internal/objstore).
+type Storage = objstore.Store
 
-func NewStorage(root string) (*Storage, error) {
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return nil, fmt.Errorf("create upload storage root: %w", err)
-	}
-	return &Storage{root: root}, nil
-}
-
-// Save streams r to disk under id, returning the SHA256 and byte count
-// computed while writing — never buffers the whole file in memory.
-func (s *Storage) Save(id string, r io.Reader) (sha256hex string, size int64, err error) {
-	path := s.path(id)
-	f, err := os.Create(path)
-	if err != nil {
-		return "", 0, fmt.Errorf("create uploaded file: %w", err)
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	n, err := io.Copy(f, io.TeeReader(r, h))
-	if err != nil {
-		os.Remove(path)
-		return "", 0, fmt.Errorf("write uploaded file: %w", err)
-	}
-	return hex.EncodeToString(h.Sum(nil)), n, nil
-}
-
-func (s *Storage) Open(id string) (*os.File, error) {
-	f, err := os.Open(s.path(id))
-	if err != nil {
-		return nil, fmt.Errorf("open uploaded file: %w", err)
-	}
-	return f, nil
-}
-
-// Remove deletes the stored file for id — used when a fully-written
-// upload turns out to be unwanted (e.g. it lost the PENDING->RECEIVED
-// race to a concurrent PUT and must not shadow the recorded file).
-func (s *Storage) Remove(id string) {
-	os.Remove(s.path(id))
-}
-
-func (s *Storage) path(id string) string {
-	return filepath.Join(s.root, id+".bin")
+// NewStorage returns the local-disk backend rooted at root; main() uses
+// objstore.FromEnv to pick the backend from the environment.
+func NewStorage(root string) (Storage, error) {
+	return objstore.NewLocal(root)
 }

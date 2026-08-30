@@ -38,6 +38,7 @@ import (
 	"acs/internal/jobs"
 	"acs/internal/mailer"
 	"acs/internal/netguard"
+	"acs/internal/objstore"
 	"acs/internal/observability"
 	"acs/internal/operators"
 	"acs/internal/parameters"
@@ -91,14 +92,14 @@ func main() {
 	defer db.Close()
 
 	firmwareRoot := envOr("ACS_FIRMWARE_STORAGE_ROOT", "./firmware-storage")
-	firmwareStorage, err := firmware.NewStorage(firmwareRoot)
+	firmwareStorage, err := objstore.FromEnv(logger, firmwareRoot, "firmware/")
 	if err != nil {
 		logger.Error("failed to initialize firmware storage", "err", err, "root", firmwareRoot)
 		os.Exit(1)
 	}
 
 	uploadRoot := envOr("ACS_UPLOAD_STORAGE_ROOT", "./upload-storage")
-	uploadStorage, err := uploads.NewStorage(uploadRoot)
+	uploadStorage, err := objstore.FromEnv(logger, uploadRoot, "uploads/")
 	if err != nil {
 		logger.Error("failed to initialize upload storage", "err", err, "root", uploadRoot)
 		os.Exit(1)
