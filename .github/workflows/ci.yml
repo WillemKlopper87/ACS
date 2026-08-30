@@ -1,0 +1,152 @@
+# Required delivery gate (audit P1.6). Every job must pass before merge;
+# configure branch protection on main to require: go, frontend,
+# migrations, containers, security.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: backend (fmt, vet, test -race, govulncheck)
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "unformatted:"; echo "$out"; exit 1; fi
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test -race -count=1 ./...
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  frontend:
+    name: frontend (lint, typecheck+build, test, audit)
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test -- --run
+      - name: audit (production deps must be clean; dev deps at high+)
+        run: |
+          npm audit --omit=dev --audit-level=low
+          npm audit --audit-level=high
+
+  migrations:
+    name: migrations (clean DB, idempotent re-run, concurrent runners)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: acs, POSTGRES_PASSWORD: acs, POSTGRES_DB: acs }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U acs -d acs"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      ACS_POSTGRES_DSN: postgres://acs:acs@localhost:5432/acs?sslmode=disable
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: build migrate tool
+        run: go build -o /tmp/migrate ./cmd/migrate
+      - name: apply to a clean database
+        run: /tmp/migrate
+      - name: re-run is a no-op (idempotent, checksums verified)
+        run: /tmp/migrate
+      - name: concurrent runners serialize on the advisory lock
+        run: |
+          psql "$ACS_POSTGRES_DSN" -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
+          /tmp/migrate & /tmp/migrate & /tmp/migrate &
+          wait
+          n=$(psql -tA "$ACS_POSTGRES_DSN" -c 'SELECT COUNT(*) FROM schema_migrations')
+          f=$(ls internal/store/migrations/*.sql | wc -l)
+          echo "applied=$n files=$f"; [ "$n" = "$f" ]
+      - name: services start against the migrated schema (fail-closed config)
+        env:
+          ACS_JWT_SIGNING_SECRET: ci-only-jwt-secret-0123456789abcdef0123456789
+          ACS_CREDENTIAL_ENCRYPTION_KEY: ci-only-encryption-key-0123456789
+          ACS_INTERNAL_SERVICE_TOKEN: ci-only-internal-service-token-0123456789abcdef
+          ACS_DIGEST_USERNAME: cpe
+          ACS_DIGEST_PASSWORD: ci-only-digest-password-0123456789
+          ACS_BSS_OAUTH_SIGNING_SECRET: ci-only-bss-oauth-secret-0123456789abcdef
+          ACS_API_ADDR: ":18080"
+          ACS_ADDR: ":17547"
+          ACS_STUN_ADDR: "off"
+          ACS_BSS_ADDR: ":18090"
+        run: |
+          go build -o /tmp/acs ./cmd/acs && go build -o /tmp/api ./cmd/api && go build -o /tmp/bssadapter ./cmd/bssadapter
+          /tmp/acs & p1=$!; /tmp/api & p2=$!; /tmp/bssadapter & p3=$!
+          sleep 5
+          for port in 17547 18080 18090; do
+            curl -fsS "http://localhost:$port/readyz" || { echo "readiness failed on $port"; exit 1; }
+          done
+          kill $p1 $p2 $p3; wait || true
+      - name: placeholder secrets are refused (fail-closed)
+        run: |
+          set +e
+          ACS_JWT_SIGNING_SECRET=change-me ACS_CREDENTIAL_ENCRYPTION_KEY=change-me ACS_INTERNAL_SERVICE_TOKEN=change-me timeout 10 go run ./cmd/api
+          rc=$?; set -e
+          [ "$rc" -ne 0 ] || { echo "cmd/api started with placeholder secrets"; exit 1; }
+
+  containers:
+    name: container images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build backend images
+        run: |
+          for svc in acs api bssadapter; do
+            docker build -f backend/Dockerfile.$svc -t acs-$svc:ci backend
+          done
+      - name: build frontend image
+        run: docker build -t acs-frontend:ci frontend
+      - name: scan images (Trivy, fail on HIGH/CRITICAL fixable)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: acs-api:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+  security:
+    name: secrets scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

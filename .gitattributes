@@ -1,0 +1,8 @@
+# Normalize line endings: LF in the repository regardless of platform.
+# Windows checkouts previously produced CRLF working copies that made
+# gofmt -l flag every file and every commit warn about conversions.
+* text=auto eol=lf
+*.sh text eol=lf
+*.png binary
+*.jpg binary
+*.exe binary
