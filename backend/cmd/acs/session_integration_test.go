@@ -12,7 +12,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -244,5 +246,204 @@ func TestIntegration_CPESession(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Errorf("replayed Digest header → %d, want 401", res.StatusCode)
+	}
+}
+
+// vendorInform renders a periodic Inform for one of the vendor catalog
+// profiles (internal/devices/adapters/catalogs), the "vendor profiles"
+// half of the mock-CPE harness (audit P3.3).
+func vendorInform(t *testing.T, manufacturer, oui, productClass, serial string) string {
+	s := periodicInform(t)
+	s = strings.Replace(s, "<Manufacturer>Zyxel</Manufacturer>", "<Manufacturer>"+manufacturer+"</Manufacturer>", 1)
+	s = strings.Replace(s, "<OUI>001349</OUI>", "<OUI>"+oui+"</OUI>", 1)
+	s = strings.Replace(s, "<ProductClass>NR5103</ProductClass>", "<ProductClass>"+productClass+"</ProductClass>", 1)
+	s = strings.Replace(s, "<SerialNumber>S230Q12345678</SerialNumber>", "<SerialNumber>"+serial+"</SerialNumber>", 1)
+	return s
+}
+
+func newTestGateway(t *testing.T) (*handler, *httptest.Server, context.Context) {
+	t.Helper()
+	dsn := os.Getenv("ACS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("ACS_TEST_POSTGRES_DSN not set; skipping DB-backed integration test")
+	}
+	ctx := context.Background()
+	db, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.ExecContext(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	h := &handler{
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		auth:          auth.DigestAuthenticator{Username: cpeUser, Password: cpePass},
+		devices:       devices.NewRepository(db),
+		sessions:      sessions.NewRepository(db),
+		jobs:          jobs.NewRepository(db),
+		params:        parameters.NewRepository(db),
+		auditor:       observability.NewAuditor(db),
+		metrics:       observability.NewMetrics("acs-test"),
+		policies:      policy.NewRepository(db),
+		templates:     templates.NewRepository(db),
+		ipLimiter:     ratelimit.New(100000, 100000, time.Minute),
+		deviceLimiter: ratelimit.New(100000, 100000, time.Minute),
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", h.handleCWMP)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return h, srv, ctx
+}
+
+// TestIntegration_CPEVendorProfiles registers one device per vendor
+// catalog and checks each is recognised by manufacturer.
+func TestIntegration_CPEVendorProfiles(t *testing.T) {
+	h, srv, ctx := newTestGateway(t)
+	profiles := []struct{ manufacturer, oui, productClass, serial string }{
+		{"Huawei", "00E0FC", "5G CPE Pro", "HW0001"},
+		{"Nokia", "0005E4", "FastMile 5G", "NK0001"},
+		{"Teltonika", "001E42", "RUTX50", "TK0001"},
+		{"Zyxel", "001349", "NR7101", "ZX0001"},
+	}
+	for _, p := range profiles {
+		cpe := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
+		if code, body := cpe.post(vendorInform(t, p.manufacturer, p.oui, p.productClass, p.serial)); code != 200 || !strings.Contains(body, "InformResponse") {
+			t.Fatalf("%s Inform: %d %s", p.manufacturer, code, body)
+		}
+		cpe.post("")
+	}
+	list, err := h.devices.List(ctx, devices.ListParams{})
+	if err != nil || list.Total != len(profiles) {
+		t.Fatalf("devices registered = %d, want %d (%v)", list.Total, len(profiles), err)
+	}
+	seen := map[string]bool{}
+	for _, d := range list.Items {
+		seen[d.Manufacturer] = true
+	}
+	for _, p := range profiles {
+		if !seen[p.manufacturer] {
+			t.Errorf("%s not registered", p.manufacturer)
+		}
+	}
+}
+
+// TestIntegration_CPETransferComplete covers the firmware transfer path:
+// Download RPC dispatched, accepted, TransferComplete arriving in a later
+// session (delayed), then duplicated, then a stale fault; the last two
+// must not change the finished job (audit P3.3 "delayed/duplicate").
+func TestIntegration_CPETransferComplete(t *testing.T) {
+	h, srv, ctx := newTestGateway(t)
+	cpe := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
+	cpe.post(periodicInform(t))
+	cpe.post("")
+	list, _ := h.devices.List(ctx, devices.ListParams{})
+	device := list.Items[0]
+
+	job, err := h.jobs.Create(ctx, device.ID, jobs.TypeFirmwareDownload, jobs.FirmwareDownloadPayload{
+		FirmwareImageID: "img", FileType: "1 Firmware Upgrade Image", URL: "http://acs.test/fw.bin", FileSize: 1234, TargetFilename: "fw.bin",
+	}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cpe.cookie = nil
+	cpe.post(periodicInform(t))
+	code, body := cpe.post("")
+	if code != 200 || !strings.Contains(body, "<cwmp:Download>") || !strings.Contains(body, job.CommandKey) {
+		t.Fatalf("expected Download RPC, got %d %s", code, body)
+	}
+	cpe.post(fixture(t, "download_response.xml"))
+	j, _ := h.jobs.ByID(ctx, job.ID)
+	if j.Status != jobs.StatusAwaitingTransferComplete {
+		t.Fatalf("after DownloadResponse status = %s, want AWAITING_TRANSFER_COMPLETE", j.Status)
+	}
+
+	// Delayed: the CPE rebooted and opens a fresh session for TransferComplete.
+	tc := strings.Replace(fixture(t, "transfer_complete.xml"), "fw_20260804_test0001", job.CommandKey, 1)
+	cpe.cookie = nil
+	cpe.post(periodicInform(t))
+	if code, body = cpe.post(tc); code != 200 || !strings.Contains(body, "TransferCompleteResponse") {
+		t.Fatalf("TransferComplete: %d %s", code, body)
+	}
+	j, _ = h.jobs.ByID(ctx, job.ID)
+	if j.Status != jobs.StatusSuccess {
+		t.Fatalf("after TransferComplete status = %s, want SUCCESS", j.Status)
+	}
+	jobsBefore, _ := h.jobs.List(ctx, device.ID, nil, false)
+
+	// Duplicate TransferComplete: acked, ignored, no extra confirmation job.
+	cpe.post(tc)
+	jobsAfter, _ := h.jobs.List(ctx, device.ID, nil, false)
+	if len(jobsAfter) != len(jobsBefore) {
+		t.Errorf("duplicate TransferComplete created %d extra job(s)", len(jobsAfter)-len(jobsBefore))
+	}
+	// Stale fault after success must not flip the outcome.
+	tcFault := strings.Replace(fixture(t, "transfer_complete_fault.xml"), "fw_20260804_test0002", job.CommandKey, 1)
+	cpe.post(tcFault)
+	j, _ = h.jobs.ByID(ctx, job.ID)
+	if j.Status != jobs.StatusSuccess {
+		t.Errorf("stale fault after success changed status to %s", j.Status)
+	}
+	// Unknown command key is acked, not an error.
+	if code, _ = cpe.post(fixture(t, "transfer_complete.xml")); code != 200 {
+		t.Errorf("TransferComplete with unknown command key: %d, want 200 ack", code)
+	}
+}
+
+// TestIntegration_CPEMalformed: malformed XML is rejected cleanly, and an
+// authenticated but session-less POST is answered without error.
+func TestIntegration_CPEMalformed(t *testing.T) {
+	_, srv, _ := newTestGateway(t)
+	cpe := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
+	cpe.post(periodicInform(t)) // establishes credentials/nonce
+	if code, _ := cpe.post("<soap-env:Envelope><unclosed>"); code != 400 {
+		t.Errorf("malformed XML: %d, want 400", code)
+	}
+	cpe.cookie = nil
+	if code, _ := cpe.post(""); code != 200 {
+		t.Errorf("session-less empty POST: %d, want 200", code)
+	}
+}
+
+// TestIntegration_CPELoad is the load mode: ACS_TEST_LOAD_DEVICES
+// concurrent mock CPEs each run one Inform + empty-POST session.
+// Reports sessions/second; skipped unless the variable is set.
+func TestIntegration_CPELoad(t *testing.T) {
+	n, _ := strconv.Atoi(os.Getenv("ACS_TEST_LOAD_DEVICES"))
+	if n <= 0 {
+		t.Skip("ACS_TEST_LOAD_DEVICES not set; skipping load mode")
+	}
+	h, srv, ctx := newTestGateway(t)
+	start := time.Now()
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			cpe := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
+			serial := fmt.Sprintf("LOAD%06d", i)
+			if code, _ := cpe.post(vendorInform(t, "Zyxel", "001349", "NR7101", serial)); code != 200 {
+				errs <- fmt.Errorf("device %d Inform: %d", i, code)
+				return
+			}
+			cpe.post("")
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	failed := 0
+	for range errs {
+		failed++
+	}
+	elapsed := time.Since(start)
+	list, _ := h.devices.List(ctx, devices.ListParams{})
+	t.Logf("load: %d devices, %d failed, %.1f sessions/s, %d registered", n, failed, float64(n)/elapsed.Seconds(), list.Total)
+	if failed > 0 || list.Total != n {
+		t.Errorf("load run: %d failures, %d/%d registered", failed, list.Total, n)
 	}
 }

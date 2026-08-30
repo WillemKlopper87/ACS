@@ -304,6 +304,20 @@ func (h *handler) handleTransferComplete(ctx context.Context, w http.ResponseWri
 		return
 	}
 
+	// Idempotency (audit P3.3 "delayed/duplicate events"): CPEs retransmit
+	// TransferComplete until acked, and some send it again after a reboot.
+	// Only a job still waiting on the transfer may be completed by it; a
+	// duplicate, or a stale fault arriving after success, is acked and
+	// otherwise ignored, so it cannot re-queue confirmations or flip a
+	// finished job's outcome.
+	if job.Status != jobs.StatusAwaitingTransferComplete && job.Status != jobs.StatusRPCSent {
+		h.logger.Info("duplicate or late TransferComplete ignored", "command_key", tc.CommandKey, "job_id", job.ID, "status", job.Status)
+		w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(cwmp.RenderTransferCompleteResponseNS(respID, ns))
+		return
+	}
+
 	if tc.IsFault() {
 		if err := h.jobs.MarkFailed(ctx, job.ID, tc.FaultStruct.FaultCode, tc.FaultStruct.FaultString); err != nil {
 			h.logger.Error("failed to mark job failed", "err", err, "job_id", job.ID)
