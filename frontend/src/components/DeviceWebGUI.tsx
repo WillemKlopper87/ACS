@@ -15,6 +15,26 @@ export function DeviceWebGUI({ id, writable }: { id: string; writable: boolean }
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ base_url: "", username: "", password: "" });
   const [showFrame, setShowFrame] = useState(false);
+  // The iframe URL carries a short-lived browser ticket (audit P1.4),
+  // minted when the frame is opened rather than baked into the render.
+  const [frameSrc, setFrameSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!showFrame) {
+      setFrameSrc(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .webGUIProxyURL(id)
+      .then((url) => {
+        if (!cancelled) setFrameSrc(url);
+      })
+      .catch((e) => toast(e instanceof ApiError ? e.message : "Failed to obtain a web GUI ticket", "error"));
+    return () => {
+      cancelled = true;
+    };
+  }, [showFrame, id]);
 
   async function load() {
     try {
@@ -101,9 +121,9 @@ export function DeviceWebGUI({ id, writable }: { id: string; writable: boolean }
             </button>
           </div>
 
-          {showFrame && (
+          {showFrame && frameSrc && (
             <iframe
-              src={api.webGUIProxyURL(id)}
+              src={frameSrc}
               title="Device web GUI"
               style={{
                 marginTop: "0.6rem",

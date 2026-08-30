@@ -437,14 +437,23 @@ export const api = {
   deleteCLICredential: (deviceId: string, credentialId: string) =>
     request<void>(`/api/v1/devices/${deviceId}/cli/credentials/${credentialId}`, { method: "DELETE" }),
 
+  // Browser ticket (audit P1.4): the session JWT never goes in a URL.
+  // The two handshakes a browser can't attach a header to (WebSocket,
+  // iframe) get a 60-second, audience-bound ticket minted just before
+  // use; the backend accepts nothing else in ?token=. Returns null when
+  // auth is disabled (dev mode) so the URL builders omit the param.
+  browserTicket: async (): Promise<string | null> => {
+    if (!getAuthState().token) return null;
+    const { ticket } = await request<{ ticket: string }>("/api/v1/auth/ticket", { method: "POST" });
+    return ticket;
+  },
+
   // Not a fetch() call — the caller opens this URL directly as a WebSocket.
-  // Token travels as a query param because the browser WebSocket API can't
-  // set the Authorization header on the handshake (see bearerToken's
-  // ?token= fallback on the backend).
-  cliConnectURL: (deviceId: string, credentialId: string) => {
+  // Async because it first mints a browser ticket for the handshake.
+  cliConnectURL: async (deviceId: string, credentialId: string) => {
     const wsBase = BASE_URL.replace(/^http/, "ws");
-    const { token } = getAuthState();
-    const qs = new URLSearchParams({ credential_id: credentialId, ...(token ? { token } : {}) });
+    const ticket = await api.browserTicket();
+    const qs = new URLSearchParams({ credential_id: credentialId, ...(ticket ? { token: ticket } : {}) });
     return `${wsBase}/api/v1/devices/${deviceId}/cli/connect?${qs.toString()}`;
   },
 
@@ -454,10 +463,10 @@ export const api = {
   setWebGUIConfig: (deviceId: string, input: { base_url: string; username?: string; password?: string }) =>
     request<WebGUIConfig>(`/api/v1/devices/${deviceId}/webgui`, { method: "PUT", body: JSON.stringify(input) }),
   deleteWebGUIConfig: (deviceId: string) => request<void>(`/api/v1/devices/${deviceId}/webgui`, { method: "DELETE" }),
-  // Iframe src — same ?token= handshake constraint as the WS URL above.
-  webGUIProxyURL: (deviceId: string) => {
-    const { token } = getAuthState();
-    const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+  // Iframe src — same ticket handshake as the WS URL above.
+  webGUIProxyURL: async (deviceId: string) => {
+    const ticket = await api.browserTicket();
+    const qs = ticket ? `?token=${encodeURIComponent(ticket)}` : "";
     return `${BASE_URL}/api/v1/devices/${deviceId}/webgui/proxy/${qs}`;
   },
 

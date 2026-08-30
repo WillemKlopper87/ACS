@@ -29,6 +29,11 @@ import (
 
 const jwtTTL = 8 * time.Hour
 
+// browserTicketTTL bounds a ticket minted for a WebSocket/iframe
+// handshake (audit P1.4): long enough to open the connection, far too
+// short to be useful if it leaks through a log, referrer, or history.
+const browserTicketTTL = 60 * time.Second
+
 type ctxKey int
 
 const claimsCtxKey ctxKey = 0
@@ -68,13 +73,26 @@ func withJWTAuth(secret []byte, internalServiceToken string, next http.Handler) 
 			return
 		}
 
-		token, ok := bearerToken(r)
+		token, fromQuery, ok := bearerToken(r)
 		if !ok {
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
 			return
 		}
+		// A credential in the URL is accepted on exactly the two routes a
+		// browser cannot send a header to (audit P1.4), and then only a
+		// purpose-bound ticket — never a session JWT or the service token.
+		if fromQuery && !isBrowserTicketRoute(r) {
+			http.Error(w, "credentials in the query string are not accepted on this route", http.StatusUnauthorized)
+			return
+		}
 
-		if internalServiceToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(internalServiceToken)) == 1 {
+		if !fromQuery && internalServiceToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(internalServiceToken)) == 1 {
+			// The machine identity is deliberately narrow (audit P1.4): it
+			// may do only what internal/bss/acsclient.go does.
+			if !isServiceRoute(r) {
+				http.Error(w, "internal service token is not permitted on this route", http.StatusForbidden)
+				return
+			}
 			claims := &auth.Claims{Subject: serviceSubject, Role: operators.RoleSuperAdmin, IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
 			next.ServeHTTP(w, r.WithContext(withOperatorClaims(r.Context(), claims)))
 			return
@@ -85,9 +103,44 @@ func withJWTAuth(secret []byte, internalServiceToken string, next http.Handler) 
 			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 			return
 		}
+		// Token kind must match how it arrived: tickets only in the query
+		// string on ticket routes, session tokens only in the header.
+		if fromQuery != (claims.Audience == auth.AudienceBrowserTicket) {
+			http.Error(w, "wrong token type for this route", http.StatusUnauthorized)
+			return
+		}
 
 		next.ServeHTTP(w, r.WithContext(withOperatorClaims(r.Context(), claims)))
 	})
+}
+
+// isBrowserTicketRoute names the routes whose handshake a browser makes
+// without control over request headers: the console WebSocket and the
+// web-GUI iframe. These accept a browser ticket in ?token= and nothing
+// else in the query string.
+func isBrowserTicketRoute(r *http.Request) bool {
+	p := r.URL.Path
+	if !strings.HasPrefix(p, "/api/v1/devices/") {
+		return false
+	}
+	return strings.HasSuffix(p, "/cli/connect") || strings.Contains(p, "/webgui/proxy/")
+}
+
+// isServiceRoute is the allowlist for the internal service token — the
+// exact calls internal/bss/acsclient.go makes on behalf of
+// cmd/bssadapter, nothing else (no operator management, no tenancy, no
+// firmware, no console).
+func isServiceRoute(r *http.Request) bool {
+	p := r.URL.Path
+	switch {
+	case r.Method == http.MethodPut && strings.HasPrefix(p, "/api/v1/devices/") && strings.HasSuffix(p, "/parameters"):
+		return true
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/v1/devices/") && strings.Count(p, "/") == 4:
+		return true // GET /api/v1/devices/{id}
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/v1/jobs/"):
+		return true
+	}
+	return false
 }
 
 func isPublicRoute(r *http.Request) bool {
@@ -145,22 +198,50 @@ func withRateLimit(limiter *ratelimit.Limiter, metrics *observability.Metrics, n
 	})
 }
 
-// bearerToken reads the operator JWT from the Authorization header, or
-// falls back to a ?token= query parameter — the browser WebSocket API
-// (used by the device console's SSH/Telnet bridge) cannot set custom
-// request headers on the handshake, so that's the only way a WS client can
-// present its token at all. This is strictly additive (still requires the
-// same valid signed JWT) and a common pattern for exactly this constraint.
-func bearerToken(r *http.Request) (string, bool) {
+// bearerToken reads the credential from the Authorization header, or —
+// reporting fromQuery=true so the caller can apply the stricter rules —
+// from a ?token= query parameter. The query form exists only because the
+// browser WebSocket API and an <iframe src> cannot set request headers;
+// withJWTAuth confines it to those two routes and to purpose-bound
+// tickets (audit P1.4).
+func bearerToken(r *http.Request) (token string, fromQuery bool, ok bool) {
 	h := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if len(h) > len(prefix) && h[:len(prefix)] == prefix {
-		return h[len(prefix):], true
+		return h[len(prefix):], false, true
 	}
 	if t := r.URL.Query().Get("token"); t != "" {
-		return t, true
+		return t, true, true
 	}
-	return "", false
+	return "", false, false
+}
+
+// issueBrowserTicket mints a short-lived, audience-bound ticket for the
+// calling operator (audit P1.4). The frontend requests one immediately
+// before opening the console WebSocket or the web-GUI iframe and puts
+// it — not the session JWT — in that URL's ?token=. It cannot be used
+// in an Authorization header, on any other route, or after 60 seconds.
+func (h *handler) issueBrowserTicket(w http.ResponseWriter, r *http.Request) {
+	claims, ok := operatorClaims(r.Context())
+	if !ok {
+		http.Error(w, "no authenticated operator", http.StatusUnauthorized)
+		return
+	}
+	if claims.Subject == serviceSubject {
+		http.Error(w, "service identities cannot mint browser tickets", http.StatusForbidden)
+		return
+	}
+	now := time.Now().UTC()
+	ticket, err := auth.SignJWT(h.jwtSecret, auth.Claims{
+		Subject: claims.Subject, Role: claims.Role, Audience: auth.AudienceBrowserTicket,
+		IssuedAt: now, ExpiresAt: now.Add(browserTicketTTL),
+	})
+	if err != nil {
+		h.logger.Error("failed to sign browser ticket", "err", err, "username", claims.Subject)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ticket": ticket, "expires_in": int(browserTicketTTL.Seconds())})
 }
 
 // requireRole wraps a handler with a minimum-role check. When auth is

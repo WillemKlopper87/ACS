@@ -263,6 +263,7 @@ func main() {
 	}
 	mux.HandleFunc("GET /metrics", metrics.Handler().ServeHTTP)
 	mux.HandleFunc("POST /api/v1/auth/login", metrics.InstrumentHTTP("POST /api/v1/auth/login", h.login))
+	route("POST", "/api/v1/auth/ticket", ro, h.issueBrowserTicket) // audit P1.4 — see issueBrowserTicket
 	route("POST", "/api/v1/auth/operators", admin, h.createOperator)
 	route("GET", "/api/v1/auth/operators", admin, h.listOperators)
 	route("PUT", "/api/v1/auth/operators/{id}/password", admin, h.resetOperatorPassword)

@@ -66,9 +66,17 @@ export function RemoteShell({ id, writable }: { id: string; writable: boolean })
     };
   }, []);
 
-  function connect() {
+  async function connect() {
     if (!selected || !terminal.current) return;
-    const socket = new WebSocket(api.cliConnectURL(id, selected));
+    let url: string;
+    try {
+      url = await api.cliConnectURL(id, selected);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Failed to obtain a console ticket", "error");
+      return;
+    }
+    if (!terminal.current) return;
+    const socket = new WebSocket(url);
     socket.binaryType = "arraybuffer";
 
     socket.onopen = () => {

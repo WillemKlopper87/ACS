@@ -27,13 +27,23 @@ type Claims struct {
 	Role      string
 	IssuedAt  time.Time
 	ExpiresAt time.Time
+	// Audience separates token kinds that must not be interchangeable
+	// (audit P1.4): "" is an ordinary operator session presented in the
+	// Authorization header; AudienceBrowserTicket is a short-lived
+	// ticket that may travel in a URL for the one WebSocket/iframe
+	// handshake a browser cannot attach a header to.
+	Audience string
 }
+
+// AudienceBrowserTicket marks a ticket minted by POST /auth/ticket.
+const AudienceBrowserTicket = "browser-ticket"
 
 type jwtPayload struct {
 	Subject   string `json:"sub"`
 	Role      string `json:"role"`
 	IssuedAt  int64  `json:"iat"`
 	ExpiresAt int64  `json:"exp"`
+	Audience  string `json:"aud,omitempty"`
 }
 
 const jwtHeader = `{"alg":"HS256","typ":"JWT"}`
@@ -51,6 +61,7 @@ func SignJWT(secret []byte, claims Claims) (string, error) {
 		Role:      claims.Role,
 		IssuedAt:  claims.IssuedAt.Unix(),
 		ExpiresAt: claims.ExpiresAt.Unix(),
+		Audience:  claims.Audience,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal claims: %w", err)
@@ -87,6 +98,7 @@ func VerifyJWT(secret []byte, token string) (*Claims, error) {
 		Role:      p.Role,
 		IssuedAt:  time.Unix(p.IssuedAt, 0).UTC(),
 		ExpiresAt: time.Unix(p.ExpiresAt, 0).UTC(),
+		Audience:  p.Audience,
 	}
 	if time.Now().After(claims.ExpiresAt) {
 		return nil, ErrInvalidToken
