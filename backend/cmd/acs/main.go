@@ -445,7 +445,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	if mtlsAuthenticated {
 		authMode = devices.AuthModeMTLS
 	} else if h.auth.Enabled() {
-		if !h.auth.Verify(r) {
+		if ok, stale := h.auth.Verify(r); !ok {
 			h.logger.Warn("authentication failed or missing", "remote", r.RemoteAddr)
 			// Drain the unauthenticated request body before writing the
 			// 401 so the keep-alive connection survives: an Inform can
@@ -453,7 +453,11 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 			// a closed connection here makes some CPEs treat the whole
 			// session as failed instead of retrying with credentials.
 			_, _ = io.Copy(io.Discard, r.Body)
-			h.auth.Challenge(w)
+			if stale {
+				h.auth.ChallengeStale(w) // right credentials, expired nonce — retry, don't fail
+			} else {
+				h.auth.Challenge(w)
+			}
 			return
 		}
 		authMode = devices.AuthModeDigest

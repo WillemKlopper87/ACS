@@ -7,18 +7,58 @@
 package auth
 
 import (
+	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 const realm = "acs"
+
+// nonceTTL bounds how long an issued Digest nonce verifies (audit P0.5).
+// A CPE session comfortably completes within it; a captured
+// Authorization header goes stale shortly after. Expiry is answered
+// with stale=true so a well-behaved CPE silently re-authenticates.
+const nonceTTL = 10 * time.Minute
+
+// nonceState tracks replay for one issued nonce.
+type nonceState struct {
+	expires time.Time
+	lastNC  uint64 // highest nonce-count seen (qop=auth); 0 = unused
+	used    bool   // non-qop responses are strictly single-use
+}
+
+// nonceCache is the bounded replay cache (audit P0.5): (nonce, nc)
+// pairs must be strictly increasing per nonce, and a non-qop response
+// verifies at most once. Entries expire with their nonce.
+var nonceCache = struct {
+	sync.Mutex
+	m map[string]*nonceState
+}{m: map[string]*nonceState{}}
+
+// nonceCacheMax caps the cache so an attacker hammering the endpoint
+// with fresh challenges can't grow it without bound; expired entries
+// are purged first, then verification is refused until space frees up
+// (fail closed, never fail open).
+const nonceCacheMax = 100_000
+
+func purgeExpiredNoncesLocked(now time.Time) {
+	for n, st := range nonceCache.m {
+		if now.After(st.expires) {
+			delete(nonceCache.m, n)
+		}
+	}
+}
 
 // DigestAuthenticator validates HTTP Digest (RFC 2617) credentials against
 // a single configured username/password. Phase 0/1 have no per-device
@@ -47,11 +87,25 @@ func (d DigestAuthenticator) Enabled() bool {
 
 // Challenge sends a 401 with a fresh Digest challenge (and, when
 // AllowBasic is set, a Basic challenge as well — the CPE picks whichever
-// scheme it implements).
+// scheme it implements). stale=true tells a CPE whose credentials were
+// right but whose nonce had expired to simply retry with the new nonce
+// (RFC 2617 §3.2.1) instead of treating it as an auth failure.
 func (d DigestAuthenticator) Challenge(w http.ResponseWriter) {
-	nonce := newNonce()
-	w.Header().Set("WWW-Authenticate", fmt.Sprintf(
-		`Digest realm="%s", qop="auth", nonce="%s", algorithm=MD5`, realm, nonce))
+	d.challenge(w, false)
+}
+
+// ChallengeStale is Challenge with stale=true — see Verify.
+func (d DigestAuthenticator) ChallengeStale(w http.ResponseWriter) {
+	d.challenge(w, true)
+}
+
+func (d DigestAuthenticator) challenge(w http.ResponseWriter, stale bool) {
+	nonce := d.newNonce(time.Now())
+	hdr := fmt.Sprintf(`Digest realm="%s", qop="auth", nonce="%s", algorithm=MD5`, realm, nonce)
+	if stale {
+		hdr += `, stale=true`
+	}
+	w.Header().Set("WWW-Authenticate", hdr)
 	if d.AllowBasic {
 		w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
 	}
@@ -61,37 +115,144 @@ func (d DigestAuthenticator) Challenge(w http.ResponseWriter) {
 // Verify checks the Authorization header of an incoming CWMP request. It
 // returns ok=false with no side effects if the header is missing or
 // malformed — callers should respond with Challenge in that case.
-func (d DigestAuthenticator) Verify(r *http.Request) bool {
+// Stale reports the one case where the credentials were right but the
+// nonce had expired; callers should answer that with ChallengeStale.
+func (d DigestAuthenticator) Verify(r *http.Request) (ok bool, stale bool) {
 	header := r.Header.Get("Authorization")
 	switch {
 	case strings.HasPrefix(header, "Digest "):
-		return d.verifyDigest(r, header[len("Digest "):])
+		return d.verifyDigest(r, header[len("Digest "):], time.Now())
 	case d.AllowBasic && strings.HasPrefix(header, "Basic "):
-		return d.verifyBasic(header[len("Basic "):])
+		return d.verifyBasic(header[len("Basic "):]), false
 	default:
-		return false
+		return false, false
 	}
 }
 
-func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string) bool {
+// verifyDigest validates a Digest response (audit P0.5). Beyond the
+// RFC 2617 hash check it requires: realm (when sent) matching ours; uri
+// matching the request actually made; a nonce this ACS issued (HMAC over
+// its timestamp, keyed from the configured password) that hasn't
+// expired; and no replay — nc strictly increasing per nonce for
+// qop=auth, single-use for legacy non-qop responses.
+func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time.Time) (ok bool, stale bool) {
 	params := parseDigestParams(rest)
 	if params["username"] != d.Username {
-		return false
+		return false, false
+	}
+	if rl, present := params["realm"]; present && rl != realm {
+		return false, false
+	}
+	if params["uri"] != r.URL.RequestURI() {
+		return false, false
+	}
+
+	nonce := params["nonce"]
+	issued, valid := d.parseNonce(nonce)
+	if !valid {
+		return false, false
 	}
 
 	ha1 := md5Hex(d.Username + ":" + realm + ":" + d.Password)
 	ha2 := md5Hex(r.Method + ":" + params["uri"])
 
 	var expected string
-	if qop := params["qop"]; qop != "" {
+	qop := params["qop"]
+	if qop != "" {
+		if qop != "auth" {
+			return false, false
+		}
 		expected = md5Hex(strings.Join([]string{
-			ha1, params["nonce"], params["nc"], params["cnonce"], qop, ha2,
+			ha1, nonce, params["nc"], params["cnonce"], qop, ha2,
 		}, ":"))
 	} else {
-		expected = md5Hex(ha1 + ":" + params["nonce"] + ":" + ha2)
+		expected = md5Hex(ha1 + ":" + nonce + ":" + ha2)
+	}
+	if subtle.ConstantTimeCompare([]byte(expected), []byte(params["response"])) != 1 {
+		return false, false
 	}
 
-	return subtle.ConstantTimeCompare([]byte(expected), []byte(params["response"])) == 1
+	// Credentials are right. Expiry is decided only now so a wrong
+	// password never learns whether its nonce was still fresh.
+	if now.After(issued.Add(nonceTTL)) {
+		return false, true
+	}
+	return d.checkReplay(nonce, qop, params["nc"], issued.Add(nonceTTL), now), false
+}
+
+// checkReplay records this (nonce, nc) use and reports whether it is
+// new. Fails closed when the cache is full of unexpired entries.
+func (d DigestAuthenticator) checkReplay(nonce, qop, ncHex string, expires, now time.Time) bool {
+	nonceCache.Lock()
+	defer nonceCache.Unlock()
+
+	st, seen := nonceCache.m[nonce]
+	if !seen {
+		if len(nonceCache.m) >= nonceCacheMax {
+			purgeExpiredNoncesLocked(now)
+			if len(nonceCache.m) >= nonceCacheMax {
+				return false
+			}
+		}
+		st = &nonceState{expires: expires}
+		nonceCache.m[nonce] = st
+	}
+
+	if qop == "" {
+		if st.used {
+			return false
+		}
+		st.used = true
+		return true
+	}
+	nc, err := strconv.ParseUint(ncHex, 16, 64)
+	if err != nil || nc == 0 || nc <= st.lastNC {
+		return false
+	}
+	st.lastNC = nc
+	return true
+}
+
+// nonceKey derives the nonce-signing key from the configured password
+// so every ACS replica sharing the credential also accepts each other's
+// nonces, with nothing extra to configure.
+func (d DigestAuthenticator) nonceKey() []byte {
+	mac := hmac.New(sha256.New, []byte(d.Password))
+	mac.Write([]byte("acs-digest-nonce-v1"))
+	return mac.Sum(nil)
+}
+
+func (d DigestAuthenticator) nonceMAC(ts, random string) string {
+	mac := hmac.New(sha256.New, d.nonceKey())
+	mac.Write([]byte(ts + "." + random))
+	return hex.EncodeToString(mac.Sum(nil)[:16])
+}
+
+// newNonce issues "<unix-ts>.<random>.<hmac>": the random part keeps
+// nonces unique, the HMAC proves this ACS issued it and that the
+// timestamp is untampered.
+func (d DigestAuthenticator) newNonce(now time.Time) string {
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	ts := strconv.FormatInt(now.Unix(), 10)
+	random := hex.EncodeToString(b)
+	return ts + "." + random + "." + d.nonceMAC(ts, random)
+}
+
+// parseNonce checks a nonce's authenticity and returns its issue time.
+func (d DigestAuthenticator) parseNonce(nonce string) (issued time.Time, valid bool) {
+	parts := strings.SplitN(nonce, ".", 3)
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	if !hmac.Equal([]byte(parts[2]), []byte(d.nonceMAC(parts[0], parts[1]))) {
+		return time.Time{}, false
+	}
+	sec, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(sec, 0), true
 }
 
 func (d DigestAuthenticator) verifyBasic(encoded string) bool {
@@ -111,12 +272,6 @@ func (d DigestAuthenticator) verifyBasic(encoded string) bool {
 func md5Hex(s string) string {
 	sum := md5.Sum([]byte(s))
 	return hex.EncodeToString(sum[:])
-}
-
-func newNonce() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
 }
 
 var digestParamRE = regexp.MustCompile(`(\w+)=("([^"]*)"|[^,]*)`)
