@@ -16,7 +16,7 @@ import (
 // or refactor of main() is needed. Every registered (method, path) must
 // appear in the spec and vice versa.
 func TestOpenAPIMatchesRegisteredRoutes(t *testing.T) {
-	src, err := os.ReadFile("main.go")
+	src, err := os.ReadFile("routes.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,13 +74,13 @@ func TestOpenAPIMatchesRegisteredRoutes(t *testing.T) {
 	sort.Strings(missing)
 	sort.Strings(stale)
 	if len(missing) > 0 {
-		t.Errorf("routes registered in main.go but absent from openapi.yaml:\n  %s", strings.Join(missing, "\n  "))
+		t.Errorf("routes registered in routes.go but absent from openapi.yaml:\n  %s", strings.Join(missing, "\n  "))
 	}
 	if len(stale) > 0 {
 		t.Errorf("operations in openapi.yaml with no registered route:\n  %s", strings.Join(stale, "\n  "))
 	}
 	if len(registered) < 50 {
-		t.Fatalf("only %d routes extracted from main.go — the extraction regex is probably broken", len(registered))
+		t.Fatalf("only %d routes extracted from routes.go — the extraction regex is probably broken", len(registered))
 	}
 }
 
