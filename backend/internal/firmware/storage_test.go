@@ -78,7 +78,7 @@ func TestStorageOpenMissingFile(t *testing.T) {
 	}
 	if _, err := storage.Open("does-not-exist"); err == nil {
 		t.Error("Open of a never-saved id should error, not silently return a handle")
-	} else if !strings.Contains(err.Error(), "open firmware file") {
+	} else if !strings.Contains(err.Error(), "open object file") {
 		t.Errorf("unexpected error shape: %v", err)
 	}
 }

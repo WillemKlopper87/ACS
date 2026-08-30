@@ -27,7 +27,6 @@ func TestLocalRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
 	if _, err := f.Seek(9, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
@@ -35,6 +34,7 @@ func TestLocalRoundTrip(t *testing.T) {
 	if !bytes.Equal(got, payload[9:]) {
 		t.Error("seek+read returned wrong bytes")
 	}
+	f.Close() // Windows refuses to delete a file with an open handle
 	st.Remove("img-1")
 	if _, err := st.Open("img-1"); err == nil {
 		t.Error("Open after Remove succeeded")
