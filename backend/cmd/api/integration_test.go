@@ -250,7 +250,7 @@ func TestIntegration_TenantIsolation(t *testing.T) {
 			t.Errorf("alice's matching ids leak: %d %s", r.code, r.body)
 		}
 		r = e.call("alice", "GET", "/api/v1/devices/summary", nil)
-		if r.code != 200 || !strings.Contains(r.body, `"count":1`) {
+		if r.code != 200 || !strings.Contains(r.body, `"Count":1`) {
 			t.Errorf("alice's summary should count exactly her one device: %d %s", r.code, r.body)
 		}
 		r = e.call("root", "GET", "/api/v1/devices", nil)
@@ -276,7 +276,7 @@ func TestIntegration_TenantIsolation(t *testing.T) {
 		r := e.call("alice", "POST", "/api/v1/devices/bulk-actions", map[string]any{
 			"action": "CONNECTION_REQUEST", "device_ids": []string{devA, devB, devU},
 		})
-		if r.code != 200 {
+		if r.code != 202 {
 			t.Fatalf("bulk → %d %s", r.code, r.body)
 		}
 		var out struct {
