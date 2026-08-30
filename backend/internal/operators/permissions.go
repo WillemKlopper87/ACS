@@ -170,11 +170,34 @@ func (r *Repository) ConsumeResetToken(ctx context.Context, token string) (*Oper
 // the superadmin "reset this user's password" action and the self-service
 // token-based reset flow.
 func (r *Repository) UpdatePassword(ctx context.Context, operatorID, passwordHash string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE operators SET password_hash = $2, updated_at = now() WHERE id = $1`, operatorID, passwordHash)
+	// A password change revokes every outstanding session (token_version
+	// bump) — the expected behaviour after a reset or a suspected leak.
+	_, err := r.db.ExecContext(ctx, `UPDATE operators SET password_hash = $2, updated_at = now(), token_version = token_version + 1 WHERE id = $1`, operatorID, passwordHash)
 	if err != nil {
 		return fmt.Errorf("update operator password: %w", err)
 	}
 	return nil
+}
+
+// RevokeSessions invalidates every JWT issued for the operator so far
+// (POST /auth/logout, or an admin forcing a sign-out) by bumping
+// token_version; the next login issues tokens under the new version.
+func (r *Repository) RevokeSessions(ctx context.Context, operatorID string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE operators SET token_version = token_version + 1, updated_at = now() WHERE id = $1`, operatorID)
+	if err != nil {
+		return fmt.Errorf("revoke operator sessions: %w", err)
+	}
+	return nil
+}
+
+// TokenVersion returns the current version for a username — the
+// revocation check withJWTAuth performs (cached briefly by the caller).
+func (r *Repository) TokenVersion(ctx context.Context, username string) (int, error) {
+	var v int
+	if err := r.db.QueryRowContext(ctx, `SELECT token_version FROM operators WHERE username = $1`, username).Scan(&v); err != nil {
+		return 0, fmt.Errorf("load token version: %w", err)
+	}
+	return v, nil
 }
 
 // ByEmail fetches an operator by email — the self-service reset request

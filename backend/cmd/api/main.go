@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -288,7 +289,7 @@ func main() {
 	}
 	server := &http.Server{
 		Addr:    addr,
-		Handler: withCORS(corsOrigin, withJWTAuth(jwtSecret, internalServiceToken, withRateLimit(apiLimiter, metrics, withBodyLimit(mux)))),
+		Handler: withCORS(corsOrigin, withJWTAuth(jwtSecret, internalServiceToken, h.tokenCurrent, withRateLimit(apiLimiter, metrics, withBodyLimit(mux)))),
 		// Timeouts (audit P1.2). No global ReadTimeout/WriteTimeout on
 		// purpose: firmware uploads and CPE upload receipts stream large
 		// bodies, and the console WebSocket / web-GUI proxy are long-lived
@@ -428,6 +429,10 @@ type handler struct {
 	// netPolicy restricts where the web-GUI proxy and console bridge
 	// may dial (audit P0.4) — see ACS_DEVICE_NET_ALLOWED_CIDRS.
 	netPolicy netguard.Policy
+
+	// JWT revocation cache — see tokenCurrent.
+	versionMu    sync.Mutex
+	versionCache map[string]versionEntry
 
 	metrics     *observability.Metrics
 	groups      *devices.GroupRepository

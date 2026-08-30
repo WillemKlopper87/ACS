@@ -128,7 +128,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		vpnPeers:        vpnRepo,
 	}
 	mux := h.registerRoutes(metrics, db)
-	srv := httptest.NewServer(withJWTAuth(testJWTSecret, testServiceToken, withBodyLimit(mux)))
+	srv := httptest.NewServer(withJWTAuth(testJWTSecret, testServiceToken, h.tokenCurrent, withBodyLimit(mux)))
 	t.Cleanup(srv.Close)
 
 	env := &testEnv{t: t, ctx: ctx, db: db, h: h, srv: srv, tokens: map[string]string{}}
@@ -148,7 +148,7 @@ func (e *testEnv) operator(username, role string, scopes ...tenancy.Scope) {
 		}
 	}
 	now := time.Now().UTC()
-	tok, _ := auth.SignJWT(testJWTSecret, auth.Claims{Subject: username, Role: role, IssuedAt: now, ExpiresAt: now.Add(time.Hour)})
+	tok, _ := auth.SignJWT(testJWTSecret, auth.Claims{Subject: username, Role: role, IssuedAt: now, ExpiresAt: now.Add(time.Hour), Version: op.TokenVersion})
 	e.tokens[username] = tok
 }
 
@@ -418,5 +418,59 @@ func TestIntegration_ServiceIdentity(t *testing.T) {
 	}
 	if r := e.call(testServiceToken, "POST", "/api/v1/auth/ticket", nil); r.code != 403 {
 		t.Errorf("service mint browser ticket → %d, want 403", r.code)
+	}
+}
+
+// TestIntegration_SessionRevocation: logout and password change must
+// invalidate outstanding JWTs; login is throttled per username+IP.
+func TestIntegration_SessionRevocation(t *testing.T) {
+	e := newTestEnv(t)
+	e.operator("alice", operators.RoleReadOnly)
+	if r := e.call("alice", "GET", "/api/v1/devices", nil); r.code != 200 {
+		t.Fatalf("pre-logout → %d", r.code)
+	}
+	if r := e.call("alice", "POST", "/api/v1/auth/logout", nil); r.code != 204 {
+		t.Fatalf("logout → %d %s", r.code, r.body)
+	}
+	if r := e.call("alice", "GET", "/api/v1/devices", nil); r.code != 401 {
+		t.Errorf("token after logout → %d, want 401", r.code)
+	}
+
+	// Fresh login works, then a password change kills that session too.
+	login := func(user, pass string) resp {
+		return e.call("", "POST", "/api/v1/auth/login", map[string]string{"username": user, "password": pass})
+	}
+	r := login("alice", "pw-alice")
+	if r.code != 200 {
+		t.Fatalf("login → %d %s", r.code, r.body)
+	}
+	var lr struct {
+		Token string `json:"token"`
+	}
+	_ = json.Unmarshal([]byte(r.body), &lr)
+	if got := e.call(lr.Token, "GET", "/api/v1/devices", nil); got.code != 200 {
+		t.Fatalf("fresh token → %d", got.code)
+	}
+	op, _ := e.h.operators.ByUsername(e.ctx, "alice")
+	if err := e.h.operators.UpdatePassword(e.ctx, op.ID, op.PasswordHash); err != nil {
+		t.Fatal(err)
+	}
+	e.h.forgetTokenVersion("alice")
+	if got := e.call(lr.Token, "GET", "/api/v1/devices", nil); got.code != 401 {
+		t.Errorf("token after password change → %d, want 401", got.code)
+	}
+
+	// Brute force: after the burst, wrong passwords are throttled (429),
+	// and the throttle is per username — a different account is unaffected.
+	e.operator("bob", operators.RoleReadOnly)
+	last := 0
+	for i := 0; i < 8; i++ {
+		last = login("alice", "wrong").code
+	}
+	if last != 429 {
+		t.Errorf("8th bad login → %d, want 429", last)
+	}
+	if got := login("bob", "pw-bob"); got.code != 200 {
+		t.Errorf("bob's login during alice's throttle → %d, want 200", got.code)
 	}
 }

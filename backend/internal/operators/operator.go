@@ -123,4 +123,7 @@ type Operator struct {
 	Role         string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	// TokenVersion is stamped into every JWT issued for this operator;
+	// a token whose version is behind this value is revoked.
+	TokenVersion int
 }

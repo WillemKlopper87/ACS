@@ -20,7 +20,7 @@ func TestWithJWTAuth_CredentialPlacement(t *testing.T) {
 	ticket, _ := auth.SignJWT(secret, auth.Claims{Subject: "alice", Role: operators.RoleNOC, Audience: auth.AudienceBrowserTicket, IssuedAt: now, ExpiresAt: now.Add(time.Minute)})
 
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	h := withJWTAuth(secret, svc, ok)
+	h := withJWTAuth(secret, svc, nil, ok)
 
 	cases := []struct {
 		name   string

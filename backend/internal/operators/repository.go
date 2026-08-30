@@ -20,7 +20,7 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
-const operatorColumns = `id, username, COALESCE(email, ''), password_hash, role, created_at, updated_at`
+const operatorColumns = `id, username, COALESCE(email, ''), password_hash, role, created_at, updated_at, token_version`
 
 // Create inserts a new operator with an already-hashed password — callers
 // are responsible for bcrypt-hashing, this package never sees a plaintext
@@ -95,7 +95,7 @@ type scanner interface {
 
 func scanOperator(s scanner) (*Operator, error) {
 	var op Operator
-	if err := s.Scan(&op.ID, &op.Username, &op.Email, &op.PasswordHash, &op.Role, &op.CreatedAt, &op.UpdatedAt); err != nil {
+	if err := s.Scan(&op.ID, &op.Username, &op.Email, &op.PasswordHash, &op.Role, &op.CreatedAt, &op.UpdatedAt, &op.TokenVersion); err != nil {
 		return nil, fmt.Errorf("scan operator: %w", err)
 	}
 	return &op, nil

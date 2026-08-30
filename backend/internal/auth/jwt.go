@@ -33,6 +33,10 @@ type Claims struct {
 	// ticket that may travel in a URL for the one WebSocket/iframe
 	// handshake a browser cannot attach a header to.
 	Audience string
+	// Version is the operator's token_version at issue time; a token is
+	// revoked once the stored version moves past it (password change,
+	// logout). Zero for tokens that predate revocation support.
+	Version int
 }
 
 // AudienceBrowserTicket marks a ticket minted by POST /auth/ticket.
@@ -44,6 +48,7 @@ type jwtPayload struct {
 	IssuedAt  int64  `json:"iat"`
 	ExpiresAt int64  `json:"exp"`
 	Audience  string `json:"aud,omitempty"`
+	Version   int    `json:"ver,omitempty"`
 }
 
 const jwtHeader = `{"alg":"HS256","typ":"JWT"}`
@@ -62,6 +67,7 @@ func SignJWT(secret []byte, claims Claims) (string, error) {
 		IssuedAt:  claims.IssuedAt.Unix(),
 		ExpiresAt: claims.ExpiresAt.Unix(),
 		Audience:  claims.Audience,
+		Version:   claims.Version,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal claims: %w", err)
@@ -99,6 +105,7 @@ func VerifyJWT(secret []byte, token string) (*Claims, error) {
 		IssuedAt:  time.Unix(p.IssuedAt, 0).UTC(),
 		ExpiresAt: time.Unix(p.ExpiresAt, 0).UTC(),
 		Audience:  p.Audience,
+		Version:   p.Version,
 	}
 	if time.Now().After(claims.ExpiresAt) {
 		return nil, ErrInvalidToken

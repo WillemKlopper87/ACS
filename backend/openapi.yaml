@@ -139,6 +139,14 @@ paths:
                   expires_in: { type: integer, description: Seconds until the ticket expires }
         "403": { description: Service identities cannot mint tickets, content: { text/plain: { schema: { type: string } } } }
 
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke every session of the calling operator (bumps token_version; outstanding JWTs stop verifying)
+      responses:
+        "204": { description: Sessions revoked }
+        "400": { description: No operator session to revoke, content: { text/plain: { schema: { type: string } } } }
+
   /healthz:
     get:
       tags: [Ops]

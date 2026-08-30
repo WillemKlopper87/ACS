@@ -16,6 +16,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -33,6 +34,59 @@ const jwtTTL = 8 * time.Hour
 // handshake (audit P1.4): long enough to open the connection, far too
 // short to be useful if it leaks through a log, referrer, or history.
 const browserTicketTTL = 60 * time.Second
+
+// Login brute-force control (audit "missing checks"): a token bucket per
+// normalized username + client IP, independent of the general API rate
+// limit, so a password-guessing loop against one account is throttled
+// long before the per-IP bucket notices — five attempts, then one every
+// twelve seconds. Keyed on both so an attacker cannot lock out a real
+// user from elsewhere, nor spray usernames from one address freely.
+var loginLimiter = ratelimit.New(1.0/12, 5, 30*time.Minute)
+
+// tokenVersionCacheTTL bounds how long a revoked JWT keeps working: the
+// per-request revocation check hits Postgres at most once per operator
+// per TTL instead of on every call.
+const tokenVersionCacheTTL = 15 * time.Second
+
+type versionEntry struct {
+	version int
+	expires time.Time
+}
+
+// tokenCurrent reports whether claims' Version is still the operator's
+// live token_version (see operators.RevokeSessions). Fails closed on a
+// lookup error — a DB blip must not resurrect revoked sessions.
+func (h *handler) tokenCurrent(ctx context.Context, claims *auth.Claims) bool {
+	if claims.Subject == serviceSubject {
+		return true
+	}
+	h.versionMu.Lock()
+	entry, ok := h.versionCache[claims.Subject]
+	h.versionMu.Unlock()
+	if !ok || time.Now().After(entry.expires) {
+		v, err := h.operators.TokenVersion(ctx, claims.Subject)
+		if err != nil {
+			h.logger.Error("token revocation check failed", "err", err, "username", claims.Subject)
+			return false
+		}
+		entry = versionEntry{version: v, expires: time.Now().Add(tokenVersionCacheTTL)}
+		h.versionMu.Lock()
+		if h.versionCache == nil {
+			h.versionCache = map[string]versionEntry{}
+		}
+		h.versionCache[claims.Subject] = entry
+		h.versionMu.Unlock()
+	}
+	return claims.Version >= entry.version
+}
+
+// forgetTokenVersion drops the cache entry so a revocation performed by
+// this process takes effect immediately for it.
+func (h *handler) forgetTokenVersion(username string) {
+	h.versionMu.Lock()
+	delete(h.versionCache, username)
+	h.versionMu.Unlock()
+}
 
 type ctxKey int
 
@@ -66,7 +120,10 @@ const serviceSubject = "service:bssadapter"
 // the entire point of Workflow B. Same shape as cmd/bssadapter's own
 // withAuth (crypto/subtle.ConstantTimeCompare against one shared secret,
 // not a real login), applied one process boundary further in.
-func withJWTAuth(secret []byte, internalServiceToken string, next http.Handler) http.Handler {
+// current, when non-nil, is the revocation check applied to every
+// verified operator JWT (handler.tokenCurrent); nil skips it (unit tests
+// of the placement rules alone).
+func withJWTAuth(secret []byte, internalServiceToken string, current func(context.Context, *auth.Claims) bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(secret) == 0 || isPublicRoute(r) {
 			next.ServeHTTP(w, r)
@@ -107,6 +164,10 @@ func withJWTAuth(secret []byte, internalServiceToken string, next http.Handler) 
 		// string on ticket routes, session tokens only in the header.
 		if fromQuery != (claims.Audience == auth.AudienceBrowserTicket) {
 			http.Error(w, "wrong token type for this route", http.StatusUnauthorized)
+			return
+		}
+		if current != nil && !current(r.Context(), claims) {
+			http.Error(w, "session revoked — sign in again", http.StatusUnauthorized)
 			return
 		}
 
@@ -325,6 +386,11 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username and password are required", http.StatusBadRequest)
 		return
 	}
+	if !loginLimiter.Allow(strings.ToLower(strings.TrimSpace(req.Username)) + "|" + clientIP(r)) {
+		h.metrics.RateLimitRejectedTotal.Inc()
+		http.Error(w, "too many login attempts — try again shortly", http.StatusTooManyRequests)
+		return
+	}
 
 	op, err := h.operators.ByUsername(r.Context(), req.Username)
 	if err != nil {
@@ -340,7 +406,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
-	claims := auth.Claims{Subject: op.Username, Role: op.Role, IssuedAt: now, ExpiresAt: now.Add(jwtTTL)}
+	claims := auth.Claims{Subject: op.Username, Role: op.Role, IssuedAt: now, ExpiresAt: now.Add(jwtTTL), Version: op.TokenVersion}
 	token, err := auth.SignJWT(h.jwtSecret, claims)
 	if err != nil {
 		h.logger.Error("failed to sign JWT", "err", err, "username", op.Username)
@@ -354,6 +420,45 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("operator logged in", "username", op.Username, "role", op.Role)
 
 	writeJSON(w, http.StatusOK, loginResponse{Token: token, Role: op.Role, ExpiresAt: claims.ExpiresAt.Format(time.RFC3339)})
+}
+
+// logout revokes every session of the calling operator (audit "missing
+// checks": JWT revocation) by bumping their token_version — the current
+// token and any other copies of it stop verifying within
+// tokenVersionCacheTTL on other replicas, immediately on this one.
+func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
+	claims, ok := operatorClaims(r.Context())
+	if !ok || claims.Subject == serviceSubject {
+		http.Error(w, "no operator session to revoke", http.StatusBadRequest)
+		return
+	}
+	op, err := h.operators.ByUsername(r.Context(), claims.Subject)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := h.operators.RevokeSessions(r.Context(), op.ID); err != nil {
+		h.logger.Error("failed to revoke sessions", "err", err, "username", op.Username)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	h.forgetTokenVersion(op.Username)
+	if err := h.auditor.Record(r.Context(), op.Username, "", "OperatorLogout", nil); err != nil {
+		h.logger.Error("failed to write audit record", "err", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// clientIP is the peer address without port. X-Forwarded-For is
+// deliberately not consulted: this API is meant to sit behind a proxy
+// the operator controls, but trusting the header unconditionally would
+// let any client choose its own rate-limit key.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // --- operator management (admin-only) ----------------------------------
