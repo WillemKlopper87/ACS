@@ -5,13 +5,18 @@ global:
 rule_files:
   - /etc/prometheus/alert_rules.yml
 
+# Two target sets per job: host.docker.internal (the documented `go run`
+# dev workflow) and the in-network container names (the opt-in
+# "containerized" docker-compose profile, infra/Dockerfile.*). Only one
+# set is ever actually running at a time; the other just shows "down" in
+# Prometheus, which is harmless and avoids needing two separate configs.
 scrape_configs:
   - job_name: acs
     static_configs:
-      - targets: ['host.docker.internal:7547']
+      - targets: ['host.docker.internal:7547', 'acs:7547']
   - job_name: api
     static_configs:
-      - targets: ['host.docker.internal:8080']
+      - targets: ['host.docker.internal:8080', 'api:8080']
   - job_name: bssadapter
     static_configs:
-      - targets: ['host.docker.internal:8090']
+      - targets: ['host.docker.internal:8090', 'bssadapter:8090']

@@ -45,6 +45,74 @@ services:
     depends_on:
       - prometheus
 
+  # --- Containerized app services, opt-in via `--profile containerized` ---
+  #
+  # Everything above this line stays the default (`docker compose up -d
+  # postgres`), matching deployment-testing-onboarding-guide.md's
+  # documented host-based workflow (`go run ./cmd/acs`, etc.) exactly as
+  # before — these four services are an alternative, not a replacement,
+  # closing the "no container image for them yet" gap without breaking
+  # that guide. prometheus.yml scrapes both host.docker.internal (dev
+  # mode, unchanged) and these services' in-network names (this profile);
+  # whichever set isn't actually running just shows "down" in Prometheus,
+  # which is harmless.
+  acs:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.acs
+    profiles: ["containerized"]
+    ports:
+      - "7547:7547"
+      - "3478:3478/udp"
+    env_file: .env.containerized
+    environment:
+      ACS_POSTGRES_DSN: postgres://acs:acs@postgres:5432/acs?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.api
+    profiles: ["containerized"]
+    ports:
+      - "8080:8080"
+    env_file: .env.containerized
+    environment:
+      ACS_POSTGRES_DSN: postgres://acs:acs@postgres:5432/acs?sslmode=disable
+      ACS_BSS_ADAPTER_URL: http://bssadapter:8090
+    depends_on:
+      postgres:
+        condition: service_healthy
+      acs:
+        condition: service_started
+
+  bssadapter:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.bssadapter
+    profiles: ["containerized"]
+    ports:
+      - "8090:8090"
+    env_file: .env.containerized
+    environment:
+      ACS_INTERNAL_API_URL: http://api:8080
+    depends_on:
+      - api
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8080
+    profiles: ["containerized"]
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
 volumes:
   acs_postgres_data:
   acs_prometheus_data:

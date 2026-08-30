@@ -6,3 +6,10 @@ backend/upload-storage/*.bin
 # Local logs and editor cruft
 *.log
 .DS_Store
+
+# Real secrets for the docker-compose "containerized" profile — see
+# infra/.env.containerized.example for the template to copy from.
+infra/.env.containerized
+
+# Built binaries stay out of source control
+*.exe
