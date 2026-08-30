@@ -8,7 +8,7 @@
 # the Postgres default only exists so a throwaway local stack still works.
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: acs
       POSTGRES_PASSWORD: ${ACS_POSTGRES_PASSWORD:-acs}

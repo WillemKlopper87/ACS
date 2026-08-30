@@ -15,7 +15,7 @@ and an operator console.
 | BSS adapter | `backend/cmd/bssadapter` | `/bss/v1` on `:8090` for CRM/BSS systems (OAuth2 client credentials or shared token), webhooks. |
 | Migrate tool | `backend/cmd/migrate` | Applies embedded migrations standalone (CI, pre-deploy). |
 | Console | `frontend/` | React 19 + Vite operator UI, served by nginx in containers. |
-| Persistence | PostgreSQL 16 | 41 forward-only embedded migrations, advisory-locked and checksum-verified at startup. Firmware and CPE uploads on local disk. |
+| Persistence | PostgreSQL 18 | 41 forward-only embedded migrations, advisory-locked and checksum-verified at startup. Firmware and CPE uploads on local disk. |
 | Observability | `infra/` | Prometheus, Alertmanager, Grafana provisioning, alert rules. |
 
 Contracts: [backend/openapi.yaml](backend/openapi.yaml) (operator API — a
