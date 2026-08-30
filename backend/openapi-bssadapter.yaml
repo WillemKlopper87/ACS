@@ -1,0 +1,256 @@
+openapi: 3.0.3
+info:
+  title: ACS BSS/CRM Integration Adapter API
+  version: "1.0.0"
+  description: >-
+    The external-facing REST API served by cmd/bssadapter (build plan §5,
+    bss-integration-guide.md). This is the boundary an external BSS/CRM
+    (Salesforce Comm Cloud, Amdocs, Netcracker, a custom operator CRM)
+    integrates against — it never talks to the CWMP gateway or Postgres
+    directly, only through this adapter's mapping/order/webhook surface,
+    per design doc v3's "Decoupled Identity" principle: the ACS stays
+    keyed on Device UUID / OUI+SerialNumber, the BSS owns the account
+    relationship.
+
+    Closes the "OpenAPI spec — still deferred" gap tracked in
+    tr069-acs-build-plan.md §10, alongside openapi.yaml for the internal
+    operator API. Hand-written against cmd/bssadapter/*.go's actual
+    request/response structs as of this pass — cross-check
+    bss-integration-guide.md for the fuller integration-facing narrative
+    (retry semantics, TM Forum shape notes, troubleshooting workflow).
+
+    Every error response is a JSON envelope: {"error": "<ErrCode>",
+    "message": "<human text>"} — unlike the internal operator API
+    (openapi.yaml), which returns plain text. This is deliberate: this
+    API's caller is an external system parsing responses programmatically,
+    that one's is an operator console.
+servers:
+  - url: http://localhost:8090
+    description: Local dev (ACS_BSS_ADDR default)
+
+security:
+  - bearerAuth: []
+  - oauth2ClientCredentials: []
+
+tags:
+  - name: Auth
+    description: OAuth2 client-credentials token issuance (build plan §9, supersedes the legacy shared token)
+  - name: Mappings
+    description: "Workflow A — durable account→device mapping"
+  - name: Orders
+    description: "Workflow B — order dispatch, idempotent on external_order_id"
+  - name: Jobs
+    description: "Workflow C — job status polling"
+  - name: Webhooks
+    description: "Workflow C alternative — JOB_COMPLETED push notifications, HMAC-signed"
+
+paths:
+  /bss/v1/oauth/token:
+    post:
+      tags: [Auth]
+      summary: RFC 6749 §4.4 client-credentials grant — issues a 1-hour bearer JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type]
+              properties:
+                grant_type: { type: string, enum: [client_credentials] }
+                client_id: { type: string, description: "Or use HTTP Basic auth instead" }
+                client_secret: { type: string, description: "Or use HTTP Basic auth instead" }
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token: { type: string }
+                  token_type: { type: string, example: Bearer }
+                  expires_in: { type: integer, example: 3600 }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /bss/v1/mappings:
+    post:
+      tags: [Mappings]
+      summary: Upsert an account-device mapping, resolved by oui_serial against the real devices table
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_id, oui_serial]
+              properties:
+                account_id: { type: string }
+                oui_serial: { type: string }
+                device_uuid: { type: string, description: "Optional — if supplied, must match what oui_serial actually resolves to" }
+                service_plan: { type: string }
+      responses:
+        "200": { description: Mapping created/updated, content: { application/json: { schema: { $ref: "#/components/schemas/Mapping" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { description: "ErrDeviceNotMapped — no device found for that oui_serial", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/mappings/{account_id}:
+    get:
+      tags: [Mappings]
+      summary: List every device mapped to an account
+      parameters:
+        - { name: account_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Mapping" } }
+
+  /bss/v1/orders:
+    post:
+      tags: [Orders]
+      summary: >-
+        Dispatch a business action as canonical parameter writes, queuing an ACS job.
+        Idempotent on external_order_id — a retried submission returns the existing
+        order's current status rather than double-dispatching.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [external_order_id, account_id, action]
+              properties:
+                external_order_id: { type: string, description: "BSS-assigned idempotency key" }
+                account_id: { type: string }
+                service_type: { type: string }
+                action: { type: string, enum: [MODIFY_WIFI, SUSPEND, ACTIVATE], description: "SUSPEND/ACTIVATE need ACS_WALLED_GARDEN_* configured server-side or return 400 (build plan §5.3)" }
+                parameters:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: "Business parameters, e.g. {wifi_ssid, wifi_password} for MODIFY_WIFI"
+      responses:
+        "202": { description: "Queued (or the existing order's current status, if a retry)", content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { description: ErrDeviceNotMapped, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "502": { description: ErrACSUnreachable, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/jobs/{command_key}:
+    get:
+      tags: [Jobs]
+      summary: Poll a dispatched order's underlying job status (Workflow C)
+      parameters:
+        - { name: command_key, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/JobStatus" } } } }
+        "404": { description: ErrJobNotFound, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "502": { description: ErrACSUnreachable, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/webhooks:
+    post:
+      tags: [Webhooks]
+      summary: Subscribe to JOB_COMPLETED push notifications instead of polling Workflow C
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_url, secret, event_types]
+              properties:
+                account_id: { type: string, nullable: true, description: "Omit for a fleet-wide subscription" }
+                target_url: { type: string }
+                secret: { type: string, description: "HMAC-SHA256 signing secret — deliveries carry X-Webhook-Signature: hex(HMAC-SHA256(secret, body))" }
+                event_types: { type: array, items: { type: string, example: JOB_COMPLETED } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/WebhookSubscription" } } } }
+    get:
+      tags: [Webhooks]
+      summary: List this caller's webhook subscriptions
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/WebhookSubscription" } } } } } } }
+
+  /bss/v1/webhooks/{id}:
+    delete:
+      tags: [Webhooks]
+      summary: Delete a webhook subscription
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Either an OAuth2 client-credentials token from POST /bss/v1/oauth/token
+        (recommended, build plan §9) or the legacy shared ACS_BSS_API_TOKEN
+        (deprecated but still accepted so existing integrations don't break
+        mid-migration — bss-integration-guide.md §3).
+    oauth2ClientCredentials:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: /bss/v1/oauth/token
+          scopes: {}
+
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  schemas:
+    ErrorEnvelope:
+      type: object
+      properties:
+        error: { type: string, example: ErrInvalidRequest }
+        message: { type: string }
+
+    Mapping:
+      type: object
+      properties:
+        account_id: { type: string }
+        device_uuid: { type: string }
+        oui_serial: { type: string }
+        service_plan: { type: string }
+        status: { type: string, enum: [PENDING_ACTIVE, ACTIVE, SUSPENDED, TERMINATED] }
+
+    Order:
+      type: object
+      properties:
+        order_tracking_id: { type: string }
+        command_key: { type: string }
+        status: { type: string }
+        timestamp: { type: string, format: date-time }
+
+    JobStatus:
+      type: object
+      properties:
+        command_key: { type: string }
+        device_id: { type: string }
+        type: { type: string }
+        status: { type: string, enum: [QUEUED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, SUCCESS, FAILED, TIMEOUT] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time, nullable: true }
+        fault_code: { type: string, nullable: true }
+        fault_string: { type: string, nullable: true }
+
+    WebhookSubscription:
+      type: object
+      properties:
+        id: { type: string }
+        account_id: { type: string, nullable: true }
+        target_url: { type: string }
+        event_types: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }

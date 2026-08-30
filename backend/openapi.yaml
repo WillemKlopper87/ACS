@@ -1,0 +1,2033 @@
+openapi: 3.0.3
+info:
+  title: ACS Operator REST API
+  version: "1.0.0"
+  description: >-
+    The operator-facing REST API served by cmd/api (design doc v3 §8,
+    build plan §4). Closes the "OpenAPI spec — still deferred" gap
+    tracked in tr069-acs-build-plan.md §10 — hand-written against the
+    actual route table and handler request/response structs in
+    cmd/api/*.go as of this pass, not generated, so it may drift from the
+    code over time; treat cmd/api/main.go's route() registrations as the
+    source of truth if this ever disagrees.
+
+    Every write endpoint (POST/PUT/DELETE that mutates device state)
+    returns 202 Accepted and a command_key — it only ever *queues* a job
+    for cmd/acs to dispatch on the device's next CWMP session, it never
+    talks to a CPE directly (design doc v3 §8.3/§19.2). Poll
+    GET /api/v1/jobs/{command_key} for the outcome.
+
+    Authentication is opt-in: unset ACS_JWT_SIGNING_SECRET and every
+    route here (except the CPE-facing firmware/upload routes, which are
+    always public — a CPE has no operator JWT to present) runs
+    unauthenticated, matching Phases 1-5's original behavior. Set it and
+    every route requires a Bearer JWT from POST /api/v1/auth/login,
+    enforced by role (readonly < noc < manager < superadmin) and, for a
+    curated set of higher-stakes capabilities, by a separately
+    configurable role_permissions table (GET/PUT
+    /api/v1/auth/role-permissions) — see the Permission enum on write
+    endpoints below for which capability each one needs.
+
+    Error responses are plain text (net/http.Error's default — a bare
+    message body, Content-Type: text/plain), not a JSON envelope. This
+    differs from cmd/bssadapter (see openapi-bssadapter.yaml), which
+    always returns a JSON {error, message} envelope — a deliberate
+    difference in audience: this API's caller is an operator/console,
+    that one's is an external BSS integration.
+servers:
+  - url: http://localhost:8080
+    description: Local dev (matches deployment-testing-onboarding-guide.md's default ACS_API_ADDR)
+
+security:
+  - bearerAuth: []
+  - {}
+
+tags:
+  - name: Auth
+    description: Operator login and account management (build plan §4 Phase 6/§9)
+  - name: RBAC
+    description: Role permission matrix, password reset (§9's RBAC tier expansion)
+  - name: Tenancy
+    description: Regions/customers/projects, operator scopes, device assignment (§9)
+  - name: Devices
+    description: Device fleet read/write, bulk actions, tags, location
+  - name: Parameters
+    description: Parameter cache reads, live GET_PARAMETER/SET_PARAMETER, history, attributes
+  - name: Diagnostics
+    description: Ping/Traceroute, cellular/WiFi refresh, parameter discovery
+  - name: Objects
+    description: AddObject/DeleteObject — provisioning new instances
+  - name: Jobs
+    description: The durable ACS-initiated work queue every write endpoint feeds
+  - name: Device Groups
+    description: Curated named device sets, used by bulk actions/schedules/templates
+  - name: Scheduled Jobs
+    description: Fixed-interval recurring job dispatch (build plan §4 Phase 7)
+  - name: Policies
+    description: Continuous compliance enforcement, checked on every Inform
+  - name: Config Templates
+    description: Named reusable multi-parameter writes, on-demand or zero-touch auto-apply
+  - name: Firmware & Rollouts
+    description: Firmware image repository and canary rollout control
+  - name: Credentials
+    description: Per-device Connection Request credential rotation (build plan §4 Phase 6)
+  - name: Audit Log
+    description: Append-only actor/action/device audit trail
+  - name: Dashboard & Fleet Health
+    description: Per-operator dashboard layout, live aggregated fleet figures
+  - name: Reports
+    description: Excel export/import
+  - name: BSS Admin
+    description: BSS/CRM integration management — mappings, OAuth2 clients, webhooks, troubleshooting
+  - name: CLI Access
+    description: Per-device SSH/Telnet credentials and the browser terminal bridge (scaffolded — see build plan §10's CGNAT item)
+  - name: Web GUI
+    description: Per-device web-UI embed config and proxy (scaffolded — see build plan §10's CGNAT item)
+  - name: VPN
+    description: WireGuard overlay peer registry (scaffolded — see build plan §10's CGNAT item)
+  - name: Uploads
+    description: CPE-to-ACS file transfer (config backups, log files)
+
+paths:
+  # --- Auth ---
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Exchange username/password for an 8-hour operator JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Login succeeded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  role: { $ref: "#/components/schemas/Role" }
+                  username: { type: string }
+                  expires_at: { type: string, format: date-time }
+        "401": { description: Wrong username or password, content: { text/plain: { schema: { type: string } } } }
+
+  /api/v1/auth/operators:
+    post:
+      tags: [Auth]
+      summary: Create an operator account (superadmin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, role]
+              properties:
+                username: { type: string }
+                email: { type: string, description: "Optional — required only for self-service password reset" }
+                password: { type: string }
+                role: { $ref: "#/components/schemas/Role" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Operator" } } } }
+    get:
+      tags: [Auth]
+      summary: List every operator (superadmin only, password hashes never leave the handler)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Operator" } }
+
+  /api/v1/auth/operators/{id}/password:
+    put:
+      tags: [RBAC]
+      summary: Superadmin-set an operator's password directly (no token/email flow)
+      parameters: [{ $ref: "#/components/parameters/OperatorId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_password]
+              properties: { new_password: { type: string } }
+      responses:
+        "204": { description: Password reset }
+
+  /api/v1/auth/role-permissions:
+    get:
+      tags: [RBAC]
+      summary: Get the configurable permission matrix for the curated high-stakes capability list
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RolePermissionsMatrix" } } } }
+    put:
+      tags: [RBAC]
+      summary: Grant or revoke one role's permission (superadmin only; superadmin itself is never editable — always all-permission)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role, permission, granted]
+              properties:
+                role: { $ref: "#/components/schemas/Role" }
+                permission: { $ref: "#/components/schemas/Permission" }
+                granted: { type: boolean }
+      responses:
+        "204": { description: Updated }
+
+  /api/v1/auth/password-reset/request:
+    post:
+      tags: [RBAC]
+      summary: Self-service password reset request (public, always 202 regardless of whether the username resolves — not a username-existence oracle)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { username: { type: string } } }
+      responses:
+        "202": { description: "Accepted (email sent if the username/email resolved, or logged if ACS_SMTP_HOST is unset)" }
+
+  /api/v1/auth/password-reset/confirm:
+    post:
+      tags: [RBAC]
+      summary: Confirm a password reset via the single-use emailed token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties: { token: { type: string }, new_password: { type: string } }
+      responses:
+        "204": { description: Password changed }
+        "400": { description: "Token invalid, expired, or already used" }
+
+  /api/v1/auth/operators/{id}/scopes:
+    post:
+      tags: [Tenancy]
+      summary: Set an operator's tenancy scopes (superadmin only). No scopes = unrestricted.
+      parameters: [{ $ref: "#/components/parameters/OperatorId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scopes:
+                  type: array
+                  items: { $ref: "#/components/schemas/OperatorScope" }
+      responses:
+        "204": { description: Scopes replaced }
+    get:
+      tags: [Tenancy]
+      summary: Get an operator's current tenancy scopes
+      parameters: [{ $ref: "#/components/parameters/OperatorId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/OperatorScope" } }
+
+  # --- Tenancy structural CRUD ---
+  /api/v1/regions:
+    post:
+      tags: [Tenancy]
+      summary: Create a region (superadmin — "the org chart")
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Region" } } } }
+    get:
+      tags: [Tenancy]
+      summary: List regions
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Region" } } } } } } }
+
+  /api/v1/regions/{id}:
+    delete:
+      tags: [Tenancy]
+      summary: Delete a region (superadmin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+
+  /api/v1/customers:
+    post:
+      tags: [Tenancy]
+      summary: Create a customer, optionally under a region (superadmin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties: { name: { type: string }, region_id: { type: string, nullable: true } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Customer" } } } }
+    get:
+      tags: [Tenancy]
+      summary: List customers
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Customer" } } } } } } }
+
+  /api/v1/customers/{id}:
+    delete:
+      tags: [Tenancy]
+      summary: Delete a customer (superadmin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+
+  /api/v1/projects:
+    post:
+      tags: [Tenancy]
+      summary: Create a project — a cross-cutting tag a device can carry several of (superadmin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties: { name: { type: string }, description: { type: string } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+    get:
+      tags: [Tenancy]
+      summary: List projects
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Project" } } } } } } }
+
+  /api/v1/projects/{id}:
+    delete:
+      tags: [Tenancy]
+      summary: Delete a project (superadmin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+
+  /api/v1/devices/{id}/customer:
+    put:
+      tags: [Tenancy]
+      summary: Assign a device to a customer (tenancy.manage permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, properties: { customer_id: { type: string, nullable: true } } } } }
+      responses:
+        "204": { description: Assigned }
+
+  /api/v1/devices/{id}/projects:
+    put:
+      tags: [Tenancy]
+      summary: Replace a device's project tags (tenancy.manage permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, properties: { project_ids: { type: array, items: { type: string } } } } } }
+      responses:
+        "204": { description: Replaced }
+    get:
+      tags: [Tenancy]
+      summary: Get a device's assigned projects
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Project" } } } } }
+
+  /api/v1/devices/import:
+    post:
+      tags: [Reports]
+      summary: Bulk-create/update devices from an uploaded file (tenancy.manage permission, capped at 5000 rows)
+      parameters:
+        - name: format
+          in: query
+          required: true
+          schema: { type: string, enum: [json, csv, xml] }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { type: string, format: binary } }
+          text/csv: { schema: { type: string, format: binary } }
+          application/xml: { schema: { type: string, format: binary } }
+      responses:
+        "200": { description: Import result, content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } } }
+        "400": { description: "No rows, too many rows (>5000), or unparseable body" }
+
+  # --- Devices ---
+  /api/v1/devices:
+    get:
+      tags: [Devices]
+      summary: List devices, paginated (capped at 500/page), tenancy-scoped to the calling operator
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: page_size
+          in: query
+          schema: { type: integer, default: 50, maximum: 500 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Device" } }
+                  total: { type: integer }
+
+  /api/v1/devices/summary:
+    get:
+      tags: [Devices]
+      summary: Fleet counts grouped by vendor/status/reachability (GROUP BY, not client-side paging)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/DeviceGroupCount" } } } } } } }
+
+  /api/v1/devices/ids:
+    get:
+      tags: [Devices]
+      summary: "\"Select all N matching this filter\" — resolves the same filters Fleet Control expresses, server-side (capped at 5000)"
+      parameters:
+        - { name: manufacturer, in: query, schema: { type: string } }
+        - { name: online_status, in: query, schema: { type: string } }
+        - { name: connection_request_mode, in: query, schema: { type: string } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ids: { type: array, items: { type: string } } } } } } }
+
+  /api/v1/devices/bulk-actions:
+    post:
+      tags: [Devices]
+      summary: Fan an action out to many devices at once (bulk_actions permission, capped at 500 devices/request)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                device_ids: { type: array, items: { type: string }, description: "Alternative to group_id" }
+                group_id: { type: string, description: "Alternative to device_ids — resolves a device_groups member set" }
+                action: { type: string, enum: [SET_PARAMETER, CONNECTION_REQUEST, REFRESH_CELLULAR] }
+                parameters:
+                  type: array
+                  items: { $ref: "#/components/schemas/ParameterInput" }
+                  description: "Required when action is SET_PARAMETER"
+                timeout_seconds: { type: integer }
+      responses:
+        "202": { description: Per-device outcome (one failure doesn't block the rest), content: { application/json: { schema: { $ref: "#/components/schemas/BulkActionResponse" } } } }
+
+  /api/v1/devices/{id}:
+    get:
+      tags: [Devices]
+      summary: Get one device
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
+        "404": { description: Not found }
+
+  /api/v1/devices/{id}/tags:
+    put:
+      tags: [Devices]
+      summary: "Replace a device's tags (devices.write permission — plain TEXT[], distinct from device_groups)"
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, properties: { tags: { type: array, items: { type: string } } } } } }
+      responses:
+        "200": { description: OK }
+
+  /api/v1/devices/{id}/location:
+    put:
+      tags: [Devices]
+      summary: Set free-text device location (devices.write permission — no structured address/GPS fields)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, properties: { location: { type: string } } } } }
+      responses:
+        "200": { description: OK }
+
+  /api/v1/reports/devices/export:
+    get:
+      tags: [Reports]
+      summary: Stream a real .xlsx workbook of the (tenancy-scoped) fleet
+      parameters:
+        - { name: region_id, in: query, schema: { type: string } }
+        - { name: customer_id, in: query, schema: { type: string } }
+        - { name: project_id, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: XLSX workbook
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: { type: string, format: binary }
+
+  # --- Parameters ---
+  /api/v1/devices/{id}/parameters:
+    get:
+      tags: [Parameters]
+      summary: Read the cached parameter values for a device
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  parameters:
+                    type: object
+                    additionalProperties: { $ref: "#/components/schemas/CachedParameter" }
+    put:
+      tags: [Parameters]
+      summary: Queue a SET_PARAMETER job (devices.write permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                parameters: { type: array, items: { $ref: "#/components/schemas/ParameterInput" } }
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  /api/v1/devices/{id}/parameters/history:
+    get:
+      tags: [Parameters]
+      summary: Parameter value history — only records when a value actually changed, insert-only
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - { name: name, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  items: { type: array, items: { $ref: "#/components/schemas/ParameterHistoryEntry" } }
+
+  /api/v1/devices/{id}/parameters/get:
+    post:
+      tags: [Parameters]
+      summary: Queue a live GET_PARAMETER job for arbitrary paths (devices.write permission — the generic form refresh-cellular/refresh-wifi-clients specialize)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { paths: { type: array, items: { type: string } } } }
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  /api/v1/devices/{id}/parameters/refresh-cellular:
+    post:
+      tags: [Diagnostics]
+      summary: Queue a GET_PARAMETER over the vendor-matched cellular/RF diagnostic paths (diagnostics.run permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/QueueResponse"
+                  - type: object
+                    properties:
+                      matched_vendor: { type: string }
+                      parameters: { type: array, items: { type: string } }
+
+  /api/v1/devices/{id}/parameters/refresh-wifi-clients:
+    post:
+      tags: [Diagnostics]
+      summary: Queue a GET_PARAMETER over the whole WiFi AccessPoint subtree, every SSID's AssociatedDevice table included (diagnostics.run permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/QueueResponse"
+                  - type: object
+                    properties: { parameters: { type: array, items: { type: string } } }
+
+  /api/v1/devices/{id}/parameter-attributes:
+    post:
+      tags: [Parameters]
+      summary: Queue a SET_PARAMETER_ATTRIBUTES job — configure active-notification level (devices.write permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attributes]
+              properties:
+                attributes:
+                  type: array
+                  items:
+                    type: object
+                    required: [name, notification]
+                    properties:
+                      name: { type: string }
+                      notification: { type: integer, enum: [0, 1, 2], description: "0 off, 1 passive, 2 active" }
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  /api/v1/devices/{id}/parameter-attributes/get:
+    post:
+      tags: [Parameters]
+      summary: Queue a GET_PARAMETER_ATTRIBUTES job — result lands in the job's result_detail once it completes (devices.write permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paths]
+              properties: { paths: { type: array, items: { type: string } } }
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  /api/v1/devices/{id}/discover-parameters:
+    post:
+      tags: [Diagnostics]
+      summary: On-demand parameter discovery (diagnostics.run permission) — the automatic-on-BOOTSTRAP sweep's manual counterpart
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  /api/v1/devices/{id}/parameter-names:
+    get:
+      tags: [Diagnostics]
+      summary: The device's last-discovered parameter tree (names + writable flags). 200 with null discovered_at if discovery never ran.
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  names: { type: object, additionalProperties: { type: boolean } }
+                  discovered_at: { type: string, format: date-time, nullable: true }
+
+  # --- Diagnostics ---
+  /api/v1/devices/{id}/diagnostics/ping:
+    post:
+      tags: [Diagnostics]
+      summary: Queue DIAGNOSTICS_PING — trigger + poll cycle, resolves to SUCCESS/FAILED/TIMEOUT (diagnostics.run permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [host]
+              properties:
+                host: { type: string }
+                number_of_repetitions: { type: integer }
+                timeout: { type: integer, description: milliseconds }
+                data_block_size: { type: integer }
+                dscp: { type: integer }
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  /api/v1/devices/{id}/diagnostics/traceroute:
+    post:
+      tags: [Diagnostics]
+      summary: Queue DIAGNOSTICS_TRACEROUTE — same trigger/poll shape as ping (diagnostics.run permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [host]
+              properties:
+                host: { type: string }
+                number_of_tries: { type: integer }
+                timeout: { type: integer, description: milliseconds }
+                data_block_size: { type: integer }
+                dscp: { type: integer }
+                max_hop_count: { type: integer }
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  # --- Objects ---
+  /api/v1/devices/{id}/objects:
+    post:
+      tags: [Objects]
+      summary: Queue ADD_OBJECT — object_path must end in "." (devices.write permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [object_path], properties: { object_path: { type: string, example: "Device.WiFi.SSID." } } }
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  /api/v1/devices/{id}/objects/delete:
+    post:
+      tags: [Objects]
+      summary: Queue DELETE_OBJECT — object_path must name a specific instance (devices.write permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [object_path], properties: { object_path: { type: string, example: "Device.WiFi.SSID.3." } } }
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  # --- Devices: lifecycle actions ---
+  /api/v1/devices/{id}/reboot:
+    post:
+      tags: [Devices]
+      summary: Queue Reboot (devices.write permission) — outcome is a later Inform with event code "M Reboot"
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  /api/v1/devices/{id}/factory-reset:
+    post:
+      tags: [Devices]
+      summary: Queue FactoryReset (devices.write permission) — destructive to the physical device, not just ACS-side bookkeeping
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  /api/v1/devices/{id}/schedule-inform:
+    post:
+      tags: [Devices]
+      summary: Queue ScheduleInform — tells the CPE to Inform again after a delay (devices.write permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [delay_seconds], properties: { delay_seconds: { type: integer, minimum: 1 } } }
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  /api/v1/devices/{id}/connection-request:
+    post:
+      tags: [Devices]
+      summary: Queue CONNECTION_REQUEST (connection_request permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { timeout_seconds: { type: integer, default: 30 } } }
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/QueueResponse"
+                  - type: object
+                    properties:
+                      reachability:
+                        type: object
+                        properties:
+                          connection_request_mode: { type: string }
+                          recommendation: { type: string }
+
+  # --- Jobs ---
+  /api/v1/devices/{id}/jobs:
+    get:
+      tags: [Jobs]
+      summary: List a device's jobs
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Job" } }, total: { type: integer } } } } } }
+
+  /api/v1/jobs:
+    get:
+      tags: [Jobs]
+      summary: List every job fleet-wide
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Job" } }, total: { type: integer } } } } } }
+
+  /api/v1/jobs/{command_key}:
+    get:
+      tags: [Jobs]
+      summary: Get one job's status by its operator-facing command_key
+      parameters: [{ name: command_key, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "404": { description: Not found }
+
+  # --- Device Groups ---
+  /api/v1/device-groups:
+    post:
+      tags: [Device Groups]
+      summary: Create a device group (group.manage permission)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties: { name: { type: string }, description: { type: string } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceGroup" } } } }
+        "409": { description: A group with this name already exists }
+    get:
+      tags: [Device Groups]
+      summary: List device groups
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/DeviceGroup" } } } } } } }
+
+  /api/v1/device-groups/{id}:
+    get:
+      tags: [Device Groups]
+      summary: Get a group and its member device IDs
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceGroup" } } } }
+    delete:
+      tags: [Device Groups]
+      summary: Delete a group (group.manage permission) — cascades to membership rows, never touches the devices themselves
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+
+  /api/v1/device-groups/{id}/members:
+    post:
+      tags: [Device Groups]
+      summary: Add members (group.manage permission) — idempotent, re-adding an existing member is a no-op
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, properties: { device_ids: { type: array, items: { type: string } } } } } }
+      responses:
+        "204": { description: Added }
+
+  /api/v1/device-groups/{id}/members/{device_id}:
+    delete:
+      tags: [Device Groups]
+      summary: Remove one member (group.manage permission)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: device_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Removed }
+
+  # --- Credentials ---
+  /api/v1/devices/{id}/credentials/rotate:
+    post:
+      tags: [Credentials]
+      summary: Generate + queue a new Connection Request credential, recorded PENDING (credential.manage permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "202": { description: Queued, content: { application/json: { schema: { $ref: "#/components/schemas/Credential" } } } }
+
+  /api/v1/devices/{id}/credentials:
+    get:
+      tags: [Credentials]
+      summary: List a device's credential versions
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Credential" } } } } } } }
+
+  /api/v1/devices/{id}/credentials/{credential_id}/activate:
+    post:
+      tags: [Credentials]
+      summary: Activate a PENDING credential — switches the ACS's own Connection Request client, demotes the previous ACTIVE row to GRACE (credential.manage permission)
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - { name: credential_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Activated, content: { application/json: { schema: { $ref: "#/components/schemas/Credential" } } } }
+
+  /api/v1/devices/{id}/credentials/{credential_id}/revoke:
+    post:
+      tags: [Credentials]
+      summary: Revoke a GRACE or PENDING credential (credential.manage permission) — an ACTIVE credential can't be revoked out from under itself
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - { name: credential_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Revoked, content: { application/json: { schema: { $ref: "#/components/schemas/Credential" } } } }
+        "404": { description: Not in a revocable state }
+
+  # --- Scheduled Jobs ---
+  /api/v1/scheduled-jobs:
+    post:
+      tags: [Scheduled Jobs]
+      summary: Create a fixed-interval recurring job (schedule.manage permission, minimum 60s interval)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, job_type, target_type, target_id, interval_seconds]
+              properties:
+                name: { type: string }
+                job_type: { type: string }
+                target_type: { type: string, enum: [DEVICE, GROUP] }
+                target_id: { type: string }
+                payload: { type: object, description: "Job-type-appropriate payload, e.g. DiagnosticsPingPayload for DIAGNOSTICS_PING" }
+                interval_seconds: { type: integer, minimum: 60 }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ScheduledJob" } } } }
+        "400": { description: interval_seconds below the 60s minimum }
+    get:
+      tags: [Scheduled Jobs]
+      summary: List scheduled jobs
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/ScheduledJob" } } } } } } }
+
+  /api/v1/scheduled-jobs/{id}:
+    delete:
+      tags: [Scheduled Jobs]
+      summary: Delete a scheduled job (schedule.manage permission)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+
+  /api/v1/scheduled-jobs/{id}/enable:
+    post:
+      tags: [Scheduled Jobs]
+      summary: Enable a scheduled job (schedule.manage permission)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Enabled }
+
+  /api/v1/scheduled-jobs/{id}/disable:
+    post:
+      tags: [Scheduled Jobs]
+      summary: Disable a scheduled job (schedule.manage permission) — stops firing without deleting it
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Disabled }
+
+  # --- Policies ---
+  /api/v1/policies:
+    post:
+      tags: [Policies]
+      summary: Create a compliance policy (policy.manage permission) — checked against every Inform's reported parameters
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, parameter_name, desired_value]
+              properties:
+                name: { type: string }
+                model_filter: { type: string, nullable: true }
+                parameter_name: { type: string }
+                desired_value: { type: string }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Policy" } } } }
+    get:
+      tags: [Policies]
+      summary: List policies
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Policy" } } } } } } }
+
+  /api/v1/policies/{id}:
+    delete:
+      tags: [Policies]
+      summary: Delete a policy (policy.manage permission)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+
+  /api/v1/policies/{id}/enable:
+    post:
+      tags: [Policies]
+      summary: Enable a policy (policy.manage permission)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Enabled }
+
+  /api/v1/policies/{id}/disable:
+    post:
+      tags: [Policies]
+      summary: Disable a policy (policy.manage permission)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Disabled }
+
+  # --- Config Templates ---
+  /api/v1/config-templates:
+    post:
+      tags: [Config Templates]
+      summary: Create a named reusable multi-parameter write template (template.manage permission)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, parameters]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                parameters: { type: array, items: { $ref: "#/components/schemas/TemplateParameter" } }
+                model_filter: { type: string, nullable: true, description: "Required if auto_apply is true" }
+                auto_apply: { type: boolean, description: "Zero-touch: applies automatically on a matching device's first BOOTSTRAP Inform" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ConfigTemplate" } } } }
+    get:
+      tags: [Config Templates]
+      summary: List config templates
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/ConfigTemplate" } } } } } } }
+
+  /api/v1/config-templates/{id}:
+    delete:
+      tags: [Config Templates]
+      summary: Delete a template (template.manage permission)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+
+  /api/v1/config-templates/{id}/apply:
+    post:
+      tags: [Config Templates]
+      summary: Apply a template's full parameter set to a device selection or group (template.manage permission) — one independent job per device
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                device_ids: { type: array, items: { type: string } }
+                group_id: { type: string }
+      responses:
+        "202": { description: Per-device outcome, content: { application/json: { schema: { $ref: "#/components/schemas/ApplyTemplateResult" } } } }
+
+  # --- Firmware & Rollouts ---
+  /api/v1/firmware/images:
+    get:
+      tags: [Firmware & Rollouts]
+      summary: List uploaded firmware images
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/FirmwareImage" } } } } } } }
+    post:
+      tags: [Firmware & Rollouts]
+      summary: Upload a firmware image (firmware.manage permission, multipart)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                vendor: { type: string }
+                model: { type: string }
+                version: { type: string }
+                channel: { type: string }
+      responses:
+        "201": { description: Uploaded, content: { application/json: { schema: { $ref: "#/components/schemas/FirmwareImage" } } } }
+
+  /api/v1/firmware/images/{id}/file:
+    get:
+      tags: [Firmware & Rollouts]
+      summary: "Download a firmware image's raw bytes — public: this is the URL a CPE's own Download RPC fetches, not an operator route"
+      security: []
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: The firmware binary, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+
+  /api/v1/devices/{id}/firmware:
+    post:
+      tags: [Firmware & Rollouts]
+      summary: Queue a single-device FIRMWARE_DOWNLOAD (firmware.manage permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [firmware_image_id]
+              properties: { firmware_image_id: { type: string }, delay_seconds: { type: integer } }
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+
+  /api/v1/firmware/rollouts:
+    post:
+      tags: [Firmware & Rollouts]
+      summary: Create a canary firmware rollout (firmware.manage permission) — eligibility snapshotted at creation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, firmware_image_id]
+              properties:
+                name: { type: string }
+                firmware_image_id: { type: string }
+                rollback_firmware_image_id: { type: string, nullable: true }
+                model_filter: { type: string, nullable: true }
+                current_version_filter: { type: string, nullable: true }
+                canary_percentage: { type: integer, minimum: 1, maximum: 100 }
+                maximum_failure_rate: { type: number }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Rollout" } } } }
+    get:
+      tags: [Firmware & Rollouts]
+      summary: List rollouts
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Rollout" } } } } } } }
+
+  /api/v1/firmware/rollouts/{id}:
+    get:
+      tags: [Firmware & Rollouts]
+      summary: Get a rollout's live per-device state, derived from each linked job's own status
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RolloutDetail" } } } }
+
+  /api/v1/firmware/rollouts/{id}/start:
+    post:
+      tags: [Firmware & Rollouts]
+      summary: Dispatch the canary batch — canary_percentage% of eligible devices, minimum 1 (firmware.manage permission)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Started, content: { application/json: { schema: { $ref: "#/components/schemas/RolloutDetail" } } } }
+        "409": { description: "Outside the configured maintenance window, or already started" }
+
+  /api/v1/firmware/rollouts/{id}/advance:
+    post:
+      tags: [Firmware & Rollouts]
+      summary: Dispatch the next wave, or flip to BLOCKED (and fire rollback) if the failure rate exceeds the configured maximum (firmware.manage permission)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Advanced
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/RolloutDetail"
+                  - type: object
+                    properties: { final_wave: { type: boolean } }
+        "409": { description: "Failure rate exceeded maximum_failure_rate — flipped to BLOCKED, rollback dispatched if configured" }
+
+  # --- Audit Log ---
+  /api/v1/audit-log:
+    get:
+      tags: [Audit Log]
+      summary: Append-only audit trail, filterable by actor/device/details text and action, virtualized on the frontend
+      parameters:
+        - { name: actor, in: query, schema: { type: string } }
+        - { name: device_id, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string }, description: "Free-text search over details" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/AuditEntry" } } } } } } }
+
+  # --- Dashboard & Fleet Health ---
+  /api/v1/fleet-health:
+    get:
+      tags: [Dashboard & Fleet Health]
+      summary: Live-snapshot aggregation for triage — the no-separate-login version of Grafana's fleet-health dashboard
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FleetHealth" } } } }
+
+  /api/v1/dashboard:
+    get:
+      tags: [Dashboard & Fleet Health]
+      summary: Live aggregated fleet figures for the per-operator dashboard, tenancy-scoped
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DashboardData" } } } }
+
+  /api/v1/dashboard/layout:
+    get:
+      tags: [Dashboard & Fleet Health]
+      summary: Get the calling operator's saved widget arrangement
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { widgets: { type: array, items: { $ref: "#/components/schemas/DashboardWidget" } } } } } } }
+    put:
+      tags: [Dashboard & Fleet Health]
+      summary: Save the calling operator's widget arrangement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, properties: { widgets: { type: array, items: { $ref: "#/components/schemas/DashboardWidget" } } } }
+      responses:
+        "204": { description: Saved }
+
+  # --- BSS Admin ---
+  /api/v1/bss/mappings:
+    get:
+      tags: [BSS Admin]
+      summary: List account-device mappings (superadmin)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/BSSMapping" } } } } } } }
+    post:
+      tags: [BSS Admin]
+      summary: Create an account-device mapping from the console (superadmin) — the same upsert POST /bss/v1/mappings performs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_id, oui_serial]
+              properties:
+                account_id: { type: string }
+                oui_serial: { type: string }
+                service_plan: { type: string }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/BSSMapping" } } } }
+
+  /api/v1/bss/oauth-clients:
+    get:
+      tags: [BSS Admin]
+      summary: List registered BSS OAuth2 clients (superadmin, client_secret never shown again after creation)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/BSSOAuthClient" } } } } } } }
+    post:
+      tags: [BSS Admin]
+      summary: Register a new OAuth2 client-credentials integration (superadmin) — client_secret returned exactly once
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/BSSOAuthClientCreateResult" } } } }
+
+  /api/v1/bss/oauth-clients/{id}:
+    delete:
+      tags: [BSS Admin]
+      summary: Revoke a client (superadmin) — blocks new token issuance immediately; already-issued tokens remain valid until their own expiry (max 1h)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Revoked }
+
+  /api/v1/bss/webhooks:
+    get:
+      tags: [BSS Admin]
+      summary: List webhook subscriptions (superadmin)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/BSSWebhookSubscription" } } } } } } }
+    post:
+      tags: [BSS Admin]
+      summary: Create a webhook subscription from the console (superadmin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_url, secret, event_types]
+              properties:
+                account_id: { type: string, nullable: true, description: "null = fleet-wide subscription" }
+                target_url: { type: string }
+                secret: { type: string, description: "HMAC-SHA256 signing secret for X-Webhook-Signature" }
+                event_types: { type: array, items: { type: string, example: JOB_COMPLETED } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/BSSWebhookSubscription" } } } }
+
+  /api/v1/bss/webhooks/{id}:
+    delete:
+      tags: [BSS Admin]
+      summary: Delete a webhook subscription (superadmin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+
+  /api/v1/bss/stats:
+    get:
+      tags: [BSS Admin]
+      summary: BSS integration statistics (superadmin)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BSSStats" } } } }
+
+  /api/v1/bss/health:
+    get:
+      tags: [BSS Admin]
+      summary: Live reachability/latency check against cmd/bssadapter (superadmin)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BSSHealth" } } } }
+
+  /api/v1/bss/troubleshoot/mapping-lookup:
+    post:
+      tags: [BSS Admin]
+      summary: Exercise Workflow A's read path exactly as a BSS caller would (superadmin)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [account_id], properties: { account_id: { type: string } } } } }
+      responses:
+        "200": { description: Result, content: { application/json: { schema: { $ref: "#/components/schemas/BSSAdapterCallResult" } } } }
+
+  /api/v1/bss/troubleshoot/auth-check:
+    post:
+      tags: [BSS Admin]
+      summary: Verify BSS-facing auth is configured and reachable (superadmin)
+      responses:
+        "200": { description: Result, content: { application/json: { schema: { $ref: "#/components/schemas/BSSAdapterCallResult" } } } }
+
+  /api/v1/bss/troubleshoot/job-status:
+    post:
+      tags: [BSS Admin]
+      summary: Exercise Workflow C exactly as a BSS caller would (superadmin)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [command_key], properties: { command_key: { type: string } } } } }
+      responses:
+        "200": { description: Result, content: { application/json: { schema: { $ref: "#/components/schemas/BSSAdapterCallResult" } } } }
+
+  /api/v1/bss/troubleshoot/order-dispatch:
+    post:
+      tags: [BSS Admin]
+      summary: Dry-run an order dispatch exactly as a BSS caller would, including idempotency (superadmin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [external_order_id, account_id]
+              properties:
+                external_order_id: { type: string }
+                account_id: { type: string }
+                wifi_ssid: { type: string }
+                wifi_password: { type: string }
+      responses:
+        "200": { description: Result, content: { application/json: { schema: { $ref: "#/components/schemas/BSSAdapterCallResult" } } } }
+
+  # --- CLI Access ---
+  /api/v1/devices/{id}/cli/credentials:
+    post:
+      tags: [CLI Access]
+      summary: Store per-device SSH/Telnet credentials, encrypted at rest under ACS_CREDENTIAL_ENCRYPTION_KEY (cli.access permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [protocol, host, port, username, password]
+              properties:
+                protocol: { type: string, enum: [SSH, TELNET] }
+                host: { type: string }
+                port: { type: integer }
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CLICredential" } } } }
+    get:
+      tags: [CLI Access]
+      summary: List a device's stored CLI credentials (password never returned)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/CLICredential" } } } } } } }
+
+  /api/v1/devices/{id}/cli/credentials/{credential_id}:
+    delete:
+      tags: [CLI Access]
+      summary: Delete a stored CLI credential (cli.access permission)
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - { name: credential_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+
+  /api/v1/devices/{id}/cli/connect:
+    get:
+      tags: [CLI Access]
+      summary: >-
+        Open a WebSocket bridging the browser terminal to the device's SSH/Telnet port
+        (cli.access permission). Real code, blocked in practice by the CGNAT reachability
+        gap — build plan §10 — until a VPN/tunnel path exists.
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "101": { description: Switching Protocols (WebSocket upgrade) }
+
+  # --- Web GUI ---
+  /api/v1/devices/{id}/webgui:
+    put:
+      tags: [Web GUI]
+      summary: Set a device's web-UI embed config (cli.access permission — this is a write-capable channel to the device)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [base_url]
+              properties:
+                base_url: { type: string }
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WebGUIConfig" } } } }
+    get:
+      tags: [Web GUI]
+      summary: Get a device's web-UI embed config (password never returned)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WebGUIConfig" } } } }
+    delete:
+      tags: [Web GUI]
+      summary: Remove a device's web-UI embed config (cli.access permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "204": { description: Deleted }
+
+  /api/v1/devices/{id}/webgui/proxy/{path}:
+    get:
+      tags: [Web GUI]
+      summary: >-
+        Proxy into the device's own web UI (cli.access permission, any HTTP method —
+        the device's admin UI needs POST for its own forms as much as GET for page
+        loads). Blocked in practice by the same CGNAT gap as CLI Access above.
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - { name: path, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Proxied response from the device's own web UI }
+
+  # --- VPN ---
+  /api/v1/devices/{id}/vpn/enroll:
+    post:
+      tags: [VPN]
+      summary: >-
+        Generate a Curve25519 keypair and allocate an overlay IP for this device
+        (cli.access permission). Registry-only — no OS-level WireGuard interface
+        consumes this yet (build plan §10).
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "201": { description: Enrolled, content: { application/json: { schema: { $ref: "#/components/schemas/VPNEnrollResult" } } } }
+        "409": { description: "Already enrolled, or the overlay subnet is exhausted" }
+
+  /api/v1/devices/{id}/vpn/config:
+    get:
+      tags: [VPN]
+      summary: Get this device's WireGuard peer config text (cli.access permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200": { description: OK, content: { text/plain: { schema: { type: string } } } }
+
+  /api/v1/vpn/peers:
+    get:
+      tags: [VPN]
+      summary: List every enrolled VPN peer fleet-wide
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/VPNPeer" } } } } } } }
+
+  /api/v1/vpn/peers/{peer_id}:
+    delete:
+      tags: [VPN]
+      summary: Revoke a peer (cli.access permission) — updates the database only; cannot tear down a live tunnel from this process
+      parameters: [{ name: peer_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Revoked }
+
+  /api/v1/vpn/concentrator:
+    get:
+      tags: [VPN]
+      summary: Get the concentrator's own public key/endpoint/overlay subnet config
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/VPNConcentrator" } } } }
+
+  # --- Uploads ---
+  /api/v1/devices/{id}/uploads:
+    post:
+      tags: [Uploads]
+      summary: Queue an UPLOAD job — the CPE-to-ACS direction, config backup or log file (upload.request permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_type]
+              properties: { file_type: { type: string, example: "1 Vendor Configuration File" } }
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/QueueResponse"
+                  - type: object
+                    properties: { upload_id: { type: string } }
+    get:
+      tags: [Uploads]
+      summary: List a device's uploaded files
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/UploadedFile" } } } } } } }
+
+  /api/v1/uploads/{id}/file:
+    get:
+      tags: [Uploads]
+      summary: Download a received uploaded file's raw bytes
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: The file, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+
+  /api/v1/uploads/{id}/receive:
+    put:
+      tags: [Uploads]
+      summary: "Public: the CPE's own PUT delivering the uploaded file's bytes, streamed to disk while computing SHA256 — not an operator route"
+      security: []
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content: { application/octet-stream: { schema: { type: string, format: binary } } }
+      responses:
+        "200": { description: Received }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "From POST /api/v1/auth/login. Enforcement is opt-in — see the top-level description."
+
+  parameters:
+    DeviceId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID)
+    OperatorId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    QueueResponse:
+      description: Job queued
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/QueueResponse" }
+
+  schemas:
+    Role:
+      type: string
+      enum: [readonly, noc, manager, superadmin]
+      description: Rank order readonly < noc < manager < superadmin (build plan §9's RBAC tier expansion)
+
+    Permission:
+      type: string
+      enum:
+        - devices.write
+        - connection_request
+        - diagnostics.run
+        - firmware.manage
+        - template.manage
+        - policy.manage
+        - schedule.manage
+        - group.manage
+        - credential.manage
+        - cli.access
+        - bulk_actions
+        - upload.request
+        - tenancy.manage
+      description: The curated ~13 highest-stakes capabilities role_permissions can configure independent of the rank gate.
+
+    Operator:
+      type: object
+      properties:
+        id: { type: string }
+        username: { type: string }
+        email: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        created_at: { type: string, format: date-time }
+
+    RolePermissionsMatrix:
+      type: object
+      properties:
+        roles: { type: array, items: { $ref: "#/components/schemas/Role" } }
+        permissions: { type: array, items: { $ref: "#/components/schemas/Permission" } }
+        matrix:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: { type: boolean }
+
+    OperatorScope:
+      type: object
+      properties:
+        type: { type: string, enum: [region, customer] }
+        id: { type: string }
+
+    Region:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+
+    Customer:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        region_id: { type: string, nullable: true }
+
+    Project:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+
+    Device:
+      type: object
+      description: Mirrors cmd/api's deviceResponse — the ACS's own device identity, decoupled from any BSS account.
+      properties:
+        id: { type: string }
+        oui_serial: { type: string }
+        manufacturer: { type: string }
+        oui: { type: string }
+        product_class: { type: string }
+        serial_number: { type: string }
+        data_model_root: { type: string, enum: [DEVICE2, IGD1, UNKNOWN] }
+        online_status: { type: string }
+        last_inform_at: { type: string, format: date-time }
+        last_inform_event_codes: { type: array, items: { type: string } }
+        connection_request_url: { type: string }
+        connection_request_mode: { type: string }
+        last_connection_request_at: { type: string, format: date-time }
+        last_connection_request_status: { type: string }
+        tags: { type: array, items: { type: string } }
+        cwmp_auth_mode: { type: string, enum: [MTLS, DIGEST, NONE] }
+        udp_connection_request_address: { type: string }
+        nat_detected: { type: boolean }
+        customer_id: { type: string }
+        location: { type: string }
+
+    DeviceGroupCount:
+      type: object
+      properties:
+        Manufacturer: { type: string }
+        OnlineStatus: { type: string }
+        ConnectionRequestMode: { type: string }
+        Count: { type: integer }
+
+    ParameterInput:
+      type: object
+      required: [name, value]
+      properties:
+        name: { type: string }
+        value: { type: string }
+        type: { type: string, example: "xsd:string" }
+
+    CachedParameter:
+      type: object
+      properties:
+        value: { type: string }
+        type: { type: string }
+        updated_at: { type: string, format: date-time }
+        source: { type: string }
+
+    ParameterHistoryEntry:
+      type: object
+      properties:
+        value: { type: string }
+        type: { type: string }
+        source: { type: string }
+        recorded_at: { type: string, format: date-time }
+
+    QueueResponse:
+      type: object
+      properties:
+        command_key: { type: string }
+        status: { type: string }
+
+    BulkActionResponse:
+      type: object
+      properties:
+        action: { type: string }
+        requested: { type: integer }
+        succeeded: { type: integer }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              device_id: { type: string }
+              command_key: { type: string }
+              error: { type: string }
+
+    Job:
+      type: object
+      properties:
+        command_key: { type: string }
+        device_id: { type: string }
+        type: { type: string }
+        status: { type: string, enum: [QUEUED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, SUCCESS, FAILED, TIMEOUT] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time, nullable: true }
+        fault_code: { type: string, nullable: true }
+        fault_string: { type: string, nullable: true }
+        result_detail:
+          type: object
+          nullable: true
+          description: "Job-type-specific: e.g. {instance_number} for ADD_OBJECT, {<path>: {notification, access_list}} for GET_PARAMETER_ATTRIBUTES"
+
+    DeviceGroup:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        member_count: { type: integer }
+        created_at: { type: string, format: date-time }
+        device_ids: { type: array, items: { type: string } }
+
+    ScheduledJob:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        job_type: { type: string }
+        target_type: { type: string, enum: [DEVICE, GROUP] }
+        target_id: { type: string }
+        payload: { type: object }
+        interval_seconds: { type: integer }
+        enabled: { type: boolean }
+        next_run_at: { type: string, format: date-time }
+        last_run_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    Policy:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        model_filter: { type: string, nullable: true }
+        parameter_name: { type: string }
+        desired_value: { type: string }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    TemplateParameter:
+      type: object
+      properties:
+        name: { type: string }
+        value: { type: string }
+        type: { type: string }
+
+    ConfigTemplate:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        parameters: { type: array, items: { $ref: "#/components/schemas/TemplateParameter" } }
+        model_filter: { type: string, nullable: true }
+        auto_apply: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    ApplyTemplateResult:
+      type: object
+      properties:
+        template_id: { type: string }
+        requested: { type: integer }
+        succeeded: { type: integer }
+        results:
+          type: array
+          items:
+            type: object
+            properties: { device_id: { type: string }, command_key: { type: string }, error: { type: string } }
+
+    FirmwareImage:
+      type: object
+      properties:
+        id: { type: string }
+        vendor: { type: string }
+        model: { type: string }
+        version: { type: string }
+        channel: { type: string }
+        filename: { type: string }
+        file_size_bytes: { type: integer }
+        created_at: { type: string, format: date-time }
+
+    Rollout:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        firmware_image_id: { type: string }
+        rollback_firmware_image_id: { type: string, nullable: true }
+        model_filter: { type: string, nullable: true }
+        current_version_filter: { type: string, nullable: true }
+        canary_percentage: { type: integer }
+        maximum_failure_rate: { type: number }
+        status: { type: string, enum: [PENDING, ELIGIBLE, RUNNING, BLOCKED, COMPLETED] }
+        created_at: { type: string, format: date-time }
+        eligible_devices: { type: integer }
+        rollback_dispatched_at: { type: string, format: date-time, nullable: true }
+
+    RolloutDevice:
+      type: object
+      properties:
+        device_id: { type: string }
+        oui_serial: { type: string }
+        state: { type: string, enum: [ELIGIBLE, QUEUED, DOWNLOADING, SUCCESS, FAILED, SKIPPED, BLOCKED] }
+        command_key: { type: string, nullable: true }
+
+    RolloutDetail:
+      allOf:
+        - $ref: "#/components/schemas/Rollout"
+        - type: object
+          properties:
+            devices: { type: array, items: { $ref: "#/components/schemas/RolloutDevice" } }
+            state_counts: { type: object, additionalProperties: { type: integer } }
+            failure_rate: { type: number }
+            terminal_count: { type: integer }
+
+    Credential:
+      type: object
+      properties:
+        id: { type: string }
+        version: { type: integer }
+        username: { type: string }
+        status: { type: string, enum: [PENDING, ACTIVE, GRACE, REVOKED] }
+        command_key: { type: string }
+        created_at: { type: string, format: date-time }
+        activated_at: { type: string, format: date-time, nullable: true }
+        revoked_at: { type: string, format: date-time, nullable: true }
+
+    AuditEntry:
+      type: object
+      properties:
+        id: { type: string }
+        occurred_at: { type: string, format: date-time }
+        actor: { type: string }
+        device_id: { type: string, nullable: true }
+        action: { type: string }
+        details: { type: object, nullable: true }
+
+    DashboardWidget:
+      type: object
+      properties:
+        id: { type: string }
+        enabled: { type: boolean }
+
+    DashboardData:
+      type: object
+      properties:
+        devices_by_status: { type: object, additionalProperties: { type: integer } }
+        devices_by_reachability: { type: object, additionalProperties: { type: integer } }
+        inform_recency: { type: object, additionalProperties: { type: integer } }
+        group_by:
+          type: object
+          properties:
+            customer: { type: object, additionalProperties: { type: integer } }
+            region: { type: object, additionalProperties: { type: integer } }
+            project: { type: object, additionalProperties: { type: integer } }
+            manufacturer: { type: object, additionalProperties: { type: integer } }
+        jobs_last_24h_total: { type: integer }
+        job_success_rate_pct: { type: number }
+        firmware:
+          type: object
+          properties: { up_to_date: { type: integer }, outdated: { type: integer }, unknown: { type: integer } }
+        alarms:
+          type: array
+          items:
+            type: object
+            properties: { severity: { type: string, enum: [critical, warning] }, title: { type: string }, detail: { type: string } }
+        scoped: { type: boolean }
+        generated_at: { type: string, format: date-time }
+
+    FleetHealth:
+      type: object
+      properties:
+        devices_by_status: { type: object, additionalProperties: { type: integer } }
+        devices_by_reachability: { type: object, additionalProperties: { type: integer } }
+        inform_recency: { type: object, additionalProperties: { type: integer } }
+        jobs_last_24h: { type: object, additionalProperties: { type: integer } }
+        jobs_last_24h_total: { type: integer }
+        job_success_rate_pct: { type: number }
+        generated_at: { type: string, format: date-time }
+
+    ImportResult:
+      type: object
+      properties:
+        total_rows: { type: integer }
+        succeeded: { type: integer }
+        failed: { type: integer }
+        results:
+          type: array
+          items:
+            type: object
+            properties: { serial_number: { type: string }, status: { type: string }, error: { type: string } }
+
+    UploadedFile:
+      type: object
+      properties:
+        id: { type: string }
+        device_id: { type: string }
+        file_type: { type: string }
+        status: { type: string, enum: [PENDING, RECEIVED] }
+        filename: { type: string }
+        file_size_bytes: { type: integer }
+        sha256: { type: string }
+        created_at: { type: string, format: date-time }
+        received_at: { type: string, format: date-time, nullable: true }
+
+    BSSMapping:
+      type: object
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        device_id: { type: string }
+        oui_serial: { type: string }
+        service_plan: { type: string }
+        status: { type: string, enum: [PENDING_ACTIVE, ACTIVE, SUSPENDED, TERMINATED] }
+
+    BSSWebhookSubscription:
+      type: object
+      properties:
+        id: { type: string }
+        account_id: { type: string, nullable: true }
+        target_url: { type: string }
+        secret: { type: string }
+        event_types: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+
+    BSSStats:
+      type: object
+      properties:
+        mappings_by_status: { type: object, additionalProperties: { type: integer } }
+        orders_by_action: { type: object, additionalProperties: { type: integer } }
+        orders_last_24h: { type: integer }
+        webhook_subscriptions: { type: integer }
+        deliveries_by_status: { type: object, additionalProperties: { type: integer } }
+
+    BSSHealth:
+      type: object
+      properties:
+        adapter_url: { type: string }
+        reachable: { type: boolean }
+        latency_ms: { type: number }
+        token_configured: { type: boolean }
+        error: { type: string, nullable: true }
+
+    BSSAdapterCallResult:
+      type: object
+      properties:
+        description: { type: string }
+        method: { type: string }
+        url: { type: string }
+        status_code: { type: integer }
+        latency_ms: { type: number }
+        body: { type: string }
+        error: { type: string, nullable: true }
+
+    BSSOAuthClient:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        client_id: { type: string }
+        created_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time, nullable: true }
+
+    BSSOAuthClientCreateResult:
+      type: object
+      properties:
+        client: { $ref: "#/components/schemas/BSSOAuthClient" }
+        client_secret: { type: string, description: "Shown exactly once — bcrypt-hashed thereafter, never retrievable again" }
+
+    CLICredential:
+      type: object
+      properties:
+        id: { type: string }
+        device_id: { type: string }
+        protocol: { type: string, enum: [SSH, TELNET] }
+        host: { type: string }
+        port: { type: integer }
+        username: { type: string }
+        created_at: { type: string, format: date-time }
+
+    WebGUIConfig:
+      type: object
+      properties:
+        configured: { type: boolean }
+        device_id: { type: string }
+        base_url: { type: string }
+        username: { type: string }
+        updated_at: { type: string, format: date-time }
+
+    VPNPeer:
+      type: object
+      properties:
+        id: { type: string }
+        device_id: { type: string }
+        public_key: { type: string }
+        private_key: { type: string, nullable: true, description: "Only ever present on enroll/config responses, never in the list" }
+        overlay_ip: { type: string }
+        status: { type: string, enum: [ENROLLED, REVOKED] }
+        created_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time, nullable: true }
+
+    VPNEnrollResult:
+      type: object
+      properties:
+        peer: { $ref: "#/components/schemas/VPNPeer" }
+        config: { type: string, description: "WireGuard peer config text" }
+
+    VPNConcentrator:
+      type: object
+      properties:
+        server_public_key: { type: string }
+        endpoint: { type: string }
+        overlay_subnet: { type: string }
+        configured: { type: boolean }
