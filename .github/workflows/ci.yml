@@ -119,7 +119,7 @@ jobs:
       - name: DB-backed integration tests (two-tenant isolation, transfer tokens, service identity, mock-CPE session)
         env:
           ACS_TEST_POSTGRES_DSN: postgres://acs:acs@localhost:5432/acs?sslmode=disable
-        run: go test -race -count=1 -run Integration ./cmd/api/ ./cmd/acs/
+        run: go test -race -count=1 -p 1 -run Integration ./cmd/api/ ./cmd/acs/  # -p 1: both suites reset the same database, so packages must not run concurrently
       - name: placeholder secrets are refused (fail-closed)
         run: |
           set +e
