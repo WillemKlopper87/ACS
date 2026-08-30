@@ -7,7 +7,7 @@
 # non-stdlib runtime dependencies are pure Go (pgx, prometheus client,
 # golang.org/x/*), so there's nothing that needs libc, and no shell/package
 # manager needs to ship in the runtime image at all.
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
