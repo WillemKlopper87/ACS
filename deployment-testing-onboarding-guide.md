@@ -21,10 +21,22 @@ frontend:
 | Console | `frontend` (Vite) | `:5173` dev / static build | HTTPS | you, in a browser |
 | Database | Postgres 16 | `:5432` | — | `cmd/acs`, `cmd/api` |
 
-Only Postgres/Prometheus/Grafana run in Docker (`infra/docker-compose.yml`).
-`cmd/acs`, `cmd/api`, `cmd/bssadapter` run directly on the host (`go run
-./cmd/acs`, or a compiled binary in a real deployment) — there's no
-container image for them yet.
+By default only Postgres/Prometheus/Grafana run in Docker
+(`infra/docker-compose.yml`); `cmd/acs`, `cmd/api`, `cmd/bssadapter` run
+directly on the host (`go run ./cmd/acs`, or a compiled binary in a real
+deployment) — everything below assumes that workflow, unchanged.
+
+**Container images now exist** (`backend/Dockerfile.acs`,
+`Dockerfile.api`, `Dockerfile.bssadapter`, `frontend/Dockerfile` —
+multi-stage builds, static Go binaries on a distroless base, nginx for
+the frontend) as an alternative, opt-in via
+`docker compose --profile containerized up -d --build` from `infra/`
+(copy `infra/.env.containerized.example` to `infra/.env.containerized`
+and fill in real secrets first — see that file for the minimum set).
+Prometheus scrapes both the host-based and containerized target names,
+so either mode works without editing `prometheus.yml`. Everything in
+this guide from here on describes the host-based workflow, which is
+still the default and the one most tested in practice.
 
 ## 2. The one decision that matters most: how does the CPE reach the ACS?
 
