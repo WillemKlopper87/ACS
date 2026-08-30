@@ -26,6 +26,7 @@ import (
 
 	"acs/internal/bss"
 	"acs/internal/cliaccess"
+	"acs/internal/config"
 	"acs/internal/credentials"
 	"acs/internal/dashboard"
 	"acs/internal/devices"
@@ -55,6 +56,22 @@ func main() {
 		logger.Error("ACS_POSTGRES_DSN is required")
 		os.Exit(1)
 	}
+
+	// Fail-closed secret enforcement (audit P0.1): without these, the
+	// API used to run wide open with only a warning. That mode now
+	// requires the explicit ACS_INSECURE_DEV_MODE=true escape hatch.
+	apiSecrets := []config.Secret{
+		{Env: "ACS_JWT_SIGNING_SECRET", MinBytes: 32, Purpose: "signs operator JWTs; without it every request is anonymous"},
+		{Env: "ACS_CREDENTIAL_ENCRYPTION_KEY", MinBytes: 16, Purpose: "encrypts device/CLI/VPN credentials at rest; without it they are stored in plaintext"},
+		{Env: "ACS_INTERNAL_SERVICE_TOKEN", MinBytes: 32, Purpose: "authenticates cmd/bssadapter's machine-to-machine calls into this API"},
+		{Env: "ACS_BOOTSTRAP_ADMIN_PASSWORD", MinBytes: 12, Purpose: "seeds the first superadmin account", Optional: true},
+		{Env: "ACS_BSS_API_TOKEN", MinBytes: 16, Purpose: "authenticates this API's troubleshooting calls to cmd/bssadapter", Optional: true},
+	}
+	if err := config.Validate(logger, apiSecrets...); err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	config.LogSummary(logger, apiSecrets...)
 
 	ctx := context.Background()
 	db, err := store.Open(ctx, dsn)

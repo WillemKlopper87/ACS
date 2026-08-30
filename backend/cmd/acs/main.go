@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"acs/internal/auth"
+	"acs/internal/config"
 	"acs/internal/cwmp"
 	"acs/internal/devices"
 	"acs/internal/devices/adapters"
@@ -118,6 +119,19 @@ func main() {
 		logger.Error("ACS_POSTGRES_DSN is required (e.g. postgres://acs:acs@localhost:5432/acs?sslmode=disable)")
 		os.Exit(1)
 	}
+
+	// Fail-closed CPE authentication (audit P0.1): the CWMP listener must
+	// authenticate devices via Digest credentials or mTLS; the historical
+	// unauthenticated mode now requires ACS_INSECURE_DEV_MODE=true.
+	cpeAuthSecrets := []config.Secret{
+		{Env: "ACS_DIGEST_PASSWORD", MinBytes: 16, Purpose: "authenticates CPE CWMP sessions via HTTP Digest"},
+		{Env: "ACS_MTLS_CA_CERT", MinBytes: 1, Purpose: "authenticates CPE CWMP sessions via client certificates"},
+	}
+	if err := config.RequireOneOf(logger, "the CWMP endpoint would otherwise accept unauthenticated devices", cpeAuthSecrets...); err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	config.LogSummary(logger, cpeAuthSecrets...)
 
 	ctx := context.Background()
 	db, err := store.Open(ctx, dsn)

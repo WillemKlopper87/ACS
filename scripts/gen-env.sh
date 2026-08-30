@@ -30,6 +30,8 @@ export ACS_BOOTSTRAP_ADMIN_PASSWORD="$(openssl rand -base64 16)"
 
 export ACS_JWT_SIGNING_SECRET="$(openssl rand -base64 32)"
 export ACS_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+export ACS_INTERNAL_SERVICE_TOKEN="$(openssl rand -base64 32)"
+export ACS_BSS_OAUTH_SIGNING_SECRET="$(openssl rand -base64 32)"
 
 export ACS_ADDR=":7547"
 export ACS_API_ADDR=":8080"
@@ -54,6 +56,14 @@ EOF
   chmod 600 "$SECRETS_FILE"
 else
   echo "Using existing credentials from $SECRETS_FILE (delete this file and rerun to regenerate)"
+  # Backfill secrets added after this file was first generated — the
+  # services fail closed without them since the P0.1 hardening.
+  for var in ACS_INTERNAL_SERVICE_TOKEN ACS_BSS_OAUTH_SIGNING_SECRET; do
+    if ! grep -q "^export $var=" "$SECRETS_FILE"; then
+      echo "Backfilling $var into $SECRETS_FILE"
+      echo "export $var=\"$(openssl rand -base64 32)\"" >> "$SECRETS_FILE"
+    fi
+  done
 fi
 
 source "$SECRETS_FILE"
@@ -72,6 +82,8 @@ source "$SECRETS_FILE"
   echo "ACS_BOOTSTRAP_ADMIN_PASSWORD=$ACS_BOOTSTRAP_ADMIN_PASSWORD"
   echo "ACS_JWT_SIGNING_SECRET=$ACS_JWT_SIGNING_SECRET"
   echo "ACS_CREDENTIAL_ENCRYPTION_KEY=$ACS_CREDENTIAL_ENCRYPTION_KEY"
+  echo "ACS_INTERNAL_SERVICE_TOKEN=$ACS_INTERNAL_SERVICE_TOKEN"
+  echo "ACS_BSS_OAUTH_SIGNING_SECRET=$ACS_BSS_OAUTH_SIGNING_SECRET"
   echo "ACS_ADDR=$ACS_ADDR"
   echo "ACS_API_ADDR=$ACS_API_ADDR"
   echo "ACS_STUN_ADDR=$ACS_STUN_ADDR"

@@ -30,6 +30,7 @@ import (
 
 	"acs/internal/auth"
 	"acs/internal/bss"
+	"acs/internal/config"
 	"acs/internal/observability"
 	"acs/internal/ratelimit"
 	"acs/internal/store"
@@ -65,6 +66,30 @@ func main() {
 		logger.Error("ACS_POSTGRES_DSN is required")
 		os.Exit(1)
 	}
+	// Fail-closed auth enforcement (audit P0.1): inbound /bss/v1 calls
+	// need OAuth or the legacy shared token, and outbound calls to
+	// cmd/api need the internal service token. The historical
+	// unauthenticated mode now requires ACS_INSECURE_DEV_MODE=true.
+	if err := config.RequireOneOf(logger, "the /bss/v1 endpoints would otherwise accept unauthenticated callers",
+		config.Secret{Env: "ACS_BSS_OAUTH_SIGNING_SECRET", MinBytes: 32, Purpose: "signs OAuth2 client-credentials tokens for BSS integrations"},
+		config.Secret{Env: "ACS_BSS_API_TOKEN", MinBytes: 16, Purpose: "legacy shared bearer token for BSS callers"},
+	); err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	adapterSecrets := []config.Secret{
+		{Env: "ACS_INTERNAL_SERVICE_TOKEN", MinBytes: 32, Purpose: "authenticates this adapter's calls into cmd/api (order dispatch, job status)"},
+	}
+	if err := config.Validate(logger, adapterSecrets...); err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	config.LogSummary(logger,
+		config.Secret{Env: "ACS_BSS_OAUTH_SIGNING_SECRET"},
+		config.Secret{Env: "ACS_BSS_API_TOKEN"},
+		config.Secret{Env: "ACS_INTERNAL_SERVICE_TOKEN"},
+	)
+
 	acsBaseURL := envOr("ACS_INTERNAL_API_URL", "http://localhost:8080")
 	token := os.Getenv("ACS_BSS_API_TOKEN")
 	oauthSigningSecret := []byte(os.Getenv("ACS_BSS_OAUTH_SIGNING_SECRET"))
