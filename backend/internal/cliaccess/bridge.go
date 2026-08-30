@@ -25,17 +25,15 @@ const dialTimeout = 10 * time.Second
 // io.ReadWriter, so it's testable against an in-memory pipe without a real
 // browser). Blocks until either side closes or ctx is canceled.
 //
-// HostKeyCallback is intentionally InsecureIgnoreHostKey: this is
-// operator-initiated troubleshooting access to a known, ACS-managed
-// device, not an arbitrary internet SSH client — the same trust boundary
-// this whole ACS already operates inside (it holds the device's CWMP
-// credentials too). Revisit if this bridge is ever exposed beyond
-// authenticated ACS operators.
-func BridgeSSH(ctx context.Context, cred *Credential, rw io.ReadWriter) error {
+// hostKey verifies the device's host key (audit P0.4) — callers pass
+// Repository.TOFUHostKeyCallback(ctx, deviceID), which pins the key on
+// first connect and rejects any later mismatch, replacing the previous
+// InsecureIgnoreHostKey behavior that accepted an interceptor silently.
+func BridgeSSH(ctx context.Context, cred *Credential, rw io.ReadWriter, hostKey ssh.HostKeyCallback) error {
 	config := &ssh.ClientConfig{
 		User:            cred.Username,
 		Auth:            []ssh.AuthMethod{ssh.Password(cred.Password)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKey,
 		Timeout:         dialTimeout,
 	}
 

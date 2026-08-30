@@ -119,6 +119,19 @@ func (h *handler) connectCLI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// The credential belongs to a device; the caller must be in that
+	// device's tenancy scope (audit P0.2).
+	if _, ok := h.getScopedDevice(w, r, cred.DeviceID); !ok {
+		return
+	}
+	// The bridge dials an operator-configured host from inside the ACS —
+	// keep it pointed at device networks, not the ACS's own
+	// infrastructure (audit P0.4, same policy as the web-GUI proxy).
+	if err := h.netPolicy.CheckHost(r.Context(), cred.Host); err != nil {
+		h.logger.Warn("cli bridge target rejected by network policy", "err", err, "credential_id", credentialID, "host", cred.Host)
+		http.Error(w, "target host is not allowed: "+err.Error(), http.StatusForbidden)
+		return
+	}
 
 	websocket.Handler(func(ws *websocket.Conn) {
 		defer ws.Close()
@@ -127,7 +140,7 @@ func (h *handler) connectCLI(w http.ResponseWriter, r *http.Request) {
 		var bridgeErr error
 		switch cred.Protocol {
 		case cliaccess.ProtocolSSH:
-			bridgeErr = cliaccess.BridgeSSH(r.Context(), cred, ws)
+			bridgeErr = cliaccess.BridgeSSH(r.Context(), cred, ws, h.cli.TOFUHostKeyCallback(r.Context(), cred.DeviceID))
 		case cliaccess.ProtocolTelnet:
 			bridgeErr = cliaccess.BridgeTelnet(r.Context(), cred, ws)
 		}

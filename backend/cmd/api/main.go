@@ -34,6 +34,7 @@ import (
 	"acs/internal/firmware"
 	"acs/internal/jobs"
 	"acs/internal/mailer"
+	"acs/internal/netguard"
 	"acs/internal/observability"
 	"acs/internal/operators"
 	"acs/internal/parameters"
@@ -157,6 +158,24 @@ func main() {
 		uploadMaxBytes = n
 	}
 
+	// Outbound device-network policy for the web-GUI proxy and console
+	// bridge (audit P0.4). Loopback/link-local/metadata/multicast targets
+	// are always refused; setting ACS_DEVICE_NET_ALLOWED_CIDRS (comma-
+	// separated, e.g. the VPN overlay plus the CPE management subnets)
+	// additionally restricts targets to those networks — recommended for
+	// any production deployment.
+	netPolicy := netguard.Policy{}
+	if v := os.Getenv("ACS_DEVICE_NET_ALLOWED_CIDRS"); v != "" {
+		cidrs, err := netguard.ParseCIDRList(v)
+		if err != nil {
+			logger.Error("invalid ACS_DEVICE_NET_ALLOWED_CIDRS", "err", err)
+			os.Exit(1)
+		}
+		netPolicy.AllowedCIDRs = cidrs
+	} else {
+		logger.Warn("ACS_DEVICE_NET_ALLOWED_CIDRS not set — the web-GUI proxy and console bridge may dial any non-loopback/non-metadata address the ACS host can reach. Set it to your device networks to close this down.")
+	}
+
 	h := &handler{
 		logger:       logger,
 		devices:      devices.NewRepository(db),
@@ -171,6 +190,7 @@ func main() {
 		jwtSecret:    jwtSecret,
 		transferKey:    transferKey,
 		uploadMaxBytes: uploadMaxBytes,
+		netPolicy:      netPolicy,
 		metrics:      metrics,
 		groups:       devices.NewGroupRepository(db),
 		credentials:  credentialsRepo,
@@ -496,6 +516,10 @@ type handler struct {
 	// from the JWT secret; empty (dev mode only) disables enforcement.
 	transferKey    []byte
 	uploadMaxBytes int64
+
+	// netPolicy restricts where the web-GUI proxy and console bridge
+	// may dial (audit P0.4) — see ACS_DEVICE_NET_ALLOWED_CIDRS.
+	netPolicy netguard.Policy
 
 	metrics     *observability.Metrics
 	groups      *devices.GroupRepository

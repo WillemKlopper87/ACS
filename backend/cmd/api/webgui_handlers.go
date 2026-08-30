@@ -12,10 +12,13 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"time"
 
 	"acs/internal/cliaccess"
 )
@@ -51,8 +54,20 @@ func (h *handler) setWebGUIConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if _, err := url.ParseRequestURI(req.BaseURL); err != nil {
+	target, err := url.ParseRequestURI(req.BaseURL)
+	if err != nil {
 		http.Error(w, "base_url must be a valid absolute URL", http.StatusBadRequest)
+		return
+	}
+	// SSRF policy (audit P0.4): only http/https, and only hosts the
+	// device-network policy allows — checked again at dial time, this is
+	// the fast-feedback copy.
+	if target.Scheme != "http" && target.Scheme != "https" {
+		http.Error(w, "base_url scheme must be http or https", http.StatusBadRequest)
+		return
+	}
+	if err := h.netPolicy.CheckHost(r.Context(), target.Hostname()); err != nil {
+		http.Error(w, "base_url host is not allowed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -126,8 +141,35 @@ func (h *handler) proxyWebGUI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "device's configured base_url is not a valid URL", http.StatusInternalServerError)
 		return
 	}
+	// SSRF policy (audit P0.4): scheme allowlist plus the device-network
+	// policy — enforced here on stored configs too (a config saved
+	// before the policy tightened doesn't get grandfathered in), and
+	// again at dial time on the literal IP via DialControl below, which
+	// is what defeats DNS rebinding between check and connect.
+	if target.Scheme != "http" && target.Scheme != "https" {
+		http.Error(w, "device web GUI scheme must be http or https", http.StatusForbidden)
+		return
+	}
+	if err := h.netPolicy.CheckHost(r.Context(), target.Hostname()); err != nil {
+		h.logger.Warn("webgui proxy target rejected by network policy", "err", err, "device_id", id, "base_url", cfg.BaseURL)
+		http.Error(w, "device web GUI host is not allowed: "+err.Error(), http.StatusForbidden)
+		return
+	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout: 10 * time.Second,
+			Control: h.netPolicy.DialControl,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       60 * time.Second,
+		// Embedded device admin UIs live on self-signed certs; the
+		// device-network policy, not the certificate, is the trust
+		// boundary here — same reasoning as the CWMP channel itself.
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		req.URL.Path = "/" + r.PathValue("path")
