@@ -262,6 +262,8 @@ func main() {
 		mux.HandleFunc(method+" "+pattern, metrics.InstrumentHTTP(method+" "+pattern, h.requireRole(op, gated)))
 	}
 	mux.HandleFunc("GET /metrics", metrics.Handler().ServeHTTP)
+	mux.Handle("GET /healthz", observability.LivenessHandler())
+	mux.Handle("GET /readyz", observability.ReadinessHandler(db))
 	mux.HandleFunc("POST /api/v1/auth/login", metrics.InstrumentHTTP("POST /api/v1/auth/login", h.login))
 	route("POST", "/api/v1/auth/ticket", ro, h.issueBrowserTicket) // audit P1.4 — see issueBrowserTicket
 	route("POST", "/api/v1/auth/operators", admin, h.createOperator)
@@ -440,7 +442,13 @@ func main() {
 	logger.Info("cmd/api rate limit configured", "per_second", apiRate, "burst", apiBurst)
 
 	addr := envOr("ACS_API_ADDR", ":8080")
-	corsOrigin := envOr("ACS_API_CORS_ORIGIN", "*")
+	// CORS (audit P1.5): default to the configured frontend origin, not
+	// "*". A wildcard is still allowed for local experiments but is
+	// called out loudly.
+	corsOrigin := envOr("ACS_API_CORS_ORIGIN", h.frontendBaseURL)
+	if corsOrigin == "*" {
+		logger.Warn("ACS_API_CORS_ORIGIN=* — any web origin may call this API with a stolen token; set it to the console's exact origin in production")
+	}
 	server := &http.Server{
 		Addr:    addr,
 		Handler: withCORS(corsOrigin, withJWTAuth(jwtSecret, internalServiceToken, withRateLimit(apiLimiter, metrics, withBodyLimit(mux)))),

@@ -195,6 +195,8 @@ func main() {
 	// handleCWMP logs the path so misconfigured device URLs stay visible.
 	mux.HandleFunc("/", h.handleCWMP)
 	mux.Handle("GET /metrics", metrics.Handler())
+	mux.Handle("GET /healthz", observability.LivenessHandler())
+	mux.Handle("GET /readyz", observability.ReadinessHandler(db))
 
 	addr := envOr("ACS_ADDR", ":7547")
 	server := &http.Server{

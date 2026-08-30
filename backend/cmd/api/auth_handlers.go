@@ -164,6 +164,9 @@ func isPublicRoute(r *http.Request) bool {
 		// firmware file-serve route above but in the opposite direction.
 		return true
 	}
+	if r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz") {
+		return true // liveness/readiness probes carry no data — see observability.LivenessHandler
+	}
 	if r.Method == http.MethodGet && r.URL.Path == "/metrics" {
 		// A Prometheus scraper has no operator JWT to present (build plan
 		// §4 Phase 7).

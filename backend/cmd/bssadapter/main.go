@@ -152,6 +152,8 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /metrics", metrics.Handler().ServeHTTP)
+	mux.Handle("GET /healthz", observability.LivenessHandler())
+	mux.Handle("GET /readyz", observability.ReadinessHandler(db))
 	mux.HandleFunc("POST /bss/v1/oauth/token", metrics.InstrumentHTTP("POST /bss/v1/oauth/token", h.issueOAuthToken))
 	mux.HandleFunc("POST /bss/v1/mappings", metrics.InstrumentHTTP("POST /bss/v1/mappings", h.createMapping))
 	mux.HandleFunc("GET /bss/v1/mappings/{account_id}", metrics.InstrumentHTTP("GET /bss/v1/mappings/{account_id}", h.listMappings))
@@ -280,6 +282,7 @@ func withAuth(token string, oauthSigningSecret []byte, next http.Handler) http.H
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if (token == "" && len(oauthSigningSecret) == 0) ||
 			(r.Method == http.MethodGet && r.URL.Path == "/metrics") ||
+			(r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz")) ||
 			(r.Method == http.MethodPost && r.URL.Path == "/bss/v1/oauth/token") {
 			next.ServeHTTP(w, r)
 			return
