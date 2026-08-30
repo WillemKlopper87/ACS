@@ -109,6 +109,15 @@ func fixture(t *testing.T, name string) string {
 	return string(b)
 }
 
+// periodicInform is the bootstrap fixture with a "2 PERIODIC" event in
+// place of "0 BOOTSTRAP": a bootstrap Inform legitimately queues
+// auto-provisioning and parameter-discovery jobs, which would make the
+// "idle session closes" and "exactly this job is dispatched" assertions
+// below race against real behaviour rather than test it.
+func periodicInform(t *testing.T) string {
+	return strings.Replace(fixture(t, "inform_bootstrap.xml"), "0 BOOTSTRAP", "2 PERIODIC", 1)
+}
+
 func TestIntegration_CPESession(t *testing.T) {
 	dsn := os.Getenv("ACS_TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -150,7 +159,7 @@ func TestIntegration_CPESession(t *testing.T) {
 	cpe := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
 
 	// --- Session 1: bootstrap Inform, no work queued -------------------
-	code, body := cpe.post(fixture(t, "inform_bootstrap.xml"))
+	code, body := cpe.post(periodicInform(t))
 	if code != 200 || !strings.Contains(body, "InformResponse") {
 		t.Fatalf("Inform → %d %s", code, body)
 	}
@@ -188,7 +197,7 @@ func TestIntegration_CPESession(t *testing.T) {
 		t.Fatal(err)
 	}
 	cpe.cookie = nil
-	if code, _ = cpe.post(fixture(t, "inform_bootstrap.xml")); code != 200 {
+	if code, _ = cpe.post(periodicInform(t)); code != 200 {
 		t.Fatalf("second Inform → %d", code)
 	}
 	code, body = cpe.post("")
@@ -215,7 +224,7 @@ func TestIntegration_CPESession(t *testing.T) {
 	bad, _ := h.jobs.Create(ctx, device.ID, jobs.TypeSetParameter,
 		jobs.SetParameterPayload{Parameters: []jobs.ParameterWrite{{Name: "Device.Nope", Value: "1", Type: "xsd:string"}}}, "test")
 	cpe.cookie = nil
-	cpe.post(fixture(t, "inform_bootstrap.xml"))
+	cpe.post(periodicInform(t))
 	if code, body = cpe.post(""); !strings.Contains(body, "SetParameterValues") {
 		t.Fatalf("expected RPC dispatch, got %d %s", code, body)
 	}
@@ -226,7 +235,7 @@ func TestIntegration_CPESession(t *testing.T) {
 	}
 
 	// --- Replayed Authorization header is refused ----------------------
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/cwmp", bytes.NewReader([]byte(fixture(t, "inform_bootstrap.xml"))))
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/cwmp", bytes.NewReader([]byte(periodicInform(t))))
 	req.Header.Set("Authorization", cpe.digest(http.MethodPost, "/cwmp")) // same nonce and nc as the last accepted request
 	res, err := srv.Client().Do(req)
 	if err != nil {
