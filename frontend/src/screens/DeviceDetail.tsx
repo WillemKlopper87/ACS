@@ -32,6 +32,9 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   const [tracerouteHost, setTracerouteHost] = useState("");
   const [objectPath, setObjectPath] = useState("");
   const [scheduleDelay, setScheduleDelay] = useState(3600);
+  const [attrSetPath, setAttrSetPath] = useState("");
+  const [attrNotification, setAttrNotification] = useState(2);
+  const [attrGetPaths, setAttrGetPaths] = useState("");
   const [historyPath, setHistoryPath] = useState<string | null>(null);
   const [historyEntries, setHistoryEntries] = useState<ParameterHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -181,6 +184,23 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
     withBusy(async () => {
       const res = await api.scheduleInform(id, scheduleDelay);
       return `ScheduleInform queued: ${res.command_key} — device will check in again in ${scheduleDelay}s`;
+    });
+
+  const handleSetParameterAttribute = () =>
+    withBusy(async () => {
+      const path = attrSetPath.trim();
+      if (!path) throw new ApiError(400, "Parameter path cannot be empty");
+      const res = await api.setParameterAttributes(id, [{ name: path, notification: attrNotification }]);
+      setAttrSetPath("");
+      return `SetParameterAttributes queued: ${res.command_key} — notification level ${attrNotification} for ${path}`;
+    });
+
+  const handleGetParameterAttributes = () =>
+    withBusy(async () => {
+      const paths = attrGetPaths.split(",").map((p) => p.trim()).filter(Boolean);
+      if (paths.length === 0) throw new ApiError(400, "At least one path is required");
+      const res = await api.getParameterAttributes(id, paths);
+      return `GetParameterAttributes queued: ${res.command_key} — watch Recent jobs for the result`;
     });
 
   const handleRequestUpload = (fileType: string) =>
@@ -428,6 +448,13 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
               {j.result_detail?.instance_number !== undefined && (
                 <span className="src">new instance: {j.result_detail.instance_number}</span>
               )}
+              {j.type === "GET_PARAMETER_ATTRIBUTES" && j.result_detail && Object.keys(j.result_detail).length > 0 && (
+                <span className="src">
+                  {Object.entries(j.result_detail)
+                    .map(([path, attr]) => `${path}=${(attr as { notification?: number })?.notification ?? "?"}`)
+                    .join(", ")}
+                </span>
+              )}
             </div>
           ))
         )}
@@ -520,6 +547,45 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
         </div>
         <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
           Add creates a new instance under a parent path (e.g. <code>Device.WiFi.SSID.</code>) — the CPE assigns the instance number, shown once the job succeeds. Delete removes one specific instance (e.g. <code>Device.WiFi.SSID.3.</code>). Both must end in "."
+        </p>
+      </div>
+
+      <div className="panel">
+        <h3>Parameter attributes</h3>
+        <div className="form-row" style={{ marginTop: 0 }}>
+          <input
+            placeholder="Parameter path to set, e.g. Device.DeviceInfo.SoftwareVersion"
+            value={attrSetPath}
+            onChange={(e) => setAttrSetPath(e.target.value)}
+            disabled={busy || !writable}
+          />
+          <select
+            value={attrNotification}
+            onChange={(e) => setAttrNotification(Number(e.target.value))}
+            disabled={busy || !writable}
+            style={{ maxWidth: "9rem" }}
+          >
+            <option value={0}>0 — off</option>
+            <option value={1}>1 — passive</option>
+            <option value={2}>2 — active</option>
+          </select>
+          <button className="btn" onClick={handleSetParameterAttribute} disabled={busy || !writable || !attrSetPath.trim()}>
+            Set
+          </button>
+        </div>
+        <div className="form-row">
+          <input
+            placeholder="Paths to read, comma-separated"
+            value={attrGetPaths}
+            onChange={(e) => setAttrGetPaths(e.target.value)}
+            disabled={busy || !writable}
+          />
+          <button className="btn" onClick={handleGetParameterAttributes} disabled={busy || !writable || !attrGetPaths.trim()}>
+            Get
+          </button>
+        </div>
+        <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
+          Configures whether the CPE actively Informs on a parameter's change (2), passively reports it on the next Inform anyway (1), or neither (0) — rather than the ACS having to poll for it. Get reads the current notification level back; the result appears inline in Recent jobs once the job succeeds.
         </p>
       </div>
 

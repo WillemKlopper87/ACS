@@ -69,6 +69,7 @@ export function clearAuth() {
 export function markAuthRequired() {
   if (state.authRequired) return;
   state = { ...state, authRequired: true };
+  persist();
   notify();
 }
 

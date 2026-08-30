@@ -209,6 +209,12 @@ export const api = {
       body: JSON.stringify({ attributes }),
     }),
 
+  getParameterAttributes: (id: string, paths: string[]) =>
+    request<QueueResponse>(`/api/v1/devices/${id}/parameter-attributes/get`, {
+      method: "POST",
+      body: JSON.stringify({ paths }),
+    }),
+
   createUpload: (id: string, fileType: string) =>
     request<QueueResponse & { upload_id: string }>(`/api/v1/devices/${id}/uploads`, {
       method: "POST",
