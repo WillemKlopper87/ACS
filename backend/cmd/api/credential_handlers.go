@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"acs/internal/credentials"
+	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
 )
 
@@ -50,7 +51,8 @@ func toCredentialResponse(c *credentials.Credential) credentialResponse {
 // before switching the ACS's own Connection Request client over.
 func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
+	device, err := h.devices.Get(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	} else if err != nil {
@@ -66,10 +68,13 @@ func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	usernamePath, _ := adapters.ResolvePath(device.DataModelRoot, adapters.ManagementServerConnectionRequestUser)
+	passwordPath, _ := adapters.ResolvePath(device.DataModelRoot, adapters.ManagementServerConnectionRequestPass)
+
 	job, err := h.jobs.Create(r.Context(), id, jobs.TypeSetParameter, jobs.SetParameterPayload{
 		Parameters: []jobs.ParameterWrite{
-			{Name: "Device.ManagementServer.ConnectionRequestUsername", Value: username, Type: "xsd:string"},
-			{Name: "Device.ManagementServer.ConnectionRequestPassword", Value: password, Type: "xsd:string"},
+			{Name: usernamePath, Value: username, Type: "xsd:string"},
+			{Name: passwordPath, Value: password, Type: "xsd:string"},
 		},
 	}, operatorFromRequest(r))
 	if err != nil {

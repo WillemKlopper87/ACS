@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"acs/internal/devices"
+	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
 	"acs/internal/observability"
 	"acs/internal/scheduler"
@@ -26,6 +27,7 @@ type scheduleWorker struct {
 	logger    *slog.Logger
 	schedules *scheduler.Repository
 	jobs      *jobs.Repository
+	devices   *devices.Repository
 	groups    *devices.GroupRepository
 	auditor   *observability.Auditor
 }
@@ -109,7 +111,24 @@ func (w *scheduleWorker) fire(ctx context.Context, sj *scheduler.ScheduledJob) {
 
 	created := 0
 	for _, deviceID := range deviceIDs {
-		if _, err := w.jobs.Create(ctx, deviceID, sj.JobType, payload, "scheduler:"+sj.Name); err != nil {
+		jobPayload := payload
+		// A group target can span devices with different discovered
+		// data_model_root values — the shared payload parsed above can't
+		// carry one Prefix correct for all of them, so it's re-resolved
+		// per device here rather than once for the whole fan-out (same
+		// reason cmd/api's createDiagnosticsPing resolves it per device
+		// at creation time).
+		if sj.JobType == jobs.TypeDiagnosticsPing {
+			p := payload.(jobs.DiagnosticsPingPayload)
+			device, err := w.devices.Get(ctx, deviceID)
+			if err != nil {
+				w.logger.Error("failed to resolve device for scheduled diagnostics ping", "err", err, "scheduled_job_id", sj.ID, "device_id", deviceID)
+				continue
+			}
+			p.Prefix = adapters.DiagnosticsPrefix(device.DataModelRoot, adapters.DiagnosticPing)
+			jobPayload = p
+		}
+		if _, err := w.jobs.Create(ctx, deviceID, sj.JobType, jobPayload, "scheduler:"+sj.Name); err != nil {
 			w.logger.Error("failed to create job from schedule", "err", err, "scheduled_job_id", sj.ID, "device_id", deviceID)
 			continue
 		}

@@ -366,6 +366,7 @@ func main() {
 		logger:    logger,
 		schedules: h.schedules,
 		jobs:      h.jobs,
+		devices:   h.devices,
 		groups:    h.groups,
 		auditor:   observability.NewAuditor(db),
 	}
@@ -1137,26 +1138,13 @@ func (h *handler) refreshCellularDiagnostics(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// wifiAssociatedDevicePaths is TR-181's WiFi client-list subtree — build
-// plan §4 Phase 5's explicitly deferred item ("achievable via the
-// existing GET_PARAMETER job type with no new code, just not exposed via
-// a dedicated convenience endpoint yet, the same way refresh-cellular
-// wraps it for RF diagnostics"). A partial path ending in "." asks the
-// CPE for everything under that node (TR-069's own mechanism for reading
-// a dynamic-length table without the ACS knowing its length ahead of
-// time) — the same reason cmd/probe uses GetParameterNames rather than
-// guessing indices. Device:2 root, matching every other hardcoded
-// parameter path already in this codebase (e.g. the WiFi SSID write) —
-// IGT:1 root resolution isn't done anywhere yet, not a gap specific to
-// this endpoint.
-const wifiAssociatedDevicePaths = "Device.WiFi.AccessPoint."
-
 // refreshWifiClients queues a GET_PARAMETER job over the whole WiFi
 // AccessPoint subtree — every SSID's AssociatedDevice table included —
 // mirroring refreshCellularDiagnostics' shape.
 func (h *handler) refreshWifiClients(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
+	device, err := h.devices.Get(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	} else if err != nil {
@@ -1165,7 +1153,7 @@ func (h *handler) refreshWifiClients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	paths := []string{wifiAssociatedDevicePaths}
+	paths := []string{adapters.WiFiAssociatedDevicesPrefix(device.DataModelRoot)}
 	job, err := h.jobs.Create(r.Context(), id, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, operatorFromRequest(r))
 	if err != nil {
 		h.logger.Error("failed to queue wifi clients refresh", "err", err, "device_id", id)
@@ -1189,7 +1177,8 @@ func (h *handler) refreshWifiClients(w http.ResponseWriter, r *http.Request) {
 // CONNECTION_REQUEST and FIRMWARE_DOWNLOAD.
 func (h *handler) createDiagnosticsPing(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
+	device, err := h.devices.Get(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	} else if err != nil {
@@ -1224,6 +1213,7 @@ func (h *handler) createDiagnosticsPing(w http.ResponseWriter, r *http.Request) 
 			Timeout:             req.Timeout,
 			DataBlockSize:       req.DataBlockSize,
 			DSCP:                req.DSCP,
+			Prefix:              adapters.DiagnosticsPrefix(device.DataModelRoot, adapters.DiagnosticPing),
 		}, operatorFromRequest(r), diagPingMaxAttempts)
 	if err != nil {
 		h.logger.Error("failed to queue diagnostics ping", "err", err, "device_id", id)
@@ -1262,7 +1252,8 @@ const (
 
 func (h *handler) createDiagnosticsTraceroute(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.devices.Get(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
+	device, err := h.devices.Get(r.Context(), id)
+	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	} else if err != nil {
@@ -1301,6 +1292,7 @@ func (h *handler) createDiagnosticsTraceroute(w http.ResponseWriter, r *http.Req
 			DataBlockSize: req.DataBlockSize,
 			DSCP:          req.DSCP,
 			MaxHopCount:   req.MaxHopCount,
+			Prefix:        adapters.DiagnosticsPrefix(device.DataModelRoot, adapters.DiagnosticTraceroute),
 		}, operatorFromRequest(r), diagTracerouteMaxAttempts)
 	if err != nil {
 		h.logger.Error("failed to queue diagnostics traceroute", "err", err, "device_id", id)

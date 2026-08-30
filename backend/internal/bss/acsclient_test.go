@@ -97,6 +97,39 @@ func TestACSClientGetJobStatusNotFound(t *testing.T) {
 	}
 }
 
+func TestACSClientGetDevice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/devices/dev-1" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(DeviceSummary{ID: "dev-1", DataModelRoot: "IGD1"})
+	}))
+	defer server.Close()
+
+	client := NewACSClient(server.URL, time.Second, "")
+	dev, err := client.GetDevice(t.Context(), "dev-1")
+	if err != nil {
+		t.Fatalf("GetDevice: %v", err)
+	}
+	if dev.DataModelRoot != "IGD1" {
+		t.Errorf("DataModelRoot = %q, want IGD1", dev.DataModelRoot)
+	}
+}
+
+func TestACSClientGetDeviceNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	client := NewACSClient(server.URL, time.Second, "")
+	_, err := client.GetDevice(t.Context(), "unknown")
+	if !errors.Is(err, ErrDeviceLookupNotFound) {
+		t.Errorf("err = %v, want ErrDeviceLookupNotFound", err)
+	}
+}
+
 func TestNewACSClientDefaultsTimeout(t *testing.T) {
 	client := NewACSClient("http://example.invalid", 0, "")
 	if client.http.Timeout != defaultHTTPTimeout {

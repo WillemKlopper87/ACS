@@ -71,3 +71,47 @@ func (h *handler) enforcePolicies(ctx context.Context, device *devices.Device, r
 			"command_key", job.CommandKey)
 	}
 }
+
+// correlateValueChangeEvents consumes the CommandKey TR-069 attaches to a
+// "4 VALUE CHANGE" Inform event (Annex A EventStruct.CommandKey): when a
+// parameter under active notification (SetParameterAttributes) changes,
+// the CPE SHOULD echo back the ParameterKey of the SetParameterValues that
+// caused it, letting the ACS confirm out-of-band that its own write
+// actually took effect on the device — distinct from the ordinary
+// GetParameterValues auto-confirm, which only proves the value stuck at
+// read time, not that the CPE itself flagged the change. Until now this
+// was parsed (cwmp.EventStruct.CommandKey) but never read anywhere.
+//
+// An empty CommandKey means the value changed on its own (local UI,
+// factory reset, another management system, not this ACS) — worth its own
+// audit trail entry, since it's evidence of drift a policy hasn't caught
+// up to yet, not something to correlate to a job.
+func (h *handler) correlateValueChangeEvents(ctx context.Context, device *devices.Device, events []cwmp.EventStruct, reported []cwmp.ParameterValueStruct) {
+	for _, e := range events {
+		if len(e.EventCode) == 0 || e.EventCode[0:1] != "4" {
+			continue
+		}
+
+		details := map[string]any{"parameters": reported}
+
+		if e.CommandKey == "" {
+			if err := h.auditor.Record(ctx, "system", device.ID, "UnsolicitedValueChange", details); err != nil {
+				h.logger.Error("failed to write audit record", "err", err)
+			}
+			continue
+		}
+
+		job, err := h.jobs.ByCommandKey(ctx, e.CommandKey)
+		if err != nil {
+			h.logger.Warn("VALUE CHANGE event for unrecognized command_key", "command_key", e.CommandKey, "device_id", device.ID, "err", err)
+			continue
+		}
+
+		details["job_id"] = job.ID
+		details["command_key"] = job.CommandKey
+		if err := h.auditor.Record(ctx, "system", device.ID, "ValueChangeConfirmed", details); err != nil {
+			h.logger.Error("failed to write audit record", "err", err)
+		}
+		h.logger.Info("VALUE CHANGE confirmed by CommandKey", "job_id", job.ID, "command_key", job.CommandKey, "device_id", device.ID)
+	}
+}

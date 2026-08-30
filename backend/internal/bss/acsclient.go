@@ -83,6 +83,56 @@ func (c *ACSClient) SetParameters(ctx context.Context, deviceID string, params [
 	return out.CommandKey, nil
 }
 
+// DeviceSummary is the subset of GET /api/v1/devices/{id}'s response this
+// package needs — mirrored here rather than imported, for the same
+// process-boundary reason as ParameterWrite/JobStatus above.
+type DeviceSummary struct {
+	ID            string `json:"id"`
+	DataModelRoot string `json:"data_model_root"`
+}
+
+// ErrDeviceLookupNotFound mirrors a 404 from GET /api/v1/devices/{id}.
+// Named distinctly from mapping.go's ErrDeviceNotFound (a different
+// lookup: oui_serial -> device, for account-mapping creation) even though
+// both ultimately mean "no such device."
+var ErrDeviceLookupNotFound = errors.New("device not found")
+
+// GetDevice calls GET /api/v1/devices/{id} — needed so an order's
+// business-action translation (template.go's Translate) can resolve a
+// canonical parameter path against the device's *own* discovered
+// data_model_root instead of assuming TR-181 (build plan §10's
+// data_model_root branching gap). Only called for actions that actually
+// need it (MODIFY_WIFI) — SUSPEND/ACTIVATE don't touch canonical WiFi
+// paths at all, so they don't pay for this extra round-trip or gain a new
+// ACS-unreachable failure mode they didn't have before.
+func (c *ACSClient) GetDevice(ctx context.Context, deviceID string) (*DeviceSummary, error) {
+	url := fmt.Sprintf("%s/api/v1/devices/%s", c.baseURL, deviceID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build device request: %w", err)
+	}
+	c.setAuth(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrACSUnreachable, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrDeviceLookupNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status from ACS: %d", resp.StatusCode)
+	}
+
+	var out DeviceSummary
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode ACS response: %w", err)
+	}
+	return &out, nil
+}
+
 // JobStatus is the shape GET /api/v1/jobs/{command_key} returns —
 // mirrored here rather than imported, for the same process-boundary
 // reason as ParameterWrite above.

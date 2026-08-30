@@ -3,6 +3,8 @@ package bss
 import (
 	"errors"
 	"fmt"
+
+	"acs/internal/devices/adapters"
 )
 
 // ParameterWrite is one parameter the internal ACS REST API's PUT
@@ -54,13 +56,18 @@ func (c WalledGardenConfig) configured() bool {
 }
 
 // Translate turns a BSS order's action + business parameters into the
-// canonical TR-181 parameter writes to queue (design doc v3 §6.2's
-// canonical-name indirection, applied one layer up from vendor path
-// resolution to business action — build plan §5.3).
-func Translate(action string, params map[string]string, wg WalledGardenConfig) ([]ParameterWrite, error) {
+// canonical parameter writes to queue (design doc v3 §6.2's canonical-name
+// indirection, applied one layer up from vendor path resolution to
+// business action — build plan §5.3), resolved to the actual device tree
+// via internal/devices/adapters.ResolvePath and the target device's own
+// discovered dataModelRoot — previously hardcoded to TR-181 regardless of
+// what the device actually spoke (build plan §10's data_model_root
+// branching gap). dataModelRoot may be "" (devices.DataModelRootUnknown)
+// for actions, like SUSPEND/ACTIVATE, that don't need it at all.
+func Translate(action string, params map[string]string, wg WalledGardenConfig, dataModelRoot string) ([]ParameterWrite, error) {
 	switch action {
 	case "MODIFY_WIFI":
-		return translateModifyWifi(params)
+		return translateModifyWifi(params, dataModelRoot)
 	case "SUSPEND":
 		return translateWalledGarden(wg, wg.SuspendValue)
 	case "ACTIVATE":
@@ -77,13 +84,15 @@ func translateWalledGarden(wg WalledGardenConfig, value string) ([]ParameterWrit
 	return []ParameterWrite{{Name: wg.Parameter, Value: value, Type: "string"}}, nil
 }
 
-func translateModifyWifi(params map[string]string) ([]ParameterWrite, error) {
+func translateModifyWifi(params map[string]string, dataModelRoot string) ([]ParameterWrite, error) {
 	var out []ParameterWrite
 	if ssid := params["wifi_ssid"]; ssid != "" {
-		out = append(out, ParameterWrite{Name: "Device.WiFi.SSID.1.SSID", Value: ssid, Type: "string"})
+		path, _ := adapters.ResolvePath(dataModelRoot, adapters.WiFiSSID)
+		out = append(out, ParameterWrite{Name: path, Value: ssid, Type: "string"})
 	}
 	if pass := params["wifi_password"]; pass != "" {
-		out = append(out, ParameterWrite{Name: "Device.WiFi.AccessPoint.1.Security.KeyPassphrase", Value: pass, Type: "string"})
+		path, _ := adapters.ResolvePath(dataModelRoot, adapters.WiFiKeyPassphrase)
+		out = append(out, ParameterWrite{Name: path, Value: pass, Type: "string"})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("%w: MODIFY_WIFI requires at least one of wifi_ssid, wifi_password", ErrInvalidParameters)

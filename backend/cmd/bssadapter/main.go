@@ -462,7 +462,27 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params, err := bss.Translate(req.Action, req.Parameters, h.walledGarden)
+	// Only MODIFY_WIFI's canonical WiFi paths depend on the device's data
+	// model root (build plan §10's data_model_root branching gap) —
+	// SUSPEND/ACTIVATE write a deployer-configured walled-garden
+	// parameter directly, so they don't pay for this extra internal-API
+	// round-trip or gain a new failure mode they didn't have before.
+	dataModelRoot := ""
+	if req.Action == "MODIFY_WIFI" {
+		dev, err := h.acs.GetDevice(r.Context(), mapping.DeviceID)
+		if errors.Is(err, bss.ErrACSUnreachable) {
+			writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
+			return
+		}
+		if err != nil {
+			h.logger.Error("failed to resolve device for order translation", "err", err, "device_id", mapping.DeviceID)
+			writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+			return
+		}
+		dataModelRoot = dev.DataModelRoot
+	}
+
+	params, err := bss.Translate(req.Action, req.Parameters, h.walledGarden, dataModelRoot)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", err.Error())
 		return

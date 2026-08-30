@@ -118,6 +118,17 @@ type DiagnosticsPingPayload struct {
 	Timeout             int    `json:"timeout"`
 	DataBlockSize       int    `json:"data_block_size"`
 	DSCP                int    `json:"dscp"`
+	// Prefix is the diagnostic's data-model root object (e.g.
+	// "Device.IP.Diagnostics.IPPing." or
+	// "InternetGatewayDevice.IPPingDiagnostics."), resolved once from the
+	// target device's discovered data_model_root at job-creation time —
+	// the same "resolve once at creation, not re-resolved at dispatch"
+	// precedent FirmwareDownloadPayload already established, so a poll
+	// dispatched minutes later still reads the same subtree the trigger
+	// wrote to even if discovery updates the device's root in between.
+	// Empty means "resolve TR-181 for backward compatibility" (any job
+	// queued before this field existed) — cmd/acs falls back accordingly.
+	Prefix string `json:"prefix,omitempty"`
 }
 
 // DiagnosticsTraceroutePayload is the payload shape for a
@@ -133,6 +144,9 @@ type DiagnosticsTraceroutePayload struct {
 	DataBlockSize int    `json:"data_block_size"`
 	DSCP          int    `json:"dscp"`
 	MaxHopCount   int    `json:"max_hop_count"`
+	// Prefix — see DiagnosticsPingPayload.Prefix's doc comment; same
+	// resolve-once-at-creation convention, same backward-compat default.
+	Prefix string `json:"prefix,omitempty"`
 }
 
 // AddObjectPayload is the payload shape for an ADD_OBJECT job.

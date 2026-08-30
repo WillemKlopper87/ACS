@@ -26,6 +26,7 @@ import (
 	"acs/internal/auth"
 	"acs/internal/cwmp"
 	"acs/internal/devices"
+	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
 	"acs/internal/observability"
 	"acs/internal/parameters"
@@ -64,39 +65,49 @@ func remoteIP(r *http.Request) string {
 	return host
 }
 
-// diagIPPingPrefix is the TR-181 IP Ping diagnostic's parameter subtree
-// (design doc v3 §10.1). Only the Device. root is targeted — same
-// single-root convention the rest of the job payloads use (e.g. the
-// firmware confirmation job's Device.DeviceInfo.SoftwareVersion read).
-const diagIPPingPrefix = "Device.IP.Diagnostics.IPPing."
-
-// diagIPPingPollPaths is what a poll (attempts >= 2) reads back: the
-// state plus every result parameter TR-181 defines for IPPing, so the
-// parameter cache ends up populated the moment the diagnostic completes
-// rather than needing a second round-trip.
-var diagIPPingPollPaths = []string{
-	diagIPPingPrefix + "DiagnosticsState",
-	diagIPPingPrefix + "SuccessCount",
-	diagIPPingPrefix + "FailureCount",
-	diagIPPingPrefix + "AverageResponseTime",
-	diagIPPingPrefix + "MinimumResponseTime",
-	diagIPPingPrefix + "MaximumResponseTime",
+// defaultDiagPrefix resolves the backward-compatible prefix for a
+// diagnostic job queued before jobs.DiagnosticsPingPayload/
+// DiagnosticsTraceroutePayload carried their own Prefix field (empty
+// Prefix means "assume what this codebase always assumed": TR-181,
+// design doc v3 §3's "TR-181 first" convention). Every current caller
+// (cmd/api's createDiagnosticsPing/createDiagnosticsTraceroute) resolves
+// and stores a real Prefix at job-creation time via
+// adapters.DiagnosticsPrefix and the target device's own discovered
+// devices.DataModelRoot — this is only the fallback for a job that
+// predates that field.
+func defaultDiagPrefix(kind string) string {
+	return adapters.DiagnosticsPrefix(devices.DataModelRootDevice2, kind)
 }
 
-// diagTraceroutePrefix is TraceRoute's TR-181 subtree — build plan §4
-// Phase 5's firm-up of the diagnostic explicitly deferred as "identical
-// pattern [to Ping]". RouteHops.{i}.* is a dynamic-length table TR-069
-// itself defines with no fixed path list to poll, so only
-// RouteHopsNumberOfEntries is read back here — an operator wanting
-// per-hop detail can follow up with an ordinary GET_PARAMETER using that
-// count, the same way this ACS already leaves WiFi associated-device
-// detail to GET_PARAMETER rather than a dedicated parser.
-const diagTraceroutePrefix = "Device.IP.Diagnostics.TraceRoute."
+// diagIPPingPollPaths is what a poll (attempts >= 2) reads back: the
+// state plus every result parameter TR-181/TR-098 both define for IPPing
+// (same leaf names, different subtree root — adapters.DiagnosticsPrefix),
+// so the parameter cache ends up populated the moment the diagnostic
+// completes rather than needing a second round-trip.
+func diagIPPingPollPaths(prefix string) []string {
+	return []string{
+		prefix + "DiagnosticsState",
+		prefix + "SuccessCount",
+		prefix + "FailureCount",
+		prefix + "AverageResponseTime",
+		prefix + "MinimumResponseTime",
+		prefix + "MaximumResponseTime",
+	}
+}
 
-var diagTraceroutePollPaths = []string{
-	diagTraceroutePrefix + "DiagnosticsState",
-	diagTraceroutePrefix + "ResponseTime",
-	diagTraceroutePrefix + "RouteHopsNumberOfEntries",
+// diagTraceroutePollPaths — see diagIPPingPollPaths. RouteHops.{i}.* is a
+// dynamic-length table TR-069 itself defines with no fixed path list to
+// poll, so only RouteHopsNumberOfEntries is read back here — an operator
+// wanting per-hop detail can follow up with an ordinary GET_PARAMETER
+// using that count, the same way this ACS already leaves WiFi
+// associated-device detail to GET_PARAMETER rather than a dedicated
+// parser.
+func diagTraceroutePollPaths(prefix string) []string {
+	return []string{
+		prefix + "DiagnosticsState",
+		prefix + "ResponseTime",
+		prefix + "RouteHopsNumberOfEntries",
+	}
 }
 
 func main() {
@@ -528,6 +539,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, infor
 		}
 	}
 
+	h.correlateValueChangeEvents(ctx, device, inform.Event, inform.ParameterList)
 	h.enforcePolicies(ctx, device, inform.ParameterList)
 
 	if inform.HasEventCode("0") {
@@ -675,6 +687,14 @@ func (h *handler) renderJobRequest(job *jobs.Job) (body []byte, ok bool) {
 			payload.Username, payload.Password, payload.FileSize, payload.TargetFilename, payload.DelaySeconds), true
 
 	case jobs.TypeDiagnosticsPing:
+		var payload jobs.DiagnosticsPingPayload
+		if err := json.Unmarshal(job.Payload, &payload); err != nil {
+			return nil, false
+		}
+		prefix := payload.Prefix
+		if prefix == "" {
+			prefix = defaultDiagPrefix(adapters.DiagnosticPing)
+		}
 		if job.Attempts <= 1 {
 			// Trigger: TR-069 diagnostics aren't a dedicated RPC — the
 			// ACS writes the diagnostic's input parameters and kicks it
@@ -682,43 +702,43 @@ func (h *handler) renderJobRequest(job *jobs.Job) (body []byte, ok bool) {
 			// DiagnosticsState=Requested (v3 §10.1). Later attempts poll
 			// instead (see below); attempts counts from Lease, so 1 means
 			// this is the very first dispatch.
-			var payload jobs.DiagnosticsPingPayload
-			if err := json.Unmarshal(job.Payload, &payload); err != nil {
-				return nil, false
-			}
 			params := []cwmp.ParameterValueStruct{
-				{Name: diagIPPingPrefix + "Host", Value: payload.Host},
-				{Name: diagIPPingPrefix + "NumberOfRepetitions", Value: strconv.Itoa(payload.NumberOfRepetitions)},
-				{Name: diagIPPingPrefix + "Timeout", Value: strconv.Itoa(payload.Timeout)},
-				{Name: diagIPPingPrefix + "DataBlockSize", Value: strconv.Itoa(payload.DataBlockSize)},
-				{Name: diagIPPingPrefix + "DSCP", Value: strconv.Itoa(payload.DSCP)},
-				{Name: diagIPPingPrefix + "DiagnosticsState", Value: "Requested"},
+				{Name: prefix + "Host", Value: payload.Host},
+				{Name: prefix + "NumberOfRepetitions", Value: strconv.Itoa(payload.NumberOfRepetitions)},
+				{Name: prefix + "Timeout", Value: strconv.Itoa(payload.Timeout)},
+				{Name: prefix + "DataBlockSize", Value: strconv.Itoa(payload.DataBlockSize)},
+				{Name: prefix + "DSCP", Value: strconv.Itoa(payload.DSCP)},
+				{Name: prefix + "DiagnosticsState", Value: "Requested"},
 			}
 			return cwmp.RenderSetParameterValues(id, params, job.CommandKey), true
 		}
 		// Poll: read DiagnosticsState (and the result parameters, so a
 		// completed poll needs no further round-trip) until it leaves
 		// "Requested".
-		return cwmp.RenderGetParameterValues(id, diagIPPingPollPaths), true
+		return cwmp.RenderGetParameterValues(id, diagIPPingPollPaths(prefix)), true
 
 	case jobs.TypeDiagnosticsTraceroute:
+		var payload jobs.DiagnosticsTraceroutePayload
+		if err := json.Unmarshal(job.Payload, &payload); err != nil {
+			return nil, false
+		}
+		prefix := payload.Prefix
+		if prefix == "" {
+			prefix = defaultDiagPrefix(adapters.DiagnosticTraceroute)
+		}
 		if job.Attempts <= 1 {
-			var payload jobs.DiagnosticsTraceroutePayload
-			if err := json.Unmarshal(job.Payload, &payload); err != nil {
-				return nil, false
-			}
 			params := []cwmp.ParameterValueStruct{
-				{Name: diagTraceroutePrefix + "Host", Value: payload.Host},
-				{Name: diagTraceroutePrefix + "NumberOfTries", Value: strconv.Itoa(payload.NumberOfTries)},
-				{Name: diagTraceroutePrefix + "Timeout", Value: strconv.Itoa(payload.Timeout)},
-				{Name: diagTraceroutePrefix + "DataBlockSize", Value: strconv.Itoa(payload.DataBlockSize)},
-				{Name: diagTraceroutePrefix + "DSCP", Value: strconv.Itoa(payload.DSCP)},
-				{Name: diagTraceroutePrefix + "MaxHopCount", Value: strconv.Itoa(payload.MaxHopCount)},
-				{Name: diagTraceroutePrefix + "DiagnosticsState", Value: "Requested"},
+				{Name: prefix + "Host", Value: payload.Host},
+				{Name: prefix + "NumberOfTries", Value: strconv.Itoa(payload.NumberOfTries)},
+				{Name: prefix + "Timeout", Value: strconv.Itoa(payload.Timeout)},
+				{Name: prefix + "DataBlockSize", Value: strconv.Itoa(payload.DataBlockSize)},
+				{Name: prefix + "DSCP", Value: strconv.Itoa(payload.DSCP)},
+				{Name: prefix + "MaxHopCount", Value: strconv.Itoa(payload.MaxHopCount)},
+				{Name: prefix + "DiagnosticsState", Value: "Requested"},
 			}
 			return cwmp.RenderSetParameterValues(id, params, job.CommandKey), true
 		}
-		return cwmp.RenderGetParameterValues(id, diagTraceroutePollPaths), true
+		return cwmp.RenderGetParameterValues(id, diagTraceroutePollPaths(prefix)), true
 
 	case jobs.TypeAddObject:
 		var payload jobs.AddObjectPayload
@@ -948,7 +968,16 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 		list := body.GetParameterValuesResponse.ParameterList
 		h.cacheParameterValues(ctx, deviceID, list, parameters.SourceGetValues)
 
-		switch state := diagnosticsState(list, diagIPPingPrefix); state {
+		var pingPayload jobs.DiagnosticsPingPayload
+		if err := json.Unmarshal(job.Payload, &pingPayload); err != nil {
+			h.logger.Error("failed to unmarshal diagnostics ping payload; assuming TR-181", "err", err, "job_id", job.ID)
+		}
+		pingPrefix := pingPayload.Prefix
+		if pingPrefix == "" {
+			pingPrefix = defaultDiagPrefix(adapters.DiagnosticPing)
+		}
+
+		switch state := diagnosticsState(list, pingPrefix); state {
 		case "Requested", "":
 			// Still running (or the CPE hasn't populated the state param
 			// yet) — poll again.
@@ -981,7 +1010,16 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 		list := body.GetParameterValuesResponse.ParameterList
 		h.cacheParameterValues(ctx, deviceID, list, parameters.SourceGetValues)
 
-		switch state := diagnosticsState(list, diagTraceroutePrefix); state {
+		var tracePayload jobs.DiagnosticsTraceroutePayload
+		if err := json.Unmarshal(job.Payload, &tracePayload); err != nil {
+			h.logger.Error("failed to unmarshal diagnostics traceroute payload; assuming TR-181", "err", err, "job_id", job.ID)
+		}
+		tracePrefix := tracePayload.Prefix
+		if tracePrefix == "" {
+			tracePrefix = defaultDiagPrefix(adapters.DiagnosticTraceroute)
+		}
+
+		switch state := diagnosticsState(list, tracePrefix); state {
 		case "Requested", "":
 			h.requeueDiagnostic(ctx, deviceID, job, "still running")
 		case "Complete":
