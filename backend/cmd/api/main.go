@@ -20,8 +20,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"acs/internal/bss"
@@ -75,7 +77,11 @@ func main() {
 	}
 	config.LogSummary(logger, apiSecrets...)
 
-	ctx := context.Background()
+	// Process lifecycle (audit P1.2): SIGINT/SIGTERM cancels this context,
+	// which stops both background workers, then the HTTP server drains.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	db, err := store.Open(ctx, dsn)
 	if err != nil {
 		logger.Error("failed to connect to postgres", "err", err)
@@ -143,6 +149,7 @@ func main() {
 	}
 
 	metrics := observability.NewMetrics("api")
+	metrics.ObserveDB(db)
 
 	var transferKey []byte
 	if len(jwtSecret) > 0 {
@@ -434,16 +441,71 @@ func main() {
 	addr := envOr("ACS_API_ADDR", ":8080")
 	corsOrigin := envOr("ACS_API_CORS_ORIGIN", "*")
 	server := &http.Server{
-		Addr:              addr,
-		Handler:           withCORS(corsOrigin, withJWTAuth(jwtSecret, internalServiceToken, withRateLimit(apiLimiter, metrics, mux))),
+		Addr:    addr,
+		Handler: withCORS(corsOrigin, withJWTAuth(jwtSecret, internalServiceToken, withRateLimit(apiLimiter, metrics, withBodyLimit(mux)))),
+		// Timeouts (audit P1.2). No global ReadTimeout/WriteTimeout on
+		// purpose: firmware uploads and CPE upload receipts stream large
+		// bodies, and the console WebSocket / web-GUI proxy are long-lived
+		// — a global write deadline would cut those off. Bodies are
+		// bounded instead by withBodyLimit (JSON routes), MaxBytesReader
+		// (upload receipt), and ParseMultipartForm's cap (firmware).
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
-	logger.Info("REST API listening", "addr", addr)
-	if err := server.ListenAndServe(); err != nil {
-		logger.Error("server error", "err", err)
-		os.Exit(1)
+	errCh := make(chan error, 1)
+	go func() {
+		logger.Info("REST API listening", "addr", addr)
+		errCh <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("server error", "err", err)
+			os.Exit(1)
+		}
+	case <-ctx.Done():
+		// Workers are already winding down (they share ctx). Give
+		// in-flight requests a bounded window to finish, then exit.
+		logger.Info("shutting down: draining in-flight requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("shutdown did not complete cleanly", "err", err)
+		}
 	}
+}
+
+// maxJSONBody caps request bodies on ordinary API routes (audit P1.2 /
+// "request-body limits on JSON routes"). Nothing legitimate on these
+// routes approaches this; the file-transfer routes below carry their
+// own, larger, purpose-specific limits.
+const (
+	maxJSONBody   = 1 << 20  // 1 MiB
+	maxImportBody = 32 << 20 // bulk device import (JSON/CSV/XML)
+)
+
+// withBodyLimit wraps every request body in a MaxBytesReader sized for
+// its route class. Streaming/multipart routes are exempt because they
+// bound themselves.
+func withBodyLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/uploads/") && strings.HasSuffix(path, "/receive"):
+			// CPE upload receipt — bounded by ACS_UPLOAD_MAX_BYTES in the handler.
+		case r.Method == http.MethodPost && path == "/api/v1/firmware/images":
+			// multipart firmware publish — bounded by ParseMultipartForm.
+		case r.Method == http.MethodPost && path == "/api/v1/devices/import":
+			r.Body = http.MaxBytesReader(w, r.Body, maxImportBody)
+		default:
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func envOr(key, fallback string) string {

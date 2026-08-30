@@ -24,8 +24,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"acs/internal/auth"
@@ -111,7 +113,11 @@ func main() {
 		logger.Warn("ACS_INTERNAL_SERVICE_TOKEN not set — order dispatch and job status lookups will get 401'd by cmd/api once its own operator JWT auth is enabled. Set the same value here and on cmd/api's ACS_INTERNAL_SERVICE_TOKEN.")
 	}
 
-	ctx := context.Background()
+	// Process lifecycle (audit P1.2): SIGINT/SIGTERM cancels ctx, which
+	// stops the webhook workers, then the HTTP server drains.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	db, err := store.Open(ctx, dsn)
 	if err != nil {
 		logger.Error("failed to connect to postgres", "err", err)
@@ -120,6 +126,7 @@ func main() {
 	defer db.Close()
 
 	metrics := observability.NewMetrics("bssadapter")
+	metrics.ObserveDB(db)
 
 	walledGarden := bss.WalledGardenConfig{
 		Parameter:    os.Getenv("ACS_WALLED_GARDEN_PARAMETER"),
@@ -154,10 +161,8 @@ func main() {
 	mux.HandleFunc("GET /bss/v1/webhooks", metrics.InstrumentHTTP("GET /bss/v1/webhooks", h.listWebhookSubscriptions))
 	mux.HandleFunc("DELETE /bss/v1/webhooks/{id}", metrics.InstrumentHTTP("DELETE /bss/v1/webhooks/{id}", h.deleteWebhookSubscription))
 
-	workerCtx, cancelWorkers := context.WithCancel(context.Background())
-	defer cancelWorkers()
-	go h.runWebhookNotifyLoop(workerCtx)
-	go h.runWebhookDeliverLoop(workerCtx)
+	go h.runWebhookNotifyLoop(ctx)
+	go h.runWebhookDeliverLoop(ctx)
 
 	rateLimitPerSecond := envOrFloat("ACS_BSS_RATE_LIMIT_PER_SECOND", defaultRateLimitPerSecond)
 	rateLimitBurst := envOrInt("ACS_BSS_RATE_LIMIT_BURST", defaultRateLimitBurst)
@@ -172,6 +177,9 @@ func main() {
 		// tokens to dodge a per-token bucket entirely.
 		Handler:           withAuth(token, oauthSigningSecret, withRateLimit(limiter, metrics, withMaxBody(mux))),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second, // every BSS route is a small JSON exchange
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// mTLS (secondary hardening layer alongside OAuth2 — mirrors cmd/acs's
@@ -204,19 +212,32 @@ func main() {
 	logger.Info("BSS adapter listening", "addr", addr, "acs_internal_api", acsBaseURL,
 		"rate_limit_per_second", rateLimitPerSecond, "rate_limit_burst", rateLimitBurst,
 		"tls", certFile != "" && keyFile != "")
-	var serveErr error
-	if certFile != "" && keyFile != "" {
-		serveErr = server.ListenAndServeTLS(certFile, keyFile)
-	} else {
-		if server.TLSConfig != nil {
-			logger.Error("ACS_BSS_MTLS_CA_CERT is set but ACS_BSS_TLS_CERT/ACS_BSS_TLS_KEY are not — mTLS needs the server to actually be running TLS")
+	if certFile == "" && server.TLSConfig != nil {
+		logger.Error("ACS_BSS_MTLS_CA_CERT is set but ACS_BSS_TLS_CERT/ACS_BSS_TLS_KEY are not — mTLS needs the server to actually be running TLS")
+		os.Exit(1)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		if certFile != "" && keyFile != "" {
+			errCh <- server.ListenAndServeTLS(certFile, keyFile)
+		} else {
+			errCh <- server.ListenAndServe()
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("server error", "err", err)
 			os.Exit(1)
 		}
-		serveErr = server.ListenAndServe()
-	}
-	if serveErr != nil {
-		logger.Error("server error", "err", serveErr)
-		os.Exit(1)
+	case <-ctx.Done():
+		logger.Info("shutting down: draining in-flight requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("shutdown did not complete cleanly", "err", err)
+		}
 	}
 }
 

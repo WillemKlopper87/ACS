@@ -160,6 +160,7 @@ func main() {
 	}
 
 	metrics := observability.NewMetrics("acs")
+	metrics.ObserveDB(db)
 
 	ipRate := envOrFloat("ACS_RATE_LIMIT_IP_PER_SECOND", defaultIPRateLimitPerSecond)
 	ipBurst := envOrInt("ACS_RATE_LIMIT_IP_BURST", defaultIPRateLimitBurst)

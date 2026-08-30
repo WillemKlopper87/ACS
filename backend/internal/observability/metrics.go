@@ -8,6 +8,7 @@
 package observability
 
 import (
+	"database/sql"
 	"net/http"
 	"strconv"
 	"time"
@@ -39,6 +40,25 @@ type Metrics struct {
 	RateLimitRejectedTotal prometheus.Counter
 
 	DevicesOnline *prometheus.GaugeVec
+
+	factory promauto.Factory
+	labels  prometheus.Labels
+}
+
+// ObserveDB exposes database/sql pool statistics (audit P1.3): open,
+// in-use, and idle connections plus the cumulative count of goroutines
+// that had to wait for one — the signal that the pool is undersized
+// (or Postgres is saturated) before latency graphs show it.
+func (m *Metrics) ObserveDB(db *sql.DB) {
+	gauge := func(name, help string, f func(sql.DBStats) float64) {
+		m.factory.NewGaugeFunc(prometheus.GaugeOpts{Name: name, Help: help, ConstLabels: m.labels},
+			func() float64 { return f(db.Stats()) })
+	}
+	gauge("acs_db_open_connections", "Open connections in the database/sql pool.", func(s sql.DBStats) float64 { return float64(s.OpenConnections) })
+	gauge("acs_db_in_use_connections", "Pool connections currently in use.", func(s sql.DBStats) float64 { return float64(s.InUse) })
+	gauge("acs_db_idle_connections", "Pool connections currently idle.", func(s sql.DBStats) float64 { return float64(s.Idle) })
+	gauge("acs_db_wait_count_total", "Cumulative number of times a caller waited for a pool connection.", func(s sql.DBStats) float64 { return float64(s.WaitCount) })
+	gauge("acs_db_wait_duration_seconds_total", "Cumulative time callers spent waiting for a pool connection.", func(s sql.DBStats) float64 { return s.WaitDuration.Seconds() })
 }
 
 // NewMetrics builds a fresh registry for one process. service becomes a
@@ -50,6 +70,8 @@ func NewMetrics(service string) *Metrics {
 
 	return &Metrics{
 		registry: reg,
+		factory:  factory,
+		labels:   constLabels,
 		HTTPRequestsTotal: factory.NewCounterVec(prometheus.CounterOpts{
 			Name:        "acs_http_requests_total",
 			Help:        "Total HTTP requests handled, by method, route, and status class.",
