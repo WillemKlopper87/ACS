@@ -436,6 +436,9 @@ func main() {
 	}
 	go scheduleW.Run(ctx)
 
+	// Bounded growth for append-only tables (audit P2.3).
+	go runRetention(ctx, db, logger)
+
 	apiRate := envOrFloat("ACS_API_RATE_LIMIT_PER_SECOND", defaultAPIRateLimitPerSecond)
 	apiBurst := envOrInt("ACS_API_RATE_LIMIT_BURST", defaultAPIRateLimitBurst)
 	apiLimiter := ratelimit.New(apiRate, apiBurst, rateLimitIdleTTL)
