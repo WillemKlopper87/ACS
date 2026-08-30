@@ -1,0 +1,26 @@
+# Alert delivery (audit P3.2). Prometheus evaluates infra/alert_rules.yml
+# and hands firing alerts here; this config routes them to a generic
+# webhook receiver whose URL comes from ACS_ALERT_WEBHOOK_URL (Slack
+# incoming webhook, PagerDuty Events v2 via a relay, Opsgenie, or a
+# custom endpoint all speak this shape). Replace the receiver block for
+# native email/Slack/PagerDuty integrations — see
+# https://prometheus.io/docs/alerting/latest/configuration/.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: ops-webhook
+  group_by: [alertname, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: ops-webhook
+      repeat_interval: 1h
+
+receivers:
+  - name: ops-webhook
+    webhook_configs:
+      - url: __ACS_ALERT_WEBHOOK_URL__
+        send_resolved: true

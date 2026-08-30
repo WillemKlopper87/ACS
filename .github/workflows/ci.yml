@@ -53,6 +53,10 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test -- --run
+      - name: OpenAPI specs are valid (drift vs. routes is a Go test)
+        run: |
+          npx --yes @redocly/cli@1 lint ../backend/openapi.yaml --skip-rule operation-4xx-response --skip-rule no-unused-components
+          npx --yes @redocly/cli@1 lint ../backend/openapi-bssadapter.yaml --skip-rule operation-4xx-response --skip-rule no-unused-components
       - name: audit (production deps must be clean; dev deps at high+)
         run: |
           npm audit --omit=dev --audit-level=low

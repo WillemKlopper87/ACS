@@ -1,11 +1,7 @@
-# Evaluated by Prometheus itself (build plan §4 Phase 7 "Alerting").
-# There is deliberately no Alertmanager/notification channel wired up in
-# this pass — that would mean sending real alerts somewhere (Slack,
-# email, PagerDuty) without being asked to configure a destination.
-# These rules demonstrate the alerting mechanism actually works: they
-# evaluate on real metrics and show up as firing under
-# Prometheus's own /alerts UI, which is the buildable, verifiable slice
-# of "alerting" for a lab-scope deployment with no real on-call to page.
+# Evaluated by Prometheus (build plan §4 Phase 7 "Alerting") and
+# delivered through Alertmanager (infra/alertmanager.yml, audit P3.2).
+# Rules are grouped by the failure class they distinguish so an on-call
+# reader knows where to look before opening a dashboard.
 groups:
   - name: acs-fleet
     rules:
@@ -37,3 +33,72 @@ groups:
         annotations:
           summary: "cmd/bssadapter is rejecting requests due to rate limiting"
           description: "At least one request was rejected by the per-token rate limiter in the last minute."
+
+  - name: acs-durability
+    rules:
+      - alert: StaleJobLeases
+        expr: max(acs_jobs_stale_leases) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jobs are sitting past their lease deadline"
+          description: "acs_jobs_stale_leases has been > 0 for 5 minutes — the lease reaper in cmd/acs is not running or cannot reach Postgres."
+
+      - alert: JobsDeadLettered
+        expr: increase(acs_jobs_recovered_total{outcome="dead_lettered"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jobs exhausted their attempts after lease expiry"
+          description: "The reaper dead-lettered jobs in the last 15 minutes; inspect fault_code = LEASE_EXPIRED rows in the jobs table."
+
+      - alert: FirmwareTransfersTimingOut
+        expr: increase(acs_jobs_recovered_total{outcome="transfer_timeout"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Firmware downloads never reported TransferComplete"
+          description: "Devices accepted a Download RPC but did not complete within 24h — check reachability of the firmware URL from the CPE side and transfer-token expiry."
+
+  - name: acs-database
+    rules:
+      - alert: DatabasePoolSaturated
+        expr: rate(acs_db_wait_count_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} is waiting for database connections"
+          description: "Callers waited for a pool connection more than once per second over 5 minutes — raise ACS_DB_MAX_OPEN_CONNS or investigate slow queries."
+
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is down or unreachable"
+          description: "Prometheus cannot scrape {{ $labels.instance }}: the service is down, refused to start on fail-closed configuration validation, or is unreachable."
+
+  - name: acs-edge
+    rules:
+      - alert: CWMPAuthFailures
+        expr: sum(rate(acs_http_requests_total{service="acs",status="4xx"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained CWMP 4xx responses (likely CPE auth failures)"
+          description: "cmd/acs is returning 4xx at more than 1/s for 10 minutes — a fleet-wide credential mismatch, or an unauthenticated scanner."
+
+      - alert: TransferEndpointRejections
+        expr: sum(rate(acs_http_requests_total{service="api",route=~"PUT /api/v1/uploads/.*",status="4xx"}[5m])) > 0.2
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "CPE upload receipts are being rejected"
+          description: "Upload PUTs are failing token/size/state checks; CPEs may be retrying with expired transfer tokens or exceeding ACS_UPLOAD_MAX_BYTES."

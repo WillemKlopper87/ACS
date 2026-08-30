@@ -5,6 +5,13 @@ global:
 rule_files:
   - /etc/prometheus/alert_rules.yml
 
+# Alert delivery (audit P3.2): firing alerts go to Alertmanager, which
+# routes them per infra/alertmanager.yml.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
 # Two target sets per job: host.docker.internal (the documented `go run`
 # dev workflow) and the in-network container names (the opt-in
 # "containerized" docker-compose profile, infra/Dockerfile.*). Only one

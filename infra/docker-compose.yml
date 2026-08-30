@@ -36,6 +36,30 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
       - acs_prometheus_data:/prometheus
+    depends_on:
+      - alertmanager
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    ports:
+      - "127.0.0.1:9093:9093"
+    # ACS_ALERT_WEBHOOK_URL is substituted into the config template at
+    # start (Alertmanager has no env expansion of its own) — export it in
+    # the shell or .env before `docker compose up`. The default points at
+    # a non-existent local receiver so a dev stack boots without one.
+    environment:
+      ACS_ALERT_WEBHOOK_URL: ${ACS_ALERT_WEBHOOK_URL:-http://host.docker.internal:9999/alerts}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        sed "s#__ACS_ALERT_WEBHOOK_URL__#$$ACS_ALERT_WEBHOOK_URL#" /etc/alertmanager/alertmanager.tmpl.yml
+        > /tmp/alertmanager.yml &&
+        exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.tmpl.yml:ro
+      - acs_alertmanager_data:/alertmanager
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -126,5 +150,6 @@ services:
 
 volumes:
   acs_postgres_data:
+  acs_alertmanager_data:
   acs_prometheus_data:
   acs_grafana_data:

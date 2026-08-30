@@ -119,6 +119,43 @@ paths:
                   expires_at: { type: string, format: date-time }
         "401": { description: Wrong username or password, content: { text/plain: { schema: { type: string } } } }
 
+  /api/v1/auth/ticket:
+    post:
+      tags: [Auth]
+      summary: Mint a 60-second browser ticket for the console WebSocket / web-GUI iframe handshake
+      description: >
+        The session JWT is never placed in a URL. The two handshakes a browser cannot attach an
+        Authorization header to (WebSocket, iframe) instead carry this audience-bound, short-lived
+        ticket in ?token=, and the backend accepts nothing else there.
+      responses:
+        "200":
+          description: Ticket issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ticket: { type: string }
+                  expires_in: { type: integer, description: Seconds until the ticket expires }
+        "403": { description: Service identities cannot mint tickets, content: { text/plain: { schema: { type: string } } } }
+
+  /healthz:
+    get:
+      tags: [Ops]
+      summary: Liveness probe (process is up; never touches dependencies)
+      security: []
+      responses:
+        "200": { description: ok, content: { text/plain: { schema: { type: string } } } }
+
+  /readyz:
+    get:
+      tags: [Ops]
+      summary: Readiness probe (503 while Postgres is unreachable)
+      security: []
+      responses:
+        "200": { description: ready, content: { text/plain: { schema: { type: string } } } }
+        "503": { description: database unavailable, content: { text/plain: { schema: { type: string } } } }
+
   /api/v1/auth/operators:
     post:
       tags: [Auth]
