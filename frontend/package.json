@@ -14,8 +14,8 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.102.8",
-    "@tanstack/react-table": "^8.21.3",
-    "@tanstack/react-virtual": "^3.14.9",
+    "@tanstack/react-table": "^9.2.3",
+    "@tanstack/react-virtual": "^3.14.10",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "react": "^19.2.8",
@@ -26,17 +26,17 @@
     "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.62.1",
     "@testing-library/dom": "^10.4.1",
-    "@testing-library/react": "^16.3.2",
-    "@types/node": "^24.13.3",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^26.4.0",
     "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.4",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
     "jsdom": "^30.0.1",
     "openapi-typescript": "^7.13.0",
-    "oxlint": "^1.75.0",
+    "oxlint": "^1.80.0",
     "playwright": "^1.62.1",
-    "typescript": "~6.0.2",
-    "vite": "^8.2.0",
-    "vitest": "^4.1.10"
+    "typescript": "~7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
   }
 }
