@@ -8,7 +8,8 @@
 # host must pass --build-arg VITE_API_BASE_URL=... at image build time.
 FROM node:22-alpine AS build
 WORKDIR /src
-COPY package.json package-lock.json ./
+# .npmrc carries legacy-peer-deps (TypeScript 6 vs openapi-typescript's ^5 peer)
+COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 COPY . .
 ARG VITE_API_BASE_URL=http://localhost:8080
