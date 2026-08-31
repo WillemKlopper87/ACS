@@ -148,6 +148,19 @@ jobs:
           done
       - name: build frontend image
         run: docker build -t acs-frontend:ci frontend
+      - name: SBOMs for every image (Syft, SPDX)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          mkdir -p sbom
+          for img in acs-acs acs-api acs-bssadapter acs-frontend; do
+            syft "$img:ci" -o spdx-json > "sbom/$img.spdx.json"
+          done
+      - name: upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sboms
+          path: sbom/
+          retention-days: 90
       - name: scan images (Trivy, fail on HIGH/CRITICAL fixable)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
