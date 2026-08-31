@@ -67,7 +67,7 @@ export function DeviceTenancy({ deviceId, customerId, writable }: { deviceId: st
     <div className="panel">
       <h3>Tenancy</h3>
       <div className="form-row" style={{ marginTop: 0 }}>
-        <select className="chip" value={selectedCustomer} onChange={(e) => setSelectedCustomer(e.target.value)} disabled={!writable}>
+        <select className="chip" aria-label="Customer" value={selectedCustomer} onChange={(e) => setSelectedCustomer(e.target.value)} disabled={!writable}>
           <option value="">Unassigned</option>
           {customers.map((c) => (
             <option key={c.id} value={c.id}>{c.name}</option>

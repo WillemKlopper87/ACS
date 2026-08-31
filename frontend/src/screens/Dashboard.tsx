@@ -261,7 +261,7 @@ export function Dashboard() {
               <div className="panel">
                 <h3>
                   Fleet breakdown
-                  <select className="chip" value={groupDim} onChange={(e) => setGroupDim(e.target.value as any)} style={{ fontSize: "0.74rem", padding: "0.2em 0.4em" }}>
+                  <select className="chip" aria-label="Group devices by" value={groupDim} onChange={(e) => setGroupDim(e.target.value as any)} style={{ fontSize: "0.74rem", padding: "0.2em 0.4em" }}>
                     {Object.entries(GROUP_BY_LABEL).map(([k, label]) => (
                       <option key={k} value={k}>By {label}</option>
                     ))}

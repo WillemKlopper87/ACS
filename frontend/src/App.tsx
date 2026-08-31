@@ -94,7 +94,7 @@ function AppShell() {
         </nav>
 
         <div className="sidebar-footer">
-          <select className="chip" value={theme} onChange={(e) => setTheme(e.target.value as Theme)} title="Console theme">
+          <select className="chip" aria-label="Console theme" value={theme} onChange={(e) => setTheme(e.target.value as Theme)} title="Console theme">
             {themes.map((t) => (
               <option key={t} value={t}>
                 {THEME_LABEL[t]}

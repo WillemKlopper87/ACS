@@ -51,19 +51,19 @@ export function Reports() {
         </p>
 
         <div className="form-row" style={{ marginTop: 0, flexWrap: "wrap" }}>
-          <select className="chip" value={regionId} onChange={(e) => setRegionId(e.target.value)}>
+          <select className="chip" aria-label="Region" value={regionId} onChange={(e) => setRegionId(e.target.value)}>
             <option value="">All regions</option>
             {regions.map((r) => (
               <option key={r.id} value={r.id}>{r.name}</option>
             ))}
           </select>
-          <select className="chip" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+          <select className="chip" aria-label="Customer" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
             <option value="">All customers</option>
             {customers.map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
-          <select className="chip" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+          <select className="chip" aria-label="Project" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
             <option value="">All projects</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>{p.name}</option>

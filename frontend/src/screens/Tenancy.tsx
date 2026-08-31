@@ -123,7 +123,7 @@ export function Tenancy() {
           <h3>Customers (ISPs)</h3>
           <form onSubmit={createCustomer} className="form-row" style={{ marginTop: 0, flexWrap: "wrap" }}>
             <input placeholder="Customer name" value={customerName} onChange={(e) => setCustomerName(e.target.value)} required />
-            <select className="chip" value={customerRegion} onChange={(e) => setCustomerRegion(e.target.value)}>
+            <select className="chip" aria-label="Region" value={customerRegion} onChange={(e) => setCustomerRegion(e.target.value)}>
               <option value="">No region</option>
               {regions.map((r) => (
                 <option key={r.id} value={r.id}>{r.name}</option>
@@ -178,7 +178,7 @@ export function Tenancy() {
           </p>
           <form onSubmit={runImport}>
             <div className="form-row" style={{ marginTop: 0 }}>
-              <select className="chip" value={importFormat} onChange={(e) => setImportFormat(e.target.value as any)}>
+              <select className="chip" aria-label="Import format" value={importFormat} onChange={(e) => setImportFormat(e.target.value as any)}>
                 <option value="csv">CSV</option>
                 <option value="json">JSON</option>
                 <option value="xml">XML</option>

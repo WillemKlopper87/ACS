@@ -13,3 +13,7 @@ infra/.env.containerized
 
 # Built binaries stay out of source control
 *.exe
+
+# Playwright artifacts
+frontend/test-results/
+frontend/playwright-report/

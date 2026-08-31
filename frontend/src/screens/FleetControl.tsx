@@ -299,7 +299,7 @@ export function FleetControl() {
             {selectingAll ? "Selecting…" : `Select all ${matchCount} matching`}
           </button>
         )}
-        <select className="chip" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
+        <select className="chip" aria-label="Rows per page" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
           {PAGE_SIZES.map((s) => (
             <option key={s} value={s}>{s} / page</option>
           ))}
@@ -344,7 +344,7 @@ export function FleetControl() {
             )}
           </h3>
           <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
-            <select className="chip" value={actionType} onChange={(e) => setActionType(e.target.value as BulkActionType)}>
+            <select className="chip" aria-label="Bulk action" value={actionType} onChange={(e) => setActionType(e.target.value as BulkActionType)}>
               <option value="CONNECTION_REQUEST">Queue Connection Request</option>
               <option value="REFRESH_CELLULAR">Refresh cellular diagnostics</option>
               <option value="SET_PARAMETER">Set WiFi SSID</option>
@@ -359,7 +359,7 @@ export function FleetControl() {
               />
             )}
             {actionType === "APPLY_TEMPLATE" && (
-              <select className="chip" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+              <select className="chip" aria-label="Template" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
                 <option value="">
                   {templates.length === 0 ? "No templates yet — create one on the Templates screen" : "Select a template…"}
                 </option>

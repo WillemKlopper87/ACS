@@ -263,6 +263,7 @@ export function DeviceConsole({ id, writable }: { id: string; writable: boolean 
         <>
           <div className="form-row">
             <select
+              aria-label="Raw RPC type"
               className="chip"
               value={rawType}
               disabled={busy || !writable}

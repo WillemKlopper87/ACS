@@ -136,13 +136,13 @@ export function Jobs() {
           </svg>
           <input ref={searchRef} placeholder="Filter by command_key, device, fault… (press /)" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-        <select className="chip" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+        <select className="chip" aria-label="Filter by job type" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
           <option value="">All types</option>
           {types.map((t) => (
             <option key={t} value={t}>{t}</option>
           ))}
         </select>
-        <select className="chip" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+        <select className="chip" aria-label="Filter by status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
           <option value="">All statuses</option>
           {statuses.map((s) => (
             <option key={s} value={s}>{s}</option>

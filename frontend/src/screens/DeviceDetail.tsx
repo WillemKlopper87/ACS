@@ -560,6 +560,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
             disabled={busy || !writable}
           />
           <select
+            aria-label="Notification level"
             value={attrNotification}
             onChange={(e) => setAttrNotification(Number(e.target.value))}
             disabled={busy || !writable}

@@ -148,7 +148,7 @@ export function RemoteShell({ id, writable }: { id: string; writable: boolean })
 
       {showForm && (
         <div className="form-row" style={{ marginTop: 0, flexWrap: "wrap" }}>
-          <select className="chip" value={form.protocol} onChange={(e) => setForm({ ...form, protocol: e.target.value as "SSH" | "TELNET", port: e.target.value === "SSH" ? 22 : 23 })}>
+          <select className="chip" aria-label="Protocol" value={form.protocol} onChange={(e) => setForm({ ...form, protocol: e.target.value as "SSH" | "TELNET", port: e.target.value === "SSH" ? 22 : 23 })}>
             <option value="SSH">SSH</option>
             <option value="TELNET">TELNET</option>
           </select>
@@ -168,7 +168,7 @@ export function RemoteShell({ id, writable }: { id: string; writable: boolean })
         </p>
       ) : (
         <div className="form-row" style={{ marginTop: showForm ? "0.75rem" : 0 }}>
-          <select className="chip" value={selected} onChange={(e) => setSelected(e.target.value)} disabled={connected}>
+          <select className="chip" aria-label="Credential" value={selected} onChange={(e) => setSelected(e.target.value)} disabled={connected}>
             {credentials.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.protocol} · {c.username}@{c.host}:{c.port}

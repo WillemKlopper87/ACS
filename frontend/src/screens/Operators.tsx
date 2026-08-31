@@ -237,7 +237,7 @@ export function Operators() {
               required
               autoComplete="new-password"
             />
-            <select className="chip" value={newRole} onChange={(e) => setNewRole(e.target.value as Role)}>
+            <select className="chip" aria-label="Role" value={newRole} onChange={(e) => setNewRole(e.target.value as Role)}>
               {ROLES.map((r) => (
                 <option key={r} value={r}>{r}</option>
               ))}

@@ -158,7 +158,7 @@ export function DeviceFleet() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <select className="chip" value={vendorFilter} onChange={(e) => setVendorFilter(e.target.value)}>
+        <select className="chip" aria-label="Filter by vendor" value={vendorFilter} onChange={(e) => setVendorFilter(e.target.value)}>
           <option value="">All vendors</option>
           {vendors.map((v) => (
             <option key={v} value={v}>

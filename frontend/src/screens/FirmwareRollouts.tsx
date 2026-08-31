@@ -190,7 +190,7 @@ export function FirmwareRollouts() {
             <input placeholder="Vendor" value={uploadVendor} onChange={(e) => setUploadVendor(e.target.value)} disabled={uploading || !writable} required />
             <input placeholder="Model" value={uploadModel} onChange={(e) => setUploadModel(e.target.value)} disabled={uploading || !writable} required />
             <input placeholder="Version" value={uploadVersion} onChange={(e) => setUploadVersion(e.target.value)} disabled={uploading || !writable} required />
-            <select className="chip" value={uploadChannel} onChange={(e) => setUploadChannel(e.target.value)} disabled={uploading || !writable}>
+            <select className="chip" aria-label="Release channel" value={uploadChannel} onChange={(e) => setUploadChannel(e.target.value)} disabled={uploading || !writable}>
               <option value="stable">stable</option>
               <option value="beta">beta</option>
               <option value="canary">canary</option>
@@ -211,7 +211,7 @@ export function FirmwareRollouts() {
           <form onSubmit={onCreate}>
             <div className="form-row">
               <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
-              <select className="chip" value={imageId} onChange={(e) => setImageId(e.target.value)} required>
+              <select className="chip" aria-label="Firmware image" value={imageId} onChange={(e) => setImageId(e.target.value)} required>
                 {images.length === 0 && <option value="">No firmware images</option>}
                 {images.map((img) => (
                   <option key={img.id} value={img.id}>
@@ -223,7 +223,7 @@ export function FirmwareRollouts() {
             <div className="form-row">
               <label className="dim" style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.8rem", flex: 1 }}>
                 Rollback image (optional)
-                <select className="chip" value={rollbackImageId} onChange={(e) => setRollbackImageId(e.target.value)} style={{ flex: 1 }}>
+                <select className="chip" aria-label="Rollback image" value={rollbackImageId} onChange={(e) => setRollbackImageId(e.target.value)} style={{ flex: 1 }}>
                   <option value="">None — no automatic rollback if blocked</option>
                   {images.map((img) => (
                     <option key={img.id} value={img.id}>

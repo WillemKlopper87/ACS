@@ -93,7 +93,7 @@ export function AuditLog() {
           </svg>
           <input placeholder="Filter by actor, device, details…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-        <select className="chip" value={actionFilter} onChange={(e) => setActionFilter(e.target.value)}>
+        <select className="chip" aria-label="Filter by action" value={actionFilter} onChange={(e) => setActionFilter(e.target.value)}>
           <option value="">All actions</option>
           {actions.map((a) => (
             <option key={a} value={a}>{a}</option>

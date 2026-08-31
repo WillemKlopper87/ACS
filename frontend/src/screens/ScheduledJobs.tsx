@@ -153,14 +153,14 @@ export function ScheduledJobs() {
         <form onSubmit={onCreate}>
           <div className="form-row">
             <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
-            <select className="chip" value={jobType} onChange={(e) => setJobType(e.target.value)}>
+            <select className="chip" aria-label="Job type" value={jobType} onChange={(e) => setJobType(e.target.value)}>
               {JOB_TYPES.map((t) => (
                 <option key={t} value={t}>{t}</option>
               ))}
             </select>
           </div>
           <div className="form-row">
-            <select className="chip" value={targetType} onChange={(e) => setTargetType(e.target.value as "DEVICE" | "GROUP")}>
+            <select className="chip" aria-label="Target type" value={targetType} onChange={(e) => setTargetType(e.target.value as "DEVICE" | "GROUP")}>
               <option value="DEVICE">Device</option>
               <option value="GROUP">Group</option>
             </select>

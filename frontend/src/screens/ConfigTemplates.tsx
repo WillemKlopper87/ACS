@@ -232,7 +232,7 @@ export function ConfigTemplates() {
                   onChange={(e) => updateRow(i, { value: e.target.value })}
                   disabled={!writable}
                 />
-                <select className="chip" value={row.type} onChange={(e) => updateRow(i, { type: e.target.value })} disabled={!writable}>
+                <select className="chip" aria-label="Parameter type" value={row.type} onChange={(e) => updateRow(i, { type: e.target.value })} disabled={!writable}>
                   <option value="string">string</option>
                   <option value="int">int</option>
                   <option value="boolean">boolean</option>
@@ -290,7 +290,7 @@ export function ConfigTemplates() {
                 ))}
               </ul>
               <div className="form-row" style={{ marginTop: 0 }}>
-                <select className="chip" value={applyTarget} onChange={(e) => setApplyTarget(e.target.value as "devices" | "group")}>
+                <select className="chip" aria-label="Apply to" value={applyTarget} onChange={(e) => setApplyTarget(e.target.value as "devices" | "group")}>
                   <option value="devices">Device IDs</option>
                   <option value="group">Device group</option>
                 </select>
