@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { api, ApiError } from "../api/client";
 import type { DashboardAlarm, DashboardData, DashboardWidget } from "../api/types";
-import { useLive } from "../lib/useLive";
 import { timeAgo } from "../lib/format";
 import { toast } from "../lib/toast";
 
@@ -124,32 +124,37 @@ const WIDGET_TITLE: Record<string, string> = {
 };
 
 export function Dashboard() {
-  const [data, setData] = useState<DashboardData | null>(null);
   const [widgets, setWidgets] = useState<DashboardWidget[]>([]);
   const [groupDim, setGroupDim] = useState<"customer" | "region" | "project" | "manufacturer">("manufacturer");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [customizing, setCustomizing] = useState(false);
+  const [live, setLive] = useState(true);
 
-  async function load(background = false) {
-    if (!background) setLoading(true);
-    try {
+  // Server state via TanStack Query (audit P2.4) — this screen is the
+  // reference conversion away from the manual load()/useLive pattern:
+  // caching, request dedupe, background polling, and error/retry come
+  // from the library instead of hand-rolled state.
+  const query = useQuery({
+    queryKey: ["dashboard"],
+    queryFn: async () => {
       const [d, l] = await Promise.all([api.getDashboard(), api.getDashboardLayout()]);
-      setData(d);
-      setWidgets(l.widgets);
-      setError(null);
-    } catch (e) {
-      if (!background) setError(e instanceof ApiError ? `${e.status}: ${e.message}` : "Failed to reach the API");
-    } finally {
-      if (!background) setLoading(false);
-    }
-  }
+      return { data: d, layout: l.widgets };
+    },
+    refetchInterval: live ? 10_000 : false,
+  });
+  const data: DashboardData | null = query.data?.data ?? null;
+  const loading = query.isPending || query.isFetching;
+  const error = query.error
+    ? query.error instanceof ApiError
+      ? `${query.error.status}: ${query.error.message}`
+      : "Failed to reach the API"
+    : null;
+  const load = () => query.refetch();
 
+  // The widget list is editable locally (toggle/reorder before Save), so
+  // it stays component state, (re)seeded whenever the server copy loads.
   useEffect(() => {
-    load();
-  }, []);
-
-  const [live, setLive] = useLive(() => load(true), 10000);
+    if (query.data) setWidgets(query.data.layout);
+  }, [query.data]);
 
   function toggleWidget(id: string) {
     setWidgets((prev) => prev.map((w) => (w.id === id ? { ...w, enabled: !w.enabled } : w)));

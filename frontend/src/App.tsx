@@ -1,4 +1,5 @@
-import { Suspense, lazy, useState, type ComponentType } from "react";
+import { Suspense, lazy, type ComponentType } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Login } from "./screens/Login";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AuthProvider } from "./auth/AuthContext";
@@ -58,7 +59,14 @@ const SCREEN_COMPONENT: Record<Screen, ComponentType> = {
 };
 
 function AppShell() {
-  const [screen, setScreen] = useState<Screen>("fleet");
+  // The active screen lives in the URL (audit P2.4: deep links) — /jobs,
+  // /rollouts, /fleet?device=<id>, … — so views are linkable and the
+  // browser's back button works. Unknown paths fall back to the fleet.
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const fromPath = pathname.split("/")[1] as Screen;
+  const screen: Screen = SCREEN_COMPONENT[fromPath] ? fromPath : "fleet";
+  const setScreen = (s: Screen) => navigate("/" + s);
   const { token, authRequired, username, role, logout } = useAuth();
   const admin = canAdmin(role);
   const { theme, setTheme, themes } = useTheme();

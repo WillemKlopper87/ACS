@@ -1,5 +1,6 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { Device } from "../api/types";
 import { DataTable } from "../components/DataTable";
@@ -15,7 +16,24 @@ export function DeviceFleet() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [vendorFilter, setVendorFilter] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The selected device rides in ?device= (audit P2.4: deep links) so a
+  // device drill-down can be shared/bookmarked and survives a reload.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedId = searchParams.get("device");
+  const setSelectedId = useCallback(
+    (id: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (id) next.set("device", id);
+          else next.delete("device");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
   const searchRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async (background = false) => {
