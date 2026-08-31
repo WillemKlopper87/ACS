@@ -115,6 +115,8 @@ a Trivy scan, and gitleaks. Make every job required in branch protection.
 ## Documents
 
 - [ACS_CODEBASE_AUDIT_2026-08-28.md](ACS_CODEBASE_AUDIT_2026-08-28.md) — the audit this hardening work follows; see git history for `audit P0.x`/`P1.x` commits.
+- [docs/OPERATIONS-RUNBOOK.md](docs/OPERATIONS-RUNBOOK.md) — rolling upgrades, backup/restore drills (RPO/RTO), secret rotation, alert responses.
+- [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) — per-vendor and per-capability coverage; where real-device results get recorded.
 - [HANDOFF.md](HANDOFF.md) — project handoff notes.
 - [deployment-testing-onboarding-guide.md](deployment-testing-onboarding-guide.md) — full environment/variable reference and test workflow.
 - [EC2-DEPLOYMENT-GUIDE.md](EC2-DEPLOYMENT-GUIDE.md) — single-host EC2 deployment.
