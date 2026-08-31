@@ -50,6 +50,16 @@ import type {
   UploadedFile,
 } from "./types";
 import { getAuthState, clearAuth, markAuthRequired } from "../auth/tokenStore";
+import type { paths } from "./generated";
+
+// Generated contract (audit P2.5): src/api/generated.ts is produced from
+// backend/openapi.yaml by `npm run generate:api`, and CI fails if it
+// drifts from the committed spec. New endpoints should take their
+// request/response types from `paths` like LoginResponse below instead
+// of re-declaring them by hand; the hand-written types in types.ts are
+// legacy to be migrated over time.
+type LoginResponse =
+  paths["/api/v1/auth/login"]["post"]["responses"]["200"]["content"]["application/json"];
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -99,7 +109,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   login: (username: string, password: string) =>
-    request<{ token: string; role: string; expires_at: string }>(LOGIN_PATH, {
+    request<LoginResponse>(LOGIN_PATH, {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),

@@ -57,6 +57,10 @@ jobs:
         run: |
           npx --yes @redocly/cli@1 lint ../backend/openapi.yaml --skip-rule operation-4xx-response --skip-rule no-unused-components
           npx --yes @redocly/cli@1 lint ../backend/openapi-bssadapter.yaml --skip-rule operation-4xx-response --skip-rule no-unused-components
+      - name: generated API types match the committed spec (audit P2.5)
+        run: |
+          npm run generate:api
+          git diff --exit-code -- src/api/generated.ts
       - name: audit (production deps must be clean; dev deps at high+)
         run: |
           npm audit --omit=dev --audit-level=low

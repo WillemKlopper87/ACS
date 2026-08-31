@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "generate:api": "openapi-typescript ../backend/openapi.yaml -o src/api/generated.ts"
   },
   "dependencies": {
     "@tanstack/react-table": "^8.21.3",
@@ -25,6 +26,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.4",
     "jsdom": "^30.0.1",
+    "openapi-typescript": "^7.13.0",
     "oxlint": "^1.75.0",
     "playwright": "^1.62.1",
     "typescript": "~6.0.2",

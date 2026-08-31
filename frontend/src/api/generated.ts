@@ -37,11 +37,11 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            token?: string;
-                            role?: components["schemas"]["Role"];
+                            token: string;
+                            role: components["schemas"]["Role"];
                             username?: string;
                             /** Format: date-time */
-                            expires_at?: string;
+                            expires_at: string;
                         };
                     };
                 };

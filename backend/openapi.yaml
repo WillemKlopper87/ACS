@@ -112,6 +112,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [token, role, expires_at]
                 properties:
                   token: { type: string }
                   role: { $ref: "#/components/schemas/Role" }
