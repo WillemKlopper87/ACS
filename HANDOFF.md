@@ -4,6 +4,25 @@ Written for the next agent/engineer picking this project up. It records what
 exists, what was verified today, what is missing, and what the previous
 reviewer would have done differently. Read this before the 90 KB build plan.
 
+> **Current status addendum — 2026-09-02:** This handoff contains historical
+> snapshots below. The current source of truth is the root `README.md`, the
+> latest commits on `main`, and this addendum. Since the original August review,
+> ACS has added fail-closed production configuration, centralized tenancy
+> enforcement, expiring transfer tokens and bounded uploads, SSRF/SSH controls,
+> Digest replay protection, lease recovery, graceful service shutdown, pool and
+> migration hardening, retention pruning, object storage, CI/SBOM/image gates,
+> generated API contracts, route-based frontend loading, TanStack Query,
+> Playwright/axe coverage, and a committed mock-CPE/load harness.
+>
+> Current repository checks on `main` pass: backend `go test ./...` and
+> `go vet ./...`; frontend Vitest, lint, TypeScript build, and production build.
+> The remaining release evidence is primarily real-device compatibility and
+> load/soak qualification. `docs/COMPATIBILITY.md` currently has no real-device
+> rows and no recorded load run. XMPP connection requests and TR-098 writes
+> remain unsupported. A production backup/restore drill, external CI branch
+> protection, and organization-level security/licensing approvals must also be
+> recorded before release.
+
 ---
 
 ## 0. Orientation — two lineages, one live codebase
