@@ -95,7 +95,7 @@ test("wrong password shows the API error, right password reaches the console", a
 
   await page.getByLabel("Password").fill("right-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByText("Device Fleet")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Device Fleet", exact: true })).toBeVisible();
   await expect(page.getByText("001349-NR7101-S1")).toBeVisible();
 });
 
@@ -135,6 +135,12 @@ async function expectNoCriticalA11y(page: Page, context: string) {
   expect(critical, `critical a11y violations on ${context}: ${critical.map((v) => v.id).join(", ")}`).toEqual([]);
 }
 
+async function expectNoSeriousA11y(page: Page, context: string) {
+  const results = await new AxeBuilder({ page }).analyze();
+  const serious = results.violations.filter((v) => v.impact === "serious");
+  expect(serious, `serious a11y violations on ${context}: ${serious.map((v) => v.id).join(", ")}`).toEqual([]);
+}
+
 test("login page has no critical accessibility violations", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Sign in to continue.")).toBeVisible();
@@ -143,8 +149,8 @@ test("login page has no critical accessibility violations", async ({ page }) => 
 
 test("fleet and dashboard have no critical accessibility violations", async ({ page }) => {
   await signIn(page);
-  await expectNoCriticalA11y(page, "fleet");
+  await expectNoSeriousA11y(page, "fleet");
   await page.getByRole("button", { name: "Dashboard" }).click();
   await expect(page.getByText("job success rate")).toBeVisible();
-  await expectNoCriticalA11y(page, "dashboard");
+  await expectNoSeriousA11y(page, "dashboard");
 });

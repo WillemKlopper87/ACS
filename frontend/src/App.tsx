@@ -130,6 +130,7 @@ function AppShell() {
 
       <div className="shell-main">
         <main className="view">
+          <h1 className="sr-only">{NAV.find((item) => item.id === screen)?.label}</h1>
           <ErrorBoundary key={screen}>
             <Suspense fallback={<p className="dim">Loading…</p>}>
               <ActiveScreen />

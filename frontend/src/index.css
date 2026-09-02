@@ -9,7 +9,7 @@
   --border: #263349;
   --ink: #e7ecf5;
   --ink-dim: #98a5bc;
-  --ink-faint: #6c7890;
+  --ink-faint: #9aa7bb;
   --accent: #e0a458;
   --accent-ink: #1a1206;
   --ok: #5fbf8f;
@@ -33,7 +33,7 @@
   --border: #d7dee8;
   --ink: #16202e;
   --ink-dim: #57647a;
-  --ink-faint: #8290a5;
+  --ink-faint: #68758a;
   --accent: #a6641f;
   --accent-ink: #fff7ec;
   --ok: #2f8f62;
@@ -50,7 +50,7 @@
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]):not([data-theme="unfold"]):not([data-theme="fluent"]) {
     --bg: #f3f5f8; --surface: #ffffff; --surface-2: #eef1f6; --surface-3: #e4e9f0;
-    --border: #d7dee8; --ink: #16202e; --ink-dim: #57647a; --ink-faint: #8290a5;
+    --border: #d7dee8; --ink: #16202e; --ink-dim: #57647a; --ink-faint: #68758a;
     --accent: #a6641f; --accent-ink: #fff7ec; --ok: #2f8f62; --warn: #a6641f;
     --pending: #7c879c; --danger: #b8492f;
     --danger-bg: color-mix(in srgb, #b8492f 12%, transparent);
@@ -70,7 +70,7 @@
   --border: #e5e7eb;
   --ink: #111827;
   --ink-dim: #6b7280;
-  --ink-faint: #9ca3af;
+  --ink-faint: #687386;
   --accent: #6366f1;
   --accent-ink: #ffffff;
   --ok: #10b981;
@@ -104,7 +104,7 @@
   --border: #e0e0e0;
   --ink: #242424;
   --ink-dim: #616161;
-  --ink-faint: #8a8886;
+  --ink-faint: #6b6b6b;
   --accent: #0f6cbd;
   --accent-ink: #ffffff;
   --ok: #107c10;
@@ -247,6 +247,18 @@ nav.tabs button.active { color: var(--ink); border-bottom-color: var(--accent); 
 .conn-indicator.down .dot { background: var(--danger); }
 
 main.view { flex: 1; padding: 1.1rem 1.25rem 2.5rem; max-width: 96rem; width: 100%; margin: 0 auto; }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 .stat-strip {
   display: grid;
