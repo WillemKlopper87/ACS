@@ -144,6 +144,7 @@ async function expectNoSeriousA11y(page: Page, context: string) {
 test("login page has no critical accessibility violations", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Sign in to continue.")).toBeVisible();
+  await expect(page.getByRole("heading").first()).toBeVisible();
   await expectNoCriticalA11y(page, "login");
 });
 

@@ -13,14 +13,14 @@ const fieldStyle = {
 
 function AuthCard({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)" }}>
+    <main aria-labelledby="auth-heading" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)" }}>
       <div className="panel" style={{ width: "22rem", display: "flex", flexDirection: "column", gap: "0.9rem" }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: "0.5rem", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
+        <h1 id="auth-heading" style={{ display: "flex", alignItems: "baseline", gap: "0.5rem", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "1rem", margin: 0 }}>
           <span style={{ color: "var(--accent)" }}>●</span> ACS<span style={{ color: "var(--ink-faint)" }}>/</span>console
-        </div>
+        </h1>
         {children}
       </div>
-    </div>
+    </main>
   );
 }
 
