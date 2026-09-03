@@ -148,7 +148,6 @@ func TestIntegration_CPESession(t *testing.T) {
 	defer srv.Close()
 
 	cpe := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
-
 	code, body := cpe.post(periodicInform(t))
 	if code != 200 || !strings.Contains(body, "InformResponse") {
 		t.Fatalf("Inform → %d %s", code, body)
@@ -434,8 +433,8 @@ func TestIntegration_CPEMalformed(t *testing.T) {
 		t.Errorf("malformed XML: %d, want 400", code)
 	}
 	cpe.cookie = nil
-	if code, _ := cpe.post(""); code != 200 {
-		t.Errorf("session-less empty POST: %d, want 200", code)
+	if code, _ := cpe.post(""); code != 200 && code != 204 {
+		t.Errorf("session-less empty POST: %d, want 200 or 204", code)
 	}
 }
 

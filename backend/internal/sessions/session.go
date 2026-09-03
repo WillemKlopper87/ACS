@@ -22,6 +22,8 @@ const (
 	StateReadyForDispatch   = "READY_FOR_RPC_DISPATCH"
 	StateRPCDispatched      = "RPC_DISPATCHED"
 	StateClosed             = "SESSION_CLOSED"
+
+	DefaultCWMPNamespace = "urn:dslforum-org:cwmp-1-0"
 )
 
 type Session struct {
@@ -30,6 +32,7 @@ type Session struct {
 	State            string
 	InformEventCodes []string
 	CurrentJobID     *string
+	CWMPNamespace    string
 	OpenedAt         time.Time
 	ClosedAt         *time.Time
 	CloseReason      *string
@@ -51,12 +54,19 @@ func NewRepository(db *sql.DB) *Repository {
 // Open records a new session in state INFORM_RESPONSE_SENT (the ACS has
 // received Inform and is about to answer it — by the time the caller
 // has a Session to hand back, the response is already on its way).
-func (r *Repository) Open(ctx context.Context, deviceID string, eventCodes []string) (*Session, error) {
+// cwmpNamespace is persisted so every ACS-initiated RPC in this session
+// uses the version negotiated by the CPE's Inform rather than falling
+// back to the renderer's legacy CWMP 1.0 default.
+func (r *Repository) Open(ctx context.Context, deviceID string, eventCodes []string, cwmpNamespace ...string) (*Session, error) {
+	ns := DefaultCWMPNamespace
+	if len(cwmpNamespace) > 0 && cwmpNamespace[0] != "" {
+		ns = cwmpNamespace[0]
+	}
 	id := uuid.New().String()
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO cwmp_sessions (id, device_id, state, inform_event_codes, opened_at)
-		VALUES ($1, $2, $3, $4, now())
-	`, id, deviceID, StateInformResponseSent, store.StringArray(eventCodes))
+		INSERT INTO cwmp_sessions (id, device_id, state, inform_event_codes, cwmp_namespace, opened_at)
+		VALUES ($1, $2, $3, $4, $5, now())
+	`, id, deviceID, StateInformResponseSent, store.StringArray(eventCodes), ns)
 	if err != nil {
 		return nil, fmt.Errorf("open session: %w", err)
 	}
@@ -65,7 +75,7 @@ func (r *Repository) Open(ctx context.Context, deviceID string, eventCodes []str
 
 func (r *Repository) Get(ctx context.Context, id string) (*Session, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, device_id, state, inform_event_codes, current_job_id, opened_at, closed_at, close_reason
+		SELECT id, device_id, state, inform_event_codes, current_job_id, cwmp_namespace, opened_at, closed_at, close_reason
 		FROM cwmp_sessions WHERE id = $1
 	`, id)
 
@@ -74,7 +84,7 @@ func (r *Repository) Get(ctx context.Context, id string) (*Session, error) {
 	var closedAt sql.NullTime
 	var closeReason sql.NullString
 	var eventCodes store.StringArray
-	if err := row.Scan(&s.ID, &s.DeviceID, &s.State, &eventCodes, &currentJobID, &s.OpenedAt, &closedAt, &closeReason); err != nil {
+	if err := row.Scan(&s.ID, &s.DeviceID, &s.State, &eventCodes, &currentJobID, &s.CWMPNamespace, &s.OpenedAt, &closedAt, &closeReason); err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 	if currentJobID.Valid {

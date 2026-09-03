@@ -8,10 +8,16 @@ import (
 	"acs/internal/devices"
 	"acs/internal/jobs"
 	"acs/internal/parameters"
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
+	"compress/zlib"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -23,6 +29,68 @@ func remoteIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// readCWMPBody accepts the encodings seen on real CWMP stacks while
+// keeping both the encoded and decoded forms under maxBodyBytes. A 415
+// for an unsupported content-coding is intentionally distinct from a
+// malformed SOAP 400: compliant CPEs can retry without compression.
+// "deflate" is tried as zlib-wrapped RFC 1950 first and then raw RFC 1951
+// because both interpretations exist in older embedded HTTP libraries.
+func readCWMPBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	encoded, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	encoding := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding")))
+	if idx := strings.IndexByte(encoding, ','); idx >= 0 {
+		// Stacked content-codings are not useful for CWMP and are rare in
+		// embedded CPEs. Reject them explicitly rather than decoding in an
+		// ambiguous order.
+		return nil, &unsupportedEncodingError{encoding: encoding}
+	}
+
+	var reader io.Reader = bytes.NewReader(encoded)
+	var closer io.Closer
+	switch encoding {
+	case "", "identity":
+	case "gzip", "x-gzip":
+		gz, err := gzip.NewReader(reader)
+		if err != nil {
+			return nil, err
+		}
+		reader, closer = gz, gz
+	case "deflate":
+		zr, err := zlib.NewReader(reader)
+		if err == nil {
+			reader, closer = zr, zr
+		} else {
+			fr := flate.NewReader(bytes.NewReader(encoded))
+			reader, closer = fr, fr
+		}
+	default:
+		return nil, &unsupportedEncodingError{encoding: encoding}
+	}
+	if closer != nil {
+		defer closer.Close()
+	}
+
+	decoded, err := io.ReadAll(io.LimitReader(reader, int64(maxBodyBytes)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(decoded) > maxBodyBytes {
+		return nil, fmt.Errorf("decoded CWMP body exceeds %d bytes", maxBodyBytes)
+	}
+	return decoded, nil
+}
+
+type unsupportedEncodingError struct{ encoding string }
+
+func (e *unsupportedEncodingError) Error() string {
+	return "unsupported Content-Encoding: " + e.encoding
 }
 
 // handleCWMP implements the Phase 2 session shape:
@@ -37,27 +105,16 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.onboardingListener.observe(r)
 
-	// Coarse per-IP limit, ahead of auth and body parsing entirely — the
-	// cheapest possible rejection for an unauthenticated flood (build
-	// plan §7.1/§7c). A misbehaving *authenticated* device is caught
-	// below, per-device, after we know who it is.
 	if !h.ipLimiter.Allow(remoteIP(r)) {
 		h.metrics.RateLimitRejectedTotal.Inc()
 		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-
 	if r.URL.Path != "/cwmp" {
 		h.logger.Debug("CWMP POST on non-standard path (device ACS URL differs from /cwmp)", "path", r.URL.Path, "remote", r.RemoteAddr)
 	}
 
-	// A presented client cert has already been chain-verified by the TLS
-	// handshake itself (server.TLSConfig's ClientCAs, set only when
-	// ACS_MTLS_CA_CERT is configured) — mTLS is the *preferred* method
-	// per v3 §11.2, so it supersedes Digest for this request rather than
-	// requiring both.
 	authMode := devices.AuthModeNone
 	mtlsAuthenticated := r.TLS != nil && len(r.TLS.PeerCertificates) > 0
 	if mtlsAuthenticated {
@@ -65,14 +122,11 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	} else if h.auth.Enabled() {
 		if ok, stale := h.auth.Verify(r); !ok {
 			h.logger.Warn("authentication failed or missing", "remote", r.RemoteAddr)
-			// Drain the unauthenticated request body before writing the
-			// 401 so the keep-alive connection survives: an Inform can
-			// exceed the amount net/http is willing to auto-discard, and
-			// a closed connection here makes some CPEs treat the whole
-			// session as failed instead of retrying with credentials.
+			// Drain the unauthenticated encoded body before the challenge so
+			// keep-alive survives on CPEs that retry the same connection.
 			_, _ = io.Copy(io.Discard, r.Body)
 			if stale {
-				h.auth.ChallengeStale(w) // right credentials, expired nonce — retry, don't fail
+				h.auth.ChallengeStale(w)
 			} else {
 				h.auth.Challenge(w)
 			}
@@ -80,10 +134,16 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 		}
 		authMode = devices.AuthModeDigest
 	}
-	raw, err := io.ReadAll(r.Body)
+
+	raw, err := readCWMPBody(w, r)
 	if err != nil {
-		h.logger.Warn("failed to read request body (possibly oversized)", "err", err, "remote", r.RemoteAddr)
-		http.Error(w, "body too large or unreadable", http.StatusBadRequest)
+		if _, unsupported := err.(*unsupportedEncodingError); unsupported {
+			w.Header().Set("Accept-Encoding", "identity, gzip, deflate")
+			http.Error(w, err.Error(), http.StatusUnsupportedMediaType)
+			return
+		}
+		h.logger.Warn("failed to read/decode request body (possibly oversized)", "err", err, "remote", r.RemoteAddr)
+		http.Error(w, "body too large, unreadable, or invalidly compressed", http.StatusBadRequest)
 		return
 	}
 
@@ -94,14 +154,6 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Per-device limit, keyed on whatever identifies the device at this
-	// point in the exchange: the natural key on Inform (before a session
-	// cookie exists), the session cookie for every request after that —
-	// which is 1:1 with a device for that session's lifetime, so it's
-	// deviceID in effect without a DB lookup on every request just to
-	// rate-limit. Generous burst (see defaultDeviceRateLimitBurst) so a
-	// legitimate diagnostics poll loop (Phase 5) — several requests in
-	// quick succession within one session — isn't mistaken for abuse.
 	deviceKey := remoteIP(r)
 	if env.Body.Inform != nil {
 		deviceKey = env.Body.Inform.DeviceId.NaturalKey()
@@ -115,10 +167,6 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	// Responses to CPE-initiated RPCs must echo the request's cwmp:ID
-	// (TR-069 §3.4.1.1) and speak the same CWMP namespace version the CPE
-	// used — strict CPE stacks abort the session on either mismatch.
 	respID := env.Header.ID
 	if respID == "" {
 		respID = cwmp.NewID()
@@ -130,12 +178,6 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TransferComplete is checked ahead of the normal session-dispatch
-	// path because it doesn't correlate to session.CurrentJobID at all —
-	// the CPE may not send it until a session well after the one that
-	// dispatched Download (fetch, flash, and reboot can take minutes),
-	// so the only thing tying it back to a job is the CommandKey inside
-	// the message itself (build plan §4 Phase 4).
 	if env.Body.TransferComplete != nil {
 		h.handleTransferComplete(ctx, w, env.Body.TransferComplete, respID, ns)
 		return
@@ -189,7 +231,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 		}
 	}
 
-	session, err := h.sessions.Open(ctx, device.ID, events)
+	session, err := h.sessions.Open(ctx, device.ID, events, ns)
 	if err != nil {
 		h.logger.Error("failed to open session", "err", err, "device_id", device.ID)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -198,8 +240,9 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	h.metrics.SessionsOpenedTotal.Inc()
 
 	if err := h.auditor.Record(ctx, "system", device.ID, "Inform", map[string]any{
-		"event_codes": events,
-		"session_id":  session.ID,
+		"event_codes":    events,
+		"session_id":     session.ID,
+		"cwmp_namespace": ns,
 	}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
@@ -210,6 +253,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 		"manufacturer", device.Manufacturer,
 		"events", events,
 		"session_id", session.ID,
+		"cwmp_namespace", ns,
 	)
 	h.onboardingListener.onboarded(device.ID, r.RemoteAddr)
 
@@ -285,9 +329,11 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 		h.respondEmpty(w)
 		return
 	}
+	requestBody = cwmp.RewriteCWMPNamespace(requestBody, session.CWMPNamespace)
 
 	h.logger.Info("dispatching job RPC", "job_id", job.ID, "command_key", job.CommandKey,
-		"type", job.Type, "device_id", session.DeviceID, "session_id", session.ID)
+		"type", job.Type, "device_id", session.DeviceID, "session_id", session.ID,
+		"cwmp_namespace", session.CWMPNamespace)
 
 	w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
 	w.WriteHeader(http.StatusOK)
@@ -308,12 +354,6 @@ func (h *handler) handleTransferComplete(ctx context.Context, w http.ResponseWri
 		return
 	}
 
-	// Idempotency (audit P3.3 "delayed/duplicate events"): CPEs retransmit
-	// TransferComplete until acked, and some send it again after a reboot.
-	// Only a job still waiting on the transfer may be completed by it; a
-	// duplicate, or a stale fault arriving after success, is acked and
-	// otherwise ignored, so it cannot re-queue confirmations or flip a
-	// finished job's outcome.
 	if job.Status != jobs.StatusAwaitingTransferComplete && job.Status != jobs.StatusRPCSent {
 		h.logger.Info("duplicate or late TransferComplete ignored", "command_key", tc.CommandKey, "job_id", job.ID, "status", job.Status)
 		w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
@@ -330,12 +370,6 @@ func (h *handler) handleTransferComplete(ctx context.Context, w http.ResponseWri
 	} else {
 		h.markJobSuccess(ctx, job.DeviceID, job)
 
-		// TransferComplete is shared between FIRMWARE_DOWNLOAD and UPLOAD
-		// (both are CPE-driven async transfers, TR-069 §9.2/§A.3.2.7) —
-		// only firmware has a SoftwareVersion worth confirming afterward
-		// (v3 §9.3: don't just trust the ack). An Upload's real
-		// confirmation is the file itself landing at the receipt endpoint,
-		// handled separately by cmd/api's upload-receive handler.
 		if job.Type == jobs.TypeFirmwareDownload {
 			confirm, err := h.jobs.Create(ctx, job.DeviceID, jobs.TypeGetParameter,
 				jobs.GetParameterPayload{Paths: []string{"Device.DeviceInfo.SoftwareVersion"}}, "system:confirm")
@@ -367,10 +401,6 @@ func (h *handler) cacheParameterValues(ctx context.Context, deviceID string, lis
 	}
 }
 
-// extractConnectionRequestURL pulls ManagementServer.ConnectionRequestURL
-// out of an Inform's ParameterList, checking both data model roots (v3
-// §6.1) since data_model_root detection isn't wired up yet — a device
-// reporting under either root gets its Connection Request URL captured.
 func extractConnectionRequestURL(list []cwmp.ParameterValueStruct) string {
 	for _, p := range list {
 		switch p.Name {
@@ -382,14 +412,6 @@ func extractConnectionRequestURL(list []cwmp.ParameterValueStruct) string {
 	return ""
 }
 
-// extractSTUNStatus pulls ManagementServer.UDPConnectionRequestAddress and
-// .NATDetected out of an Inform's ParameterList (critical feature backlog:
-// STUN NAT traversal) — checking both data model roots, same convention as
-// extractConnectionRequestURL. Returns ok=false if the CPE didn't report
-// UDPConnectionRequestAddress at all (most CPEs, since it's only populated
-// once STUN is enabled and has actually bound), so callers don't overwrite
-// a real previous value with an empty one just because one Inform happened
-// not to carry it.
 func extractSTUNStatus(list []cwmp.ParameterValueStruct) (addr string, natDetected bool, ok bool) {
 	for _, p := range list {
 		switch p.Name {
@@ -399,7 +421,7 @@ func extractSTUNStatus(list []cwmp.ParameterValueStruct) (addr string, natDetect
 			ok = true
 		case "Device.ManagementServer.NATDetected",
 			"InternetGatewayDevice.ManagementServer.NATDetected":
-			natDetected = p.Value == "1" || p.Value == "true"
+			natDetected = p.Value == "1" || strings.EqualFold(p.Value, "true")
 		}
 	}
 	return addr, natDetected, ok
@@ -423,6 +445,14 @@ func (h *handler) closeSession(ctx context.Context, w http.ResponseWriter, sessi
 }
 
 func (h *handler) respondEmpty(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "text/xml")
-	w.WriteHeader(http.StatusOK)
+	// TR-069's normal no-more-RPCs response is HTTP 204 with no entity.
+	// A compatibility escape hatch retains the old HTTP 200-empty
+	// behavior for a known-broken vendor without making it the fleet-wide
+	// default: ACS_CWMP_EMPTY_RESPONSE_STATUS=200.
+	if envOr("ACS_CWMP_EMPTY_RESPONSE_STATUS", "204") == "200" {
+		w.Header().Set("Content-Type", "text/xml")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

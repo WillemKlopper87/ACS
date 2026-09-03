@@ -1,16 +1,17 @@
 // Package connreq implements the ACS-to-CPE Connection Request HTTP GET
 // (design doc v3 §5.6 pseudocode / §12, build plan §4 Phase 3): a plain
 // GET to the device's ConnectionRequestURL, retried once with HTTP Digest
-// credentials if the CPE challenges with 401. A 200 here only means the
-// CPE accepted the wake-up request — it does not mean a new CWMP session
-// has opened yet (v3 §5.6: "does not necessarily mean the CPE session has
-// opened"), so the caller still has to wait for a subsequent Inform.
+// or Basic credentials if the CPE challenges with 401. A successful 2xx
+// here only means the CPE accepted the wake-up request — it does not mean
+// a new CWMP session has opened yet, so the caller still has to wait for
+// a subsequent Inform.
 package connreq
 
 import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -24,6 +25,11 @@ import (
 
 // Outcome categories mirror design doc v3 §12.3's status vocabulary.
 const (
+	// OutcomeHTTP200 is retained as the stable historical success value.
+	// For CPE interoperability Attempt normalizes every successful 2xx
+	// Connection Request response (including common 204 No Content) to
+	// this value; callers should treat it as HTTP_SUCCESS, not literally
+	// "the device sent status 200".
 	OutcomeHTTP200     = "HTTP_200"
 	OutcomeHTTP401     = "HTTP_401"
 	OutcomeHTTP404     = "HTTP_404"
@@ -40,9 +46,11 @@ const (
 	OutcomeUDPNoInform       = "UDP_SENT_NO_INFORM"
 )
 
-// Attempt performs the Connection Request GET, retrying once with Digest
-// auth on a 401 challenge. username may be empty (no credentials
-// configured); in that case a 401 is reported as-is rather than retried.
+// Attempt performs the Connection Request GET, retrying once with the
+// strongest supported authentication challenge. Digest is preferred;
+// Basic is accepted as an interoperability fallback for older CPEs.
+// username may be empty (no credentials configured); in that case a 401
+// is reported as-is rather than retried.
 func Attempt(ctx context.Context, targetURL, username, password string, timeout time.Duration) string {
 	if targetURL == "" {
 		return OutcomeUnavailable
@@ -60,8 +68,7 @@ func Attempt(ctx context.Context, targetURL, username, password string, timeout 
 		return outcome
 	}
 
-	challenge := resp.Header.Get("WWW-Authenticate")
-	authHeader, ok := buildDigestAuthorization(challenge, username, password, http.MethodGet, targetURL)
+	authHeader, ok := buildAuthorization(resp.Header.Values("WWW-Authenticate"), username, password, http.MethodGet, targetURL)
 	if !ok {
 		return OutcomeHTTP401
 	}
@@ -91,12 +98,15 @@ func drainAndCategorize(resp *http.Response) string {
 }
 
 func categorizeStatus(code int) string {
-	switch code {
-	case http.StatusOK:
+	switch {
+	case code >= 200 && code < 300:
+		// TR-069 implementations in the field use both 200 and 204 for
+		// accepted Connection Requests. Normalize all 2xx responses so a
+		// harmless status-code variation does not force Annex G fallback.
 		return OutcomeHTTP200
-	case http.StatusUnauthorized:
+	case code == http.StatusUnauthorized:
 		return OutcomeHTTP401
-	case http.StatusNotFound:
+	case code == http.StatusNotFound:
 		return OutcomeHTTP404
 	default:
 		return OutcomeHTTPOther
@@ -118,7 +128,8 @@ func categorizeError(err error) string {
 			return OutcomeTCPFailure
 		}
 	}
-	if strings.Contains(err.Error(), "tls") || strings.Contains(err.Error(), "certificate") || strings.Contains(err.Error(), "x509") {
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "tls") || strings.Contains(lower, "certificate") || strings.Contains(lower, "x509") {
 		return OutcomeTLSFailure
 	}
 	return OutcomeTCPFailure
@@ -129,7 +140,7 @@ var challengeParamRE = regexp.MustCompile(`(\w+)=("([^"]*)"|[^,\s]*)`)
 func parseChallengeParams(s string) map[string]string {
 	out := map[string]string{}
 	for _, m := range challengeParamRE.FindAllStringSubmatch(s, -1) {
-		key := m[1]
+		key := strings.ToLower(m[1])
 		val := m[2]
 		if strings.HasPrefix(val, `"`) {
 			val = m[3]
@@ -139,15 +150,46 @@ func parseChallengeParams(s string) map[string]string {
 	return out
 }
 
-// buildDigestAuthorization computes an RFC 2617 Digest Authorization
-// header value from a WWW-Authenticate challenge. Only qop=auth is
-// supported (matches internal/auth's server-side implementation); ok is
-// false if the challenge isn't a Digest challenge this can answer.
+func authSchemeAndRest(challenge string) (scheme, rest string, ok bool) {
+	challenge = strings.TrimSpace(challenge)
+	idx := strings.IndexByte(challenge, ' ')
+	if idx <= 0 {
+		return "", "", false
+	}
+	return strings.ToLower(challenge[:idx]), strings.TrimSpace(challenge[idx+1:]), true
+}
+
+// buildAuthorization chooses the strongest challenge this client can
+// answer. Multiple WWW-Authenticate header fields are common; Digest is
+// preferred over Basic regardless of header order.
+func buildAuthorization(challenges []string, username, password, method, targetURL string) (string, bool) {
+	for _, challenge := range challenges {
+		if scheme, _, ok := authSchemeAndRest(challenge); ok && scheme == "digest" {
+			if header, ok := buildDigestAuthorization(challenge, username, password, method, targetURL); ok {
+				return header, true
+			}
+		}
+	}
+	for _, challenge := range challenges {
+		if scheme, _, ok := authSchemeAndRest(challenge); ok && scheme == "basic" {
+			return "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password)), true
+		}
+	}
+	return "", false
+}
+
+// buildDigestAuthorization computes an HTTP Digest Authorization header
+// from a WWW-Authenticate challenge. It accepts legacy RFC-2069 style
+// challenges without qop, qop lists containing auth, and both MD5 and
+// MD5-sess. auth-int is deliberately not selected because Connection
+// Request is a GET with no entity and many embedded HTTP stacks implement
+// only qop=auth correctly.
 func buildDigestAuthorization(challenge, username, password, method, targetURL string) (header string, ok bool) {
-	if !strings.HasPrefix(challenge, "Digest ") {
+	scheme, rest, ok := authSchemeAndRest(challenge)
+	if !ok || scheme != "digest" {
 		return "", false
 	}
-	params := parseChallengeParams(challenge[len("Digest "):])
+	params := parseChallengeParams(rest)
 	realm, nonce := params["realm"], params["nonce"]
 	if realm == "" || nonce == "" {
 		return "", false
@@ -159,12 +201,34 @@ func buildDigestAuthorization(challenge, username, password, method, targetURL s
 	}
 	uri := u.RequestURI()
 
-	ha1 := md5Hex(username + ":" + realm + ":" + password)
-	ha2 := md5Hex(method + ":" + uri)
+	qop := ""
+	if offered := params["qop"]; offered != "" {
+		for _, candidate := range strings.Split(offered, ",") {
+			if strings.EqualFold(strings.TrimSpace(candidate), "auth") {
+				qop = "auth"
+				break
+			}
+		}
+		if qop == "" {
+			return "", false
+		}
+	}
 
-	qop := params["qop"]
+	algorithm := strings.ToLower(strings.TrimSpace(params["algorithm"]))
+	if algorithm == "" {
+		algorithm = "md5"
+	}
+	if algorithm != "md5" && algorithm != "md5-sess" {
+		return "", false
+	}
+
 	nc := "00000001"
 	cnonce := newCnonce()
+	ha1 := md5Hex(username + ":" + realm + ":" + password)
+	if algorithm == "md5-sess" {
+		ha1 = md5Hex(ha1 + ":" + nonce + ":" + cnonce)
+	}
+	ha2 := md5Hex(method + ":" + uri)
 
 	var response string
 	if qop != "" {
@@ -174,20 +238,32 @@ func buildDigestAuthorization(challenge, username, password, method, targetURL s
 	}
 
 	var sb strings.Builder
-	sb.WriteString(`Digest username="` + username + `"`)
-	sb.WriteString(`, realm="` + realm + `"`)
-	sb.WriteString(`, nonce="` + nonce + `"`)
-	sb.WriteString(`, uri="` + uri + `"`)
+	sb.WriteString(`Digest username="` + escapeDigestValue(username) + `"`)
+	sb.WriteString(`, realm="` + escapeDigestValue(realm) + `"`)
+	sb.WriteString(`, nonce="` + escapeDigestValue(nonce) + `"`)
+	sb.WriteString(`, uri="` + escapeDigestValue(uri) + `"`)
 	sb.WriteString(`, response="` + response + `"`)
 	if qop != "" {
 		sb.WriteString(`, qop=` + qop)
 		sb.WriteString(`, nc=` + nc)
 		sb.WriteString(`, cnonce="` + cnonce + `"`)
+	} else if algorithm == "md5-sess" {
+		// MD5-sess needs cnonce for HA1 even when the server uses legacy
+		// no-qop digest semantics.
+		sb.WriteString(`, cnonce="` + cnonce + `"`)
 	}
 	if alg := params["algorithm"]; alg != "" {
 		sb.WriteString(`, algorithm=` + alg)
 	}
+	if opaque := params["opaque"]; opaque != "" {
+		sb.WriteString(`, opaque="` + escapeDigestValue(opaque) + `"`)
+	}
 	return sb.String(), true
+}
+
+func escapeDigestValue(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `"`, `\"`)
 }
 
 func md5Hex(s string) string {
