@@ -3,6 +3,7 @@
 package main
 
 import (
+	"acs/internal/auth"
 	"acs/internal/devices"
 	"acs/internal/jobs"
 	"acs/internal/observability"
@@ -73,6 +74,30 @@ func runLivenessReaper(ctx context.Context, repo *devices.Repository, logger *sl
 	for {
 		if _, _, err := repo.RefreshLiveness(ctx, 5*time.Minute, 90*time.Minute); err != nil {
 			logger.Error("liveness reaper pass failed", "err", err)
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// digestReplayReaperInterval trades cost against table growth: nonces
+// expire after nonceTTL (10 minutes), so purging every 5 minutes keeps
+// the table from growing much past what's still genuinely live — this
+// runs one DELETE against an indexed column, cheap at any fleet size
+// (audit P1.6).
+const digestReplayReaperInterval = 5 * time.Minute
+
+func runDigestReplayReaper(ctx context.Context, store *auth.PostgresReplayStore, logger *slog.Logger) {
+	ticker := time.NewTicker(digestReplayReaperInterval)
+	defer ticker.Stop()
+	for {
+		if n, err := store.Purge(ctx, time.Now()); err != nil {
+			logger.Error("digest replay reaper pass failed", "err", err)
+		} else if n > 0 {
+			logger.Debug("purged expired digest replay nonces", "count", n)
 		}
 		select {
 		case <-ticker.C:

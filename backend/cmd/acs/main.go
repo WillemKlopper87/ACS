@@ -103,10 +103,20 @@ func main() {
 	if os.Getenv("ACS_CREDENTIAL_ENCRYPTION_KEY") == "" {
 		logger.Warn("ACS_CREDENTIAL_ENCRYPTION_KEY not set on cmd/acs — per-device CWMP Digest credentials encrypted by cmd/api will not verify here")
 	}
+	// audit P1.6: replay state lives in Postgres, not this process's
+	// memory, so a captured Authorization header can't replay cleanly
+	// against a second cmd/acs replica or survive a restart. Always on
+	// rather than opt-in — cmd/acs already requires a live *sql.DB and
+	// already does several round trips per authenticated CWMP request
+	// (session lookup, job leasing), so one more for a security control
+	// that silently only half-worked otherwise is the correct default,
+	// not a knob most deployments would never discover.
+	digestReplayStore := auth.NewPostgresReplayStore(db)
 	authr := auth.DigestAuthenticator{
-		Username:   os.Getenv("ACS_DIGEST_USERNAME"),
-		Password:   os.Getenv("ACS_DIGEST_PASSWORD"),
-		AllowBasic: envBool("ACS_AUTH_ALLOW_BASIC"),
+		Username:    os.Getenv("ACS_DIGEST_USERNAME"),
+		Password:    os.Getenv("ACS_DIGEST_PASSWORD"),
+		AllowBasic:  envBool("ACS_AUTH_ALLOW_BASIC"),
+		ReplayStore: digestReplayStore,
 		// Per-device credentials (audit P0.5): a username that isn't the
 		// shared one is looked up in device_credentials; the first
 		// successful use of a PENDING credential activates it.
@@ -173,6 +183,7 @@ func main() {
 	go pollDevicesOnlineGauge(ctx, h.devices, metrics, logger)
 	go runLeaseReaper(ctx, h.jobs, metrics, logger)
 	go runLivenessReaper(ctx, h.devices, logger)
+	go runDigestReplayReaper(ctx, digestReplayStore, logger)
 
 	mux := http.NewServeMux()
 	// Catch-all rather than exact "/cwmp": CPEs in the field get provisioned

@@ -7,6 +7,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rand"
@@ -94,6 +95,36 @@ type DigestAuthenticator struct {
 	// explicitly when the shared credential is absent (per-device only)
 	// so nonces are still unforgeable.
 	NonceSecret []byte
+
+	// ReplayStore, when set, records nonce/nc use in shared storage
+	// instead of this process's own memory (audit P1.6). nil (the
+	// default) is correct and sufficient for exactly one cmd/acs
+	// replica; behind a load balancer or across a restart, a captured
+	// Authorization header would otherwise replay cleanly against any
+	// replica that hadn't seen it yet. See ReplayStore's doc comment for
+	// the chosen architecture.
+	ReplayStore ReplayStore
+}
+
+// ReplayStore is the pluggable backend for cross-replica Digest replay
+// protection (audit P1.6). The architecture chosen here is shared
+// storage (a Postgres table, internal/auth's PostgresReplayStore) rather
+// than a cryptographic/stateless scheme or sticky routing: this
+// codebase already treats Postgres as the source of truth for every
+// other piece of shared CWMP state (sessions, job leases, migrations),
+// cmd/acs already holds a live *sql.DB, and unlike sticky routing it
+// keeps working correctly through a rolling deploy or an unplanned
+// replica restart.
+type ReplayStore interface {
+	// CheckAndRecord atomically records this (nonce, nc) pair's use and
+	// reports whether it is new (ok=true, not yet seen anywhere) or a
+	// replay (ok=false). ncOrdinal is the parsed qop=auth nc value, or 1
+	// for a legacy non-qop response (single-use — modeled as "nc must
+	// strictly increase past 1", which a second use of the same
+	// zero-nc response satisfies as still <= 1 and is correctly
+	// rejected the same way a repeated qop=auth nc would be).
+	// Implementations must fail closed: an error is treated as ok=false.
+	CheckAndRecord(ctx context.Context, nonce string, ncOrdinal uint64, expires time.Time) (ok bool, err error)
 }
 
 // Enabled reports whether a credential has been configured. When it
@@ -228,7 +259,7 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 	if now.After(issued.Add(nonceTTL)) {
 		return false, true, Identity{}
 	}
-	if !d.checkReplay(nonce, qop, params["nc"], issued.Add(nonceTTL), now) {
+	if !d.checkReplay(r.Context(), nonce, qop, params["nc"], issued.Add(nonceTTL), now) {
 		return false, false, Identity{}
 	}
 	if perDevice && d.OnAuthenticated != nil {
@@ -238,8 +269,27 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 }
 
 // checkReplay records this (nonce, nc) use and reports whether it is
-// new. Fails closed when the cache is full of unexpired entries.
-func (d DigestAuthenticator) checkReplay(nonce, qop, ncHex string, expires, now time.Time) bool {
+// new. Delegates to ReplayStore when set (audit P1.6, cross-replica);
+// otherwise falls back to this process's own in-memory cache, fine for
+// exactly one cmd/acs replica. Both paths fail closed.
+func (d DigestAuthenticator) checkReplay(ctx context.Context, nonce, qop, ncHex string, expires, now time.Time) bool {
+	ncOrdinal := uint64(1) // legacy non-qop: single-use, modeled as "nc must exceed 1"
+	if qop != "" {
+		nc, err := strconv.ParseUint(ncHex, 16, 64)
+		if err != nil || nc == 0 {
+			return false
+		}
+		ncOrdinal = nc
+	}
+
+	if d.ReplayStore != nil {
+		ok, err := d.ReplayStore.CheckAndRecord(ctx, nonce, ncOrdinal, expires)
+		if err != nil {
+			return false
+		}
+		return ok
+	}
+
 	nonceCache.Lock()
 	defer nonceCache.Unlock()
 
@@ -262,11 +312,10 @@ func (d DigestAuthenticator) checkReplay(nonce, qop, ncHex string, expires, now 
 		st.used = true
 		return true
 	}
-	nc, err := strconv.ParseUint(ncHex, 16, 64)
-	if err != nil || nc == 0 || nc <= st.lastNC {
+	if ncOrdinal <= st.lastNC {
 		return false
 	}
-	st.lastNC = nc
+	st.lastNC = ncOrdinal
 	return true
 }
 

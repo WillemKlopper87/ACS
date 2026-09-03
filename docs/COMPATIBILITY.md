@@ -50,7 +50,7 @@ Compatibility must not become a reason to disable authentication globally. Prefe
 | CWMP 1.x namespace detection/echo + session persistence | `internal/cwmp`, `internal/sessions`, migration `0045` | namespace and renderer regression tests | not yet |
 | Identity/gzip/x-gzip/zlib-deflate/raw-deflate CWMP bodies | `cmd/acs/session.go` | HTTP compatibility unit tests | not yet |
 | Empty session POST / session close | `cmd/acs/session.go` | whitespace empty body + 204/legacy-200 tests | not yet |
-| Digest auth (qop=auth, nonce expiry, replay rejection), Basic fallback | `internal/auth/digest.go` | ✅ incl. replay | not yet |
+| Digest auth (qop=auth, nonce expiry, replay rejection — Postgres-backed, cross-replica, audit P1.6), Basic fallback | `internal/auth/digest.go`, `internal/auth/replay_postgres.go` | ✅ incl. cross-replica replay | not yet |
 | Per-device Digest credentials (`CWMP_DIGEST` rotation, self-activating) | `internal/credentials`, `cmd/acs/main.go` | unit | not yet |
 | mTLS client certificates | `ACS_MTLS_CA_CERT` | — | not yet |
 | SetParameterValues / GetParameterValues / GetParameterNames | `cmd/acs/dispatch.go` | ✅ SPV success + 9005 fault | not yet |
