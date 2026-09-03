@@ -210,7 +210,13 @@ ACS_DIGEST_PASSWORD, ACS_AUTH_ALLOW_BASIC, ACS_CONNECTION_REQUEST_USERNAME,
 ACS_CONNECTION_REQUEST_PASSWORD, ACS_RATE_LIMIT_IP_PER_SECOND,
 ACS_RATE_LIMIT_IP_BURST, ACS_RATE_LIMIT_DEVICE_PER_SECOND,
 ACS_RATE_LIMIT_DEVICE_BURST, ACS_WALLED_GARDEN_PARAMETER,
-ACS_WALLED_GARDEN_ACTIVE_VALUE, ACS_WALLED_GARDEN_SUSPEND_VALUE, ACS_DEBUG
+ACS_WALLED_GARDEN_ACTIVE_VALUE, ACS_WALLED_GARDEN_SUSPEND_VALUE,
+ACS_ONBOARDING_LISTENER, ACS_DEBUG
+
+# ACS_ONBOARDING_LISTENER: off (default), on, or once. When on/once, the
+# ACS logs each request that reaches the real CWMP endpoint. once stops the
+# extra reachability logging after the first successful Inform. This is an
+# observer for fault-finding; it does not block or alter normal CWMP traffic.
 
 # cmd/api (REST API — operators, tenancy, dashboards, BSS admin panel, CLI/VPN/webgui)
 ACS_API_ADDR, ACS_API_CORS_ORIGIN, ACS_API_RATE_LIMIT_PER_SECOND,

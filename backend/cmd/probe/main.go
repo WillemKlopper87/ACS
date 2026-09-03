@@ -182,7 +182,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 		if respID == "" {
 			respID = cwmp.NewID()
 		}
-		h.handleInform(w, env.Body.Inform, respID, cwmp.DetectCWMPNamespace(raw))
+		h.handleInform(w, r, env.Body.Inform, respID, cwmp.DetectCWMPNamespace(raw))
 		return
 	}
 
@@ -205,7 +205,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	h.dispatchNext(w, session)
 }
 
-func (h *handler) handleInform(w http.ResponseWriter, inform *cwmp.Inform, respID, ns string) {
+func (h *handler) handleInform(w http.ResponseWriter, r *http.Request, inform *cwmp.Inform, respID, ns string) {
 	events := inform.EventCodes()
 	h.logger.Info("Inform received",
 		"manufacturer", inform.DeviceId.Manufacturer,
@@ -221,6 +221,8 @@ func (h *handler) handleInform(w http.ResponseWriter, inform *cwmp.Inform, respI
 		Name:     "acs_session",
 		Value:    session.DeviceKey,
 		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil,
 		HttpOnly: true,
 	})
 	w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)

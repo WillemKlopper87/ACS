@@ -64,3 +64,20 @@ func runLeaseReaper(ctx context.Context, repo *jobs.Repository, metrics *observa
 		}
 	}
 }
+
+// runLivenessReaper downgrades stale devices to OFFLINE and long-stale devices
+// to UNREACHABLE so fleet dashboards mirror real connectedness.
+func runLivenessReaper(ctx context.Context, repo *devices.Repository, logger *slog.Logger) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for {
+		if _, _, err := repo.RefreshLiveness(ctx, 5*time.Minute, 90*time.Minute); err != nil {
+			logger.Error("liveness reaper pass failed", "err", err)
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return
+		}
+	}
+}

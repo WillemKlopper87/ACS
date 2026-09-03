@@ -153,24 +153,26 @@ func main() {
 	deviceBurst := envOrInt("ACS_RATE_LIMIT_DEVICE_BURST", defaultDeviceRateLimitBurst)
 
 	h := &handler{
-		logger:        logger,
-		auth:          authr,
-		devices:       devices.NewRepository(db),
-		sessions:      sessions.NewRepository(db),
-		jobs:          jobs.NewRepository(db),
-		params:        parameters.NewRepository(db),
-		auditor:       observability.NewAuditor(db),
-		metrics:       metrics,
-		policies:      policy.NewRepository(db),
-		templates:     templates.NewRepository(db),
-		ipLimiter:     ratelimit.New(ipRate, ipBurst, rateLimitIdleTTL),
-		deviceLimiter: ratelimit.New(deviceRate, deviceBurst, rateLimitIdleTTL),
+		logger:             logger,
+		auth:               authr,
+		devices:            devices.NewRepository(db),
+		sessions:           sessions.NewRepository(db),
+		jobs:               jobs.NewRepository(db),
+		params:             parameters.NewRepository(db),
+		auditor:            observability.NewAuditor(db),
+		metrics:            metrics,
+		policies:           policy.NewRepository(db),
+		templates:          templates.NewRepository(db),
+		ipLimiter:          ratelimit.New(ipRate, ipBurst, rateLimitIdleTTL),
+		deviceLimiter:      ratelimit.New(deviceRate, deviceBurst, rateLimitIdleTTL),
+		onboardingListener: newOnboardingListener(envOr("ACS_ONBOARDING_LISTENER", "off"), logger),
 	}
 	logger.Info("rate limits configured", "ip_per_second", ipRate, "ip_burst", ipBurst,
 		"device_per_second", deviceRate, "device_burst", deviceBurst)
 
 	go pollDevicesOnlineGauge(ctx, h.devices, metrics, logger)
 	go runLeaseReaper(ctx, h.jobs, metrics, logger)
+	go runLivenessReaper(ctx, h.devices, logger)
 
 	mux := http.NewServeMux()
 	// Catch-all rather than exact "/cwmp": CPEs in the field get provisioned
@@ -370,6 +372,7 @@ type handler struct {
 	policies  *policy.Repository
 	templates *templates.Repository
 
-	ipLimiter     *ratelimit.Limiter
-	deviceLimiter *ratelimit.Limiter
+	ipLimiter          *ratelimit.Limiter
+	deviceLimiter      *ratelimit.Limiter
+	onboardingListener *onboardingListener
 }

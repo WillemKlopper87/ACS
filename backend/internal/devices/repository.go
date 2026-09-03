@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -78,6 +79,74 @@ func (r *Repository) PreRegister(ctx context.Context, ouiSerial, manufacturer, o
 func (r *Repository) Get(ctx context.Context, id string) (*Device, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT `+deviceColumns+` FROM devices WHERE id = $1`, id)
 	return scanDevice(row)
+}
+
+// GetByOUIserial fetches a device row by the natural identifier used in the
+// Inform handshake (OUI + ProductClass + SerialNumber, or OUI + SerialNumber when
+// ProductClass is absent).
+func (r *Repository) GetByOUIserial(ctx context.Context, ouiSerial string) (*Device, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT `+deviceColumns+` FROM devices WHERE oui_serial = $1`, ouiSerial)
+	return scanDevice(row)
+}
+
+// RefreshLiveness re-classifies stale devices by the last Inform time. A fresh
+// device stays ONLINE, a quiet-but-healthy device drops to OFFLINE, and a long-
+// stale device is marked UNREACHABLE.
+func (r *Repository) RefreshLiveness(ctx context.Context, onlineThreshold, unreachableThreshold time.Duration) (offlineCount, unreachableCount int, err error) {
+	if onlineThreshold <= 0 {
+		onlineThreshold = 5 * time.Minute
+	}
+	if unreachableThreshold <= 0 {
+		unreachableThreshold = 90 * time.Minute
+	}
+
+	_, err = r.db.ExecContext(ctx, `
+		UPDATE devices
+		SET online_status = CASE
+			WHEN last_inform_at IS NULL THEN 'OFFLINE'
+			WHEN last_inform_at > now() - $1::interval THEN 'ONLINE'
+			WHEN last_inform_at > now() - $2::interval THEN 'OFFLINE'
+			ELSE 'UNREACHABLE'
+		END,
+		last_updated_at = now()
+		WHERE last_inform_at IS NULL OR last_inform_at <= now() - $1::interval OR last_inform_at <= now() - $2::interval
+	`, formatInterval(onlineThreshold), formatInterval(unreachableThreshold))
+	if err != nil {
+		return 0, 0, fmt.Errorf("refresh liveness: %w", err)
+	}
+
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT online_status, COUNT(*)
+		FROM devices
+		WHERE online_status IN ('OFFLINE', 'UNREACHABLE')
+		GROUP BY online_status
+	`)
+	if err != nil {
+		return 0, 0, fmt.Errorf("count liveness states: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return 0, 0, fmt.Errorf("scan liveness state: %w", err)
+		}
+		switch status {
+		case "OFFLINE":
+			offlineCount = count
+		case "UNREACHABLE":
+			unreachableCount = count
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, fmt.Errorf("finish liveness scan: %w", err)
+	}
+	return offlineCount, unreachableCount, nil
+}
+
+func formatInterval(d time.Duration) string {
+	return d.String()
 }
 
 // maxPageSize caps page_size (design doc v3 §8.1's ?page/&page_size query

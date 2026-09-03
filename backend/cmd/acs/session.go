@@ -35,6 +35,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "CWMP requires POST", http.StatusMethodNotAllowed)
 		return
 	}
+	h.onboardingListener.observe(r)
 
 	// Coarse per-IP limit, ahead of auth and body parsing entirely — the
 	// cheapest possible rejection for an unauthenticated flood (build
@@ -125,7 +126,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	ns := cwmp.DetectCWMPNamespace(raw)
 
 	if env.Body.Inform != nil {
-		h.handleInform(ctx, w, env.Body.Inform, authMode, respID, ns)
+		h.handleInform(ctx, w, r, env.Body.Inform, authMode, respID, ns)
 		return
 	}
 
@@ -143,7 +144,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	h.dispatch(ctx, w, r, env.Body)
 }
 
-func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, inform *cwmp.Inform, authMode, respID, ns string) {
+func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *http.Request, inform *cwmp.Inform, authMode, respID, ns string) {
 	h.metrics.InformsTotal.Inc()
 	events := inform.EventCodes()
 
@@ -210,11 +211,14 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, infor
 		"events", events,
 		"session_id", session.ID,
 	)
+	h.onboardingListener.onboarded(device.ID, r.RemoteAddr)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "acs_session",
 		Value:    session.ID,
 		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil,
 		HttpOnly: true,
 	})
 	w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
