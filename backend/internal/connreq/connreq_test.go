@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,6 +18,20 @@ func TestAttemptPlain200(t *testing.T) {
 	got := Attempt(t.Context(), server.URL+"/cwmp", "", "", time.Second)
 	if got != OutcomeHTTP200 {
 		t.Errorf("Attempt() = %q, want %q", got, OutcomeHTTP200)
+	}
+}
+
+func TestAttemptAccepts204AndOther2xx(t *testing.T) {
+	for _, status := range []int{http.StatusNoContent, http.StatusAccepted} {
+		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+			if got := Attempt(t.Context(), server.URL+"/cwmp", "", "", time.Second); got != OutcomeHTTP200 {
+				t.Fatalf("Attempt() = %q, want normalized success %q", got, OutcomeHTTP200)
+			}
+		})
 	}
 }
 
@@ -52,10 +67,6 @@ func TestAttempt401WithoutCredentials(t *testing.T) {
 	}
 }
 
-// TestAttemptDigestChallengeSuccess acts as a minimal mock CPE Connection
-// Request endpoint: challenges the first request with Digest, then
-// verifies the retried request's Authorization header is a correctly
-// computed Digest response before accepting it.
 func TestAttemptDigestChallengeSuccess(t *testing.T) {
 	const username, password, realm, nonce = "cpe-acs", "s3cret", "cpe", "fixed-test-nonce"
 	requestCount := 0
@@ -79,7 +90,7 @@ func TestAttemptDigestChallengeSuccess(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
 
@@ -92,6 +103,45 @@ func TestAttemptDigestChallengeSuccess(t *testing.T) {
 	}
 }
 
+func TestAttemptDigestQOPListCaseInsensitiveAndOpaque(t *testing.T) {
+	const username, password = "user", "pass"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("WWW-Authenticate", `dIgEsT realm="cpe", qop="auth,auth-int", nonce="n1", opaque="keep-me", algorithm=md5`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		if !strings.Contains(auth, "qop=auth") || !strings.Contains(auth, `opaque="keep-me"`) {
+			t.Fatalf("Authorization missing compatible qop/opaque fields: %s", auth)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	if got := Attempt(t.Context(), server.URL+"/cwmp", username, password, time.Second); got != OutcomeHTTP200 {
+		t.Fatalf("Attempt() = %q, want %q", got, OutcomeHTTP200)
+	}
+}
+
+func TestAttemptBasicFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Basic realm="legacy-cpe"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if user != "user" || pass != "pass" {
+			t.Fatalf("unexpected Basic credentials %q/%q", user, pass)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	if got := Attempt(t.Context(), server.URL+"/cwmp", "user", "pass", time.Second); got != OutcomeHTTP200 {
+		t.Fatalf("Attempt() = %q, want %q", got, OutcomeHTTP200)
+	}
+}
+
 func TestAttemptDigestWrongPassword(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "" {
@@ -99,7 +149,6 @@ func TestAttemptDigestWrongPassword(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		// Any retried request is still treated as wrong credentials for this test.
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer server.Close()
