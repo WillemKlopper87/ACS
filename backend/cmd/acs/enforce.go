@@ -32,7 +32,7 @@ func (h *handler) enforcePolicies(ctx context.Context, device *devices.Device, r
 		return
 	}
 
-	policies, err := h.policies.ForDevice(ctx, device.Manufacturer, device.ProductClass)
+	policies, err := h.policies.ForDevice(ctx, device.Manufacturer, device.ProductClass, device.CustomerID)
 	if err != nil {
 		h.logger.Error("failed to load policies for device", "err", err, "device_id", device.ID)
 		return

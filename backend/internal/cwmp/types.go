@@ -3,6 +3,8 @@
 // state needed to drive a probe session against a real CPE.
 package cwmp
 
+import "strings"
+
 // SOAP/CWMP namespaces used on outbound envelopes. Inbound envelopes are
 // parsed by local element name only (see envelope.go), so CPEs using
 // different prefixes (soap-env vs soapenv vs SOAP-ENV) still parse
@@ -26,11 +28,23 @@ type DeviceID struct {
 // NaturalKey is the device identity used across the platform: OUI +
 // SerialNumber, falling back to including ProductClass when OUI+Serial
 // alone is ambiguous for a vendor (v3 design doc §6.1).
+//
+// Each component is escaped before joining (audit M-5) so two different
+// claimed identities can never collide onto the same key: without this,
+// {OUI:"A", ProductClass:"", SerialNumber:"X+1"} and {OUI:"A",
+// ProductClass:"X", SerialNumber:"1"} both joined to "A+X+1", letting a
+// forged Inform alias an existing device's row. Fields with no literal
+// "+" or "\" — the overwhelming majority of real OUI/ProductClass/Serial
+// values — produce the exact same key as before this fix.
 func (d DeviceID) NaturalKey() string {
-	if d.ProductClass != "" {
-		return d.OUI + "+" + d.ProductClass + "+" + d.SerialNumber
+	esc := func(s string) string {
+		s = strings.ReplaceAll(s, `\`, `\\`)
+		return strings.ReplaceAll(s, `+`, `\+`)
 	}
-	return d.OUI + "+" + d.SerialNumber
+	if d.ProductClass != "" {
+		return esc(d.OUI) + "+" + esc(d.ProductClass) + "+" + esc(d.SerialNumber)
+	}
+	return esc(d.OUI) + "+" + esc(d.SerialNumber)
 }
 
 // EventStruct is one entry in Inform's Event list.

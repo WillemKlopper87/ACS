@@ -152,7 +152,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ok, _ := h.auth.Verify(r); h.auth.Enabled() && !ok {
+	if ok, _, _ := h.auth.Verify(r); h.auth.Enabled() && !ok {
 		h.logger.Warn("authentication failed or missing", "remote", r.RemoteAddr)
 		h.auth.Challenge(w)
 		return

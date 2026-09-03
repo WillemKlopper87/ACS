@@ -47,9 +47,12 @@ type Template struct {
 	Parameters  []ParameterWrite
 	ModelFilter *string
 	AutoApply   bool
-	CreatedBy   string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// CustomerID is the template's tenant owner (audit P0.4) -- nil means
+	// platform-global, restricted the same way DeviceGroup.CustomerID is.
+	CustomerID *string
+	CreatedBy  string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type Repository struct {
@@ -60,9 +63,9 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
-const columns = `id, name, description, parameters, model_filter, auto_apply, created_by, created_at, updated_at`
+const columns = `id, name, description, parameters, model_filter, auto_apply, customer_id, created_by, created_at, updated_at`
 
-func (r *Repository) Create(ctx context.Context, name, description string, params []ParameterWrite, modelFilter *string, autoApply bool, createdBy string) (*Template, error) {
+func (r *Repository) Create(ctx context.Context, name, description string, params []ParameterWrite, modelFilter *string, autoApply bool, customerID *string, createdBy string) (*Template, error) {
 	if len(params) == 0 {
 		return nil, fmt.Errorf("template must have at least one parameter")
 	}
@@ -73,10 +76,10 @@ func (r *Repository) Create(ctx context.Context, name, description string, param
 
 	id := uuid.New().String()
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO config_templates (id, name, description, parameters, model_filter, auto_apply, created_by)
-		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+		INSERT INTO config_templates (id, name, description, parameters, model_filter, auto_apply, customer_id, created_by)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
 		RETURNING `+columns,
-		id, name, description, paramsJSON, modelFilter, autoApply, nullIfEmpty(createdBy))
+		id, name, description, paramsJSON, modelFilter, autoApply, customerID, nullIfEmpty(createdBy))
 	return scan(row)
 }
 
@@ -122,11 +125,19 @@ func (r *Repository) Delete(ctx context.Context, id string) error {
 // matches this manufacturer/product_class — same ILIKE-against-either-
 // field matching internal/policy.Repository.ForDevice already uses, for
 // consistency across this codebase's two model_filter consumers.
-func (r *Repository) MatchingAutoApply(ctx context.Context, manufacturer, productClass string) ([]Template, error) {
+//
+// deviceCustomerID additionally restricts matches to templates owned by
+// that same customer, plus platform-global ones (audit P0.4 critical
+// invariant: a matching manufacturer/model is never sufficient
+// authorization to push a tenant-created template onto another tenant's
+// device). Pass nil for an unassigned device, which then only matches
+// platform-global templates.
+func (r *Repository) MatchingAutoApply(ctx context.Context, manufacturer, productClass string, deviceCustomerID *string) ([]Template, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT `+columns+` FROM config_templates
-		WHERE auto_apply AND model_filter IS NOT NULL AND ($1 ILIKE model_filter OR $2 ILIKE model_filter)`,
-		manufacturer, productClass)
+		WHERE auto_apply AND model_filter IS NOT NULL AND ($1 ILIKE model_filter OR $2 ILIKE model_filter)
+			AND (customer_id IS NULL OR customer_id = $3)`,
+		manufacturer, productClass, deviceCustomerID)
 	if err != nil {
 		return nil, fmt.Errorf("list auto-apply templates: %w", err)
 	}
@@ -150,9 +161,10 @@ type scanner interface {
 func scan(s scanner) (*Template, error) {
 	var t Template
 	var description, modelFilter, createdBy sql.NullString
+	var customerID sql.NullString
 	var paramsRaw []byte
 
-	if err := s.Scan(&t.ID, &t.Name, &description, &paramsRaw, &modelFilter, &t.AutoApply, &createdBy, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	if err := s.Scan(&t.ID, &t.Name, &description, &paramsRaw, &modelFilter, &t.AutoApply, &customerID, &createdBy, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return nil, fmt.Errorf("scan config template: %w", err)
 	}
 	if description.Valid {
@@ -161,6 +173,10 @@ func scan(s scanner) (*Template, error) {
 	if modelFilter.Valid {
 		s := modelFilter.String
 		t.ModelFilter = &s
+	}
+	if customerID.Valid {
+		c := customerID.String
+		t.CustomerID = &c
 	}
 	if createdBy.Valid {
 		t.CreatedBy = createdBy.String

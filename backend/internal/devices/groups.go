@@ -29,6 +29,11 @@ type DeviceGroup struct {
 	ID          string
 	Name        string
 	Description string
+	// CustomerID is the group's tenant owner (audit P0.2) -- nil means
+	// platform-global, an ownership state callers must restrict to
+	// superadmin/GlobalAccess operators rather than letting a scoped
+	// operator create by simply omitting it.
+	CustomerID  *string
 	MemberCount int
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -42,17 +47,17 @@ func NewGroupRepository(db *sql.DB) *GroupRepository {
 	return &GroupRepository{db: db}
 }
 
-// Create makes a new, empty group.
-func (r *GroupRepository) Create(ctx context.Context, name, description string) (*DeviceGroup, error) {
+// Create makes a new, empty group owned by customerID (nil = platform-global).
+func (r *GroupRepository) Create(ctx context.Context, name, description string, customerID *string) (*DeviceGroup, error) {
 	id := uuid.New().String()
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO device_groups (id, name, description)
-		VALUES ($1, $2, $3)
-		RETURNING id, name, description, created_at, updated_at`,
-		id, name, description)
+		INSERT INTO device_groups (id, name, description, customer_id)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, name, description, customer_id, created_at, updated_at`,
+		id, name, description, customerID)
 
 	var g DeviceGroup
-	if err := row.Scan(&g.ID, &g.Name, &g.Description, &g.CreatedAt, &g.UpdatedAt); err != nil {
+	if err := row.Scan(&g.ID, &g.Name, &g.Description, &g.CustomerID, &g.CreatedAt, &g.UpdatedAt); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return nil, ErrGroupNameUsed
@@ -62,10 +67,13 @@ func (r *GroupRepository) Create(ctx context.Context, name, description string) 
 	return &g, nil
 }
 
-// List returns every group with its current member count.
+// List returns every group with its current member count, unfiltered —
+// callers enforce tenancy scope (audit P0.2), the same pattern devices.List
+// already uses, since "every group" is also what an unscoped/superadmin
+// caller legitimately needs.
 func (r *GroupRepository) List(ctx context.Context) ([]DeviceGroup, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT g.id, g.name, g.description, g.created_at, g.updated_at,
+		SELECT g.id, g.name, g.description, g.customer_id, g.created_at, g.updated_at,
 			COUNT(m.device_id)
 		FROM device_groups g
 		LEFT JOIN device_group_members m ON m.group_id = g.id
@@ -79,7 +87,7 @@ func (r *GroupRepository) List(ctx context.Context) ([]DeviceGroup, error) {
 	var out []DeviceGroup
 	for rows.Next() {
 		var g DeviceGroup
-		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.CreatedAt, &g.UpdatedAt, &g.MemberCount); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.Description, &g.CustomerID, &g.CreatedAt, &g.UpdatedAt, &g.MemberCount); err != nil {
 			return nil, fmt.Errorf("scan device group: %w", err)
 		}
 		out = append(out, g)
@@ -90,7 +98,7 @@ func (r *GroupRepository) List(ctx context.Context) ([]DeviceGroup, error) {
 // Get fetches one group by ID, with its member count.
 func (r *GroupRepository) Get(ctx context.Context, id string) (*DeviceGroup, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT g.id, g.name, g.description, g.created_at, g.updated_at,
+		SELECT g.id, g.name, g.description, g.customer_id, g.created_at, g.updated_at,
 			COUNT(m.device_id)
 		FROM device_groups g
 		LEFT JOIN device_group_members m ON m.group_id = g.id
@@ -98,7 +106,7 @@ func (r *GroupRepository) Get(ctx context.Context, id string) (*DeviceGroup, err
 		GROUP BY g.id`, id)
 
 	var g DeviceGroup
-	if err := row.Scan(&g.ID, &g.Name, &g.Description, &g.CreatedAt, &g.UpdatedAt, &g.MemberCount); err != nil {
+	if err := row.Scan(&g.ID, &g.Name, &g.Description, &g.CustomerID, &g.CreatedAt, &g.UpdatedAt, &g.MemberCount); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrGroupNotFound
 		}

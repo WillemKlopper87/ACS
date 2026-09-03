@@ -77,9 +77,15 @@ type DigestAuthenticator struct {
 	AllowBasic bool
 
 	// Lookup, when set, resolves a presented username that is not the
-	// shared Username to its per-device password (audit P0.5: unique
-	// per-device credentials). Returning ok=false rejects the request.
-	Lookup func(username string) (password string, ok bool)
+	// shared Username to its per-device password and the device it is
+	// bound to (audit P0.5: unique per-device credentials; audit C-1:
+	// deviceID lets the caller verify the Inform's claimed identity
+	// matches the credential that authenticated it). deviceID is
+	// whatever opaque identifier the caller's device store uses; empty
+	// deviceID with ok=true is treated the same as the shared credential
+	// — no per-device binding to enforce. Returning ok=false rejects the
+	// request.
+	Lookup func(username string) (password, deviceID string, ok bool)
 	// OnAuthenticated is invoked after a per-device credential verifies —
 	// the hook that auto-activates a PENDING rotation.
 	OnAuthenticated func(username string)
@@ -99,17 +105,20 @@ func (d DigestAuthenticator) Enabled() bool {
 }
 
 // passwordFor resolves the password to verify a presented username
-// against: the shared credential, or a per-device one via Lookup.
-func (d DigestAuthenticator) passwordFor(username string) (password string, perDevice bool, ok bool) {
+// against: the shared credential, or a per-device one via Lookup —
+// returning that credential's bound device identifier (audit C-1), if
+// any, so the caller can enforce it against the identity the request
+// actually claims.
+func (d DigestAuthenticator) passwordFor(username string) (password, deviceID string, perDevice bool, ok bool) {
 	if d.Username != "" && username == d.Username {
-		return d.Password, false, true
+		return d.Password, "", false, true
 	}
 	if d.Lookup != nil && username != "" {
-		if pw, found := d.Lookup(username); found {
-			return pw, true, true
+		if pw, devID, found := d.Lookup(username); found {
+			return pw, devID, true, true
 		}
 	}
-	return "", false, false
+	return "", "", false, false
 }
 
 // Challenge sends a 401 with a fresh Digest challenge (and, when
@@ -144,15 +153,28 @@ func (d DigestAuthenticator) challenge(w http.ResponseWriter, stale bool) {
 // malformed — callers should respond with Challenge in that case.
 // Stale reports the one case where the credentials were right but the
 // nonce had expired; callers should answer that with ChallengeStale.
-func (d DigestAuthenticator) Verify(r *http.Request) (ok bool, stale bool) {
+// Identity is what a successful Verify learned about the credential that
+// authenticated the request (audit C-1). BoundDeviceID is empty for the
+// shared fleet credential — no per-device binding to enforce, matching
+// the pre-existing shared-credential compatibility tradeoff — and
+// non-empty for a per-device credential, in which case the caller must
+// verify the request's claimed device identity equals BoundDeviceID
+// before trusting it.
+type Identity struct {
+	Username      string
+	BoundDeviceID string
+}
+
+func (d DigestAuthenticator) Verify(r *http.Request) (ok bool, stale bool, identity Identity) {
 	header := r.Header.Get("Authorization")
 	switch {
 	case strings.HasPrefix(header, "Digest "):
 		return d.verifyDigest(r, header[len("Digest "):], time.Now())
 	case d.AllowBasic && strings.HasPrefix(header, "Basic "):
-		return d.verifyBasic(header[len("Basic "):]), false
+		ok, identity := d.verifyBasic(header[len("Basic "):])
+		return ok, false, identity
 	default:
-		return false, false
+		return false, false, Identity{}
 	}
 }
 
@@ -162,24 +184,24 @@ func (d DigestAuthenticator) Verify(r *http.Request) (ok bool, stale bool) {
 // its timestamp, keyed from the configured password) that hasn't
 // expired; and no replay — nc strictly increasing per nonce for
 // qop=auth, single-use for legacy non-qop responses.
-func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time.Time) (ok bool, stale bool) {
+func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time.Time) (ok bool, stale bool, identity Identity) {
 	params := parseDigestParams(rest)
 	username := params["username"]
-	password, perDevice, found := d.passwordFor(username)
+	password, deviceID, perDevice, found := d.passwordFor(username)
 	if !found {
-		return false, false
+		return false, false, Identity{}
 	}
 	if rl, present := params["realm"]; present && rl != realm {
-		return false, false
+		return false, false, Identity{}
 	}
 	if params["uri"] != r.URL.RequestURI() {
-		return false, false
+		return false, false, Identity{}
 	}
 
 	nonce := params["nonce"]
 	issued, valid := d.parseNonce(nonce)
 	if !valid {
-		return false, false
+		return false, false, Identity{}
 	}
 
 	ha1 := md5Hex(username + ":" + realm + ":" + password)
@@ -189,7 +211,7 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 	qop := params["qop"]
 	if qop != "" {
 		if qop != "auth" {
-			return false, false
+			return false, false, Identity{}
 		}
 		expected = md5Hex(strings.Join([]string{
 			ha1, nonce, params["nc"], params["cnonce"], qop, ha2,
@@ -198,21 +220,21 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 		expected = md5Hex(ha1 + ":" + nonce + ":" + ha2)
 	}
 	if subtle.ConstantTimeCompare([]byte(expected), []byte(params["response"])) != 1 {
-		return false, false
+		return false, false, Identity{}
 	}
 
 	// Credentials are right. Expiry is decided only now so a wrong
 	// password never learns whether its nonce was still fresh.
 	if now.After(issued.Add(nonceTTL)) {
-		return false, true
+		return false, true, Identity{}
 	}
 	if !d.checkReplay(nonce, qop, params["nc"], issued.Add(nonceTTL), now) {
-		return false, false
+		return false, false, Identity{}
 	}
 	if perDevice && d.OnAuthenticated != nil {
 		d.OnAuthenticated(username)
 	}
-	return true, false
+	return true, false, Identity{Username: username, BoundDeviceID: deviceID}
 }
 
 // checkReplay records this (nonce, nc) use and reports whether it is
@@ -294,26 +316,26 @@ func (d DigestAuthenticator) parseNonce(nonce string) (issued time.Time, valid b
 	return time.Unix(sec, 0), true
 }
 
-func (d DigestAuthenticator) verifyBasic(encoded string) bool {
+func (d DigestAuthenticator) verifyBasic(encoded string) (bool, Identity) {
 	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
 	if err != nil {
-		return false
+		return false, Identity{}
 	}
 	user, pass, ok := strings.Cut(string(decoded), ":")
 	if !ok {
-		return false
+		return false, Identity{}
 	}
-	expected, perDevice, found := d.passwordFor(user)
+	expected, deviceID, perDevice, found := d.passwordFor(user)
 	if !found {
-		return false
+		return false, Identity{}
 	}
 	if subtle.ConstantTimeCompare([]byte(pass), []byte(expected)) != 1 {
-		return false
+		return false, Identity{}
 	}
 	if perDevice && d.OnAuthenticated != nil {
 		d.OnAuthenticated(user)
 	}
-	return true
+	return true, Identity{Username: user, BoundDeviceID: deviceID}
 }
 
 func md5Hex(s string) string {

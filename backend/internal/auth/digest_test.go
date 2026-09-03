@@ -56,21 +56,21 @@ func digestRequest(nonce, nc, password string) *http.Request {
 
 func TestDigestAuthenticator_ValidCredentials(t *testing.T) {
 	nonce := issuedNonce(t, testAuthr, time.Now())
-	if ok, stale := testAuthr.Verify(digestRequest(nonce, "00000001", "s3cret")); !ok || stale {
+	if ok, stale, _ := testAuthr.Verify(digestRequest(nonce, "00000001", "s3cret")); !ok || stale {
 		t.Errorf("Verify() = (%v, %v) for correctly computed Digest credentials, want (true, false)", ok, stale)
 	}
 }
 
 func TestDigestAuthenticator_WrongPassword(t *testing.T) {
 	nonce := issuedNonce(t, testAuthr, time.Now())
-	if ok, _ := testAuthr.Verify(digestRequest(nonce, "00000001", "wrong-password")); ok {
+	if ok, _, _ := testAuthr.Verify(digestRequest(nonce, "00000001", "wrong-password")); ok {
 		t.Error("Verify() = true for wrong password, want false")
 	}
 }
 
 func TestDigestAuthenticator_MissingHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/cwmp", nil)
-	if ok, _ := testAuthr.Verify(req); ok {
+	if ok, _, _ := testAuthr.Verify(req); ok {
 		t.Error("Verify() = true with no Authorization header, want false")
 	}
 }
@@ -81,7 +81,7 @@ func TestDigest_ForeignNonceRejected(t *testing.T) {
 	// A nonce not issued by this ACS (or issued under a different
 	// credential) must fail even with the right password.
 	for _, nonce := range []string{"testnonce", "1700000000.abcd.0000", issuedNonce(t, DigestAuthenticator{Username: "cpe-device", Password: "other"}, time.Now())} {
-		if ok, _ := testAuthr.Verify(digestRequest(nonce, "00000001", "s3cret")); ok {
+		if ok, _, _ := testAuthr.Verify(digestRequest(nonce, "00000001", "s3cret")); ok {
 			t.Errorf("Verify() = true for foreign nonce %q, want false", nonce)
 		}
 	}
@@ -91,19 +91,19 @@ func TestDigest_TamperedNonceTimestampRejected(t *testing.T) {
 	nonce := issuedNonce(t, testAuthr, time.Now().Add(-time.Hour))
 	parts := strings.SplitN(nonce, ".", 3)
 	forged := "9999999999." + parts[1] + "." + parts[2]
-	if ok, stale := testAuthr.Verify(digestRequest(forged, "00000001", "s3cret")); ok || stale {
+	if ok, stale, _ := testAuthr.Verify(digestRequest(forged, "00000001", "s3cret")); ok || stale {
 		t.Errorf("Verify() = (%v, %v) for forged timestamp, want (false, false)", ok, stale)
 	}
 }
 
 func TestDigest_ExpiredNonceIsStaleNotFailed(t *testing.T) {
 	nonce := issuedNonce(t, testAuthr, time.Now().Add(-nonceTTL-time.Minute))
-	ok, stale := testAuthr.Verify(digestRequest(nonce, "00000001", "s3cret"))
+	ok, stale, _ := testAuthr.Verify(digestRequest(nonce, "00000001", "s3cret"))
 	if ok || !stale {
 		t.Errorf("Verify() = (%v, %v) for expired nonce with right password, want (false, true)", ok, stale)
 	}
 	// Wrong password on an expired nonce must NOT reveal staleness.
-	ok, stale = testAuthr.Verify(digestRequest(nonce, "00000001", "wrong"))
+	ok, stale, _ = testAuthr.Verify(digestRequest(nonce, "00000001", "wrong"))
 	if ok || stale {
 		t.Errorf("Verify() = (%v, %v) for expired nonce with wrong password, want (false, false)", ok, stale)
 	}
@@ -111,18 +111,18 @@ func TestDigest_ExpiredNonceIsStaleNotFailed(t *testing.T) {
 
 func TestDigest_ReplayRejected(t *testing.T) {
 	nonce := issuedNonce(t, testAuthr, time.Now())
-	if ok, _ := testAuthr.Verify(digestRequest(nonce, "00000001", "s3cret")); !ok {
+	if ok, _, _ := testAuthr.Verify(digestRequest(nonce, "00000001", "s3cret")); !ok {
 		t.Fatal("first use rejected")
 	}
 	// Exact replay of the same (nonce, nc).
-	if ok, _ := testAuthr.Verify(digestRequest(nonce, "00000001", "s3cret")); ok {
+	if ok, _, _ := testAuthr.Verify(digestRequest(nonce, "00000001", "s3cret")); ok {
 		t.Error("Verify() = true for replayed (nonce, nc), want false")
 	}
 	// nc must strictly increase — going backwards is a replay too.
-	if ok, _ := testAuthr.Verify(digestRequest(nonce, "00000003", "s3cret")); !ok {
+	if ok, _, _ := testAuthr.Verify(digestRequest(nonce, "00000003", "s3cret")); !ok {
 		t.Error("nc=3 after nc=1 rejected, want accepted")
 	}
-	if ok, _ := testAuthr.Verify(digestRequest(nonce, "00000002", "s3cret")); ok {
+	if ok, _, _ := testAuthr.Verify(digestRequest(nonce, "00000002", "s3cret")); ok {
 		t.Error("Verify() = true for nc=2 after nc=3, want false")
 	}
 }
@@ -131,10 +131,10 @@ func TestDigest_LegacyNonQopIsSingleUse(t *testing.T) {
 	nonce := issuedNonce(t, testAuthr, time.Now())
 	req := httptest.NewRequest(http.MethodPost, "/cwmp", nil)
 	req.Header.Set("Authorization", buildLegacyAuthHeader("cpe-device", "s3cret", http.MethodPost, "/cwmp", nonce))
-	if ok, _ := testAuthr.Verify(req); !ok {
+	if ok, _, _ := testAuthr.Verify(req); !ok {
 		t.Fatal("legacy non-qop response rejected on first use, want accepted")
 	}
-	if ok, _ := testAuthr.Verify(req); ok {
+	if ok, _, _ := testAuthr.Verify(req); ok {
 		t.Error("Verify() = true for replayed legacy non-qop response, want false")
 	}
 }
@@ -144,7 +144,7 @@ func TestDigest_URIMismatchRejected(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/cwmp", nil)
 	// Signed over a different uri than the request actually targets.
 	req.Header.Set("Authorization", buildAuthHeader("cpe-device", "s3cret", http.MethodPost, "/other", nonce, "00000001", "c"))
-	if ok, _ := testAuthr.Verify(req); ok {
+	if ok, _, _ := testAuthr.Verify(req); ok {
 		t.Error("Verify() = true for uri mismatch, want false")
 	}
 }
@@ -154,7 +154,7 @@ func TestDigest_WrongRealmRejected(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/cwmp", nil)
 	hdr := buildAuthHeader("cpe-device", "s3cret", http.MethodPost, "/cwmp", nonce, "00000001", "c")
 	req.Header.Set("Authorization", strings.Replace(hdr, `realm="acs"`, `realm="evil"`, 1))
-	if ok, _ := testAuthr.Verify(req); ok {
+	if ok, _, _ := testAuthr.Verify(req); ok {
 		t.Error("Verify() = true for wrong realm, want false")
 	}
 }
@@ -200,11 +200,11 @@ func TestDigest_PerDeviceLookup(t *testing.T) {
 	var activated []string
 	d := DigestAuthenticator{
 		Username: "cpe-device", Password: "s3cret",
-		Lookup: func(u string) (string, bool) {
+		Lookup: func(u string) (string, string, bool) {
 			if u == "cr-device-1" {
-				return "device-1-password", true
+				return "device-1-password", "device-1-id", true
 			}
-			return "", false
+			return "", "", false
 		},
 		OnAuthenticated: func(u string) { activated = append(activated, u) },
 	}
@@ -214,21 +214,30 @@ func TestDigest_PerDeviceLookup(t *testing.T) {
 		req.Header.Set("Authorization", buildAuthHeader(user, pass, http.MethodPost, "/cwmp", nonce, nc, "c"))
 		return req
 	}
-	if ok, _ := d.Verify(mk("cr-device-1", "device-1-password", "00000001")); !ok {
+	ok, _, identity := d.Verify(mk("cr-device-1", "device-1-password", "00000001"))
+	if !ok {
 		t.Fatal("per-device credential rejected, want accepted")
+	}
+	if identity.BoundDeviceID != "device-1-id" {
+		t.Errorf("Identity.BoundDeviceID = %q, want %q (audit C-1)", identity.BoundDeviceID, "device-1-id")
 	}
 	if len(activated) != 1 || activated[0] != "cr-device-1" {
 		t.Errorf("OnAuthenticated calls = %v, want [cr-device-1]", activated)
 	}
-	if ok, _ := d.Verify(mk("cr-device-1", "wrong", "00000002")); ok {
+	if ok, _, _ := d.Verify(mk("cr-device-1", "wrong", "00000002")); ok {
 		t.Error("per-device credential with wrong password accepted")
 	}
-	if ok, _ := d.Verify(mk("cr-unknown", "device-1-password", "00000003")); ok {
+	if ok, _, _ := d.Verify(mk("cr-unknown", "device-1-password", "00000003")); ok {
 		t.Error("unknown per-device username accepted")
 	}
-	// The shared credential keeps working alongside, without the hook.
-	if ok, _ := d.Verify(mk("cpe-device", "s3cret", "00000004")); !ok {
+	// The shared credential keeps working alongside, without the hook, and
+	// asserts no device binding (audit C-1: shared credential = no identity).
+	ok, _, identity = d.Verify(mk("cpe-device", "s3cret", "00000004"))
+	if !ok {
 		t.Error("shared credential rejected once Lookup is set")
+	}
+	if identity.BoundDeviceID != "" {
+		t.Errorf("shared credential Identity.BoundDeviceID = %q, want empty", identity.BoundDeviceID)
 	}
 	if len(activated) != 1 {
 		t.Errorf("OnAuthenticated fired for the shared credential: %v", activated)
@@ -236,7 +245,7 @@ func TestDigest_PerDeviceLookup(t *testing.T) {
 }
 
 func TestDigest_EnabledWithLookupOnly(t *testing.T) {
-	d := DigestAuthenticator{Lookup: func(string) (string, bool) { return "", false }, NonceSecret: []byte("k")}
+	d := DigestAuthenticator{Lookup: func(string) (string, string, bool) { return "", "", false }, NonceSecret: []byte("k")}
 	if !d.Enabled() {
 		t.Error("Enabled() = false with only a per-device Lookup, want true")
 	}

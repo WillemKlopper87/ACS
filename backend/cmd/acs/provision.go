@@ -16,7 +16,7 @@ import (
 )
 
 func (h *handler) applyAutoProvisioningTemplates(ctx context.Context, device *devices.Device) {
-	matches, err := h.templates.MatchingAutoApply(ctx, device.Manufacturer, device.ProductClass)
+	matches, err := h.templates.MatchingAutoApply(ctx, device.Manufacturer, device.ProductClass, device.CustomerID)
 	if err != nil {
 		h.logger.Error("failed to load auto-apply templates for device", "err", err, "device_id", device.ID)
 		return

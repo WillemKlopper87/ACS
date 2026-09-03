@@ -58,20 +58,44 @@ func (w *scheduleWorker) Run(ctx context.Context) {
 // does for an operator-initiated bulk action, just triggered by a timer
 // instead of an HTTP request.
 func (w *scheduleWorker) fire(ctx context.Context, sj *scheduler.ScheduledJob) {
-	var deviceIDs []string
+	var candidateIDs []string
 	switch sj.TargetType {
 	case scheduler.TargetDevice:
-		deviceIDs = []string{sj.TargetID}
+		candidateIDs = []string{sj.TargetID}
 	case scheduler.TargetGroup:
 		ids, err := w.groups.MemberDeviceIDs(ctx, sj.TargetID)
 		if err != nil {
 			w.logger.Error("failed to resolve scheduled job group target", "err", err, "scheduled_job_id", sj.ID, "group_id", sj.TargetID)
 			return
 		}
-		deviceIDs = ids
+		candidateIDs = ids
 	default:
 		w.logger.Error("scheduled job has unknown target_type", "scheduled_job_id", sj.ID, "target_type", sj.TargetType)
 		return
+	}
+
+	// audit P0.6: re-check authorization at fire time, not just at
+	// creation — a device (or a group member) can move to a different
+	// customer after the schedule was created, and a stale schedule
+	// created before this remediation may still carry no customer_id at
+	// all. Every candidate must currently belong to the schedule's own
+	// customer (platform-global schedules, customer_id nil, skip this
+	// check by design).
+	deviceIDs := candidateIDs
+	if sj.CustomerID != nil {
+		deviceIDs = deviceIDs[:0]
+		for _, id := range candidateIDs {
+			d, err := w.devices.Get(ctx, id)
+			if err != nil {
+				w.logger.Error("failed to resolve scheduled job target device", "err", err, "scheduled_job_id", sj.ID, "device_id", id)
+				continue
+			}
+			if d.CustomerID == nil || *d.CustomerID != *sj.CustomerID {
+				w.logger.Warn("scheduled job target no longer in the schedule's customer, skipping", "scheduled_job_id", sj.ID, "device_id", id)
+				continue
+			}
+			deviceIDs = append(deviceIDs, id)
+		}
 	}
 
 	var payload any

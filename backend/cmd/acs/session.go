@@ -13,6 +13,8 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -116,11 +118,21 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	authMode := devices.AuthModeNone
+	// bound is the device identity this request's credential asserts
+	// (audit C-1) — empty fields mean the shared fleet credential was
+	// used, which asserts no device identity at all (the pre-existing,
+	// documented compatibility tradeoff of a shared secret). A per-device
+	// credential or a cert with a CommonName does assert one, and
+	// handleInform below must reject any Inform that claims a different
+	// device than what actually authenticated it.
+	var bound inboundIdentity
 	mtlsAuthenticated := r.TLS != nil && len(r.TLS.PeerCertificates) > 0
 	if mtlsAuthenticated {
 		authMode = devices.AuthModeMTLS
+		bound.mtlsNaturalKey = strings.TrimSpace(r.TLS.PeerCertificates[0].Subject.CommonName)
 	} else if h.auth.Enabled() {
-		if ok, stale := h.auth.Verify(r); !ok {
+		ok, stale, identity := h.auth.Verify(r)
+		if !ok {
 			h.logger.Warn("authentication failed or missing", "remote", r.RemoteAddr)
 			// Drain the unauthenticated encoded body before the challenge so
 			// keep-alive survives on CPEs that retry the same connection.
@@ -132,6 +144,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		bound.credentialDeviceID = identity.BoundDeviceID
 		authMode = devices.AuthModeDigest
 	}
 
@@ -174,7 +187,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	ns := cwmp.DetectCWMPNamespace(raw)
 
 	if env.Body.Inform != nil {
-		h.handleInform(ctx, w, r, env.Body.Inform, authMode, respID, ns)
+		h.handleInform(ctx, w, r, env.Body.Inform, authMode, bound, respID, ns)
 		return
 	}
 
@@ -186,9 +199,54 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	h.dispatch(ctx, w, r, env.Body)
 }
 
-func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *http.Request, inform *cwmp.Inform, authMode, respID, ns string) {
+// inboundIdentity is what this request's credential asserts about device
+// identity (audit C-1). At most one field is ever set: mtlsNaturalKey for
+// an mTLS-authenticated request whose leaf certificate's CommonName names
+// a specific device (by convention, that device's oui_serial natural
+// key), credentialDeviceID for a per-device Digest/Basic credential.
+// Both empty means the shared fleet credential authenticated the
+// request, which — same as today — asserts no device identity to bind.
+type inboundIdentity struct {
+	credentialDeviceID string
+	mtlsNaturalKey     string
+}
+
+func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *http.Request, inform *cwmp.Inform, authMode string, bound inboundIdentity, respID, ns string) {
 	h.metrics.InformsTotal.Inc()
 	events := inform.EventCodes()
+
+	if inform.DeviceId.OUI == "" || inform.DeviceId.SerialNumber == "" {
+		h.logger.Warn("Inform rejected: OUI and SerialNumber are required for a device identity", "remote", r.RemoteAddr)
+		http.Error(w, "Inform DeviceId requires OUI and SerialNumber", http.StatusBadRequest)
+		return
+	}
+	naturalKey := inform.DeviceId.NaturalKey()
+
+	// audit C-1: a credential bound to one device must not be able to
+	// author another device's Inform — that would let its holder receive
+	// the victim device's queued jobs (including parameter writes with
+	// secrets), mark its jobs complete/failed, or get auto-provisioning
+	// templates pushed to it under a forged manufacturer/model match.
+	if bound.credentialDeviceID != "" {
+		existing, err := h.devices.GetByOUIserial(ctx, naturalKey)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			h.logger.Error("failed to resolve device for identity binding check", "err", err, "natural_key", naturalKey)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if err != nil || existing.ID != bound.credentialDeviceID {
+			h.logger.Warn("Inform rejected: per-device credential does not match the claimed device identity",
+				"bound_device_id", bound.credentialDeviceID, "claimed_natural_key", naturalKey, "remote", r.RemoteAddr)
+			http.Error(w, "device identity mismatch", http.StatusUnauthorized)
+			return
+		}
+	}
+	if bound.mtlsNaturalKey != "" && bound.mtlsNaturalKey != naturalKey {
+		h.logger.Warn("Inform rejected: mTLS certificate CommonName does not match the claimed device identity",
+			"cert_cn", bound.mtlsNaturalKey, "claimed_natural_key", naturalKey, "remote", r.RemoteAddr)
+		http.Error(w, "device identity mismatch", http.StatusUnauthorized)
+		return
+	}
 
 	device, err := h.devices.UpsertFromInform(ctx, inform.DeviceId, events)
 	if err != nil {

@@ -110,12 +110,12 @@ func main() {
 		// Per-device credentials (audit P0.5): a username that isn't the
 		// shared one is looked up in device_credentials; the first
 		// successful use of a PENDING credential activates it.
-		Lookup: func(username string) (string, bool) {
+		Lookup: func(username string) (string, string, bool) {
 			cred, err := credRepo.LookupCWMPDigest(context.Background(), username)
 			if err != nil {
-				return "", false
+				return "", "", false
 			}
-			return cred.Password, true
+			return cred.Password, cred.DeviceID, true
 		},
 		OnAuthenticated: func(username string) {
 			ctx := context.Background()

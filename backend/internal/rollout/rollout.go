@@ -62,10 +62,17 @@ type Rollout struct {
 	MaintenanceWindowStartUTC *string // "HH:MM:SS" or nil
 	MaintenanceWindowEndUTC   *string
 	Status                    string
-	CreatedBy                 string
-	CreatedAt                 time.Time
-	UpdatedAt                 time.Time
-	RollbackDispatchedAt      *time.Time
+	// CustomerID is the rollout's tenant owner (audit P0.7) -- nil means
+	// platform-global, restricted the same way DeviceGroup.CustomerID is.
+	// It also bounds eligibility computed at creation (candidate devices
+	// outside it are never included) so a scoped operator's rollout can
+	// never dispatch firmware to another tenant merely because the model
+	// filter matches.
+	CustomerID           *string
+	CreatedBy            string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	RollbackDispatchedAt *time.Time
 }
 
 // DeviceStatus is one device's live status within a rollout — device
@@ -91,15 +98,20 @@ func NewRepository(db *sql.DB) *Repository {
 const rolloutColumns = `id, name, firmware_image_id, rollback_firmware_image_id,
 	model_filter, current_version_filter, canary_percentage, maximum_failure_rate,
 	maintenance_window_start_utc, maintenance_window_end_utc, status,
-	created_by, created_at, updated_at, rollback_dispatched_at`
+	customer_id, created_by, created_at, updated_at, rollback_dispatched_at`
 
 // Create inserts a DRAFT rollout and computes its eligible device set in
 // the same transaction — eligibility (model_filter / current_version_filter
 // against devices + the cached SoftwareVersion) is a snapshot taken once
 // at creation, not re-evaluated live, so a rollout's target set doesn't
 // shift under it while it's running.
+//
+// customerID additionally bounds eligibility to that customer's devices,
+// or (nil) to no customer restriction at all — a platform-global rollout,
+// which callers must restrict to superadmin/GlobalAccess operators the
+// same way every other control object here does (audit P0.7).
 func (r *Repository) Create(ctx context.Context, name, firmwareImageID string, rollbackImageID, modelFilter, currentVersionFilter *string,
-	canaryPercentage int, maxFailureRate float64, windowStart, windowEnd *string, createdBy string) (*Rollout, error) {
+	canaryPercentage int, maxFailureRate float64, windowStart, windowEnd, customerID *string, createdBy string) (*Rollout, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin create rollout tx: %w", err)
@@ -110,11 +122,11 @@ func (r *Repository) Create(ctx context.Context, name, firmwareImageID string, r
 	row := tx.QueryRowContext(ctx, `
 		INSERT INTO firmware_rollout (id, name, firmware_image_id, rollback_firmware_image_id,
 			model_filter, current_version_filter, canary_percentage, maximum_failure_rate,
-			maintenance_window_start_utc, maintenance_window_end_utc, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			maintenance_window_start_utc, maintenance_window_end_utc, customer_id, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING `+rolloutColumns,
 		id, name, firmwareImageID, rollbackImageID, modelFilter, currentVersionFilter,
-		canaryPercentage, maxFailureRate, windowStart, windowEnd, nullIfEmpty(createdBy))
+		canaryPercentage, maxFailureRate, windowStart, windowEnd, customerID, nullIfEmpty(createdBy))
 
 	ro, err := scanRollout(row)
 	if err != nil {
@@ -128,8 +140,9 @@ func (r *Repository) Create(ctx context.Context, name, firmwareImageID string, r
 		  AND ($3::text IS NULL OR (
 		      SELECT p.parameters->'Device.DeviceInfo.SoftwareVersion'->>'value'
 		      FROM device_parameter_cache p WHERE p.device_id = d.id
-		  ) = $3)`,
-		id, modelFilter, currentVersionFilter); err != nil {
+		  ) = $3)
+		  AND ($4::uuid IS NULL OR d.customer_id = $4)`,
+		id, modelFilter, currentVersionFilter, customerID); err != nil {
 		return nil, fmt.Errorf("compute eligible devices: %w", err)
 	}
 
@@ -350,13 +363,17 @@ func scanRollout(s scanner) (*Rollout, error) {
 	var ro Rollout
 	var rollbackImageID, modelFilter, versionFilter sql.NullString
 	var windowStart, windowEnd sql.NullString
-	var createdBy sql.NullString
+	var createdBy, customerID sql.NullString
 	var rollbackDispatchedAt sql.NullTime
 
 	if err := s.Scan(&ro.ID, &ro.Name, &ro.FirmwareImageID, &rollbackImageID,
 		&modelFilter, &versionFilter, &ro.CanaryPercentage, &ro.MaximumFailureRate,
-		&windowStart, &windowEnd, &ro.Status, &createdBy, &ro.CreatedAt, &ro.UpdatedAt, &rollbackDispatchedAt); err != nil {
+		&windowStart, &windowEnd, &ro.Status, &customerID, &createdBy, &ro.CreatedAt, &ro.UpdatedAt, &rollbackDispatchedAt); err != nil {
 		return nil, fmt.Errorf("scan rollout: %w", err)
+	}
+	if customerID.Valid {
+		c := customerID.String
+		ro.CustomerID = &c
 	}
 	if rollbackDispatchedAt.Valid {
 		t := rollbackDispatchedAt.Time

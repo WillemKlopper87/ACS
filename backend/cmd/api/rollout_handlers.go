@@ -23,6 +23,7 @@ type rolloutResponse struct {
 	CanaryPercentage     int     `json:"canary_percentage"`
 	MaximumFailureRate   float64 `json:"maximum_failure_rate"`
 	Status               string  `json:"status"`
+	CustomerID           *string `json:"customer_id,omitempty"`
 	CreatedAt            string  `json:"created_at"`
 	RollbackDispatchedAt *string `json:"rollback_dispatched_at,omitempty"`
 }
@@ -32,13 +33,41 @@ func toRolloutResponse(ro *rollout.Rollout) rolloutResponse {
 		ID: ro.ID, Name: ro.Name, FirmwareImageID: ro.FirmwareImageID, RollbackImageID: ro.RollbackFirmwareImageID,
 		ModelFilter: ro.ModelFilter, CurrentVersionFilter: ro.CurrentVersionFilter,
 		CanaryPercentage: ro.CanaryPercentage, MaximumFailureRate: ro.MaximumFailureRate,
-		Status: ro.Status, CreatedAt: ro.CreatedAt.Format(time.RFC3339),
+		Status: ro.Status, CustomerID: ro.CustomerID, CreatedAt: ro.CreatedAt.Format(time.RFC3339),
 	}
 	if ro.RollbackDispatchedAt != nil {
 		s := ro.RollbackDispatchedAt.Format(time.RFC3339)
 		resp.RollbackDispatchedAt = &s
 	}
 	return resp
+}
+
+// scopedRollout loads a rollout and enforces the caller's tenancy scope
+// (audit P0.7/H-3) — 404 both when it doesn't exist and when it's outside
+// scope, same reasoning as scopedGroup. Closes the H-3 gap where any
+// read-tier operator could fetch DeviceStatuses (including other
+// tenants' oui_serials) for an arbitrary rollout ID.
+func (h *handler) scopedRollout(w http.ResponseWriter, r *http.Request, id string) (*rollout.Rollout, bool) {
+	ro, err := h.rollouts.ByID(r.Context(), id)
+	if errors.Is(err, rollout.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return nil, false
+	}
+	if err != nil {
+		h.logger.Error("failed to get rollout", "err", err, "id", id)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, false
+	}
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, false
+	}
+	if scoped && !deviceInScope(ro.CustomerID, customerIDs) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return nil, false
+	}
+	return ro, true
 }
 
 type createRolloutRequest struct {
@@ -51,6 +80,7 @@ type createRolloutRequest struct {
 	MaximumFailureRate      float64 `json:"maximum_failure_rate,omitempty"`
 	MaintenanceWindowStart  *string `json:"maintenance_window_start_utc,omitempty"` // "HH:MM:SS"
 	MaintenanceWindowEnd    *string `json:"maintenance_window_end_utc,omitempty"`
+	CustomerID              *string `json:"customer_id,omitempty"`
 }
 
 func (h *handler) createRollout(w http.ResponseWriter, r *http.Request) {
@@ -70,9 +100,25 @@ func (h *handler) createRollout(w http.ResponseWriter, r *http.Request) {
 		req.MaximumFailureRate = 0.2
 	}
 
+	// audit P0.7: a matching manufacturer/model is never sufficient
+	// authorization on its own — a scoped operator must name a
+	// customer_id within scope, which then also bounds eligibility
+	// computation so the rollout can only ever target that customer.
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if scoped {
+		if req.CustomerID == nil || !deviceInScope(req.CustomerID, customerIDs) {
+			http.Error(w, "customer_id is required and must be within your assigned scope", http.StatusBadRequest)
+			return
+		}
+	}
+
 	ro, err := h.rollouts.Create(r.Context(), req.Name, req.FirmwareImageID, req.RollbackFirmwareImageID,
 		req.ModelFilter, req.CurrentVersionFilter, req.CanaryPercentage, req.MaximumFailureRate,
-		req.MaintenanceWindowStart, req.MaintenanceWindowEnd, operatorFromRequest(r))
+		req.MaintenanceWindowStart, req.MaintenanceWindowEnd, req.CustomerID, operatorFromRequest(r))
 	if err != nil {
 		h.logger.Error("failed to create rollout", "err", err, "name", req.Name)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -95,7 +141,7 @@ func (h *handler) createRollout(w http.ResponseWriter, r *http.Request) {
 		"id": resp.ID, "name": resp.Name, "firmware_image_id": resp.FirmwareImageID,
 		"model_filter": resp.ModelFilter, "current_version_filter": resp.CurrentVersionFilter,
 		"canary_percentage": resp.CanaryPercentage, "maximum_failure_rate": resp.MaximumFailureRate,
-		"status": resp.Status, "created_at": resp.CreatedAt, "eligible_devices": len(eligible),
+		"status": resp.Status, "customer_id": resp.CustomerID, "created_at": resp.CreatedAt, "eligible_devices": len(eligible),
 	})
 }
 
@@ -106,8 +152,16 @@ func (h *handler) listRollouts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	items := make([]rolloutResponse, 0, len(list))
 	for _, ro := range list {
+		if scoped && !deviceInScope(ro.CustomerID, customerIDs) {
+			continue
+		}
 		items = append(items, toRolloutResponse(&ro))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -122,14 +176,8 @@ type rolloutDeviceResponse struct {
 
 func (h *handler) getRollout(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	ro, err := h.rollouts.ByID(r.Context(), id)
-	if errors.Is(err, rollout.ErrNotFound) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		h.logger.Error("failed to get rollout", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	ro, ok := h.scopedRollout(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -185,14 +233,8 @@ func (h *handler) advanceRollout(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) dispatchRolloutBatch(w http.ResponseWriter, r *http.Request, isCanaryStart bool) {
 	id := r.PathValue("id")
-	ro, err := h.rollouts.ByID(r.Context(), id)
-	if errors.Is(err, rollout.ErrNotFound) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		h.logger.Error("failed to get rollout", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	ro, ok := h.scopedRollout(w, r, id)
+	if !ok {
 		return
 	}
 	if isCanaryStart && ro.Status != rollout.StatusDraft {

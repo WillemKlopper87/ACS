@@ -47,9 +47,15 @@ type ScheduledJob struct {
 	Enabled         bool
 	NextRunAt       time.Time
 	LastRunAt       *time.Time
-	CreatedBy       string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// CustomerID is the schedule's tenant owner (audit P0.6) -- nil means
+	// platform-global, restricted the same way DeviceGroup.CustomerID is.
+	// The worker re-checks every fire-time target against this, since a
+	// device or group's own customer can drift after the schedule was
+	// created.
+	CustomerID *string
+	CreatedBy  string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type Repository struct {
@@ -61,12 +67,12 @@ func NewRepository(db *sql.DB) *Repository {
 }
 
 const columns = `id, name, job_type, target_type, target_id, payload,
-	interval_seconds, enabled, next_run_at, last_run_at, created_by, created_at, updated_at`
+	interval_seconds, enabled, next_run_at, last_run_at, customer_id, created_by, created_at, updated_at`
 
 // Create schedules a new recurring job, due to run immediately (next_run_at
 // = now()) — an operator creating one wants to see it fire on the next
 // worker tick, not wait a full interval first.
-func (r *Repository) Create(ctx context.Context, name, jobType, targetType, targetID string, payload any, intervalSeconds int, createdBy string) (*ScheduledJob, error) {
+func (r *Repository) Create(ctx context.Context, name, jobType, targetType, targetID string, payload any, intervalSeconds int, customerID *string, createdBy string) (*ScheduledJob, error) {
 	if intervalSeconds < MinIntervalSeconds {
 		return nil, ErrIntervalTooShort
 	}
@@ -77,10 +83,10 @@ func (r *Repository) Create(ctx context.Context, name, jobType, targetType, targ
 
 	id := uuid.New().String()
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO scheduled_jobs (id, name, job_type, target_type, target_id, payload, interval_seconds, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO scheduled_jobs (id, name, job_type, target_type, target_id, payload, interval_seconds, customer_id, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING `+columns,
-		id, name, jobType, targetType, targetID, payloadJSON, intervalSeconds, nullIfEmpty(createdBy))
+		id, name, jobType, targetType, targetID, payloadJSON, intervalSeconds, customerID, nullIfEmpty(createdBy))
 
 	return scan(row)
 }
@@ -187,15 +193,19 @@ type scanner interface {
 
 func scan(s scanner) (*ScheduledJob, error) {
 	var sj ScheduledJob
-	var createdBy sql.NullString
+	var createdBy, customerID sql.NullString
 	var lastRunAt sql.NullTime
 
 	if err := s.Scan(&sj.ID, &sj.Name, &sj.JobType, &sj.TargetType, &sj.TargetID, &sj.Payload,
-		&sj.IntervalSeconds, &sj.Enabled, &sj.NextRunAt, &lastRunAt, &createdBy, &sj.CreatedAt, &sj.UpdatedAt); err != nil {
+		&sj.IntervalSeconds, &sj.Enabled, &sj.NextRunAt, &lastRunAt, &customerID, &createdBy, &sj.CreatedAt, &sj.UpdatedAt); err != nil {
 		return nil, fmt.Errorf("scan scheduled job: %w", err)
 	}
 	if createdBy.Valid {
 		sj.CreatedBy = createdBy.String
+	}
+	if customerID.Valid {
+		c := customerID.String
+		sj.CustomerID = &c
 	}
 	if lastRunAt.Valid {
 		t := lastRunAt.Time

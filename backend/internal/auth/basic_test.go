@@ -16,20 +16,20 @@ func basicRequest(t *testing.T, user, pass string) *http.Request {
 
 func TestVerify_BasicAcceptedWhenEnabled(t *testing.T) {
 	d := DigestAuthenticator{Username: "cpe", Password: "secret", AllowBasic: true}
-	if ok, _ := d.Verify(basicRequest(t, "cpe", "secret")); !ok {
+	if ok, _, _ := d.Verify(basicRequest(t, "cpe", "secret")); !ok {
 		t.Fatal("valid Basic credentials rejected with AllowBasic=true")
 	}
-	if ok, _ := d.Verify(basicRequest(t, "cpe", "wrong")); ok {
+	if ok, _, _ := d.Verify(basicRequest(t, "cpe", "wrong")); ok {
 		t.Fatal("invalid Basic password accepted")
 	}
-	if ok, _ := d.Verify(basicRequest(t, "other", "secret")); ok {
+	if ok, _, _ := d.Verify(basicRequest(t, "other", "secret")); ok {
 		t.Fatal("invalid Basic username accepted")
 	}
 }
 
 func TestVerify_BasicRejectedWhenDisabled(t *testing.T) {
 	d := DigestAuthenticator{Username: "cpe", Password: "secret"}
-	if ok, _ := d.Verify(basicRequest(t, "cpe", "secret")); ok {
+	if ok, _, _ := d.Verify(basicRequest(t, "cpe", "secret")); ok {
 		t.Fatal("Basic credentials accepted without AllowBasic")
 	}
 }

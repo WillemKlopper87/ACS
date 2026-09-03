@@ -38,10 +38,16 @@ func (r *Repository) UpsertFromInform(ctx context.Context, id cwmp.DeviceID, eve
 		                      first_seen_at, last_updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, 'ONLINE', now(), $7, now(), now())
 		ON CONFLICT (oui_serial) DO UPDATE SET
-			manufacturer = EXCLUDED.manufacturer,
-			oui = EXCLUDED.oui,
-			product_class = EXCLUDED.product_class,
-			serial_number = EXCLUDED.serial_number,
+			-- audit C-1: manufacturer is not part of the oui_serial natural
+			-- key, so on a genuine match it should already agree with what
+			-- this same identity reported before -- set once, keep stable
+			-- after, rather than letting every subsequent Inform (including
+			-- one authenticated only by the shared fleet credential, which
+			-- asserts no specific device identity) silently rewrite it.
+			-- oui/product_class/serial_number are deliberately left alone:
+			-- they compose the very natural key this ON CONFLICT matched on,
+			-- so on a real conflict they cannot legitimately differ.
+			manufacturer = CASE WHEN COALESCE(devices.manufacturer, '') = '' THEN EXCLUDED.manufacturer ELSE devices.manufacturer END,
 			online_status = 'ONLINE',
 			last_inform_at = now(),
 			last_inform_event_codes = EXCLUDED.last_inform_event_codes,

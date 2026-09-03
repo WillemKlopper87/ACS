@@ -28,9 +28,12 @@ type Policy struct {
 	ParameterName string
 	DesiredValue  string
 	Enabled       bool
-	CreatedBy     string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// CustomerID is the policy's tenant owner (audit P0.5) -- nil means
+	// platform-global, restricted the same way DeviceGroup.CustomerID is.
+	CustomerID *string
+	CreatedBy  string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type Repository struct {
@@ -41,15 +44,15 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
-const columns = `id, name, model_filter, parameter_name, desired_value, enabled, created_by, created_at, updated_at`
+const columns = `id, name, model_filter, parameter_name, desired_value, enabled, customer_id, created_by, created_at, updated_at`
 
-func (r *Repository) Create(ctx context.Context, name string, modelFilter *string, parameterName, desiredValue, createdBy string) (*Policy, error) {
+func (r *Repository) Create(ctx context.Context, name string, modelFilter *string, parameterName, desiredValue string, customerID *string, createdBy string) (*Policy, error) {
 	id := uuid.New().String()
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO policies (id, name, model_filter, parameter_name, desired_value, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO policies (id, name, model_filter, parameter_name, desired_value, customer_id, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING `+columns,
-		id, name, modelFilter, parameterName, desiredValue, nullIfEmpty(createdBy))
+		id, name, modelFilter, parameterName, desiredValue, customerID, nullIfEmpty(createdBy))
 	return scan(row)
 }
 
@@ -104,14 +107,18 @@ func (r *Repository) ByID(ctx context.Context, id string) (*Policy, error) {
 
 // ForDevice returns every enabled policy whose model_filter matches this
 // device's manufacturer or product_class (or has no filter at all —
-// fleet-wide). Called on every Inform (enforce.go), so this stays a
-// simple indexed-free scan against what's normally a small table; not
-// meant to scale to thousands of policies.
-func (r *Repository) ForDevice(ctx context.Context, manufacturer, productClass string) ([]Policy, error) {
+// fleet-wide) AND whose customer_id is either platform-global or equal
+// to deviceCustomerID (audit P0.5 critical invariant: a matching model is
+// never sufficient authorization to mutate a device across a tenant
+// boundary). Called on every Inform (enforce.go), so this stays a simple
+// indexed-free scan against what's normally a small table; not meant to
+// scale to thousands of policies.
+func (r *Repository) ForDevice(ctx context.Context, manufacturer, productClass string, deviceCustomerID *string) ([]Policy, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT `+columns+` FROM policies
-		WHERE enabled AND (model_filter IS NULL OR $1 ILIKE model_filter OR $2 ILIKE model_filter)`,
-		manufacturer, productClass)
+		WHERE enabled AND (model_filter IS NULL OR $1 ILIKE model_filter OR $2 ILIKE model_filter)
+			AND (customer_id IS NULL OR customer_id = $3)`,
+		manufacturer, productClass, deviceCustomerID)
 	if err != nil {
 		return nil, fmt.Errorf("list policies for device: %w", err)
 	}
@@ -134,12 +141,15 @@ type scanner interface {
 
 func scan(s scanner) (*Policy, error) {
 	var p Policy
-	var modelFilter, createdBy sql.NullString
-	if err := s.Scan(&p.ID, &p.Name, &modelFilter, &p.ParameterName, &p.DesiredValue, &p.Enabled, &createdBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
+	var modelFilter, createdBy, customerID sql.NullString
+	if err := s.Scan(&p.ID, &p.Name, &modelFilter, &p.ParameterName, &p.DesiredValue, &p.Enabled, &customerID, &createdBy, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, fmt.Errorf("scan policy: %w", err)
 	}
 	if modelFilter.Valid {
 		p.ModelFilter = &modelFilter.String
+	}
+	if customerID.Valid {
+		p.CustomerID = &customerID.String
 	}
 	if createdBy.Valid {
 		p.CreatedBy = createdBy.String

@@ -19,6 +19,7 @@ type policyResponse struct {
 	ParameterName string  `json:"parameter_name"`
 	DesiredValue  string  `json:"desired_value"`
 	Enabled       bool    `json:"enabled"`
+	CustomerID    *string `json:"customer_id,omitempty"`
 	CreatedAt     string  `json:"created_at"`
 }
 
@@ -26,8 +27,33 @@ func toPolicyResponse(p *policy.Policy) policyResponse {
 	return policyResponse{
 		ID: p.ID, Name: p.Name, ModelFilter: p.ModelFilter,
 		ParameterName: p.ParameterName, DesiredValue: p.DesiredValue,
-		Enabled: p.Enabled, CreatedAt: p.CreatedAt.Format(time.RFC3339),
+		Enabled: p.Enabled, CustomerID: p.CustomerID, CreatedAt: p.CreatedAt.Format(time.RFC3339),
 	}
+}
+
+// scopedPolicy loads a policy and enforces the caller's tenancy scope
+// (audit P0.5/H-3), same 404-not-403 reasoning as scopedGroup/scopedTemplate.
+func (h *handler) scopedPolicy(w http.ResponseWriter, r *http.Request, id string) (*policy.Policy, bool) {
+	p, err := h.policies.ByID(r.Context(), id)
+	if errors.Is(err, policy.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return nil, false
+	}
+	if err != nil {
+		h.logger.Error("failed to get policy", "err", err, "id", id)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, false
+	}
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, false
+	}
+	if scoped && !deviceInScope(p.CustomerID, customerIDs) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return nil, false
+	}
+	return p, true
 }
 
 type createPolicyRequest struct {
@@ -35,6 +61,7 @@ type createPolicyRequest struct {
 	ModelFilter   *string `json:"model_filter,omitempty"`
 	ParameterName string  `json:"parameter_name"`
 	DesiredValue  string  `json:"desired_value"`
+	CustomerID    *string `json:"customer_id,omitempty"`
 }
 
 func (h *handler) createPolicy(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +75,21 @@ func (h *handler) createPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, err := h.policies.Create(r.Context(), req.Name, req.ModelFilter, req.ParameterName, req.DesiredValue, operatorFromRequest(r))
+	// audit P0.5: same rule as groups/templates — a scoped operator must
+	// name a customer_id within their own scope.
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if scoped {
+		if req.CustomerID == nil || !deviceInScope(req.CustomerID, customerIDs) {
+			http.Error(w, "customer_id is required and must be within your assigned scope", http.StatusBadRequest)
+			return
+		}
+	}
+
+	p, err := h.policies.Create(r.Context(), req.Name, req.ModelFilter, req.ParameterName, req.DesiredValue, req.CustomerID, operatorFromRequest(r))
 	if err != nil {
 		h.logger.Error("failed to create policy", "err", err, "name", req.Name)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -56,7 +97,7 @@ func (h *handler) createPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.auditor.Record(r.Context(), operatorFromRequest(r), "", "PolicyCreated", map[string]any{
-		"policy_id": p.ID, "name": p.Name, "parameter_name": p.ParameterName,
+		"policy_id": p.ID, "name": p.Name, "parameter_name": p.ParameterName, "customer_id": p.CustomerID,
 	}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
@@ -71,8 +112,16 @@ func (h *handler) listPolicies(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	items := make([]policyResponse, 0, len(list))
 	for _, p := range list {
+		if scoped && !deviceInScope(p.CustomerID, customerIDs) {
+			continue
+		}
 		items = append(items, toPolicyResponse(&p))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -80,6 +129,9 @@ func (h *handler) listPolicies(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) deletePolicy(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if _, ok := h.scopedPolicy(w, r, id); !ok {
+		return
+	}
 	if err := h.policies.Delete(r.Context(), id); errors.Is(err, policy.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -97,6 +149,9 @@ func (h *handler) deletePolicy(w http.ResponseWriter, r *http.Request) {
 func (h *handler) setPolicyEnabled(enabled bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if _, ok := h.scopedPolicy(w, r, id); !ok {
+			return
+		}
 		p, err := h.policies.SetEnabled(r.Context(), id, enabled)
 		if errors.Is(err, policy.ErrNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
