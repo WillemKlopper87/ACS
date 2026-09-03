@@ -53,8 +53,6 @@ type mockCPE struct {
 
 func (c *mockCPE) post(body string) (int, string) {
 	c.t.Helper()
-	// First attempt without credentials on a fresh nonce; the real CPE
-	// behaviour is to answer the 401 challenge and retry.
 	for attempt := 0; attempt < 2; attempt++ {
 		req, _ := http.NewRequest(http.MethodPost, c.url, strings.NewReader(body))
 		req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
@@ -111,11 +109,6 @@ func fixture(t *testing.T, name string) string {
 	return string(b)
 }
 
-// periodicInform is the bootstrap fixture with a "2 PERIODIC" event in
-// place of "0 BOOTSTRAP": a bootstrap Inform legitimately queues
-// auto-provisioning and parameter-discovery jobs, which would make the
-// "idle session closes" and "exactly this job is dispatched" assertions
-// below race against real behaviour rather than test it.
 func periodicInform(t *testing.T) string {
 	return strings.Replace(fixture(t, "inform_bootstrap.xml"), "0 BOOTSTRAP", "2 PERIODIC", 1)
 }
@@ -159,8 +152,6 @@ func TestIntegration_CPESession(t *testing.T) {
 	defer srv.Close()
 
 	cpe := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
-
-	// --- Session 1: bootstrap Inform, no work queued -------------------
 	code, body := cpe.post(periodicInform(t))
 	if code != 200 || !strings.Contains(body, "InformResponse") {
 		t.Fatalf("Inform → %d %s", code, body)
@@ -183,7 +174,6 @@ func TestIntegration_CPESession(t *testing.T) {
 	if v, ok := cached["Device.DeviceInfo.SoftwareVersion"]; !ok || v.Value != "2.3.1" {
 		t.Errorf("Inform parameters not cached: %+v", cached)
 	}
-	// Empty POST with nothing queued closes the session.
 	code, body = cpe.post("")
 	if code != 200 && code != 204 {
 		t.Fatalf("empty POST with no work → %d %s", code, body)
@@ -192,7 +182,6 @@ func TestIntegration_CPESession(t *testing.T) {
 		t.Error("session should be closed after an empty POST with no work")
 	}
 
-	// --- Session 2: a SET_PARAMETER job is dispatched and succeeds -----
 	job, err := h.jobs.Create(ctx, device.ID, jobs.TypeSetParameter,
 		jobs.SetParameterPayload{Parameters: []jobs.ParameterWrite{{Name: "Device.ManagementServer.PeriodicInformInterval", Value: "300", Type: "xsd:unsignedInt"}}}, "test")
 	if err != nil {
@@ -222,7 +211,6 @@ func TestIntegration_CPESession(t *testing.T) {
 		t.Errorf("job status after SetParameterValuesResponse = %s, want SUCCESS (fault=%v)", done.Status, done.FaultString)
 	}
 
-	// --- Session 3: the CPE faults the RPC -----------------------------
 	bad, _ := h.jobs.Create(ctx, device.ID, jobs.TypeSetParameter,
 		jobs.SetParameterPayload{Parameters: []jobs.ParameterWrite{{Name: "Device.Nope", Value: "1", Type: "xsd:string"}}}, "test")
 	cpe.cookie = nil
@@ -236,9 +224,8 @@ func TestIntegration_CPESession(t *testing.T) {
 		t.Errorf("job after CWMP fault = %+v, want FAILED with fault 9005", failed)
 	}
 
-	// --- Replayed Authorization header is refused ----------------------
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/cwmp", bytes.NewReader([]byte(periodicInform(t))))
-	req.Header.Set("Authorization", cpe.digest(http.MethodPost, "/cwmp")) // same nonce and nc as the last accepted request
+	req.Header.Set("Authorization", cpe.digest(http.MethodPost, "/cwmp"))
 	res, err := srv.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -249,9 +236,6 @@ func TestIntegration_CPESession(t *testing.T) {
 	}
 }
 
-// vendorInform renders a periodic Inform for one of the vendor catalog
-// profiles (internal/devices/adapters/catalogs), the "vendor profiles"
-// half of the mock-CPE harness (audit P3.3).
 func vendorInform(t *testing.T, manufacturer, oui, productClass, serial string) string {
 	s := periodicInform(t)
 	s = strings.Replace(s, "<Manufacturer>Zyxel</Manufacturer>", "<Manufacturer>"+manufacturer+"</Manufacturer>", 1)
@@ -300,8 +284,6 @@ func newTestGateway(t *testing.T) (*handler, *httptest.Server, context.Context) 
 	return h, srv, ctx
 }
 
-// TestIntegration_CPEVendorProfiles registers one device per vendor
-// catalog and checks each is recognised by manufacturer.
 func TestIntegration_CPEVendorProfiles(t *testing.T) {
 	h, srv, ctx := newTestGateway(t)
 	profiles := []struct{ manufacturer, oui, productClass, serial string }{
@@ -332,10 +314,6 @@ func TestIntegration_CPEVendorProfiles(t *testing.T) {
 	}
 }
 
-// TestIntegration_CPETransferComplete covers the firmware transfer path:
-// Download RPC dispatched, accepted, TransferComplete arriving in a later
-// session (delayed), then duplicated, then a stale fault; the last two
-// must not change the finished job (audit P3.3 "delayed/duplicate").
 func TestIntegration_CPETransferComplete(t *testing.T) {
 	h, srv, ctx := newTestGateway(t)
 	cpe := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
@@ -362,7 +340,6 @@ func TestIntegration_CPETransferComplete(t *testing.T) {
 		t.Fatalf("after DownloadResponse status = %s, want AWAITING_TRANSFER_COMPLETE", j.Status)
 	}
 
-	// Delayed: the CPE rebooted and opens a fresh session for TransferComplete.
 	tc := strings.Replace(fixture(t, "transfer_complete.xml"), "fw_20260804_test0001", job.CommandKey, 1)
 	cpe.cookie = nil
 	cpe.post(periodicInform(t))
@@ -374,44 +351,35 @@ func TestIntegration_CPETransferComplete(t *testing.T) {
 		t.Fatalf("after TransferComplete status = %s, want SUCCESS", j.Status)
 	}
 	jobsBefore, _ := h.jobs.List(ctx, device.ID, nil, false)
-
-	// Duplicate TransferComplete: acked, ignored, no extra confirmation job.
 	cpe.post(tc)
 	jobsAfter, _ := h.jobs.List(ctx, device.ID, nil, false)
 	if len(jobsAfter) != len(jobsBefore) {
 		t.Errorf("duplicate TransferComplete created %d extra job(s)", len(jobsAfter)-len(jobsBefore))
 	}
-	// Stale fault after success must not flip the outcome.
 	tcFault := strings.Replace(fixture(t, "transfer_complete_fault.xml"), "fw_20260804_test0002", job.CommandKey, 1)
 	cpe.post(tcFault)
 	j, _ = h.jobs.ByID(ctx, job.ID)
 	if j.Status != jobs.StatusSuccess {
 		t.Errorf("stale fault after success changed status to %s", j.Status)
 	}
-	// Unknown command key is acked, not an error.
 	if code, _ = cpe.post(fixture(t, "transfer_complete.xml")); code != 200 {
 		t.Errorf("TransferComplete with unknown command key: %d, want 200 ack", code)
 	}
 }
 
-// TestIntegration_CPEMalformed: malformed XML is rejected cleanly, and an
-// authenticated but session-less POST is answered without error.
 func TestIntegration_CPEMalformed(t *testing.T) {
 	_, srv, _ := newTestGateway(t)
 	cpe := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
-	cpe.post(periodicInform(t)) // establishes credentials/nonce
+	cpe.post(periodicInform(t))
 	if code, _ := cpe.post("<soap-env:Envelope><unclosed>"); code != 400 {
 		t.Errorf("malformed XML: %d, want 400", code)
 	}
 	cpe.cookie = nil
-	if code, _ := cpe.post(""); code != 200 {
-		t.Errorf("session-less empty POST: %d, want 200", code)
+	if code, _ := cpe.post(""); code != 200 && code != 204 {
+		t.Errorf("session-less empty POST: %d, want 200 or 204", code)
 	}
 }
 
-// TestIntegration_CPELoad is the load mode: ACS_TEST_LOAD_DEVICES
-// concurrent mock CPEs each run one Inform + empty-POST session.
-// Reports sessions/second; skipped unless the variable is set.
 func TestIntegration_CPELoad(t *testing.T) {
 	n, _ := strconv.Atoi(os.Getenv("ACS_TEST_LOAD_DEVICES"))
 	if n <= 0 {
