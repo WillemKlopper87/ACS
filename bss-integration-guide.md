@@ -202,9 +202,37 @@ accepted — some OAuth2 client libraries only support the body form.)
 ```
 
 Use `access_token` as the bearer token on every subsequent `/bss/v1/*`
-call, and request a new one when it expires. Revoking a client (admin
-panel) blocks new token requests immediately; already-issued tokens
-remain valid until their own expiry (max 1 hour).
+call, and request a new one when it expires.
+
+**Revocation (audit P2.3).** Revoking a client (admin panel) blocks new
+token requests immediately (`VerifyCredentials` checks `revoked_at` on
+every token exchange). Already-issued tokens are *also* checked on
+every request against the same revocation state — not just at
+issuance — so a token minted moments before a compromised client is
+revoked does not simply keep working for the rest of its 1-hour
+lifetime. The one caveat: this check runs behind a 15-second cache in
+`cmd/bssadapter` (bounding it to one Postgres lookup per client per
+15s instead of one per request), so the true worst-case residual
+window after clicking "revoke" is 15 seconds, not the full token TTL.
+
+**Emergency procedure — a client_secret or issued token is suspected
+compromised:**
+
+1. Revoke the client immediately from BSS Integration → OAuth Clients
+   in the admin panel. This is the single action that matters — it cuts
+   off both new token issuance and any already-issued token within 15
+   seconds.
+2. Confirm no traffic continues: `GET /bss/v1/health` (admin panel) or
+   the `bssadapter_*` request metrics should show the client's calls
+   stopping.
+3. Issue a new client (new `client_id`/`client_secret` pair) for the
+   integration once the BSS side has rotated whatever leaked. There is
+   no "rotate secret in place" — a compromised client is revoked and
+   replaced, not repaired.
+4. Check the audit log (`GET /audit-log`, filtered to BSS-adjacent
+   actions) and this client's mapping/order history for anything
+   dispatched during the suspected compromise window that needs manual
+   review.
 
 ### 3.2 Legacy shared token (deprecated, still accepted)
 

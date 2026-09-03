@@ -27,6 +27,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -195,7 +196,7 @@ func main() {
 		// missing token is rejected (401) without ever touching the rate
 		// limiter — otherwise an attacker could spray distinct bogus
 		// tokens to dodge a per-token bucket entirely.
-		Handler:           withAuth(token, oauthSigningSecret, withRateLimit(limiter, metrics, withMaxBody(mux))),
+		Handler:           withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(mux))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second, // every BSS route is a small JSON exchange
 		WriteTimeout:      60 * time.Second,
@@ -296,7 +297,17 @@ func envOrInt(key string, fallback int) int {
 //
 // Both are "off unless configured": if neither oauthSigningSecret nor
 // token is set, every request passes — same lab-mode default as before.
-func withAuth(token string, oauthSigningSecret []byte, next http.Handler) http.Handler {
+//
+// revoked (audit P2.3) is checked on every OAuth-client-issued token,
+// not just at issuance: JWT verification alone only proves the token
+// was validly signed and hasn't expired (up to oauthTokenTTL, one
+// hour), which would otherwise let a token issued just before an
+// operator revokes a compromised client keep working for the rest of
+// that hour. Chose active revocation checking over the document's other
+// options (shortening the TTL further, or accepting the residual
+// window) because it closes the gap outright rather than just bounding
+// it, and the check is cheap — see clientRevoked's short cache.
+func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Context, string) bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if (token == "" && len(oauthSigningSecret) == 0) ||
 			(r.Method == http.MethodGet && r.URL.Path == "/metrics") ||
@@ -310,7 +321,12 @@ func withAuth(token string, oauthSigningSecret []byte, next http.Handler) http.H
 		if len(oauthSigningSecret) > 0 {
 			if bearer, ok := strings.CutPrefix(got, "Bearer "); ok {
 				if claims, err := auth.VerifyJWT(oauthSigningSecret, bearer); err == nil && claims.Role == bssClientRole {
-					next.ServeHTTP(w, r)
+					clientID := strings.TrimPrefix(claims.Subject, "bss-client:")
+					if !revoked(r.Context(), clientID) {
+						next.ServeHTTP(w, r)
+						return
+					}
+					writeError(w, http.StatusUnauthorized, "ErrUnauthorized", "oauth client has been revoked")
 					return
 				}
 			}
@@ -373,6 +389,49 @@ type handler struct {
 	// controlled) may point (audit H-7) -- checked at subscription
 	// creation and again at delivery time.
 	netPolicy netguard.Policy
+
+	// revocationMu/revocationCache back clientRevoked (audit P2.3): a
+	// short-TTL cache of oauth_clients.revoked_at, keyed by client_id, so
+	// checking it on every request costs one Postgres lookup per client
+	// per TTL rather than per request.
+	revocationMu    sync.Mutex
+	revocationCache map[string]revocationEntry
+}
+
+type revocationEntry struct {
+	revoked bool
+	expires time.Time
+}
+
+// revocationCacheTTL bounds how long a just-revoked OAuth client's
+// already-issued tokens keep working after the revocation call — the
+// same shape and TTL as cmd/api's operator token_version cache.
+const revocationCacheTTL = 15 * time.Second
+
+// clientRevoked reports whether clientID's OAuth client has been
+// revoked (audit P2.3). Fails closed: a lookup error is treated as
+// revoked, so a Postgres blip can't resurrect a revoked client's access.
+func (h *handler) clientRevoked(ctx context.Context, clientID string) bool {
+	h.revocationMu.Lock()
+	entry, ok := h.revocationCache[clientID]
+	h.revocationMu.Unlock()
+	if ok && time.Now().Before(entry.expires) {
+		return entry.revoked
+	}
+
+	revoked, err := h.oauthClients.IsRevoked(ctx, clientID)
+	if err != nil {
+		h.logger.Error("oauth client revocation check failed", "err", err, "client_id", clientID)
+		return true
+	}
+	entry = revocationEntry{revoked: revoked, expires: time.Now().Add(revocationCacheTTL)}
+	h.revocationMu.Lock()
+	if h.revocationCache == nil {
+		h.revocationCache = map[string]revocationEntry{}
+	}
+	h.revocationCache[clientID] = entry
+	h.revocationMu.Unlock()
+	return revoked
 }
 
 // errorEnvelope matches the BSS integration guide §4 error shape.

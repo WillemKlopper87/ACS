@@ -106,6 +106,26 @@ func (r *OAuthRepository) RevokeClient(ctx context.Context, id string) error {
 	return nil
 }
 
+// IsRevoked reports whether clientID (embedded in an already-issued
+// access token's claims, audit P2.3) has since been revoked — checked
+// on every request behind a short cache (see cmd/bssadapter's
+// withAuth), the same "bound the residual validity of an already-issued
+// token to a short, explicit cache TTL rather than its own long
+// expiry" shape cmd/api's operator token_version check already uses.
+// An unknown client_id (deleted row, or none — defensive) counts as
+// revoked: fail closed.
+func (r *OAuthRepository) IsRevoked(ctx context.Context, clientID string) (bool, error) {
+	var revokedAt sql.NullTime
+	err := r.db.QueryRowContext(ctx, `SELECT revoked_at FROM bss_oauth_clients WHERE client_id = $1`, clientID).Scan(&revokedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return true, fmt.Errorf("check oauth client revocation: %w", err)
+	}
+	return revokedAt.Valid, nil
+}
+
 // VerifyCredentials checks a client_id/client_secret pair against the
 // stored bcrypt hash — constant-time by construction (bcrypt.CompareHashAndPassword
 // is designed to be), and rejects a revoked client even with a correct secret.
