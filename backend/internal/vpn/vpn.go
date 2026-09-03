@@ -245,6 +245,23 @@ func (r *Repository) GetPeerConfig(ctx context.Context, deviceID string) (*Peer,
 	return peer, nil
 }
 
+// GetPeerByID fetches a peer by its own id (not its device) — the
+// private key is never decrypted or returned here (audit P2.1/H-3);
+// this exists so a peer-addressed route can learn which device it
+// belongs to before authorizing the caller against that device's scope.
+func (r *Repository) GetPeerByID(ctx context.Context, id string) (*Peer, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT `+peerColumns+` FROM device_vpn_peers WHERE id = $1`, id)
+	peer, err := r.scanPeer(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	peer.PrivateKey = ""
+	return peer, nil
+}
+
 // RevokePeer marks a peer REVOKED and frees its overlay IP for reuse —
 // it does not (cannot, from this process) tear down a live tunnel, since
 // no OS-level WireGuard interface is managed here; see this package's

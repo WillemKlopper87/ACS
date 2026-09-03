@@ -463,6 +463,28 @@ func TestIntegration_H3SubResourceIsolation(t *testing.T) {
 			t.Errorf("alice's vpn peer list leaks bob's device: %s", r.body)
 		}
 	})
+
+	t.Run("vpn peer revoke is scoped", func(t *testing.T) {
+		r := e.call("bob", "POST", "/api/v1/devices/"+devB+"/vpn/enroll", nil)
+		if r.code != 200 && r.code != 201 {
+			t.Fatalf("bob enroll vpn peer → %d %s", r.code, r.body)
+		}
+		var created struct {
+			Peer struct {
+				ID string `json:"id"`
+			} `json:"peer"`
+		}
+		_ = json.Unmarshal([]byte(r.body), &created)
+		if created.Peer.ID == "" {
+			t.Fatalf("enroll response has no peer id: %s", r.body)
+		}
+		if r := e.call("alice", "DELETE", "/api/v1/vpn/peers/"+created.Peer.ID, nil); r.code != 404 {
+			t.Errorf("alice revoke bob's vpn peer → %d, want 404", r.code)
+		}
+		if r := e.call("bob", "DELETE", "/api/v1/vpn/peers/"+created.Peer.ID, nil); r.code != 204 {
+			t.Errorf("bob revoke his own vpn peer → %d, want 204", r.code)
+		}
+	})
 }
 
 // TestIntegration_ZeroScopeDenyByDefault is the P0.1 acceptance gate

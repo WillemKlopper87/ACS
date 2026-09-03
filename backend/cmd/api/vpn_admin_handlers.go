@@ -10,6 +10,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 
 	"acs/internal/vpn"
@@ -97,6 +98,21 @@ func (h *handler) getVPNPeerConfig(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) revokeVPNPeer(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("peer_id")
+	// audit P2.1/H-3: this route is peer-addressed with no device_id in
+	// the path — without loading the peer first to learn its device, any
+	// operator could revoke any tenant's VPN peer by UUID alone.
+	peer, err := h.vpnPeers.GetPeerByID(r.Context(), id)
+	if errors.Is(err, vpn.ErrNotFound) {
+		http.Error(w, "vpn peer not found or already revoked", http.StatusNotFound)
+		return
+	} else if err != nil {
+		h.logger.Error("failed to load vpn peer", "err", err, "id", id)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if _, ok := h.getScopedDevice(w, r, peer.DeviceID); !ok {
+		return
+	}
 	if err := h.vpnPeers.RevokePeer(r.Context(), id); err == vpn.ErrNotFound {
 		http.Error(w, "vpn peer not found or already revoked", http.StatusNotFound)
 		return
