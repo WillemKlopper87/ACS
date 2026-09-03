@@ -79,7 +79,18 @@ func (h *handler) listFirmwareImages(w http.ResponseWriter, r *http.Request) {
 // staging step), and records the metadata. The binary never touches
 // Postgres (v3 §9.4/§19.4).
 func (h *handler) uploadFirmwareImage(w http.ResponseWriter, r *http.Request) {
+	// audit P1.4: ParseMultipartForm's argument below only bounds how
+	// much of a small form part is buffered in memory before spilling to
+	// a temp file — it is not a total request-size limit, so without
+	// this the endpoint accepted an unbounded body streamed straight to
+	// disk (h.firmwareFS.Save has no cap of its own either).
+	r.Body = http.MaxBytesReader(w, r.Body, h.firmwareMaxBytes)
 	if err := r.ParseMultipartForm(64 << 20); err != nil { // 64 MiB header buffer; the file itself streams
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, fmt.Sprintf("upload exceeds the %d-byte limit", h.firmwareMaxBytes), http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "invalid multipart form", http.StatusBadRequest)
 		return
 	}

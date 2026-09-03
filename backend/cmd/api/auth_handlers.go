@@ -297,9 +297,19 @@ func (h *handler) issueBrowserTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
+	// audit P1.5: a ticket carries the operator's token version from the
+	// parent session JWT that authenticated this request, not the zero
+	// value — withJWTAuth's version check (line ~170) applies to ticket
+	// routes exactly like any other, so a ticket minted with no version
+	// would either outlive a revocation it should have died with (an
+	// operator whose TokenVersion has never left its initial value), or
+	// come out dead on arrival forever after the first revocation (any
+	// operator whose TokenVersion has since moved past that initial
+	// value) — this ties a ticket's validity to the same revocation
+	// event as the session it was minted from, and to no other.
 	ticket, err := auth.SignJWT(h.jwtSecret, auth.Claims{
 		Subject: claims.Subject, Role: claims.Role, Audience: auth.AudienceBrowserTicket,
-		IssuedAt: now, ExpiresAt: now.Add(browserTicketTTL),
+		IssuedAt: now, ExpiresAt: now.Add(browserTicketTTL), Version: claims.Version,
 	})
 	if err != nil {
 		h.logger.Error("failed to sign browser ticket", "err", err, "username", claims.Subject)

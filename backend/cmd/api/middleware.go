@@ -27,7 +27,10 @@ func withBodyLimit(next http.Handler) http.Handler {
 		case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/uploads/") && strings.HasSuffix(path, "/receive"):
 			// CPE upload receipt — bounded by ACS_UPLOAD_MAX_BYTES in the handler.
 		case r.Method == http.MethodPost && path == "/api/v1/firmware/images":
-			// multipart firmware publish — bounded by ParseMultipartForm.
+			// multipart firmware publish — bounded by h.firmwareMaxBytes in
+			// the handler itself (audit P1.4: ParseMultipartForm's own
+			// argument is not a total-size limit, so this needs its own,
+			// larger MaxBytesReader rather than the default maxJSONBody).
 		case r.Method == http.MethodPost && path == "/api/v1/devices/import":
 			r.Body = http.MaxBytesReader(w, r.Body, maxImportBody)
 		default:

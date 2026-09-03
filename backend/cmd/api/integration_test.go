@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -107,7 +108,8 @@ func newTestEnv(t *testing.T) *testEnv {
 		operators:       operators.NewRepository(db),
 		jwtSecret:       testJWTSecret,
 		transferKey:     transfer.DeriveKey(testJWTSecret),
-		uploadMaxBytes:  1 << 20,
+		uploadMaxBytes:   1 << 20,
+		firmwareMaxBytes: 1 << 20,
 		metrics:         metrics,
 		groups:          devices.NewGroupRepository(db),
 		credentials:     credRepo,
@@ -568,6 +570,142 @@ func TestIntegration_ConcurrentUploadPUTs(t *testing.T) {
 	wantSHA := hex.EncodeToString(sum[:])
 	if f.SHA256 == nil || *f.SHA256 != wantSHA {
 		t.Errorf("recorded sha256 = %v, want %s (the actual retained file's hash)", f.SHA256, wantSHA)
+	}
+}
+
+// TestIntegration_BrowserTicketTokenVersion is the P1.5 acceptance gate:
+// a browser ticket must carry the operator's token version at mint time,
+// not the zero value — so it dies with the same revocation event as its
+// parent session, and a ticket minted from a fresh session after
+// logout/password-reset works again.
+func TestIntegration_BrowserTicketTokenVersion(t *testing.T) {
+	e := newTestEnv(t)
+	custA := e.customer("Customer A")
+	devA := e.device("A001", &custA)
+	e.operator("alice", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custA})
+	e.grant(operators.RoleManager, operators.PermCLIAccess)
+
+	mintTicket := func() string {
+		t.Helper()
+		r := e.call("alice", "POST", "/api/v1/auth/ticket", nil)
+		if r.code != 200 {
+			t.Fatalf("mint ticket → %d %s", r.code, r.body)
+		}
+		var out struct {
+			Ticket string `json:"ticket"`
+		}
+		_ = json.Unmarshal([]byte(r.body), &out)
+		return out.Ticket
+	}
+	// A ticket-protected route (webgui proxy) against a real, in-scope
+	// device with no webgui configured: 401 means withJWTAuth's version
+	// check itself rejected the ticket; 404 ("no web GUI configured")
+	// means it passed that check and reached the real handler — the
+	// distinction this test needs, without standing up a full proxy target.
+	useTicket := func(ticket string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, e.srv.URL+"/api/v1/devices/"+devA+"/webgui/proxy/x?token="+ticket, nil)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	relogin := func() {
+		t.Helper()
+		r := e.call("", "POST", "/api/v1/auth/login", map[string]string{"username": "alice", "password": "pw-alice"})
+		if r.code != 200 {
+			t.Fatalf("relogin → %d %s", r.code, r.body)
+		}
+		var lr struct {
+			Token string `json:"token"`
+		}
+		_ = json.Unmarshal([]byte(r.body), &lr)
+		e.tokens["alice"] = lr.Token
+	}
+
+	t.Run("uses current token version", func(t *testing.T) {
+		if got := useTicket(mintTicket()); got == http.StatusUnauthorized {
+			t.Errorf("freshly minted ticket → 401, want to pass the auth layer (got %d)", got)
+		}
+	})
+
+	t.Run("works after logout and relogin", func(t *testing.T) {
+		stale := mintTicket()
+		if r := e.call("alice", "POST", "/api/v1/auth/logout", nil); r.code != 204 {
+			t.Fatalf("logout → %d %s", r.code, r.body)
+		}
+		if got := useTicket(stale); got != http.StatusUnauthorized {
+			t.Errorf("ticket minted before logout → %d, want 401", got)
+		}
+		relogin()
+		if got := useTicket(mintTicket()); got == http.StatusUnauthorized {
+			t.Errorf("ticket minted after relogin → 401, want to pass the auth layer (got %d)", got)
+		}
+	})
+
+	t.Run("works after password reset and relogin", func(t *testing.T) {
+		stale := mintTicket()
+		op, err := e.h.operators.ByUsername(e.ctx, "alice")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.h.operators.UpdatePassword(e.ctx, op.ID, op.PasswordHash); err != nil {
+			t.Fatal(err)
+		}
+		e.h.forgetTokenVersion("alice")
+		if got := useTicket(stale); got != http.StatusUnauthorized {
+			t.Errorf("ticket minted before password reset → %d, want 401", got)
+		}
+		relogin()
+		if got := useTicket(mintTicket()); got == http.StatusUnauthorized {
+			t.Errorf("ticket minted after post-reset relogin → 401, want to pass the auth layer (got %d)", got)
+		}
+	})
+}
+
+// TestIntegration_FirmwareUploadSizeLimit is the P1.4 acceptance gate:
+// ParseMultipartForm's own argument is a memory-buffer threshold, not a
+// total request-size limit, so the publish endpoint must enforce
+// firmwareMaxBytes itself.
+func TestIntegration_FirmwareUploadSizeLimit(t *testing.T) {
+	e := newTestEnv(t)
+	e.operator("root", operators.RoleSuperAdmin)
+
+	upload := func(fileSize int, version string) int {
+		t.Helper()
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		_ = mw.WriteField("vendor", "TestVendor")
+		_ = mw.WriteField("model", "TestModel")
+		_ = mw.WriteField("version", version)
+		fw, err := mw.CreateFormFile("file", "fw.bin")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fw.Write(bytes.Repeat([]byte("x"), fileSize)); err != nil {
+			t.Fatal(err)
+		}
+		if err := mw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		req, _ := http.NewRequest(http.MethodPost, e.srv.URL+"/api/v1/firmware/images", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		req.Header.Set("Authorization", "Bearer "+e.tokens["root"])
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		return res.StatusCode
+	}
+
+	if got := upload(1<<20+1024, "v1-too-big"); got != http.StatusRequestEntityTooLarge {
+		t.Errorf("upload over firmwareMaxBytes → %d, want 413", got)
+	}
+	if got := upload(1024, "v1-ok"); got != http.StatusCreated {
+		t.Errorf("upload under firmwareMaxBytes → %d, want 201", got)
 	}
 }
 

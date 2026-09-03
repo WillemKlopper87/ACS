@@ -162,6 +162,19 @@ func main() {
 		}
 		uploadMaxBytes = n
 	}
+	// audit P1.4: ParseMultipartForm's argument only bounds the in-memory
+	// buffer for small form parts — it is not a total request-size limit,
+	// so without this the firmware publish endpoint accepted an
+	// unbounded body streamed straight to disk.
+	firmwareMaxBytes := int64(1 << 30) // 1 GiB default ceiling per firmware image
+	if v := os.Getenv("ACS_FIRMWARE_MAX_BYTES"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n <= 0 {
+			logger.Error("invalid ACS_FIRMWARE_MAX_BYTES", "value", v)
+			os.Exit(1)
+		}
+		firmwareMaxBytes = n
+	}
 
 	// Outbound device-network policy for the web-GUI proxy and console
 	// bridge (audit P0.4). Loopback/link-local/metadata/multicast targets
@@ -209,6 +222,7 @@ func main() {
 		jwtSecret:           jwtSecret,
 		transferKey:         transferKey,
 		uploadMaxBytes:      uploadMaxBytes,
+		firmwareMaxBytes:    firmwareMaxBytes,
 		netPolicy:           netPolicy,
 		bssWebhookNetPolicy: bssWebhookNetPolicy,
 		metrics:             metrics,
@@ -380,6 +394,9 @@ type handler struct {
 	// from the JWT secret; empty (dev mode only) disables enforcement.
 	transferKey    []byte
 	uploadMaxBytes int64
+	// firmwareMaxBytes caps a firmware publish request's total body size
+	// (audit P1.4) — see ACS_FIRMWARE_MAX_BYTES.
+	firmwareMaxBytes int64
 
 	// netPolicy restricts where the web-GUI proxy and console bridge
 	// may dial (audit P0.4) — see ACS_DEVICE_NET_ALLOWED_CIDRS.
