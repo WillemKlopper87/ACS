@@ -67,14 +67,25 @@ const listLimit = 300
 
 // List returns the most recent audit entries, optionally filtered by
 // device_id and/or action, newest first. Either filter empty means "any."
-func (a *Auditor) List(ctx context.Context, deviceID, action string) ([]AuditEntry, error) {
+// List returns audit entries, most recent first. When scoped is true
+// (audit P2.1/M-12), results are restricted to entries whose device_id
+// resolves to one of customerIDs — both a platform-wide action (no
+// device_id at all: operator/tenancy management, other structural CRUD)
+// and a foreign-tenant device's entries are excluded, since either can
+// carry another tenant's identifying details (device IDs, VPN overlay
+// IPs and keys, template parameter values) into a response a scoped
+// caller — the lowest, "ro", role tier — could otherwise read.
+// customerIDs/scoped are ignored when scoped is false (superadmin/
+// GlobalAccess caller, or auth disabled).
+func (a *Auditor) List(ctx context.Context, deviceID, action string, customerIDs []string, scoped bool) ([]AuditEntry, error) {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT id, occurred_at, actor, device_id, action, details
 		FROM audit_log
 		WHERE ($1 = '' OR device_id::text = $1)
 		  AND ($2 = '' OR action = $2)
+		  AND (NOT $4 OR device_id IN (SELECT id FROM devices WHERE customer_id = ANY($5)))
 		ORDER BY occurred_at DESC
-		LIMIT $3`, deviceID, action, listLimit)
+		LIMIT $3`, deviceID, action, listLimit, scoped, customerIDs)
 	if err != nil {
 		return nil, fmt.Errorf("list audit log: %w", err)
 	}

@@ -49,7 +49,20 @@ func (h *handler) enrollVPNPeer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) listVPNPeers(w http.ResponseWriter, r *http.Request) {
-	items, err := h.vpnPeers.ListPeers(r.Context())
+	// audit P2.1/M-12: a peer row names its device and overlay IP, both
+	// cross-tenant identifying details — this list must not be
+	// fleet-wide for a scoped operator.
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	var items []vpn.Peer
+	if scoped {
+		items, err = h.vpnPeers.ListPeersForCustomers(r.Context(), customerIDs)
+	} else {
+		items, err = h.vpnPeers.ListPeers(r.Context())
+	}
 	if err != nil {
 		h.logger.Error("failed to list vpn peers", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

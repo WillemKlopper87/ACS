@@ -152,6 +152,22 @@ func (h *handler) activateDeviceCredential(w http.ResponseWriter, r *http.Reques
 	}
 	credID := r.PathValue("credential_id")
 
+	// audit H-3: the scope check above only covers the path device —
+	// without this, a scoped operator could pass their own device_id
+	// (to clear that check) alongside an arbitrary foreign credential_id
+	// and activate another tenant's PENDING rotation.
+	if existing, err := h.credentials.ByID(r.Context(), credID); errors.Is(err, credentials.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		h.logger.Error("failed to load credential", "err", err, "credential_id", credID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	} else if existing.DeviceID != deviceID {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
 	cred, err := h.credentials.Activate(r.Context(), credID)
 	if errors.Is(err, credentials.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -181,6 +197,22 @@ func (h *handler) revokeDeviceCredential(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	credID := r.PathValue("credential_id")
+
+	// audit H-3: same cross-device check as activateDeviceCredential —
+	// without it a scoped operator could revoke another tenant's ACTIVE
+	// credential by pairing their own device_id with a foreign
+	// credential_id, breaking that device's Connection Request auth.
+	if existing, err := h.credentials.ByID(r.Context(), credID); errors.Is(err, credentials.ErrNotFound) {
+		http.Error(w, "not found (or not in a revocable state)", http.StatusNotFound)
+		return
+	} else if err != nil {
+		h.logger.Error("failed to load credential", "err", err, "credential_id", credID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	} else if existing.DeviceID != deviceID {
+		http.Error(w, "not found (or not in a revocable state)", http.StatusNotFound)
+		return
+	}
 
 	cred, err := h.credentials.Revoke(r.Context(), credID)
 	if errors.Is(err, credentials.ErrNotFound) {

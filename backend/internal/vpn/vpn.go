@@ -175,10 +175,41 @@ func (r *Repository) EnrollDevice(ctx context.Context, deviceID string) (*Peer, 
 
 // ListPeers returns every peer, private keys always redacted — this is
 // the admin panel's list view, never a place a raw key should appear.
+// ListPeers returns every peer, unfiltered. Callers enforce tenancy
+// scope (audit P2.1/M-12) — see ListPeersForCustomers for the scoped
+// equivalent, the same split devices.List/deviceScope already uses.
 func (r *Repository) ListPeers(ctx context.Context) ([]Peer, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+peerColumns+` FROM device_vpn_peers ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list vpn peers: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Peer
+	for rows.Next() {
+		p, err := r.scanPeer(rows)
+		if err != nil {
+			return nil, err
+		}
+		p.PrivateKey = ""
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
+// ListPeersForCustomers returns every peer whose device belongs to one
+// of customerIDs (audit P2.1/M-12) — what a scoped operator's peer list
+// must be restricted to, since a peer row names its device and overlay
+// IP, both cross-tenant identifying details.
+func (r *Repository) ListPeersForCustomers(ctx context.Context, customerIDs []string) ([]Peer, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT p.id, p.device_id, p.public_key, p.private_key, p.overlay_ip, p.status, p.created_at, p.revoked_at
+		FROM device_vpn_peers p
+		JOIN devices d ON d.id = p.device_id
+		WHERE d.customer_id = ANY($1)
+		ORDER BY p.created_at DESC`, customerIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list vpn peers for customers: %w", err)
 	}
 	defer rows.Close()
 

@@ -36,7 +36,16 @@ func (h *handler) listAuditLog(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.URL.Query().Get("device_id")
 	action := r.URL.Query().Get("action")
 
-	entries, err := h.auditor.List(r.Context(), deviceID, action)
+	// audit P2.1/M-12: the audit trail carries other tenants' device IDs,
+	// VPN overlay IPs/keys, and template parameter values — a scoped
+	// operator (this route's minimum tier is "ro", the lowest) must not
+	// read entries outside their own scope.
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	entries, err := h.auditor.List(r.Context(), deviceID, action, customerIDs, scoped)
 	if err != nil {
 		h.logger.Error("failed to list audit log", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

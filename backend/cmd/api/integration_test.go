@@ -340,6 +340,131 @@ func TestIntegration_TenantIsolation(t *testing.T) {
 	})
 }
 
+// TestIntegration_H3SubResourceIsolation covers the H-3/P2.1 IDOR gaps
+// that survived the original P0.2 device-addressed scoping pass: cross-
+// device credential activate/revoke, CLI-credential delete with no
+// device in the check at all, cross-tenant bulk import, and fleet-wide
+// audit-log/VPN-peer reads for a scoped operator.
+func TestIntegration_H3SubResourceIsolation(t *testing.T) {
+	e := newTestEnv(t)
+	custA, custB := e.customer("Customer A"), e.customer("Customer B")
+	devA := e.device("A001", &custA)
+	devB := e.device("B001", &custB)
+	e.operator("alice", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custA})
+	e.operator("bob", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custB})
+	e.grant(operators.RoleManager, operators.PermCredentialManage, operators.PermCLIAccess, operators.PermTenancyManage)
+
+	t.Run("credential activate/revoke cannot cross devices", func(t *testing.T) {
+		r := e.call("bob", "POST", "/api/v1/devices/"+devB+"/credentials/rotate", nil)
+		if r.code != 200 && r.code != 202 {
+			t.Fatalf("bob rotate own credential → %d %s", r.code, r.body)
+		}
+		var created struct {
+			ID string `json:"id"`
+		}
+		_ = json.Unmarshal([]byte(r.body), &created)
+		if created.ID == "" {
+			t.Fatalf("rotate response has no credential id: %s", r.body)
+		}
+		// alice pairs her own device_id with bob's credential_id.
+		if r := e.call("alice", "POST", "/api/v1/devices/"+devA+"/credentials/"+created.ID+"/activate", nil); r.code != 404 {
+			t.Errorf("alice activate bob's credential via her own device path → %d, want 404", r.code)
+		}
+		if r := e.call("alice", "POST", "/api/v1/devices/"+devA+"/credentials/"+created.ID+"/revoke", nil); r.code != 404 {
+			t.Errorf("alice revoke bob's credential via her own device path → %d, want 404", r.code)
+		}
+		// bob himself still can (sanity check the fix didn't over-block).
+		if r := e.call("bob", "POST", "/api/v1/devices/"+devB+"/credentials/"+created.ID+"/revoke", nil); r.code != 200 {
+			t.Errorf("bob revoke his own credential → %d %s, want 200", r.code, r.body)
+		}
+	})
+
+	t.Run("cli credential delete is scoped", func(t *testing.T) {
+		r := e.call("bob", "POST", "/api/v1/devices/"+devB+"/cli/credentials", map[string]any{
+			"protocol": "SSH", "host": "10.99.0.5", "port": 22, "username": "root", "password": "x",
+		})
+		if r.code != 200 && r.code != 201 {
+			t.Fatalf("bob create cli credential → %d %s", r.code, r.body)
+		}
+		var created struct {
+			ID string `json:"id"`
+		}
+		_ = json.Unmarshal([]byte(r.body), &created)
+		if created.ID == "" {
+			t.Fatalf("cli credential response has no id: %s", r.body)
+		}
+		if r := e.call("alice", "DELETE", "/api/v1/devices/"+devA+"/cli/credentials/"+created.ID, nil); r.code != 404 {
+			t.Errorf("alice delete bob's cli credential → %d, want 404", r.code)
+		}
+		if r := e.call("bob", "DELETE", "/api/v1/devices/"+devB+"/cli/credentials/"+created.ID, nil); r.code != 204 {
+			t.Errorf("bob delete his own cli credential → %d, want 204", r.code)
+		}
+	})
+
+	t.Run("bulk import cannot plant or reassign a device outside scope", func(t *testing.T) {
+		r := e.call("alice", "POST", "/api/v1/devices/import?format=json", []map[string]any{
+			{"manufacturer": "Evil", "oui": "AABBCC", "serial_number": "HIJACK01", "customer_id": custB},
+		})
+		if r.code != 200 {
+			t.Fatalf("import → %d %s", r.code, r.body)
+		}
+		if !strings.Contains(r.body, `"status":"error"`) || strings.Contains(r.body, `"succeeded":1`) {
+			t.Errorf("import into a foreign customer_id should be rejected, got: %s", r.body)
+		}
+
+		// bob imports a device into his own customer...
+		importRow := map[string]any{"manufacturer": "Importable", "oui": "DDEEFF", "serial_number": "SHARED01", "customer_id": custB}
+		r = e.call("bob", "POST", "/api/v1/devices/import?format=json", []map[string]any{importRow})
+		if r.code != 200 || !strings.Contains(r.body, `"succeeded":1`) {
+			t.Fatalf("bob import own device → %d %s", r.code, r.body)
+		}
+		// ...and alice re-importing the exact same natural key, scoped to
+		// her own customer, must not reassign it away from bob's.
+		hijack := map[string]any{"manufacturer": "Importable", "oui": "DDEEFF", "serial_number": "SHARED01", "customer_id": custA}
+		r = e.call("alice", "POST", "/api/v1/devices/import?format=json", []map[string]any{hijack})
+		if r.code != 200 {
+			t.Fatalf("import → %d %s", r.code, r.body)
+		}
+		if !strings.Contains(r.body, `"status":"error"`) {
+			t.Errorf("re-importing a foreign tenant's existing device should be rejected, got: %s", r.body)
+		}
+		imported, err := e.h.devices.GetByOUIserial(e.ctx, "DDEEFF++SHARED01")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if imported.CustomerID == nil || *imported.CustomerID != custB {
+			t.Errorf("shared device's customer_id after hijack attempt = %v, want unchanged (%s)", imported.CustomerID, custB)
+		}
+	})
+
+	t.Run("audit log is scoped", func(t *testing.T) {
+		if err := e.h.auditor.Record(e.ctx, "system", devB, "TestEvent", map[string]any{"secret": "bob-only"}); err != nil {
+			t.Fatal(err)
+		}
+		r := e.call("alice", "GET", "/api/v1/audit-log", nil)
+		if r.code != 200 {
+			t.Fatalf("alice list audit log → %d", r.code)
+		}
+		if strings.Contains(r.body, "bob-only") || strings.Contains(r.body, devB) {
+			t.Errorf("alice's audit log leaks bob's device entry: %s", r.body)
+		}
+		r = e.call("bob", "GET", "/api/v1/audit-log", nil)
+		if !strings.Contains(r.body, devB) {
+			t.Errorf("bob's own audit log should include his device's entries: %s", r.body)
+		}
+	})
+
+	t.Run("vpn peer list is scoped", func(t *testing.T) {
+		r := e.call("alice", "GET", "/api/v1/vpn/peers", nil)
+		if r.code != 200 {
+			t.Fatalf("alice list vpn peers → %d %s", r.code, r.body)
+		}
+		if strings.Contains(r.body, devB) {
+			t.Errorf("alice's vpn peer list leaks bob's device: %s", r.body)
+		}
+	})
+}
+
 // TestIntegration_ZeroScopeDenyByDefault is the P0.1 acceptance gate
 // (ACS_REMEDIATION_EXECUTION_PROTOCOL_2026-09-03.md §5): zero
 // operator_scopes rows must mean zero device access, never unrestricted

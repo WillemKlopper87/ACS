@@ -117,6 +117,21 @@ func (h *handler) importDevices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// audit H-3: PreRegister UPSERTs on oui_serial, so an unchecked
+	// customer_id lets a bulk import both plant a device into a
+	// customer_id the caller has no scope over, and reassign an already-
+	// registered device that currently belongs to a *different* tenant
+	// into the importer's own — a cross-tenant device hijack via a
+	// guessed or known OUI/serial. A scoped caller must name a
+	// customer_id within their own scope, and any row that would touch
+	// an existing device outside that scope is rejected instead of
+	// silently reassigning it.
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	results := make([]importRowResult, 0, len(rows))
 	created := 0
 	for _, row := range rows {
@@ -128,6 +143,16 @@ func (h *handler) importDevices(w http.ResponseWriter, r *http.Request) {
 		var customerID *string
 		if row.CustomerID != "" {
 			customerID = &row.CustomerID
+		}
+		if scoped {
+			if customerID == nil || !deviceInScope(customerID, customerIDs) {
+				results = append(results, importRowResult{SerialNumber: row.SerialNumber, Status: "error", Error: "customer_id is required and must be within your assigned scope"})
+				continue
+			}
+			if existing, err := h.devices.GetByOUIserial(r.Context(), ouiSerial); err == nil && !deviceInScope(existing.CustomerID, customerIDs) {
+				results = append(results, importRowResult{SerialNumber: row.SerialNumber, Status: "error", Error: "not found"})
+				continue
+			}
 		}
 		if _, err := h.devices.PreRegister(r.Context(), ouiSerial, row.Manufacturer, row.OUI, row.ProductClass, row.SerialNumber, customerID, row.Tags); err != nil {
 			h.logger.Error("failed to pre-register device", "err", err, "oui_serial", ouiSerial)

@@ -100,6 +100,22 @@ func (h *handler) listCLICredentials(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) deleteCLICredential(w http.ResponseWriter, r *http.Request) {
 	credentialID := r.PathValue("credential_id")
+	// audit H-3: this route is credential-addressed with no device_id in
+	// the path at all — without loading the credential to check its own
+	// device against the caller's scope first, any operator could delete
+	// any tenant's stored SSH/Telnet credentials by UUID alone.
+	cred, err := h.cli.ByID(r.Context(), credentialID)
+	if errors.Is(err, cliaccess.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		h.logger.Error("failed to load cli credential", "err", err, "credential_id", credentialID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if _, ok := h.getScopedDevice(w, r, cred.DeviceID); !ok {
+		return
+	}
 	if err := h.cli.Delete(r.Context(), credentialID); errors.Is(err, cliaccess.ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
