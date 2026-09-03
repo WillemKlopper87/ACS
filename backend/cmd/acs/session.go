@@ -89,7 +89,9 @@ func readCWMPBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 
 type unsupportedEncodingError struct{ encoding string }
 
-func (e *unsupportedEncodingError) Error() string { return "unsupported Content-Encoding: " + e.encoding }
+func (e *unsupportedEncodingError) Error() string {
+	return "unsupported Content-Encoding: " + e.encoding
+}
 
 // handleCWMP implements the Phase 2 session shape:
 //
