@@ -120,6 +120,23 @@ func (s *S3) Remove(id string) {
 	})
 }
 
+// Rename copies oldID's object onto newID's key and deletes the original
+// — S3 has no atomic rename, but CopyObject+DeleteObject is the standard
+// substitute and is only ever called once per upload (the race winner),
+// not on the hot path.
+func (s *S3) Rename(oldID, newID string) error {
+	source := s.bucket + "/" + s.key(oldID)
+	if _, err := s.client.CopyObject(context.Background(), &s3.CopyObjectInput{
+		Bucket:     aws.String(s.bucket),
+		Key:        aws.String(s.key(newID)),
+		CopySource: aws.String(source),
+	}); err != nil {
+		return fmt.Errorf("s3 copy %s to %s: %w", source, s.key(newID), err)
+	}
+	s.Remove(oldID)
+	return nil
+}
+
 // ErrNotConfigured is returned by FromEnv-adjacent helpers when the S3
 // backend is selected without a bucket; kept exported for callers that
 // want to special-case it.

@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
 	"acs/internal/jobs"
 	"acs/internal/transfer"
 	"acs/internal/uploads"
@@ -124,8 +126,17 @@ func (h *handler) receiveUpload(w http.ResponseWriter, r *http.Request) {
 	// Cap the body (audit P0.3: unbounded stream to disk). MaxBytesReader
 	// fails the read once the ceiling is crossed, so at most the ceiling
 	// plus one buffer ever lands on disk before cleanup.
+	//
+	// audit P1.3/M-13: two concurrent PUTs against the same valid token
+	// used to both Save(id, ...) — the same object name — so their writes
+	// could interleave on disk, and whichever lost the DB race would then
+	// Remove(id), deleting bytes the winner had just written. Each
+	// request now stages to its own never-colliding object name and only
+	// the request the DB declares the winner gets promoted to id; the
+	// loser's cleanup only ever touches its own staged object.
+	stagingID := id + ".recv-" + uuid.New().String()
 	body := http.MaxBytesReader(w, r.Body, h.uploadMaxBytes)
-	sha256hex, size, err := h.uploadsFS.Save(id, body)
+	sha256hex, size, err := h.uploadsFS.Save(stagingID, body)
 	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
@@ -144,14 +155,23 @@ func (h *handler) receiveUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := h.uploads.MarkReceived(r.Context(), id, filename, sha256hex, size)
 	if errors.Is(err, uploads.ErrNotFound) {
-		// Lost the PENDING->RECEIVED race to a concurrent PUT — this
-		// request's file must not overwrite the recorded one.
-		h.uploadsFS.Remove(id)
+		// Lost the PENDING->RECEIVED race to a concurrent PUT — remove
+		// only this request's own staged object, never the winner's.
+		h.uploadsFS.Remove(stagingID)
 		http.Error(w, "upload slot already used", http.StatusConflict)
 		return
 	}
 	if err != nil {
 		h.logger.Error("failed to mark upload received", "err", err, "id", id)
+		h.uploadsFS.Remove(stagingID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := h.uploadsFS.Rename(stagingID, id); err != nil {
+		// The DB row says RECEIVED but the object never made it to its
+		// final name — surfaced as an internal error rather than quietly
+		// serving a 200 for a file that isn't retrievable.
+		h.logger.Error("failed to promote staged upload to its final object name", "err", err, "id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

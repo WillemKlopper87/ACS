@@ -52,3 +52,10 @@ func (s *Local) Open(id string) (io.ReadSeekCloser, error) {
 func (s *Local) Remove(id string) {
 	os.Remove(s.path(id))
 }
+
+func (s *Local) Rename(oldID, newID string) error {
+	if err := os.Rename(s.path(oldID), s.path(newID)); err != nil {
+		return fmt.Errorf("rename object file: %w", err)
+	}
+	return nil
+}

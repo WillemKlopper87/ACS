@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -11,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -482,6 +485,89 @@ func TestIntegration_TransferTokens(t *testing.T) {
 	}
 	if r := e.call("carol", "GET", "/api/v1/uploads/"+slot.ID+"/file", nil); r.code != 404 {
 		t.Errorf("carol fetch alice's file → %d, want 404", r.code)
+	}
+}
+
+// TestIntegration_ConcurrentUploadPUTs is the P1.3/M-13 acceptance gate:
+// two genuinely simultaneous PUTs against the same valid upload slot
+// must leave exactly one winner, one 409 conflict, and a retained object
+// whose bytes and recorded sha256 both belong wholly to the winner —
+// never an interleaved mix of both bodies, and never a file the loser's
+// cleanup deleted out from under the winner.
+func TestIntegration_ConcurrentUploadPUTs(t *testing.T) {
+	e := newTestEnv(t)
+	custA := e.customer("Customer A")
+	devA := e.device("A001", &custA)
+	e.operator("alice", operators.RoleNOC, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custA})
+	e.grant(operators.RoleNOC, operators.PermUploadRequest)
+
+	r := e.call("alice", "POST", "/api/v1/devices/"+devA+"/uploads", map[string]string{"file_type": "1 Vendor Configuration File"})
+	if r.code != 202 {
+		t.Fatalf("create upload → %d %s", r.code, r.body)
+	}
+	var created struct {
+		UploadID string `json:"upload_id"`
+	}
+	_ = json.Unmarshal([]byte(r.body), &created)
+	slot, err := e.h.uploads.ByID(e.ctx, created.UploadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _ := e.h.jobs.List(e.ctx, devA, nil, false)
+	var payload jobs.UploadPayload
+	_ = json.Unmarshal(job[0].Payload, &payload)
+	token := payload.URL[strings.Index(payload.URL, "?token=")+len("?token="):]
+
+	bodyA := bytes.Repeat([]byte("A"), 200000)
+	bodyB := bytes.Repeat([]byte("B"), 200000)
+	put := func(body []byte) (int, error) {
+		url := e.srv.URL + "/api/v1/uploads/" + slot.ID + "/receive?token=" + token
+		req, _ := http.NewRequest(http.MethodPut, url, bytes.NewReader(body))
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, err
+		}
+		defer res.Body.Close()
+		return res.StatusCode, nil
+	}
+
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); codes[0], _ = put(bodyA) }()
+	go func() { defer wg.Done(); codes[1], _ = put(bodyB) }()
+	wg.Wait()
+
+	won200, lost409 := 0, 0
+	for _, c := range codes {
+		switch c {
+		case 200:
+			won200++
+		case 409:
+			lost409++
+		}
+	}
+	if won200 != 1 || lost409 != 1 {
+		t.Fatalf("concurrent PUT status codes = %v, want exactly one 200 and one 409", codes)
+	}
+
+	rGet := e.call("alice", "GET", "/api/v1/uploads/"+slot.ID+"/file", nil)
+	if rGet.code != 200 {
+		t.Fatalf("fetch retained file → %d", rGet.code)
+	}
+	body := []byte(rGet.body)
+	if !bytes.Equal(body, bodyA) && !bytes.Equal(body, bodyB) {
+		t.Fatalf("retained file is %d bytes and belongs to neither writer wholly (interleaved/corrupted) — first 20 bytes: %q", len(body), body[:min(20, len(body))])
+	}
+
+	f, err := e.h.uploads.ByID(e.ctx, slot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	wantSHA := hex.EncodeToString(sum[:])
+	if f.SHA256 == nil || *f.SHA256 != wantSHA {
+		t.Errorf("recorded sha256 = %v, want %s (the actual retained file's hash)", f.SHA256, wantSHA)
 	}
 }
 

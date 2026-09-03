@@ -27,6 +27,13 @@ type Store interface {
 	Open(id string) (io.ReadSeekCloser, error)
 	// Remove deletes the object; a missing object is not an error.
 	Remove(id string)
+	// Rename moves the object named oldID to newID (audit P1.3/M-13):
+	// callers that race two concurrent writers for the same logical slot
+	// save each writer to its own unique, never-colliding id and rename
+	// only the one an atomic DB check declares the winner into the
+	// shared final id — the loser's Remove(oldID) then only ever touches
+	// its own never-promoted object, not whatever the winner wrote.
+	Rename(oldID, newID string) error
 }
 
 // hashReader tees r into a SHA-256 while counting bytes.
