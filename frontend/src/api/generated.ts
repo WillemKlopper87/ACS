@@ -285,6 +285,10 @@ export interface paths {
                         email?: string;
                         password: string;
                         role: components["schemas"]["Role"];
+                        /** @description Optional initial tenancy scopes (audit P0.1) — until set (or global_access granted), a non-superadmin operator has zero device access. */
+                        scopes?: components["schemas"]["OperatorScope"][];
+                        /** @description Optional initial OPERATOR_GLOBAL grant (audit P0.1). */
+                        global_access?: boolean;
                     };
                 };
             };
@@ -529,7 +533,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** Set an operator's tenancy scopes (superadmin only). No scopes = unrestricted. */
+        /** Set an operator's tenancy scopes (superadmin only). No scopes = zero device access unless global_access is also granted. */
         post: {
             parameters: {
                 query?: never;
@@ -556,6 +560,55 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/operators/{id}/global-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Grant or revoke an operator's explicit OPERATOR_GLOBAL entitlement (superadmin only, audit P0.1). The only way a non-superadmin operator gets unrestricted fleet access — never inferred from zero scope rows. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["OperatorId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        global_access: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Global access updated */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Operator not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4765,6 +4818,8 @@ export interface components {
             username?: string;
             email?: string;
             role?: components["schemas"]["Role"];
+            /** @description Explicit OPERATOR_GLOBAL entitlement (audit P0.1) — true only when a superadmin deliberately granted fleet-wide access. */
+            global_access?: boolean;
             /** Format: date-time */
             created_at?: string;
         };
