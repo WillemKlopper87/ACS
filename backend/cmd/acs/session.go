@@ -192,7 +192,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if env.Body.TransferComplete != nil {
-		h.handleTransferComplete(ctx, w, env.Body.TransferComplete, respID, ns)
+		h.handleTransferComplete(ctx, w, env.Body.TransferComplete, bound, respID, ns)
 		return
 	}
 
@@ -237,14 +237,14 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 		if err != nil || existing.ID != bound.credentialDeviceID {
 			h.logger.Warn("Inform rejected: per-device credential does not match the claimed device identity",
 				"bound_device_id", bound.credentialDeviceID, "claimed_natural_key", naturalKey, "remote", r.RemoteAddr)
-			http.Error(w, "device identity mismatch", http.StatusUnauthorized)
+			http.Error(w, "device identity mismatch", http.StatusForbidden)
 			return
 		}
 	}
 	if bound.mtlsNaturalKey != "" && bound.mtlsNaturalKey != naturalKey {
 		h.logger.Warn("Inform rejected: mTLS certificate CommonName does not match the claimed device identity",
 			"cert_cn", bound.mtlsNaturalKey, "claimed_natural_key", naturalKey, "remote", r.RemoteAddr)
-		http.Error(w, "device identity mismatch", http.StatusUnauthorized)
+		http.Error(w, "device identity mismatch", http.StatusForbidden)
 		return
 	}
 
@@ -402,7 +402,16 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 // completes whichever job its CommandKey names — found by CommandKey,
 // not by any session state, since this may be a session that never
 // dispatched anything itself (build plan §4 Phase 4).
-func (h *handler) handleTransferComplete(ctx context.Context, w http.ResponseWriter, tc *cwmp.TransferComplete, respID, ns string) {
+//
+// audit P1.1/M-2: CommandKey alone identifies a job but does not prove the
+// sender is the job's device — CommandKeys are 32-bit and appear in REST
+// responses, audit rows and logs, so any authenticated CPE that learns
+// another device's CommandKey could otherwise mark that transfer
+// FAILED, which (via rollout.FailureRate) can force a fleet-wide
+// rollback. bound is the identity this specific request's credential
+// actually authenticated (audit C-1, resolved in handleCWMP); when it
+// asserts a device, that device must equal job.DeviceID.
+func (h *handler) handleTransferComplete(ctx context.Context, w http.ResponseWriter, tc *cwmp.TransferComplete, bound inboundIdentity, respID, ns string) {
 	job, err := h.jobs.ByCommandKey(ctx, tc.CommandKey)
 	if err != nil {
 		h.logger.Warn("TransferComplete for unrecognized command_key", "command_key", tc.CommandKey, "err", err)
@@ -410,6 +419,22 @@ func (h *handler) handleTransferComplete(ctx context.Context, w http.ResponseWri
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(cwmp.RenderTransferCompleteResponseNS(respID, ns))
 		return
+	}
+
+	if bound.credentialDeviceID != "" && bound.credentialDeviceID != job.DeviceID {
+		h.logger.Warn("TransferComplete rejected: authenticated credential is bound to a different device than the job",
+			"command_key", tc.CommandKey, "job_id", job.ID, "job_device_id", job.DeviceID, "bound_device_id", bound.credentialDeviceID)
+		http.Error(w, "device identity mismatch", http.StatusForbidden)
+		return
+	}
+	if bound.mtlsNaturalKey != "" {
+		device, err := h.devices.Get(ctx, job.DeviceID)
+		if err != nil || device.OUISerial != bound.mtlsNaturalKey {
+			h.logger.Warn("TransferComplete rejected: mTLS certificate does not match the job's device",
+				"command_key", tc.CommandKey, "job_id", job.ID, "job_device_id", job.DeviceID, "cert_cn", bound.mtlsNaturalKey)
+			http.Error(w, "device identity mismatch", http.StatusForbidden)
+			return
+		}
 	}
 
 	if job.Status != jobs.StatusAwaitingTransferComplete && job.Status != jobs.StatusRPCSent {

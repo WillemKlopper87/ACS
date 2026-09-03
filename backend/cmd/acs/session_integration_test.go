@@ -45,6 +45,11 @@ type mockCPE struct {
 	cookie *http.Cookie
 	nonce  string
 	nc     int
+	// user/pass override the shared cpeUser/cpePass credential — used to
+	// exercise a per-device credential (audit C-1/P1.1 tests) without
+	// touching every existing call site, which leaves these zero and
+	// gets the shared credential exactly as before.
+	user, pass string
 }
 
 func (c *mockCPE) post(body string) (int, string) {
@@ -86,14 +91,18 @@ func (c *mockCPE) post(body string) (int, string) {
 }
 
 func (c *mockCPE) digest(method, uri string) string {
+	user, pass := c.user, c.pass
+	if user == "" {
+		user, pass = cpeUser, cpePass
+	}
 	h := func(s string) string { sum := md5.Sum([]byte(s)); return hex.EncodeToString(sum[:]) }
 	nc := fmt.Sprintf("%08x", c.nc)
 	cnonce := "0a1b2c3d"
-	ha1 := h(cpeUser + ":acs:" + cpePass)
+	ha1 := h(user + ":acs:" + pass)
 	ha2 := h(method + ":" + uri)
 	resp := h(strings.Join([]string{ha1, c.nonce, nc, cnonce, "auth", ha2}, ":"))
 	return fmt.Sprintf(`Digest username="%s", realm="acs", nonce="%s", uri="%s", qop=auth, nc=%s, cnonce="%s", response="%s", algorithm=MD5`,
-		cpeUser, c.nonce, uri, nc, cnonce, resp)
+		user, c.nonce, uri, nc, cnonce, resp)
 }
 
 func fixture(t *testing.T, name string) string {
@@ -422,6 +431,126 @@ func TestIntegration_CPETransferComplete(t *testing.T) {
 	}
 	if code, _ = cpe.post(fixture(t, "transfer_complete.xml")); code != 200 {
 		t.Errorf("TransferComplete with unknown command key: %d, want 200 ack", code)
+	}
+}
+
+// TestIntegration_TransferCompleteDeviceBinding is the P1.1/M-2/C-1
+// acceptance gate: a per-device credential bound to one device must not
+// be able to complete another device's job by CommandKey alone.
+func TestIntegration_TransferCompleteDeviceBinding(t *testing.T) {
+	dsn := os.Getenv("ACS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("ACS_TEST_POSTGRES_DSN not set; skipping DB-backed integration test")
+	}
+	ctx := context.Background()
+	db, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.ExecContext(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	type cred struct{ password, deviceID string }
+	perDevice := map[string]cred{}
+	h := &handler{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		auth: auth.DigestAuthenticator{
+			Username: cpeUser, Password: cpePass,
+			Lookup: func(u string) (string, string, bool) {
+				c, ok := perDevice[u]
+				if !ok {
+					return "", "", false
+				}
+				return c.password, c.deviceID, true
+			},
+		},
+		devices:       devices.NewRepository(db),
+		sessions:      sessions.NewRepository(db),
+		jobs:          jobs.NewRepository(db),
+		params:        parameters.NewRepository(db),
+		auditor:       observability.NewAuditor(db),
+		metrics:       observability.NewMetrics("acs-test"),
+		policies:      policy.NewRepository(db),
+		templates:     templates.NewRepository(db),
+		ipLimiter:     ratelimit.New(100000, 100000, time.Minute),
+		deviceLimiter: ratelimit.New(100000, 100000, time.Minute),
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", h.handleCWMP)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// Device A informs under the shared credential, then gets a per-device
+	// credential bound to it (as if rotated via the REST API).
+	cpeA := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
+	cpeA.post(periodicInform(t))
+	cpeA.post("")
+	listA, _ := h.devices.List(ctx, devices.ListParams{})
+	deviceA := listA.Items[0]
+	perDevice["cr-device-a"] = cred{password: "device-a-pass", deviceID: deviceA.ID}
+
+	// Device B is a distinct device on the shared credential, with a
+	// firmware download in flight.
+	cpeB := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
+	bInform := vendorInform(t, "Nokia", "AABBCC", "FastMile", "SERIALB001")
+	cpeB.post(bInform)
+	cpeB.post("")
+	listAll, _ := h.devices.List(ctx, devices.ListParams{})
+	var deviceB devices.Device
+	for _, d := range listAll.Items {
+		if d.ID != deviceA.ID {
+			deviceB = d
+		}
+	}
+	if deviceB.ID == "" {
+		t.Fatal("device B not registered")
+	}
+
+	job, err := h.jobs.Create(ctx, deviceB.ID, jobs.TypeFirmwareDownload, jobs.FirmwareDownloadPayload{
+		FirmwareImageID: "img", FileType: "1 Firmware Upgrade Image", URL: "http://acs.test/fw.bin", FileSize: 1234, TargetFilename: "fw.bin",
+	}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cpeB.cookie = nil
+	cpeB.post(bInform)
+	code, body := cpeB.post("")
+	if code != 200 || !strings.Contains(body, "<cwmp:Download>") {
+		t.Fatalf("expected Download RPC, got %d %s", code, body)
+	}
+	cpeB.post(fixture(t, "download_response.xml"))
+	j, _ := h.jobs.ByID(ctx, job.ID)
+	if j.Status != jobs.StatusAwaitingTransferComplete {
+		t.Fatalf("after DownloadResponse status = %s, want AWAITING_TRANSFER_COMPLETE", j.Status)
+	}
+
+	// Device A's credential (bound to a different device) tries to
+	// complete device B's transfer by knowing its CommandKey.
+	tc := strings.Replace(fixture(t, "transfer_complete.xml"), "fw_20260804_test0001", job.CommandKey, 1)
+	forger := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp", user: "cr-device-a", pass: "device-a-pass"}
+	code, body = forger.post(tc)
+	if code != http.StatusForbidden {
+		t.Fatalf("cross-device TransferComplete → %d %s, want 403", code, body)
+	}
+	j, _ = h.jobs.ByID(ctx, job.ID)
+	if j.Status != jobs.StatusAwaitingTransferComplete {
+		t.Errorf("job status after rejected cross-device TransferComplete = %s, want unchanged AWAITING_TRANSFER_COMPLETE", j.Status)
+	}
+
+	// The legitimate device (shared credential, its own session) still
+	// completes it normally.
+	code, body = cpeB.post(tc)
+	if code != 200 || !strings.Contains(body, "TransferCompleteResponse") {
+		t.Fatalf("legitimate TransferComplete: %d %s", code, body)
+	}
+	j, _ = h.jobs.ByID(ctx, job.ID)
+	if j.Status != jobs.StatusSuccess {
+		t.Fatalf("after legitimate TransferComplete status = %s, want SUCCESS", j.Status)
 	}
 }
 
