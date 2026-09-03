@@ -1,20 +1,23 @@
 package cwmp
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 )
 
 // DefaultCWMPNamespace is the CWMP namespace used for ACS-initiated RPCs
-// (job dispatch). Responses to CPE-initiated RPCs should instead echo the
-// namespace version the CPE used — see DetectCWMPNamespace.
+// when no session-negotiated namespace is available. Responses to
+// CPE-initiated RPCs should echo the namespace version the CPE used — see
+// DetectCWMPNamespace.
 const DefaultCWMPNamespace = "urn:dslforum-org:cwmp-1-0"
 
 // soapEnvelopeTemplate wraps a single RPC body element in the standard
 // CWMP SOAP envelope. %[1]s is the cwmp:ID header value, %[2]s is the
 // already-rendered body element (e.g. <cwmp:InformResponse>...), %[3]s is
-// the CWMP namespace URN (cwmp-1-0 .. cwmp-1-4).
+// the CWMP namespace URN (cwmp-1-0 .. cwmp-1-4 and compatible later
+// dslforum cwmp-1-N revisions).
 //
 // Outbound envelopes are hand-rendered rather than built via encoding/xml
 // because Go's Marshal gives no control over which namespace prefix
@@ -53,11 +56,35 @@ func renderEnvelope(id, body string) []byte {
 // §3.4.1.1), and a CPE-chosen ID must not be able to break or inject
 // into our XML.
 func renderEnvelopeNS(id, body, ns string) []byte {
+	if !validCWMPNamespace(ns) {
+		ns = DefaultCWMPNamespace
+	}
 	return []byte(fmt.Sprintf(soapEnvelopeTemplate, escapeXML(id), body, ns))
 }
 
-// RenderEmptyResponse is the zero-content-length 200 OK the ACS sends to
-// close a session when it has no more RPCs queued for the device.
+// RewriteCWMPNamespace rewrites an ACS-rendered envelope to the namespace
+// negotiated by the CPE for the current session. The individual RPC
+// renderers intentionally keep their simple historical API and render in
+// DefaultCWMPNamespace; cmd/acs applies this function immediately before
+// sending the RPC. Only a syntactically valid dslforum CWMP namespace is
+// accepted, so a persisted/corrupted string cannot inject XML.
+func RewriteCWMPNamespace(envelope []byte, ns string) []byte {
+	if len(envelope) == 0 || ns == "" || ns == DefaultCWMPNamespace || !validCWMPNamespace(ns) {
+		return envelope
+	}
+	oldDecl := []byte(`xmlns:cwmp="` + DefaultCWMPNamespace + `"`)
+	newDecl := []byte(`xmlns:cwmp="` + ns + `"`)
+	return bytes.Replace(envelope, oldDecl, newDecl, 1)
+}
+
+func validCWMPNamespace(ns string) bool {
+	m := cwmpNamespaceRE.FindString(ns)
+	return m != "" && m == ns
+}
+
+// RenderEmptyResponse is retained for callers/tests that want the body
+// bytes of a session-closing response. The HTTP status (204 by default)
+// is owned by cmd/acs; the CWMP payload itself is always empty.
 func RenderEmptyResponse() []byte {
 	return nil
 }
