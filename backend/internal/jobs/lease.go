@@ -134,24 +134,70 @@ func (r *Repository) ExtendLease(ctx context.Context, id string, d time.Duration
 	return nil
 }
 
+// nonRepeatableTypes are RPCs the protocol document (audit P1.7) singles
+// out for "particular attention": a lease expiring after dispatch does
+// not prove the CPE never received or executed the RPC, only that this
+// process lost track of the outcome. For an idempotent RPC (SET_PARAMETER,
+// a diagnostic, a read) blindly re-dispatching is harmless. For these,
+// it risks duplicating an object, repeating a factory reset or reboot,
+// or retriggering a firmware flash the device may already be mid-way
+// through (a brick risk, not just a redundant action) -- so these never
+// auto-requeue on lease expiry, however many attempts remain; they
+// dead-letter for explicit operator review instead. True reconciliation
+// (inspecting device state before deciding) is future work; this is the
+// safe default in the meantime -- never blind repetition of a
+// destructive RPC.
+var nonRepeatableTypes = []string{
+	TypeAddObject, TypeDeleteObject, TypeReboot, TypeFactoryReset,
+	TypeFirmwareDownload, TypeUpload,
+}
+
 // RecoveryResult reports what one RecoverExpiredLeases pass did.
 type RecoveryResult struct {
-	Requeued     int // lease expired, attempts remained -> back to QUEUED
+	Requeued     int // lease expired, attempts remained, safe to retry -> back to QUEUED
 	DeadLettered int // lease expired, attempts exhausted -> FAILED
-	TimedOut     int // AWAITING_TRANSFER_COMPLETE past the transfer deadline -> FAILED
+	// DeadLetteredUnsafeRetry counts non-repeatable-type jobs dead-lettered
+	// on lease expiry regardless of remaining attempts (audit P1.7).
+	DeadLetteredUnsafeRetry int
+	TimedOut                int // AWAITING_TRANSFER_COMPLETE past the transfer deadline -> FAILED
 }
 
 // RecoverExpiredLeases is the stale-lease reaper (audit P1.1). A job
 // whose holder died mid-flight would otherwise sit in RPC_SENT /
-// IN_PROGRESS forever, invisible to every Lease query. Expired leases
-// go back to QUEUED while attempts remain (Lease increments attempts on
-// the next pickup, so a job that keeps stranding is bounded by
-// max_attempts) and are dead-lettered as FAILED otherwise, with the
-// reason recorded in fault_string. Legacy rows leased before the lease
-// columns existed (leased_until IS NULL) are recovered on their
-// started_at instead, so nothing already stranded stays stranded.
+// IN_PROGRESS forever, invisible to every Lease query. Non-repeatable
+// types (audit P1.7 — see nonRepeatableTypes) always dead-letter on
+// lease expiry, however many attempts remain; everything else goes back
+// to QUEUED while attempts remain (Lease increments attempts on the
+// next pickup, so a job that keeps stranding is bounded by max_attempts)
+// and is dead-lettered as FAILED otherwise, with the reason recorded in
+// fault_string. Legacy rows leased before the lease columns existed
+// (leased_until IS NULL) are recovered on their started_at instead, so
+// nothing already stranded stays stranded.
+//
+// The three passes below run in this order deliberately: the
+// non-repeatable pass must run before the attempts-exhausted and
+// requeue passes, since it needs to claim those jobs unconditionally
+// (not just when attempts are exhausted) before the general passes
+// would otherwise requeue them.
 func (r *Repository) RecoverExpiredLeases(ctx context.Context) (RecoveryResult, error) {
 	var res RecoveryResult
+
+	unsafe, err := r.db.ExecContext(ctx, `
+		UPDATE jobs SET status = 'FAILED', completed_at = now(), updated_at = now(),
+			fault_code = 'LEASE_EXPIRED_UNSAFE_RETRY',
+			fault_string = 'job lease expired after ' || attempts || ' attempt(s); type ' || type ||
+				' is not safe to blindly re-dispatch (it may already have executed on the device) -- requires manual review; last holder ' || COALESCE(lease_owner, 'unknown'),
+			lease_owner = NULL, leased_until = NULL
+		WHERE status IN ('RPC_SENT', 'IN_PROGRESS')
+		  AND COALESCE(leased_until, started_at + $1 * interval '1 second') < now()
+		  AND type = ANY($2)
+	`, int(sessionLease.Seconds()), nonRepeatableTypes)
+	if err != nil {
+		return res, fmt.Errorf("dead-letter expired non-repeatable leases: %w", err)
+	}
+	if n, err := unsafe.RowsAffected(); err == nil {
+		res.DeadLetteredUnsafeRetry = int(n)
+	}
 
 	dead, err := r.db.ExecContext(ctx, `
 		UPDATE jobs SET status = 'FAILED', completed_at = now(), updated_at = now(),
