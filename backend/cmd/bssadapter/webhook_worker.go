@@ -20,7 +20,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"acs/internal/bss"
@@ -111,7 +113,25 @@ func (h *handler) notifyTerminalOrders(ctx context.Context) {
 func (h *handler) runWebhookDeliverLoop(ctx context.Context) {
 	ticker := time.NewTicker(webhookDeliverInterval)
 	defer ticker.Stop()
-	client := &http.Client{Timeout: webhookHTTPTimeout}
+	// target_url is BSS-operator-controlled (audit H-7): DialControl
+	// re-enforces netPolicy at connect time (rebinding-proof) behind the
+	// up-front CheckHost in sendWebhookDelivery. Redirects are never
+	// followed — a webhook receiver has no legitimate reason to 3xx a
+	// signed delivery, and following one would retarget it (with the
+	// HMAC signature already computed for the original body) wherever
+	// the up-front check never saw.
+	client := &http.Client{
+		Timeout: webhookHTTPTimeout,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout: webhookHTTPTimeout,
+				Control: h.netPolicy.DialControl,
+			}).DialContext,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -144,6 +164,17 @@ func (h *handler) deliverDueWebhooks(ctx context.Context, client *http.Client) {
 // letting the receiver verify the payload actually came from here and
 // wasn't tampered with in transit.
 func (h *handler) sendWebhookDelivery(ctx context.Context, client *http.Client, d bss.WebhookDelivery) bool {
+	// audit H-7: re-checked at send time, not just at subscription
+	// creation — a target allowed when the subscription was created
+	// shouldn't be trusted forever if the policy tightens later.
+	if u, err := url.Parse(d.TargetURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		h.logger.Warn("webhook delivery target has an invalid scheme, refusing", "delivery_id", d.ID, "target_url", d.TargetURL)
+		return false
+	} else if err := h.netPolicy.CheckHost(ctx, u.Hostname()); err != nil {
+		h.logger.Warn("webhook delivery target rejected by network policy", "err", err, "delivery_id", d.ID, "target_url", d.TargetURL)
+		return false
+	}
+
 	mac := hmac.New(sha256.New, []byte(d.Secret))
 	mac.Write(d.Payload)
 	signature := hex.EncodeToString(mac.Sum(nil))
@@ -203,6 +234,14 @@ func (h *handler) createWebhookSubscription(w http.ResponseWriter, r *http.Reque
 	}
 	if req.TargetURL == "" || req.Secret == "" || len(req.EventTypes) == 0 {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "target_url, secret, and at least one event_type are required")
+		return
+	}
+	// audit H-7: validate at save time too, not only at delivery.
+	if u, err := url.Parse(req.TargetURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "target_url must be a valid http/https URL")
+		return
+	} else if err := h.netPolicy.CheckHost(r.Context(), u.Hostname()); err != nil {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "target_url host is not allowed: "+err.Error())
 		return
 	}
 

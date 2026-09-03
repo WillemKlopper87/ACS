@@ -39,6 +39,13 @@ const (
 	OutcomeTCPFailure  = "TCP_FAILURE"
 	OutcomeTLSFailure  = "TLS_FAILURE"
 	OutcomeUnavailable = "UNAVAILABLE"
+	// OutcomeBlockedByPolicy means ConnectionRequestURL resolved outside
+	// the configured device network policy (audit H-2/P1.2) — distinct
+	// from a real network failure so operators can tell "misconfigured
+	// policy" apart from "device unreachable" in the fleet view. Set by
+	// the caller (cmd/api/connreq_worker.go), not by Attempt itself —
+	// see Attempt's doc comment for why the policy check lives there.
+	OutcomeBlockedByPolicy = "BLOCKED_BY_POLICY"
 
 	// Annex G UDP outcomes (annexg.go).
 	OutcomeUDPSendFailed     = "UDP_SEND_FAILED"
@@ -51,12 +58,28 @@ const (
 // Basic is accepted as an interoperability fallback for older CPEs.
 // username may be empty (no credentials configured); in that case a 401
 // is reported as-is rather than retried.
-func Attempt(ctx context.Context, targetURL, username, password string, timeout time.Duration) string {
+//
+// client lets the caller enforce an outbound network policy (audit H-2/
+// P1.2): ConnectionRequestURL is CPE-controlled, so a malicious or
+// compromised device can point it at an internal service or the cloud
+// metadata endpoint and use the ACS as a port scanner and an offline-
+// crackable-digest oracle for the shared Connection Request credential.
+// This package stays policy-agnostic on purpose (it has no concept of
+// tenancy/device networks, and its own tests exercise real httptest
+// servers on loopback, which a real device-network policy would always
+// reject) — cmd/api/connreq_worker.go is what builds a client whose
+// Transport enforces netguard.Policy.DialControl and whose CheckRedirect
+// refuses to follow, the same pattern webgui_handlers.go's proxy uses.
+// A nil client falls back to a plain one with no policy enforcement —
+// callers that skip this argument are opting out, not getting it for
+// free.
+func Attempt(ctx context.Context, targetURL, username, password string, timeout time.Duration, client *http.Client) string {
 	if targetURL == "" {
 		return OutcomeUnavailable
 	}
-
-	client := &http.Client{Timeout: timeout}
+	if client == nil {
+		client = &http.Client{Timeout: timeout}
+	}
 
 	resp, err := doGet(ctx, client, targetURL, "")
 	if err != nil {

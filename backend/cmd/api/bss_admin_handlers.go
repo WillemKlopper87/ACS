@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"acs/internal/bss"
@@ -137,6 +138,25 @@ func (h *handler) createBSSMapping(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, mapping)
 }
 
+// webhookSubscriptionResponse omits bss.WebhookSubscription.Secret (audit
+// H-7): the bss-integration-guide promises the HMAC secret is "never
+// returned by any endpoint after creation" — bssadapter's own handlers
+// already honor that via an equivalent DTO; this admin panel didn't.
+type webhookSubscriptionResponse struct {
+	ID         string   `json:"id"`
+	AccountID  *string  `json:"account_id"`
+	TargetURL  string   `json:"target_url"`
+	EventTypes []string `json:"event_types"`
+	CreatedAt  string   `json:"created_at"`
+}
+
+func toWebhookSubscriptionResponse(s *bss.WebhookSubscription) webhookSubscriptionResponse {
+	return webhookSubscriptionResponse{
+		ID: s.ID, AccountID: s.AccountID, TargetURL: s.TargetURL,
+		EventTypes: s.EventTypes, CreatedAt: s.CreatedAt.Format(time.RFC3339),
+	}
+}
+
 func (h *handler) listBSSWebhooks(w http.ResponseWriter, r *http.Request) {
 	items, err := h.bssWebhooks.ListSubscriptions(r.Context())
 	if err != nil {
@@ -144,10 +164,11 @@ func (h *handler) listBSSWebhooks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if items == nil {
-		items = []bss.WebhookSubscription{}
+	out := make([]webhookSubscriptionResponse, 0, len(items))
+	for _, s := range items {
+		out = append(out, toWebhookSubscriptionResponse(&s))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
 
 type createBSSWebhookRequest struct {
@@ -167,6 +188,16 @@ func (h *handler) createBSSWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "target_url, secret, and at least one event type are required", http.StatusBadRequest)
 		return
 	}
+	// audit H-7: same SSRF gate as bssadapter's own creation endpoint —
+	// target_url is operator-controlled here too, and a config saved
+	// through this panel shouldn't be held to a weaker standard.
+	if u, err := url.Parse(req.TargetURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		http.Error(w, "target_url must be a valid http/https URL", http.StatusBadRequest)
+		return
+	} else if err := h.bssWebhookNetPolicy.CheckHost(r.Context(), u.Hostname()); err != nil {
+		http.Error(w, "target_url host is not allowed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	sub, err := h.bssWebhooks.CreateSubscription(r.Context(), req.AccountID, req.TargetURL, req.Secret, req.EventTypes)
 	if err != nil {
 		h.logger.Error("failed to create webhook subscription", "err", err)
@@ -179,7 +210,7 @@ func (h *handler) createBSSWebhook(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
-	writeJSON(w, http.StatusOK, sub)
+	writeJSON(w, http.StatusOK, toWebhookSubscriptionResponse(sub))
 }
 
 func (h *handler) deleteBSSWebhook(w http.ResponseWriter, r *http.Request) {

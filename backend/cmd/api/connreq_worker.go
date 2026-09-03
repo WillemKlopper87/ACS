@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/url"
 	"time"
 
 	"acs/internal/connreq"
 	"acs/internal/credentials"
 	"acs/internal/devices"
 	"acs/internal/jobs"
+	"acs/internal/netguard"
 	"acs/internal/observability"
 )
 
@@ -35,6 +39,41 @@ type connectionRequestWorker struct {
 	auditor     *observability.Auditor
 	username    string // fallback shared credential (Phase 3) for devices with no rotated credential (Phase 6, §11.6)
 	password    string
+	// netPolicy bounds where ConnectionRequestURL (CPE-controlled) may
+	// point (audit H-2/P1.2) — same policy the web-GUI proxy and CLI
+	// bridge already enforce.
+	netPolicy netguard.Policy
+}
+
+// attemptGET checks the target against the device-network policy (audit
+// H-2/P1.2) before ever attempting the GET, then builds a client whose
+// Transport re-enforces that policy at dial time (rebinding-proof) and
+// which never follows redirects — a CPE has no legitimate reason to 3xx a
+// Connection Request, and following one would let it retarget the retry
+// (sent with real credentials) somewhere the up-front check never saw.
+// Same two-layer pattern webgui_handlers.go's proxy uses.
+func (w *connectionRequestWorker) attemptGET(ctx context.Context, targetURL, username, password string) string {
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return connreq.OutcomeBlockedByPolicy
+	}
+	if err := w.netPolicy.CheckHost(ctx, u.Hostname()); err != nil {
+		w.logger.Warn("connection request target rejected by network policy", "err", err, "url", targetURL)
+		return connreq.OutcomeBlockedByPolicy
+	}
+	client := &http.Client{
+		Timeout: connReqGETTimeout,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout: connReqGETTimeout,
+				Control: w.netPolicy.DialControl,
+			}).DialContext,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	return connreq.Attempt(ctx, targetURL, username, password, connReqGETTimeout, client)
 }
 
 // credentialFor resolves which username/password to use for this
@@ -117,7 +156,7 @@ func (w *connectionRequestWorker) process(ctx context.Context, job *jobs.Job) {
 
 	attemptedAt := time.Now().UTC()
 	getCtx, cancel := context.WithTimeout(ctx, connReqGETTimeout)
-	outcome := connreq.Attempt(getCtx, *device.ConnectionRequestURL, username, password, connReqGETTimeout)
+	outcome := w.attemptGET(getCtx, *device.ConnectionRequestURL, username, password)
 	cancel()
 
 	w.logger.Info("connection request GET completed", "device_id", device.ID, "job_id", job.ID, "outcome", outcome)

@@ -181,33 +181,48 @@ func main() {
 		logger.Warn("ACS_DEVICE_NET_ALLOWED_CIDRS not set — the web-GUI proxy and console bridge may dial any non-loopback/non-metadata address the ACS host can reach. Set it to your device networks to close this down.")
 	}
 
+	// Same shape, different population (audit H-7): BSS webhook
+	// target_url points at a receiver on the internet/BSS network, not a
+	// CPE, so it gets its own policy/CIDR list rather than reusing
+	// ACS_DEVICE_NET_ALLOWED_CIDRS.
+	bssWebhookNetPolicy := netguard.Policy{}
+	if v := os.Getenv("ACS_BSS_WEBHOOK_ALLOWED_CIDRS"); v != "" {
+		cidrs, err := netguard.ParseCIDRList(v)
+		if err != nil {
+			logger.Error("invalid ACS_BSS_WEBHOOK_ALLOWED_CIDRS", "err", err)
+			os.Exit(1)
+		}
+		bssWebhookNetPolicy.AllowedCIDRs = cidrs
+	}
+
 	h := &handler{
-		logger:         logger,
-		devices:        devices.NewRepository(db),
-		jobs:           jobs.NewRepository(db),
-		params:         parameters.NewRepository(db),
-		vendors:        adapters.NewRegistry(),
-		auditor:        observability.NewAuditor(db),
-		firmware:       firmware.NewRepository(db),
-		firmwareFS:     firmwareStorage,
-		firmwareBase:   envOr("ACS_FIRMWARE_BASE_URL", "http://localhost:8080"),
-		operators:      operators.NewRepository(db),
-		jwtSecret:      jwtSecret,
-		transferKey:    transferKey,
-		uploadMaxBytes: uploadMaxBytes,
-		netPolicy:      netPolicy,
-		metrics:        metrics,
-		groups:         devices.NewGroupRepository(db),
-		credentials:    credentialsRepo,
-		schedules:      scheduler.NewRepository(db),
-		rollouts:       rollout.NewRepository(db),
-		policies:       policy.NewRepository(db),
-		uploads:        uploads.NewRepository(db),
-		uploadsFS:      uploadStorage,
-		uploadsBase:    envOr("ACS_UPLOAD_BASE_URL", "http://localhost:8080"),
-		templates:      templates.NewRepository(db),
-		cli:            cliRepo,
-		permissions:    operators.NewPermissionRepository(db),
+		logger:              logger,
+		devices:             devices.NewRepository(db),
+		jobs:                jobs.NewRepository(db),
+		params:              parameters.NewRepository(db),
+		vendors:             adapters.NewRegistry(),
+		auditor:             observability.NewAuditor(db),
+		firmware:            firmware.NewRepository(db),
+		firmwareFS:          firmwareStorage,
+		firmwareBase:        envOr("ACS_FIRMWARE_BASE_URL", "http://localhost:8080"),
+		operators:           operators.NewRepository(db),
+		jwtSecret:           jwtSecret,
+		transferKey:         transferKey,
+		uploadMaxBytes:      uploadMaxBytes,
+		netPolicy:           netPolicy,
+		bssWebhookNetPolicy: bssWebhookNetPolicy,
+		metrics:             metrics,
+		groups:              devices.NewGroupRepository(db),
+		credentials:         credentialsRepo,
+		schedules:           scheduler.NewRepository(db),
+		rollouts:            rollout.NewRepository(db),
+		policies:            policy.NewRepository(db),
+		uploads:             uploads.NewRepository(db),
+		uploadsFS:           uploadStorage,
+		uploadsBase:         envOr("ACS_UPLOAD_BASE_URL", "http://localhost:8080"),
+		templates:           templates.NewRepository(db),
+		cli:                 cliRepo,
+		permissions:         operators.NewPermissionRepository(db),
 		mailer: mailer.New(mailer.Config{
 			Host: os.Getenv("ACS_SMTP_HOST"), Port: envOr("ACS_SMTP_PORT", "587"),
 			Username: os.Getenv("ACS_SMTP_USERNAME"), Password: os.Getenv("ACS_SMTP_PASSWORD"),
@@ -255,6 +270,7 @@ func main() {
 		auditor:     observability.NewAuditor(db),
 		username:    connReqUsername,
 		password:    connReqPassword,
+		netPolicy:   netPolicy,
 	}
 	go worker.Run(ctx)
 
@@ -368,6 +384,9 @@ type handler struct {
 	// netPolicy restricts where the web-GUI proxy and console bridge
 	// may dial (audit P0.4) — see ACS_DEVICE_NET_ALLOWED_CIDRS.
 	netPolicy netguard.Policy
+	// bssWebhookNetPolicy restricts where a BSS webhook target_url may
+	// point (audit H-7) — see ACS_BSS_WEBHOOK_ALLOWED_CIDRS.
+	bssWebhookNetPolicy netguard.Policy
 
 	// JWT revocation cache — see tokenCurrent.
 	versionMu    sync.Mutex

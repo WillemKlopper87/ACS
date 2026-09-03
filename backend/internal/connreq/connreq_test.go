@@ -15,7 +15,7 @@ func TestAttemptPlain200(t *testing.T) {
 	}))
 	defer server.Close()
 
-	got := Attempt(t.Context(), server.URL+"/cwmp", "", "", time.Second)
+	got := Attempt(t.Context(), server.URL+"/cwmp", "", "", time.Second, nil)
 	if got != OutcomeHTTP200 {
 		t.Errorf("Attempt() = %q, want %q", got, OutcomeHTTP200)
 	}
@@ -28,7 +28,7 @@ func TestAttemptAccepts204AndOther2xx(t *testing.T) {
 				w.WriteHeader(status)
 			}))
 			defer server.Close()
-			if got := Attempt(t.Context(), server.URL+"/cwmp", "", "", time.Second); got != OutcomeHTTP200 {
+			if got := Attempt(t.Context(), server.URL+"/cwmp", "", "", time.Second, nil); got != OutcomeHTTP200 {
 				t.Fatalf("Attempt() = %q, want normalized success %q", got, OutcomeHTTP200)
 			}
 		})
@@ -41,14 +41,14 @@ func TestAttempt404(t *testing.T) {
 	}))
 	defer server.Close()
 
-	got := Attempt(t.Context(), server.URL+"/cwmp", "", "", time.Second)
+	got := Attempt(t.Context(), server.URL+"/cwmp", "", "", time.Second, nil)
 	if got != OutcomeHTTP404 {
 		t.Errorf("Attempt() = %q, want %q", got, OutcomeHTTP404)
 	}
 }
 
 func TestAttemptUnavailableWithoutURL(t *testing.T) {
-	got := Attempt(t.Context(), "", "user", "pass", time.Second)
+	got := Attempt(t.Context(), "", "user", "pass", time.Second, nil)
 	if got != OutcomeUnavailable {
 		t.Errorf("Attempt() = %q, want %q", got, OutcomeUnavailable)
 	}
@@ -61,7 +61,7 @@ func TestAttempt401WithoutCredentials(t *testing.T) {
 	}))
 	defer server.Close()
 
-	got := Attempt(t.Context(), server.URL+"/cwmp", "", "", time.Second)
+	got := Attempt(t.Context(), server.URL+"/cwmp", "", "", time.Second, nil)
 	if got != OutcomeHTTP401 {
 		t.Errorf("Attempt() = %q, want %q (no retry without credentials)", got, OutcomeHTTP401)
 	}
@@ -94,7 +94,7 @@ func TestAttemptDigestChallengeSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	got := Attempt(t.Context(), server.URL+"/cwmp", username, password, time.Second)
+	got := Attempt(t.Context(), server.URL+"/cwmp", username, password, time.Second, nil)
 	if got != OutcomeHTTP200 {
 		t.Errorf("Attempt() = %q, want %q", got, OutcomeHTTP200)
 	}
@@ -118,7 +118,7 @@ func TestAttemptDigestQOPListCaseInsensitiveAndOpaque(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
-	if got := Attempt(t.Context(), server.URL+"/cwmp", username, password, time.Second); got != OutcomeHTTP200 {
+	if got := Attempt(t.Context(), server.URL+"/cwmp", username, password, time.Second, nil); got != OutcomeHTTP200 {
 		t.Fatalf("Attempt() = %q, want %q", got, OutcomeHTTP200)
 	}
 }
@@ -137,7 +137,7 @@ func TestAttemptBasicFallback(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
-	if got := Attempt(t.Context(), server.URL+"/cwmp", "user", "pass", time.Second); got != OutcomeHTTP200 {
+	if got := Attempt(t.Context(), server.URL+"/cwmp", "user", "pass", time.Second, nil); got != OutcomeHTTP200 {
 		t.Fatalf("Attempt() = %q, want %q", got, OutcomeHTTP200)
 	}
 }
@@ -153,14 +153,14 @@ func TestAttemptDigestWrongPassword(t *testing.T) {
 	}))
 	defer server.Close()
 
-	got := Attempt(t.Context(), server.URL+"/cwmp", "user", "wrong", time.Second)
+	got := Attempt(t.Context(), server.URL+"/cwmp", "user", "wrong", time.Second, nil)
 	if got != OutcomeHTTP401 {
 		t.Errorf("Attempt() = %q, want %q", got, OutcomeHTTP401)
 	}
 }
 
 func TestAttemptConnectionRefused(t *testing.T) {
-	got := Attempt(t.Context(), "http://127.0.0.1:1/cwmp", "", "", 500*time.Millisecond)
+	got := Attempt(t.Context(), "http://127.0.0.1:1/cwmp", "", "", 500*time.Millisecond, nil)
 	if got != OutcomeTCPFailure {
 		t.Errorf("Attempt() = %q, want %q", got, OutcomeTCPFailure)
 	}
@@ -173,7 +173,7 @@ func TestAttemptTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 
-	got := Attempt(t.Context(), server.URL+"/cwmp", "", "", 20*time.Millisecond)
+	got := Attempt(t.Context(), server.URL+"/cwmp", "", "", 20*time.Millisecond, nil)
 	if got != OutcomeTimeout {
 		t.Errorf("Attempt() = %q, want %q", got, OutcomeTimeout)
 	}

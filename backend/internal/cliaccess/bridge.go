@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"acs/internal/netguard"
 )
 
 // dialTimeout bounds how long a connect attempt waits before giving up —
@@ -29,7 +31,12 @@ const dialTimeout = 10 * time.Second
 // Repository.TOFUHostKeyCallback(ctx, deviceID), which pins the key on
 // first connect and rejects any later mismatch, replacing the previous
 // InsecureIgnoreHostKey behavior that accepted an interceptor silently.
-func BridgeSSH(ctx context.Context, cred *Credential, rw io.ReadWriter, hostKey ssh.HostKeyCallback) error {
+//
+// policy is enforced at dial time (audit H-4) — the caller already
+// checks cred.Host up front, but re-resolving the hostname here without
+// a dial-time guard let a DNS answer that changed between check and
+// connect reach an address the up-front check never saw.
+func BridgeSSH(ctx context.Context, cred *Credential, rw io.ReadWriter, hostKey ssh.HostKeyCallback, policy netguard.Policy) error {
 	config := &ssh.ClientConfig{
 		User:            cred.Username,
 		Auth:            []ssh.AuthMethod{ssh.Password(cred.Password)},
@@ -38,10 +45,17 @@ func BridgeSSH(ctx context.Context, cred *Credential, rw io.ReadWriter, hostKey 
 	}
 
 	addr := net.JoinHostPort(cred.Host, fmt.Sprintf("%d", cred.Port))
-	client, err := ssh.Dial("tcp", addr, config)
+	dialer := &net.Dialer{Timeout: dialTimeout, Control: policy.DialControl}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("ssh handshake %s: %w", addr, err)
+	}
+	client := ssh.NewClient(sshConn, chans, reqs)
 	defer client.Close()
 
 	session, err := client.NewSession()
@@ -84,9 +98,13 @@ func BridgeSSH(ctx context.Context, cred *Credential, rw io.ReadWriter, hostKey 
 // Anything relying on a specific negotiated option (character-mode/
 // echo-suppression from the server side) may behave oddly — a real gap,
 // not hidden here.
-func BridgeTelnet(ctx context.Context, cred *Credential, rw io.ReadWriter) error {
+// policy is enforced at dial time (audit H-4) — see BridgeSSH's doc
+// comment; without it Telnet is a raw bidirectional TCP tunnel to
+// whatever host:port a DNS rebind lands on.
+func BridgeTelnet(ctx context.Context, cred *Credential, rw io.ReadWriter, policy netguard.Policy) error {
 	addr := net.JoinHostPort(cred.Host, fmt.Sprintf("%d", cred.Port))
-	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
+	dialer := &net.Dialer{Timeout: dialTimeout, Control: policy.DialControl}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("telnet dial %s: %w", addr, err)
 	}

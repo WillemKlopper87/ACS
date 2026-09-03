@@ -58,6 +58,13 @@ func (h *handler) createCLICredential(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "host, port, and username are required", http.StatusBadRequest)
 		return
 	}
+	// audit H-4: validate at save time too, not only at connect — a
+	// credential pointed at a disallowed host should be rejected before
+	// it's ever stored, the same way webgui_handlers.go validates both.
+	if err := h.netPolicy.CheckHost(r.Context(), req.Host); err != nil {
+		http.Error(w, "target host is not allowed: "+err.Error(), http.StatusForbidden)
+		return
+	}
 
 	cred, err := h.cli.Create(r.Context(), id, req.Protocol, req.Host, req.Port, req.Username, req.Password)
 	if err != nil {
@@ -140,9 +147,9 @@ func (h *handler) connectCLI(w http.ResponseWriter, r *http.Request) {
 		var bridgeErr error
 		switch cred.Protocol {
 		case cliaccess.ProtocolSSH:
-			bridgeErr = cliaccess.BridgeSSH(r.Context(), cred, ws, h.cli.TOFUHostKeyCallback(r.Context(), cred.DeviceID))
+			bridgeErr = cliaccess.BridgeSSH(r.Context(), cred, ws, h.cli.TOFUHostKeyCallback(r.Context(), cred.DeviceID), h.netPolicy)
 		case cliaccess.ProtocolTelnet:
-			bridgeErr = cliaccess.BridgeTelnet(r.Context(), cred, ws)
+			bridgeErr = cliaccess.BridgeTelnet(r.Context(), cred, ws, h.netPolicy)
 		}
 		if bridgeErr != nil {
 			h.logger.Warn("cli bridge ended", "err", bridgeErr, "credential_id", credentialID, "protocol", cred.Protocol)

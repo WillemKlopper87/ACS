@@ -33,6 +33,7 @@ import (
 	"acs/internal/auth"
 	"acs/internal/bss"
 	"acs/internal/config"
+	"acs/internal/netguard"
 	"acs/internal/observability"
 	"acs/internal/ratelimit"
 	"acs/internal/store"
@@ -137,6 +138,22 @@ func main() {
 		logger.Warn("ACS_WALLED_GARDEN_PARAMETER not set — SUSPEND/ACTIVATE orders will be rejected (build plan §5.3: no universal safe parameter across CPE vendors, so this isn't guessed at).")
 	}
 
+	// Webhook target_url is BSS-operator-controlled (audit H-7): without a
+	// policy, a subscription could aim signed POSTs at the cloud metadata
+	// service or any internal host this process can reach. Empty means no
+	// allowlist beyond the always-forbidden classes (loopback/link-local/
+	// multicast) netguard refuses unconditionally — same safe-by-default
+	// shape as ACS_DEVICE_NET_ALLOWED_CIDRS in cmd/api.
+	webhookNetPolicy := netguard.Policy{}
+	if v := os.Getenv("ACS_BSS_WEBHOOK_ALLOWED_CIDRS"); v != "" {
+		cidrs, err := netguard.ParseCIDRList(v)
+		if err != nil {
+			logger.Error("invalid ACS_BSS_WEBHOOK_ALLOWED_CIDRS", "err", err)
+			os.Exit(1)
+		}
+		webhookNetPolicy.AllowedCIDRs = cidrs
+	}
+
 	h := &handler{
 		logger:             logger,
 		mappings:           bss.NewRepository(db),
@@ -148,6 +165,7 @@ func main() {
 		metrics:            metrics,
 		walledGarden:       walledGarden,
 		webhooks:           bss.NewWebhookRepository(db),
+		netPolicy:          webhookNetPolicy,
 	}
 
 	mux := http.NewServeMux()
@@ -351,6 +369,10 @@ type handler struct {
 	metrics            *observability.Metrics
 	walledGarden       bss.WalledGardenConfig
 	webhooks           *bss.WebhookRepository
+	// netPolicy bounds where a webhook target_url (BSS-operator-
+	// controlled) may point (audit H-7) -- checked at subscription
+	// creation and again at delivery time.
+	netPolicy netguard.Policy
 }
 
 // errorEnvelope matches the BSS integration guide §4 error shape.
