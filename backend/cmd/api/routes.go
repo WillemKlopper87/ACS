@@ -48,6 +48,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	mux.HandleFunc("POST /api/v1/auth/password-reset/confirm", metrics.InstrumentHTTP("POST /api/v1/auth/password-reset/confirm", h.confirmPasswordReset))
 	route("POST", "/api/v1/auth/operators/{id}/scopes", admin, h.setOperatorScopes)
 	route("GET", "/api/v1/auth/operators/{id}/scopes", admin, h.getOperatorScopes)
+	route("PUT", "/api/v1/auth/operators/{id}/global-access", admin, h.setOperatorGlobalAccess) // audit P0.1 — explicit OPERATOR_GLOBAL grant, superadmin-only
 
 	// Multi-tenancy (admin-platform backlog): structural CRUD is
 	// superadmin-only (the org chart); assigning a device to a

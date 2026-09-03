@@ -6,7 +6,9 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"acs/internal/tenancy"
@@ -262,6 +264,36 @@ func (h *handler) setOperatorScopes(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := operatorFromRequest(r)
 	if err := h.auditor.Record(r.Context(), actor, "", "OperatorScopesChanged", map[string]any{"operator_id": operatorID, "scopes": req.Scopes}); err != nil {
+		h.logger.Error("failed to write audit record", "err", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// setOperatorGlobalAccess grants or revokes the explicit OPERATOR_GLOBAL
+// entitlement (audit P0.1) — the only way a non-superadmin operator gets
+// unrestricted fleet access. Superadmin-only, and always audited: this is
+// the highest-leverage authorization grant in the system short of the
+// superadmin role itself.
+func (h *handler) setOperatorGlobalAccess(w http.ResponseWriter, r *http.Request) {
+	operatorID := r.PathValue("id")
+	var req struct {
+		GlobalAccess bool `json:"global_access"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if err := h.operators.SetGlobalAccess(r.Context(), operatorID, req.GlobalAccess); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		h.logger.Error("failed to set operator global access", "err", err, "operator_id", operatorID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	actor := operatorFromRequest(r)
+	if err := h.auditor.Record(r.Context(), actor, "", "OperatorGlobalAccessChanged", map[string]any{"operator_id": operatorID, "global_access": req.GlobalAccess}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)

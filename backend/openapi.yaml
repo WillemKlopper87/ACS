@@ -181,6 +181,11 @@ paths:
                 email: { type: string, description: "Optional — required only for self-service password reset" }
                 password: { type: string }
                 role: { $ref: "#/components/schemas/Role" }
+                scopes:
+                  type: array
+                  items: { $ref: "#/components/schemas/OperatorScope" }
+                  description: "Optional initial tenancy scopes (audit P0.1) — until set (or global_access granted), a non-superadmin operator has zero device access."
+                global_access: { type: boolean, description: "Optional initial OPERATOR_GLOBAL grant (audit P0.1)." }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Operator" } } } }
     get:
@@ -268,7 +273,7 @@ paths:
   /api/v1/auth/operators/{id}/scopes:
     post:
       tags: [Tenancy]
-      summary: Set an operator's tenancy scopes (superadmin only). No scopes = unrestricted.
+      summary: Set an operator's tenancy scopes (superadmin only). No scopes = zero device access unless global_access is also granted.
       parameters: [{ $ref: "#/components/parameters/OperatorId" }]
       requestBody:
         required: true
@@ -292,6 +297,24 @@ paths:
           content:
             application/json:
               schema: { type: array, items: { $ref: "#/components/schemas/OperatorScope" } }
+
+  /api/v1/auth/operators/{id}/global-access:
+    put:
+      tags: [Tenancy]
+      summary: Grant or revoke an operator's explicit OPERATOR_GLOBAL entitlement (superadmin only, audit P0.1). The only way a non-superadmin operator gets unrestricted fleet access — never inferred from zero scope rows.
+      parameters: [{ $ref: "#/components/parameters/OperatorId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [global_access]
+              properties:
+                global_access: { type: boolean }
+      responses:
+        "204": { description: Global access updated }
+        "404": { description: Operator not found }
 
   # --- Tenancy structural CRUD ---
   /api/v1/regions:
@@ -1647,6 +1670,7 @@ components:
         username: { type: string }
         email: { type: string }
         role: { $ref: "#/components/schemas/Role" }
+        global_access: { type: boolean, description: "Explicit OPERATOR_GLOBAL entitlement (audit P0.1) — true only when a superadmin deliberately granted fleet-wide access." }
         created_at: { type: string, format: date-time }
 
     RolePermissionsMatrix:

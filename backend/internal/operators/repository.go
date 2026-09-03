@@ -20,7 +20,7 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
-const operatorColumns = `id, username, COALESCE(email, ''), password_hash, role, created_at, updated_at, token_version`
+const operatorColumns = `id, username, COALESCE(email, ''), password_hash, role, created_at, updated_at, token_version, global_access`
 
 // Create inserts a new operator with an already-hashed password — callers
 // are responsible for bcrypt-hashing, this package never sees a plaintext
@@ -95,10 +95,36 @@ type scanner interface {
 
 func scanOperator(s scanner) (*Operator, error) {
 	var op Operator
-	if err := s.Scan(&op.ID, &op.Username, &op.Email, &op.PasswordHash, &op.Role, &op.CreatedAt, &op.UpdatedAt, &op.TokenVersion); err != nil {
+	if err := s.Scan(&op.ID, &op.Username, &op.Email, &op.PasswordHash, &op.Role, &op.CreatedAt, &op.UpdatedAt, &op.TokenVersion, &op.GlobalAccess); err != nil {
 		return nil, fmt.Errorf("scan operator: %w", err)
 	}
 	return &op, nil
+}
+
+// SetGlobalAccess grants or revokes the OPERATOR_GLOBAL entitlement (audit
+// P0.1) — must be called explicitly by a superadmin; nothing infers this
+// from the absence of operator_scopes rows.
+func (r *Repository) SetGlobalAccess(ctx context.Context, operatorID string, global bool) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE operators SET global_access = $1, updated_at = now() WHERE id = $2`, global, operatorID)
+	if err != nil {
+		return fmt.Errorf("set operator global access: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set operator global access: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// ByID fetches an operator by id — used by admin-facing endpoints that
+// address an operator directly (scope/global-access assignment) rather
+// than by the JWT subject.
+func (r *Repository) ByID(ctx context.Context, id string) (*Operator, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT `+operatorColumns+` FROM operators WHERE id = $1`, id)
+	return scanOperator(row)
 }
 
 // isUniqueViolation checks for Postgres error code 23505 (unique_violation)

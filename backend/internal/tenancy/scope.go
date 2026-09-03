@@ -59,19 +59,18 @@ func (r *Repository) SetOperatorScopes(ctx context.Context, operatorID string, s
 // AccessibleCustomerIDs resolves an operator's scope rows into the
 // concrete set of customer IDs they can see — a region scope expands to
 // every customer currently under it (resolved live, not denormalized, so
-// adding a customer to a scoped region immediately includes it). Returns
-// (nil, false) when the operator has no scope rows at all, meaning
-// unrestricted — callers must check the bool, not just range over a nil
-// slice, since nil+false ("see everything") and an empty
-// slice+true ("scoped but the scope currently resolves to nothing, see
-// nothing") mean opposite things.
+// adding a customer to a scoped region immediately includes it).
+//
+// Zero scope rows resolves to scoped=true with an empty ID list: zero
+// access (audit P0.1). Unrestricted access is never inferred from an
+// empty scope result — it requires the caller to check the operator's
+// superadmin role or explicit GlobalAccess grant *before* calling this
+// function (see cmd/api's deviceScope), the same way the two are already
+// short-circuited ahead of this call.
 func (r *Repository) AccessibleCustomerIDs(ctx context.Context, operatorID string) (ids []string, scoped bool, err error) {
 	scopes, err := r.OperatorScopes(ctx, operatorID)
 	if err != nil {
 		return nil, false, err
-	}
-	if len(scopes) == 0 {
-		return nil, false, nil
 	}
 
 	seen := map[string]bool{}

@@ -335,6 +335,89 @@ func TestIntegration_TenantIsolation(t *testing.T) {
 	})
 }
 
+// TestIntegration_ZeroScopeDenyByDefault is the P0.1 acceptance gate
+// (ACS_REMEDIATION_EXECUTION_PROTOCOL_2026-09-03.md §5): zero
+// operator_scopes rows must mean zero device access, never unrestricted
+// access, for any non-superadmin operator — and unrestricted access
+// requires the explicit GlobalAccess grant, never an inferred one.
+func TestIntegration_ZeroScopeDenyByDefault(t *testing.T) {
+	e := newTestEnv(t)
+	custA := e.customer("Customer A")
+	devA := e.device("A001", &custA)
+	e.operator("root", operators.RoleSuperAdmin)
+	e.grant(operators.RoleManager, operators.PermDevicesWrite)
+	e.grant(operators.RoleNOC, operators.PermDevicesWrite)
+
+	t.Run("new manager has no devices until scope assigned", func(t *testing.T) {
+		e.operator("mallory", operators.RoleManager) // no scopes passed
+		if r := e.call("mallory", "GET", "/api/v1/devices", nil); !strings.Contains(r.body, `"total":0`) {
+			t.Errorf("scopeless new manager's device list = %s, want total:0", r.body)
+		}
+		if r := e.call("mallory", "GET", "/api/v1/devices/"+devA, nil); r.code != 404 {
+			t.Errorf("scopeless new manager GET device → %d, want 404", r.code)
+		}
+	})
+
+	t.Run("new noc has no devices until scope assigned", func(t *testing.T) {
+		e.operator("nancy", operators.RoleNOC) // no scopes passed
+		if r := e.call("nancy", "GET", "/api/v1/devices", nil); !strings.Contains(r.body, `"total":0`) {
+			t.Errorf("scopeless new noc's device list = %s, want total:0", r.body)
+		}
+		if r := e.call("nancy", "GET", "/api/v1/devices/"+devA, nil); r.code != 404 {
+			t.Errorf("scopeless new noc GET device → %d, want 404", r.code)
+		}
+	})
+
+	t.Run("removing last scope does not grant global access", func(t *testing.T) {
+		e.operator("oscar", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custA})
+		if r := e.call("oscar", "GET", "/api/v1/devices/"+devA, nil); r.code != 200 {
+			t.Fatalf("oscar with a customer scope GET own device → %d, want 200", r.code)
+		}
+		op, err := e.h.operators.ByUsername(e.ctx, "oscar")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.h.tenancy.SetOperatorScopes(e.ctx, op.ID, nil); err != nil {
+			t.Fatalf("clear scopes: %v", err)
+		}
+		if r := e.call("oscar", "GET", "/api/v1/devices/"+devA, nil); r.code != 404 {
+			t.Errorf("oscar after last scope removed GET device → %d, want 404 (must not fall back to unrestricted)", r.code)
+		}
+		if r := e.call("oscar", "GET", "/api/v1/devices", nil); !strings.Contains(r.body, `"total":0`) {
+			t.Errorf("oscar after last scope removed device list = %s, want total:0", r.body)
+		}
+	})
+
+	t.Run("explicit global operator can access all customers", func(t *testing.T) {
+		e.operator("gina", operators.RoleManager) // no scopes
+		op, err := e.h.operators.ByUsername(e.ctx, "gina")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := e.call("gina", "GET", "/api/v1/devices/"+devA, nil); r.code != 404 {
+			t.Fatalf("gina before global grant GET device → %d, want 404", r.code)
+		}
+		if err := e.h.operators.SetGlobalAccess(e.ctx, op.ID, true); err != nil {
+			t.Fatalf("grant global access: %v", err)
+		}
+		if r := e.call("gina", "GET", "/api/v1/devices/"+devA, nil); r.code != 200 {
+			t.Errorf("gina after global grant GET device → %d, want 200", r.code)
+		}
+		if r := e.call("gina", "GET", "/api/v1/devices", nil); !strings.Contains(r.body, `"total":1`) {
+			t.Errorf("gina after global grant device list = %s, want total:1", r.body)
+		}
+	})
+
+	t.Run("superadmin remains global regardless of scope rows", func(t *testing.T) {
+		if r := e.call("root", "GET", "/api/v1/devices/"+devA, nil); r.code != 200 {
+			t.Errorf("root (superadmin) GET device → %d, want 200", r.code)
+		}
+		if r := e.call("root", "GET", "/api/v1/devices", nil); !strings.Contains(r.body, `"total":1`) {
+			t.Errorf("root (superadmin) device list = %s, want total:1", r.body)
+		}
+	})
+}
+
 // TestIntegration_TransferTokens exercises the public upload receipt
 // end to end (P0.3): the slot URL's token is required, purpose-bound,
 // single-use, and size-capped.

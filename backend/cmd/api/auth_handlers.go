@@ -25,6 +25,7 @@ import (
 	"acs/internal/observability"
 	"acs/internal/operators"
 	"acs/internal/ratelimit"
+	"acs/internal/tenancy"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -468,18 +469,26 @@ type createOperatorRequest struct {
 	Email    string `json:"email,omitempty"` // optional — required only if this operator will use self-service email password reset
 	Password string `json:"password"`
 	Role     string `json:"role"`
+	// Scopes and GlobalAccess are optional initial tenancy grants (audit
+	// P0.1) applied right after the operator row is created. Until
+	// either is set, a non-superadmin operator has zero device access —
+	// the safe direction for the gap between the two writes, since it
+	// only ever under-grants, never over-grants.
+	Scopes       []scopeDTO `json:"scopes,omitempty"`
+	GlobalAccess bool       `json:"global_access,omitempty"`
 }
 
 type operatorResponse struct {
-	ID        string `json:"id"`
-	Username  string `json:"username"`
-	Email     string `json:"email,omitempty"`
-	Role      string `json:"role"`
-	CreatedAt string `json:"created_at"`
+	ID           string `json:"id"`
+	Username     string `json:"username"`
+	Email        string `json:"email,omitempty"`
+	Role         string `json:"role"`
+	GlobalAccess bool   `json:"global_access"`
+	CreatedAt    string `json:"created_at"`
 }
 
 func toOperatorResponse(op operators.Operator) operatorResponse {
-	return operatorResponse{ID: op.ID, Username: op.Username, Email: op.Email, Role: op.Role, CreatedAt: op.CreatedAt.Format(time.RFC3339)}
+	return operatorResponse{ID: op.ID, Username: op.Username, Email: op.Email, Role: op.Role, GlobalAccess: op.GlobalAccess, CreatedAt: op.CreatedAt.Format(time.RFC3339)}
 }
 
 func (h *handler) createOperator(w http.ResponseWriter, r *http.Request) {
@@ -509,6 +518,34 @@ func (h *handler) createOperator(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("failed to create operator", "err", err, "username", req.Username)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+
+	// Optional initial grants (audit P0.1): applied after the operator row
+	// exists, not in the same transaction, but the gap is safe in only one
+	// direction — until these land, the new operator has zero access, never
+	// more than intended.
+	if req.GlobalAccess {
+		if err := h.operators.SetGlobalAccess(r.Context(), op.ID, true); err != nil {
+			h.logger.Error("failed to set initial global access", "err", err, "operator_id", op.ID)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		op.GlobalAccess = true
+	}
+	if len(req.Scopes) > 0 {
+		scopes := make([]tenancy.Scope, len(req.Scopes))
+		for i, s := range req.Scopes {
+			if s.Type != tenancy.ScopeRegion && s.Type != tenancy.ScopeCustomer {
+				http.Error(w, `scope type must be "region" or "customer"`, http.StatusBadRequest)
+				return
+			}
+			scopes[i] = tenancy.Scope{Type: s.Type, ID: s.ID}
+		}
+		if err := h.tenancy.SetOperatorScopes(r.Context(), op.ID, scopes); err != nil {
+			h.logger.Error("failed to set initial operator scopes", "err", err, "operator_id", op.ID)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	actor := operatorFromRequest(r)

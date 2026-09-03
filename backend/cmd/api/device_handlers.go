@@ -76,9 +76,12 @@ func toResponse(d devices.Device) deviceResponse {
 // deviceScope resolves the calling operator's multi-tenancy scope
 // (admin-platform backlog) into devices.ListParams' CustomerIDs/Scoped
 // fields — unrestricted (Scoped: false) when auth is disabled, the caller
-// is superadmin, or the operator has no scope rows assigned (the default,
-// backward-compatible for every operator until a superadmin explicitly
-// scopes one).
+// is superadmin, or the operator holds the explicit GlobalAccess grant
+// (audit P0.1). Every other operator is scoped to exactly their assigned
+// customers/regions; zero scope rows resolves to zero accessible
+// customers, not unrestricted access — GlobalAccess must be granted
+// deliberately by a superadmin, it is never inferred from an empty scope
+// result.
 //
 // Lookup failures return an error and the caller must fail the request
 // (audit P0.2): the previous behavior of treating a failed scope
@@ -96,6 +99,9 @@ func (h *handler) deviceScope(r *http.Request) (customerIDs []string, scoped boo
 	if err != nil {
 		h.logger.Error("failed to resolve operator for scoping", "err", err, "username", claims.Subject)
 		return nil, false, fmt.Errorf("resolve operator for scoping: %w", err)
+	}
+	if op.GlobalAccess {
+		return nil, false, nil
 	}
 	ids, isScoped, err := h.tenancy.AccessibleCustomerIDs(r.Context(), op.ID)
 	if err != nil {

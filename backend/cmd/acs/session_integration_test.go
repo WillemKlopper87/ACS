@@ -269,7 +269,7 @@ func TestRepository_RefreshLivenessTransitions(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `INSERT INTO devices (id, oui_serial, manufacturer, oui, product_class, serial_number, online_status, last_inform_at, first_seen_at, last_updated_at) VALUES ($1, $2, $3, $4, $5, $6, 'OFFLINE', now() - interval '3 hours', now(), now())`, uuid.MustParse("11111111-1111-4111-8111-111111111111").String(), "LIVENESS-02", "TestVendor", "001349", "NR7101", "SER2"); err != nil {
 		t.Fatalf("prepare unreachable row: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO devices (id, oui_serial, manufacturer, oui, product_class, serial_number, online_status, last_inform_at, first_seen_at, last_updated_at) VALUES ($1, $2, $3, $4, $5, $6, 'ONLINE', now() - interval '30 minutes', now(), now())`, uuid.MustParse("22222222-2222-4222-8222-222222222222").String(), "LIVENESS-03", "TestVendor", "001349", "NR7101", "SER3"); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO devices (id, oui_serial, manufacturer, oui, product_class, serial_number, online_status, last_inform_at, first_seen_at, last_updated_at) VALUES ($1, $2, $3, $4, $5, $6, 'ONLINE', now() - interval '2 minutes', now(), now())`, uuid.MustParse("22222222-2222-4222-8222-222222222222").String(), "LIVENESS-03", "TestVendor", "001349", "NR7101", "SER3"); err != nil {
 		t.Fatalf("prepare fresh row: %v", err)
 	}
 

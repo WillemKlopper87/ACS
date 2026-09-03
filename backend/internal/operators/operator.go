@@ -126,4 +126,10 @@ type Operator struct {
 	// TokenVersion is stamped into every JWT issued for this operator;
 	// a token whose version is behind this value is revoked.
 	TokenVersion int
+	// GlobalAccess is the explicit OPERATOR_GLOBAL entitlement (audit
+	// P0.1): true only when a superadmin has deliberately granted
+	// fleet-wide access to this non-superadmin operator. Zero
+	// operator_scopes rows plus GlobalAccess=false means zero access,
+	// not unrestricted access.
+	GlobalAccess bool
 }
