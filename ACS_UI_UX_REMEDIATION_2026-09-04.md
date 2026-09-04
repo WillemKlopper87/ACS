@@ -106,9 +106,9 @@ The token system itself is sound (four themes, consistent naming, real
   fixed `14.5rem`/`100vh` with no media query while `.split.two-col` collapses at
   900px; with `table-wrap { max-height: 62vh }` and `white-space: nowrap` on every
   `td`, narrow viewports get nested double-scroll.
-- [ ] **P2.5 — `.form-row` has no `flex-wrap`**, so the four-field Operators
+- [x] **P2.5 — `.form-row` has no `flex-wrap`**, so the four-field Operators
   create row squashes instead of wrapping.
-- [ ] **P2.6 — `--ink-dim` and `--ink-faint` are visually identical in dark**
+- [x] **P2.6 — `--ink-dim` and `--ink-faint` are visually identical in dark**
   (`#98a5bc` vs `#9aa7bb`, `index.css:11-12`) — the two-tier text hierarchy those
   tokens encode does not exist in the default theme.
 - [x] **P2.7 — Raw enum strings are shown to users** (`HTTP_200_INFORM_RECEIVED`,
@@ -116,7 +116,7 @@ The token system itself is sound (four themes, consistent naming, real
   the tone map in `StatusBadge.tsx`.
 - [ ] **P2.8 — Login is entirely inline-styled**, bypassing the design system it
   sits next to (`frontend/src/screens/Login.tsx:5-87`).
-- [ ] **P2.9 — No `prefers-reduced-motion` guard**, and `dot-pulse` animates
+- [x] **P2.9 — No `prefers-reduced-motion` guard**, and `dot-pulse` animates
   infinitely on every `.pill-ok::before` (`index.css:430`) — hundreds of
   simultaneous animations in a populated table.
 

@@ -9,7 +9,13 @@
   --border: #263349;
   --ink: #e7ecf5;
   --ink-dim: #98a5bc;
-  --ink-faint: #9aa7bb;
+  /* Was #9aa7bb — indistinguishable from --ink-dim, so the two-tier text
+     hierarchy the tokens encode did not visibly exist. Pulled down to a
+     real step while staying above 4.5:1 on --surface (~5.1:1), since the
+     smallest type in the app (.stat .l, .pill at ~9.5px) uses it. The
+     light/unfold/fluent themes keep theirs: their dim tier is already
+     near the contrast floor, so there is no headroom to separate them. */
+  --ink-faint: #7b879c;
   --accent: #e0a458;
   --accent-ink: #1a1206;
   --ok: #5fbf8f;
@@ -421,7 +427,10 @@ td.ellipsis { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; }
 .param-row .val { color: var(--accent); text-align: right; }
 .param-row .src { grid-column: 1 / -1; color: var(--ink-faint); font-size: 0.72rem; }
 
-.form-row { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+/* Wraps rather than squashing: the widest form row (Operators' create:
+   username, email, password, role) has no usable width left on a narrow
+   viewport otherwise. */
+.form-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
 .form-row input { flex: 1; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.4rem 0.6rem; color: var(--ink); font-family: var(--font-mono); font-size: 0.82rem; }
 
 .banner {
@@ -455,10 +464,22 @@ input:focus, select.chip:focus {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.pill-ok::before { animation: dot-pulse 2s ease-in-out infinite; }
-@keyframes dot-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
+/* The OK pill's dot used to pulse forever. In a fleet table most rows
+   are healthy, so it fired on hundreds of elements at once: continuous
+   compositor work to convey the one thing that needs no attention. The
+   pulse now lives only on the live-refresh dot below, where it actually
+   means something is happening. */
+
+/* Honour the OS-level reduced-motion preference: this app has infinite
+   pulses and a panel entrance animation, both of which are exactly what
+   the setting exists to suppress. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Live auto-refresh toggle, used in every list/detail toolbar. */
