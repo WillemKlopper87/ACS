@@ -57,9 +57,13 @@ jobs:
       - run: npm run build
       - run: npm test -- --run
       - name: OpenAPI specs are valid (drift vs. routes is a Go test)
+        # audit P2.5: pinned to an exact version, not the floating @1 major
+        # tag -- unlike the GitHub Actions above, Dependabot doesn't track
+        # an ad hoc npx invocation inside a run: script, so bumping this
+        # is a manual, deliberate edit rather than an automated PR.
         run: |
-          npx --yes @redocly/cli@1 lint ../backend/openapi.yaml --skip-rule operation-4xx-response --skip-rule no-unused-components
-          npx --yes @redocly/cli@1 lint ../backend/openapi-bssadapter.yaml --skip-rule operation-4xx-response --skip-rule no-unused-components
+          npx --yes @redocly/cli@2.51.1 lint ../backend/openapi.yaml --skip-rule operation-4xx-response --skip-rule no-unused-components
+          npx --yes @redocly/cli@2.51.1 lint ../backend/openapi-bssadapter.yaml --skip-rule operation-4xx-response --skip-rule no-unused-components
       - name: generated API types match the committed spec (audit P2.5)
         run: |
           npm run generate:api
