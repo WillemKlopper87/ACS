@@ -64,6 +64,7 @@ export function DataTable<T>({
           header: () => (
             <input
               type="checkbox"
+              aria-label="Select all rows"
               checked={data.length > 0 && data.every((d) => selection.selectedIds.has(getRowId!(d)))}
               ref={(el) => {
                 if (!el) return;
@@ -80,6 +81,7 @@ export function DataTable<T>({
             return (
               <input
                 type="checkbox"
+                aria-label={`Select row ${id}`}
                 checked={selection.selectedIds.has(id)}
                 onChange={() => selection.onToggle(id)}
                 onClick={(e) => e.stopPropagation()}
@@ -127,15 +129,32 @@ export function DataTable<T>({
               {hg.headers.map((header) => {
                 const sortable = header.column.getCanSort();
                 const sorted = header.column.getIsSorted();
+                const content = (
+                  <>
+                    {flexRender(header.column.columnDef.header, header.getContext())}
+                    <span className="arrow">{sorted === "asc" ? " ▴" : sorted === "desc" ? " ▾" : ""}</span>
+                  </>
+                );
+                // Sorting lives on a real <button> inside the <th> rather
+                // than an onClick on the cell: that is what makes it
+                // reachable by keyboard and announced as a control, and
+                // aria-sort is what tells a screen reader the current
+                // direction. .th-sort strips the button's own chrome so
+                // the header still looks identical.
                 return (
                   <th
                     key={header.id}
-                    onClick={sortable ? header.column.getToggleSortingHandler() : undefined}
                     className={sorted ? "sorted" : ""}
+                    aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : sortable ? "none" : undefined}
                     style={sortable ? undefined : { cursor: "default" }}
                   >
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                    <span className="arrow">{sorted === "asc" ? " ▴" : sorted === "desc" ? " ▾" : ""}</span>
+                    {sortable ? (
+                      <button type="button" className="th-sort" onClick={header.column.getToggleSortingHandler()}>
+                        {content}
+                      </button>
+                    ) : (
+                      content
+                    )}
                   </th>
                 );
               })}
@@ -158,10 +177,26 @@ export function DataTable<T>({
           {bodyRows.map((row) => {
             const id = getRowId ? getRowId(row.original) : row.id;
             return (
+              // A clickable row is the primary way into Device Detail, so
+              // it has to be reachable without a mouse. The row keeps its
+              // implicit `row` role — putting role="button" on a <tr>
+              // would break the table semantics for screen readers — and
+              // gains focus plus Enter/Space activation instead.
               <tr
                 key={row.id}
                 className={selectedRowId === id || selection?.selectedIds.has(id) ? "selected" : ""}
                 onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
+                onKeyDown={
+                  onRowClick
+                    ? (e) => {
+                        if (e.key !== "Enter" && e.key !== " ") return;
+                        // Space would otherwise scroll the table.
+                        e.preventDefault();
+                        onRowClick(row.original);
+                      }
+                    : undefined
+                }
                 style={onRowClick ? { cursor: "pointer" } : undefined}
               >
                 {row.getVisibleCells().map((cell) => (

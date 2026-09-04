@@ -122,12 +122,12 @@ The token system itself is sound (four themes, consistent naming, real
 
 ## P3 — accessibility *(prior: M-20)*
 
-- [ ] **P3.1 — Table rows are mouse-only.** `<tr onClick>` with `cursor: pointer`,
+- [x] **P3.1 — Table rows are mouse-only.** `<tr onClick>` with `cursor: pointer`,
   no `tabIndex` / `onKeyDown` / `role` (`DataTable.tsx:161-166`). Row-click is the
   primary route into Device Detail, so that path is keyboard-inaccessible.
-- [ ] **P3.2 — Sortable headers are click-only and carry no `aria-sort`**
+- [x] **P3.2 — Sortable headers are click-only and carry no `aria-sort`**
   (`DataTable.tsx:131-139`).
-- [ ] **P3.3 — Select-all and row checkboxes are unlabeled** (`DataTable.tsx:65-88`).
+- [x] **P3.3 — Select-all and row checkboxes are unlabeled** (`DataTable.tsx:65-88`).
 - [ ] **P3.4 — Toasts have no `role`/`aria-live`** (`Toast.tsx:10`), and most
   screens report failures exclusively via toast — so errors are silent for
   screen-reader users. The close button has no `aria-label` and the dismiss
