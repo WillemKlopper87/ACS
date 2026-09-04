@@ -106,7 +106,10 @@ export function BSSIntegration() {
     }
   }
 
-  async function revokeOAuthClient(id: string) {
+  async function revokeOAuthClient(id: string, name: string) {
+    // Revoking is immediate and irreversible: whatever BSS system holds
+    // this client_id stops being able to authenticate the moment it lands.
+    if (!window.confirm(`Revoke OAuth2 client "${name}"? Any BSS integration using it stops authenticating immediately. This cannot be undone.`)) return;
     try {
       await api.revokeBSSOAuthClient(id);
       await loadSetup();
@@ -166,7 +169,8 @@ export function BSSIntegration() {
     }
   }
 
-  async function deleteWebhook(id: string) {
+  async function deleteWebhook(id: string, target: string) {
+    if (!window.confirm(`Delete the webhook subscription to ${target}? Events will stop being delivered there.`)) return;
     try {
       await api.deleteBSSWebhook(id);
       await loadSetup();
@@ -282,7 +286,7 @@ export function BSSIntegration() {
                 {webhooks.map((w) => (
                   <div className="param-row" key={w.id}>
                     <span className="path">{w.account_id ?? "fleet-wide"} <span className="dim">→</span> {w.target_url}</span>
-                    <button className="btn danger sm" onClick={() => deleteWebhook(w.id)}>
+                    <button className="btn danger sm" onClick={() => deleteWebhook(w.id, w.target_url)}>
                       Delete
                     </button>
                     <span className="src mono">secret {maskSecret(w.secret)} · events {w.event_types.join(", ")}</span>
@@ -330,7 +334,7 @@ export function BSSIntegration() {
                     {c.revoked_at ? (
                       <span className="pill pill-danger">REVOKED</span>
                     ) : (
-                      <button className="btn danger sm" onClick={() => revokeOAuthClient(c.id)}>
+                      <button className="btn danger sm" onClick={() => revokeOAuthClient(c.id, c.name)}>
                         Revoke
                       </button>
                     )}

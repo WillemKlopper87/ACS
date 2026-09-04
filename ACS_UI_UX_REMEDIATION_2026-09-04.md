@@ -95,7 +95,7 @@ The token system itself is sound (four themes, consistent naming, real
   is copy-pasted across 5+ files; the sign-out button is a 10-line inline style
   block (`App.tsx:109-122`). Add `.btn.sm` and a ghost variant, then delete the
   inline copies.
-- [ ] **P2.2 — Destructive actions are styled like ordinary ones.** `.btn.danger`
+- [x] **P2.2 — Destructive actions are styled like ordinary ones.** `.btn.danger`
   exists and is used 5 times, but the group / policy / schedule / template /
   tenancy deletes all use plain `.btn`. Add confirmations to the list-screen
   deletes that lack them, matching the device-level actions that already confirm.

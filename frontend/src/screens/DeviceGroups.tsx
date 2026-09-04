@@ -73,10 +73,12 @@ export function DeviceGroups() {
     }
   }
 
-  async function onDelete(id: string) {
+  async function onDelete(g: DeviceGroup) {
+    const members = g.member_count === 1 ? "1 member" : `${g.member_count} members`;
+    if (!window.confirm(`Delete group "${g.name}" (${members})? Templates, schedules and rollouts that target it will lose their target. This cannot be undone.`)) return;
     try {
-      await api.deleteDeviceGroup(id);
-      if (selected?.id === id) setSelected(null);
+      await api.deleteDeviceGroup(g.id);
+      if (selected?.id === g.id) setSelected(null);
       toast("Group deleted", "info");
       await load();
     } catch (e) {
@@ -139,11 +141,11 @@ export function DeviceGroups() {
         header: "",
         cell: ({ row }) => (
           <button
-            className="btn"
+            className="btn danger"
             disabled={!writable}
             onClick={(e) => {
               e.stopPropagation();
-              onDeleteRef.current(row.original.id);
+              onDeleteRef.current(row.original);
             }}
           >
             Delete

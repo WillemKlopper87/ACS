@@ -78,9 +78,10 @@ export function Policies() {
     }
   }
 
-  async function onDelete(id: string) {
+  async function onDelete(p: Policy) {
+    if (!window.confirm(`Delete policy "${p.name}"? Devices will stop being corrected back to "${p.desired_value}". This cannot be undone.`)) return;
     try {
-      await api.deletePolicy(id);
+      await api.deletePolicy(p.id);
       toast("Policy deleted", "info");
       await load();
     } catch (e) {
@@ -118,7 +119,7 @@ export function Policies() {
             <button className="btn" disabled={!writable} onClick={() => onToggle(row.original)}>
               {row.original.enabled ? "Disable" : "Enable"}
             </button>
-            <button className="btn" disabled={!writable} onClick={() => onDelete(row.original.id)}>
+            <button className="btn danger" disabled={!writable} onClick={() => onDelete(row.original)}>
               Delete
             </button>
           </div>

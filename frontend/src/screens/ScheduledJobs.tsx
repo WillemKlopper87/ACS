@@ -88,9 +88,10 @@ export function ScheduledJobs() {
     }
   }
 
-  async function onDelete(id: string) {
+  async function onDelete(sj: ScheduledJob) {
+    if (!window.confirm(`Delete schedule "${sj.name}"? It will stop running ${sj.job_type} every ${sj.interval_seconds}s. This cannot be undone.`)) return;
     try {
-      await api.deleteScheduledJob(id);
+      await api.deleteScheduledJob(sj.id);
       toast("Schedule deleted", "info");
       await load();
     } catch (e) {
@@ -136,7 +137,7 @@ export function ScheduledJobs() {
             <button className="btn" disabled={!writable} onClick={() => onToggle(row.original)}>
               {row.original.enabled ? "Disable" : "Enable"}
             </button>
-            <button className="btn" disabled={!writable} onClick={() => onDelete(row.original.id)}>
+            <button className="btn danger" disabled={!writable} onClick={() => onDelete(row.original)}>
               Delete
             </button>
           </div>

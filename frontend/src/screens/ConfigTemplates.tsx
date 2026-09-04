@@ -109,10 +109,11 @@ export function ConfigTemplates() {
     }
   }
 
-  async function onDelete(id: string) {
+  async function onDelete(t: ConfigTemplate) {
+    if (!window.confirm(`Delete template "${t.name}"? Its ${t.parameters.length} parameter${t.parameters.length === 1 ? "" : "s"} can no longer be applied. This cannot be undone.`)) return;
     try {
-      await api.deleteTemplate(id);
-      if (selected?.id === id) setSelected(null);
+      await api.deleteTemplate(t.id);
+      if (selected?.id === t.id) setSelected(null);
       toast("Template deleted", "info");
       await load();
     } catch (e) {
@@ -189,11 +190,11 @@ export function ConfigTemplates() {
         header: "",
         cell: ({ row }) => (
           <button
-            className="btn"
+            className="btn danger"
             disabled={!writable}
             onClick={(e) => {
               e.stopPropagation();
-              onDeleteRef.current(row.original.id);
+              onDeleteRef.current(row.original);
             }}
           >
             Delete
