@@ -14,6 +14,20 @@ let items: ToastItem[] = [];
 let nextId = 1;
 const listeners = new Set<Listener>();
 
+// Errors stay until dismissed. Most screens report failures only via
+// toast, and a 4.2s timeout meant an operator who looked away lost the
+// only account of what went wrong — often the message naming the reason
+// the server refused. Successes and info still self-clear.
+const DEFAULT_TTL_MS: Record<ToastKind, number> = {
+  error: 0, // 0 = never auto-dismiss
+  success: 4200,
+  info: 4200,
+};
+
+// Sticky errors could otherwise pile up without bound; keep the most
+// recent handful rather than burying the screen.
+const MAX_VISIBLE = 6;
+
 function emit() {
   listeners.forEach((l) => l(items));
 }
@@ -21,14 +35,17 @@ function emit() {
 export function subscribeToasts(fn: Listener): () => void {
   listeners.add(fn);
   fn(items);
-  return () => listeners.delete(fn);
+  return () => {
+    listeners.delete(fn);
+  };
 }
 
-export function toast(message: string, kind: ToastKind = "info", ttlMs = 4200): number {
+export function toast(message: string, kind: ToastKind = "info", ttlMs?: number): number {
   const id = nextId++;
-  items = [...items, { id, kind, message }];
+  items = [...items, { id, kind, message }].slice(-MAX_VISIBLE);
   emit();
-  setTimeout(() => dismissToast(id), ttlMs);
+  const ttl = ttlMs ?? DEFAULT_TTL_MS[kind];
+  if (ttl > 0) setTimeout(() => dismissToast(id), ttl);
   return id;
 }
 

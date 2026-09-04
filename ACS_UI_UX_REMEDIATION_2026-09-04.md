@@ -128,11 +128,11 @@ The token system itself is sound (four themes, consistent naming, real
 - [x] **P3.2 — Sortable headers are click-only and carry no `aria-sort`**
   (`DataTable.tsx:131-139`).
 - [x] **P3.3 — Select-all and row checkboxes are unlabeled** (`DataTable.tsx:65-88`).
-- [ ] **P3.4 — Toasts have no `role`/`aria-live`** (`Toast.tsx:10`), and most
+- [x] **P3.4 — Toasts have no `role`/`aria-live`** (`Toast.tsx:10`), and most
   screens report failures exclusively via toast — so errors are silent for
   screen-reader users. The close button has no `aria-label` and the dismiss
   target is a bare `div` `onClick`.
-- [ ] **P3.5 — Error toasts auto-dismiss after 4.2s** regardless of severity
+- [x] **P3.5 — Error toasts auto-dismiss after 4.2s** regardless of severity
   (`lib/toast.ts:27`).
 - [ ] **P3.6 — Placeholder-as-label throughout the create forms** — no accessible
   name, and the text vanishes once the field has content.

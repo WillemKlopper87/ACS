@@ -468,7 +468,11 @@ input:focus, select.chip:focus {
   flex-direction: column;
   gap: 0.5rem;
   max-width: 22rem;
+  /* The host is always mounted so its live region exists before any
+     toast lands; it must not swallow clicks while empty. */
+  pointer-events: none;
 }
+.toast-host > * { pointer-events: auto; }
 .toast {
   display: flex;
   align-items: center;
