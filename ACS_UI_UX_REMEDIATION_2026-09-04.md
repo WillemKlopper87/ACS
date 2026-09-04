@@ -76,7 +76,7 @@ commit, pushed to `main`.
   device for a config backup or log bundle, and has no way to see or download
   the result.
 
-- [ ] **P1.3 — No single-device firmware push.**
+- [x] **P1.3 — No single-device firmware push.**
   `POST /api/v1/devices/{id}/firmware` (`routes.go:175`) is unexposed; firmware
   can only be shipped through a fleet rollout, which is the wrong instrument for
   one-device support work.

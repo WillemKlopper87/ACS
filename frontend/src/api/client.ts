@@ -369,6 +369,15 @@ export const api = {
     form.append("channel", channel);
     return request<FirmwareImage>("/api/v1/firmware/images", { method: "POST", body: form });
   },
+  // Push one image to one device, outside any rollout. A rollout is the
+  // wrong instrument for single-device support work (RMA replacement,
+  // reproducing a customer's report on a known build), which is what
+  // this endpoint has always been for.
+  createFirmwareDownload: (deviceId: string, firmwareImageId: string, delaySeconds = 0) =>
+    request<QueueResponse>(`/api/v1/devices/${deviceId}/firmware`, {
+      method: "POST",
+      body: JSON.stringify({ firmware_image_id: firmwareImageId, delay_seconds: delaySeconds }),
+    }),
   listRollouts: () => request<{ items: Rollout[] }>("/api/v1/firmware/rollouts"),
   getRollout: (id: string) => request<RolloutDetail>(`/api/v1/firmware/rollouts/${id}`),
   createRollout: (input: {

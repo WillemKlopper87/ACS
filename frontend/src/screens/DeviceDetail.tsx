@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { Credential, Device, Job, ParameterCache, ParameterHistoryEntry, UploadedFile } from "../api/types";
+import type { Credential, Device, FirmwareImage, Job, ParameterCache, ParameterHistoryEntry, UploadedFile } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { DeviceConsole } from "../components/DeviceConsole";
 import { RemoteShell } from "../components/RemoteShell";
@@ -22,6 +22,8 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   const [jobs, setJobs] = useState<Job[]>([]);
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [uploads, setUploads] = useState<UploadedFile[]>([]);
+  const [firmwareImages, setFirmwareImages] = useState<FirmwareImage[]>([]);
+  const [firmwareImageId, setFirmwareImageId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(busy);
@@ -83,6 +85,28 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // The image catalogue is small and slow-changing, so it's fetched once
+  // per panel rather than on every poll like the device state above.
+  useEffect(() => {
+    api.listFirmwareImages().then(
+      (r) => setFirmwareImages(r.items),
+      () => {}, // the push control just stays empty if this fails
+    );
+  }, []);
+
+  // Preselect the image built for this exact vendor/model so the common
+  // case is one click, without hiding the others — pushing a different
+  // build is sometimes precisely the point when reproducing a report.
+  useEffect(() => {
+    if (firmwareImageId || firmwareImages.length === 0 || !device) return;
+    const match = firmwareImages.find(
+      (i) =>
+        i.vendor.toLowerCase() === device.manufacturer.toLowerCase() &&
+        i.model.toLowerCase() === device.product_class.toLowerCase(),
+    );
+    setFirmwareImageId((match ?? firmwareImages[0]).id);
+  }, [device, firmwareImages, firmwareImageId]);
 
   const [live, setLive] = useLive(() => load(true), 5000);
   useEscape(onClose, true);
@@ -211,6 +235,26 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       const res = await api.createUpload(id, fileType);
       return `Upload requested: ${res.command_key} — file lands on receipt once the CPE pushes it`;
     });
+
+  const handleFirmwarePush = () => {
+    const img = firmwareImages.find((i) => i.id === firmwareImageId);
+    if (!img) return;
+    // Same class of action as a reboot or factory reset — it interrupts
+    // service and, on a device the ACS can only reach when it checks in,
+    // is awkward to undo.
+    if (
+      !window.confirm(
+        `Push ${img.vendor} ${img.model} v${img.version} (${img.channel}) to ${device?.oui_serial}? ` +
+          `The device downloads and applies it, then reboots.`,
+      )
+    ) {
+      return;
+    }
+    return withBusy(async () => {
+      const res = await api.createFirmwareDownload(id, firmwareImageId);
+      return `Firmware download queued: ${res.command_key} — the device applies it and reboots on its next contact`;
+    });
+  };
 
   async function handleDownloadUpload(u: UploadedFile) {
     try {
@@ -606,6 +650,44 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       <RemoteShell id={id} writable={writable} />
       <DeviceWebGUI id={id} writable={writable} />
       <VPNTunnel id={id} writable={writable} />
+
+      <div className="panel">
+        <h3>Push firmware</h3>
+        <p className="dim" style={{ marginTop: 0, fontSize: "0.8rem" }}>
+          Sends one image to this device alone. For a fleet, use a canary rollout on the Rollouts screen instead — this
+          is for single-device work: an RMA replacement, or reproducing a report on a known build.
+        </p>
+        {firmwareImages.length === 0 ? (
+          <p className="dim" style={{ fontSize: "0.8rem", margin: 0 }}>
+            No firmware images uploaded yet — add one on the Rollouts screen.
+          </p>
+        ) : (
+          <div className="form-row" style={{ marginTop: 0 }}>
+            <select
+              className="chip"
+              aria-label="Firmware image"
+              value={firmwareImageId}
+              onChange={(e) => setFirmwareImageId(e.target.value)}
+              disabled={busy || !writable}
+              style={{ flex: 1 }}
+            >
+              {firmwareImages.map((img) => (
+                <option key={img.id} value={img.id}>
+                  {img.vendor} {img.model} v{img.version} ({img.channel})
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn danger"
+              onClick={handleFirmwarePush}
+              disabled={busy || !writable || !firmwareImageId}
+              title="Queues FIRMWARE_DOWNLOAD — the device applies it and reboots"
+            >
+              Push to this device
+            </button>
+          </div>
+        )}
+      </div>
 
       <div className="panel">
         <h3>Upload from device</h3>
