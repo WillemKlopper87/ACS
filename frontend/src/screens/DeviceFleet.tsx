@@ -10,8 +10,18 @@ import { DeviceDetail } from "./DeviceDetail";
 import { useLive } from "../lib/useLive";
 import { useEscape, useSlashFocus } from "../lib/hotkeys";
 
+// The backend's own maxPageSize (internal/devices/repository.go). This
+// screen deliberately loads a single page of it — it's the "review a
+// working set, drill into one device" view, with Fleet Control as the
+// fleet-scale one — but it has to say so rather than silently presenting
+// the first 500 rows as the whole fleet.
+const PAGE_SIZE = 500;
+
 export function DeviceFleet() {
   const [devices, setDevices] = useState<Device[]>([]);
+  // Total matching rows server-side, which is not devices.length once the
+  // fleet exceeds one page.
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -40,12 +50,9 @@ export function DeviceFleet() {
     if (!background) setLoading(true);
     if (!background) setError(null);
     try {
-      // Single page at the max size: this screen is the "review a working
-      // set, drill into one device" view, not the fleet-scale one — Fleet
-      // Control (backend-paginated + grouped) is where 1000+ devices go.
-      // Virtualized rendering still protects it up to that 500-row cap.
-      const res = await api.listDevices(1, 500);
+      const res = await api.listDevices(1, PAGE_SIZE);
       setDevices(res.items);
+      setTotal(res.total);
       setError(null);
     } catch (e) {
       if (!background) setError(e instanceof ApiError ? `${e.status}: ${e.message}` : "Failed to reach the API — is cmd/api running?");
@@ -73,11 +80,15 @@ export function DeviceFleet() {
     );
   }, [devices, search, vendorFilter]);
 
+  // True once the fleet is larger than the single page this screen
+  // loads: the counts below then describe the loaded page, not the fleet.
+  const truncated = total > devices.length;
+
   const stats = useMemo(() => {
     const online = devices.filter((d) => d.online_status === "ONLINE").length;
     const confirmed = devices.filter((d) => d.connection_request_mode === "DIRECT_IPV4" || d.connection_request_mode === "DIRECT_IPV6").length;
-    return { total: devices.length, online, confirmed, vendors: vendors.length };
-  }, [devices, vendors]);
+    return { total: Math.max(total, devices.length), online, confirmed, vendors: vendors.length };
+  }, [devices, vendors, total]);
 
   const columns = useMemo<ColumnDef<Device, any>[]>(
     () => [
@@ -127,11 +138,11 @@ export function DeviceFleet() {
         </div>
         <div className="stat">
           <div className="n accent">{stats.online}</div>
-          <div className="l">online</div>
+          <div className="l">{truncated ? "online (loaded)" : "online"}</div>
         </div>
         <div className="stat">
           <div className="n">{stats.confirmed}</div>
-          <div className="l">reachability confirmed</div>
+          <div className="l">{truncated ? "reachable (loaded)" : "reachability confirmed"}</div>
         </div>
         <div className="stat">
           <div className="n">{stats.vendors}</div>
@@ -142,6 +153,14 @@ export function DeviceFleet() {
       {error && (
         <div className="banner error">
           {error} <button className="btn" style={{ marginLeft: "0.6rem" }} onClick={() => load()}>Retry</button>
+        </div>
+      )}
+
+      {truncated && (
+        <div className="banner info">
+          Showing the first {devices.length.toLocaleString()} of {total.toLocaleString()} devices — the online and
+          reachability counts above, the vendor filter and the search below all cover only these. Use Fleet Control for
+          fleet-scale work.
         </div>
       )}
 
@@ -179,6 +198,7 @@ export function DeviceFleet() {
         </button>
         <span className="result-count">
           {filtered.length} of {devices.length}
+          {truncated ? ` loaded · ${total.toLocaleString()} total` : ""}
         </span>
       </div>
 

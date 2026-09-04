@@ -55,7 +55,7 @@ commit, pushed to `main`.
   server-side; switching devices keeps the *previous* device's session live
   while the UI shows the new one. *(prior: H-9)*
 
-- [ ] **P0.7 — The fleet screen silently truncates at 500 devices.**
+- [x] **P0.7 — The fleet screen silently truncates at 500 devices.**
   `api.listDevices(1, 500)` (`frontend/src/screens/DeviceFleet.tsx:47`) requests
   exactly the backend's `maxPageSize`, there is no pagination UI, and
   `stats.total` is computed from `devices.length` (`:79`). A 2000-device fleet
