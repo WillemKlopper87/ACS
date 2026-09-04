@@ -17,7 +17,7 @@ commit, pushed to `main`.
 
 ## P0 — functional bugs
 
-- [ ] **P0.1 — CORS omits `DELETE`, breaking every delete in the product.**
+- [x] **P0.1 — CORS omits `DELETE`, breaking every delete in the product.**
   `Access-Control-Allow-Methods` is `GET, POST, PUT, OPTIONS`
   (`backend/cmd/api/middleware.go:62`) while `routes.go` registers 13 `DELETE`
   routes. The console talks to the API cross-origin (no `proxy_pass` in

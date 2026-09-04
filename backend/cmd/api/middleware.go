@@ -56,10 +56,19 @@ const (
 // restriction (ACS_API_CORS_ORIGIN) is the real boundary once that's set
 // to something other than "*" — auth (withJWTAuth, added Phase 6) is what
 // actually gates the requests themselves.
+//
+// corsAllowedMethods must list every method registerRoutes uses. DELETE
+// was missing until 2026-09-04, which failed the preflight for all 13
+// DELETE routes in any cross-origin deployment — i.e. the shipped one,
+// since frontend/nginx.conf serves the console without proxying the API.
+// TestCORSAllowsEveryRegisteredMethod derives the required set from
+// routes.go so this cannot silently drift again.
+const corsAllowedMethods = "GET, POST, PUT, DELETE, OPTIONS"
+
 func withCORS(origin string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", corsAllowedMethods)
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
