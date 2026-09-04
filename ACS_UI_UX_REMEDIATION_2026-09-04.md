@@ -40,12 +40,12 @@ commit, pushed to `main`.
   one that most needs operator attention. `AWAITING_TRANSFER_COMPLETE`
   (rollout device state) is missing too.
 
-- [ ] **P0.4 — The connection indicator is always green.**
+- [x] **P0.4 — The connection indicator is always green.**
   `index.css:247` defines `.conn-indicator.down .dot { background: var(--danger) }`
   but nothing ever applies `.down` (`frontend/src/App.tsx:125-127`). The dot
   reads "connected" even when the API is unreachable.
 
-- [ ] **P0.5 — Hardcoded `dev` environment badge ships in every build.**
+- [x] **P0.5 — Hardcoded `dev` environment badge ships in every build.**
   `frontend/src/App.tsx:85`. *(prior: L-19)*
 
 - [ ] **P0.6 — The SSH/Telnet WebSocket leaks on unmount and device switch.**

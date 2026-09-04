@@ -6,7 +6,14 @@ import { AuthProvider } from "./auth/AuthContext";
 import { useAuth } from "./auth/useAuth";
 import { canAdmin } from "./auth/roles";
 import { ToastHost } from "./components/Toast";
+import { useApiReachable } from "./lib/apiHealth";
 import { useTheme, type Theme } from "./theme/useTheme";
+
+// Shown next to the brand so a console pointed at production is never
+// mistaken for a scratch one. Deliberately absent rather than defaulted:
+// this was hardcoded to "dev" and shipped that way in every build, which
+// is worse than no badge at all. Set VITE_ENV_LABEL at build time.
+const ENV_LABEL = import.meta.env.VITE_ENV_LABEL as string | undefined;
 
 type Screen = "dashboard" | "fleet" | "control" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "operators" | "templates" | "tenancy" | "reports" | "bss";
 
@@ -70,6 +77,7 @@ function AppShell() {
   const { token, authRequired, username, role, logout } = useAuth();
   const admin = canAdmin(role);
   const { theme, setTheme, themes } = useTheme();
+  const apiReachable = useApiReachable();
 
   if (authRequired && !token) {
     return <Login />;
@@ -82,7 +90,7 @@ function AppShell() {
       <aside className="sidebar">
         <div className="brand">
           <span className="dot">●</span> ACS<span style={{ color: "var(--ink-faint)" }}>/</span>console
-          <span className="env">dev</span>
+          {ENV_LABEL && <span className="env">{ENV_LABEL}</span>}
         </div>
 
         <nav className="sidebar-nav">
@@ -122,8 +130,12 @@ function AppShell() {
               </button>
             </div>
           )}
-          <div className="conn-indicator">
+          <div
+            className={`conn-indicator${apiReachable ? "" : " down"}`}
+            title={apiReachable ? "Last API call reached the server" : "The last API call did not reach the server"}
+          >
             <span className="dot" /> {import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080"}
+            <span className="sr-only">{apiReachable ? " — reachable" : " — unreachable"}</span>
           </div>
         </div>
       </aside>

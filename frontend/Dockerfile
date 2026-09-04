@@ -14,6 +14,13 @@ RUN npm ci
 COPY . .
 ARG VITE_API_BASE_URL=http://localhost:8080
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+# Optional environment badge next to the brand ("staging", "production",
+# …). Same build-time-inlining constraint as the API base URL above.
+# Unset by default and then not rendered at all — the badge used to be
+# hardcoded to "dev" and shipped that way everywhere, so no badge is the
+# safer default than a wrong one.
+ARG VITE_ENV_LABEL=
+ENV VITE_ENV_LABEL=$VITE_ENV_LABEL
 RUN npm run build
 
 FROM nginx:1.31.5-alpine3.24

@@ -50,6 +50,7 @@ import type {
   UploadedFile,
 } from "./types";
 import { getAuthState, clearAuth, markAuthRequired } from "../auth/tokenStore";
+import { markApiReachable } from "../lib/apiHealth";
 import type { paths } from "./generated";
 
 // Generated contract (audit P2.5): src/api/generated.ts is produced from
@@ -87,7 +88,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${BASE_URL}${path}`, { ...init, headers });
+  // A thrown fetch means the API is unreachable (DNS, connection
+  // refused, TLS, or a rejected CORS preflight); any HTTP response —
+  // including 4xx/5xx — means it answered. That distinction is what the
+  // sidebar's connection dot reports.
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, { ...init, headers });
+  } catch (e) {
+    markApiReachable(false);
+    throw e;
+  }
+  markApiReachable(true);
 
   // A 401 on anything other than the login call itself means either no
   // token was ever presented, or the one we have expired — either way,
@@ -407,9 +419,16 @@ export const api = {
   exportDevicesReport: async (filters: { customer_id?: string; region_id?: string; project_id?: string }) => {
     const { token } = getAuthState();
     const qs = new URLSearchParams(Object.entries(filters).filter(([, v]) => v) as [string, string][]);
-    const res = await fetch(`${BASE_URL}/api/v1/reports/devices/export?${qs.toString()}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${BASE_URL}/api/v1/reports/devices/export?${qs.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+    } catch (e) {
+      markApiReachable(false);
+      throw e;
+    }
+    markApiReachable(true);
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new ApiError(res.status, body || res.statusText);
