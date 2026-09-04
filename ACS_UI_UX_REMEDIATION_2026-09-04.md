@@ -99,16 +99,16 @@ The token system itself is sound (four themes, consistent naming, real
   exists and is used 5 times, but the group / policy / schedule / template /
   tenancy deletes all use plain `.btn`. Add confirmations to the list-screen
   deletes that lack them, matching the device-level actions that already confirm.
-- [ ] **P2.3 — No visible page heading.** The only `<h1>` is `sr-only`
+- [x] **P2.3 — No visible page heading.** The only `<h1>` is `sr-only`
   (`App.tsx:133`); screens open straight into a toolbar with nothing naming them
   but the sidebar highlight.
-- [ ] **P2.4 — Nothing responds below the sidebar breakpoint.** `.sidebar` is a
+- [x] **P2.4 — Nothing responds below the sidebar breakpoint.** `.sidebar` is a
   fixed `14.5rem`/`100vh` with no media query while `.split.two-col` collapses at
   900px; with `table-wrap { max-height: 62vh }` and `white-space: nowrap` on every
   `td`, narrow viewports get nested double-scroll.
 - [x] **P2.5 — `.form-row` has no `flex-wrap`**, so the four-field Operators
   create row squashes instead of wrapping.
-- [x] **P2.6 — `--ink-dim` and `--ink-faint` are visually identical in dark**
+- [~] **P2.6 (closed: won't fix on colour) — `--ink-dim` and `--ink-faint` are visually identical in dark**
   (`#98a5bc` vs `#9aa7bb`, `index.css:11-12`) — the two-tier text hierarchy those
   tokens encode does not exist in the default theme.
 - [x] **P2.7 — Raw enum strings are shown to users** (`HTTP_200_INFORM_RECEIVED`,

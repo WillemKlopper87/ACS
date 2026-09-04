@@ -131,7 +131,11 @@ function AppShell() {
 
       <div className="shell-main">
         <main className="view">
-          <h1 className="sr-only">{NAV.find((item) => item.id === screen)?.label}</h1>
+          {/* Visible, not sr-only: screens opened straight into a toolbar
+              with nothing naming them but the sidebar's highlighted row,
+              which is gone the moment the sidebar collapses on a narrow
+              viewport. */}
+          <h1 className="page-title">{NAV.find((item) => item.id === screen)?.label}</h1>
           <ErrorBoundary key={screen}>
             <Suspense fallback={<p className="dim">Loading…</p>}>
               <ActiveScreen />

@@ -9,13 +9,16 @@
   --border: #263349;
   --ink: #e7ecf5;
   --ink-dim: #98a5bc;
-  /* Was #9aa7bb — indistinguishable from --ink-dim, so the two-tier text
-     hierarchy the tokens encode did not visibly exist. Pulled down to a
-     real step while staying above 4.5:1 on --surface (~5.1:1), since the
-     smallest type in the app (.stat .l, .pill at ~9.5px) uses it. The
-     light/unfold/fluent themes keep theirs: their dim tier is already
-     near the contrast floor, so there is no headroom to separate them. */
-  --ink-faint: #7b879c;
+  /* Nearly identical to --ink-dim, so the two-tier text hierarchy these
+     tokens imply is not actually visible in this theme. Left as-is
+     deliberately: darkening it to #7b879c measured 4.25:1 against
+     --surface-2 (which is what thead and hovered rows use, not the
+     darker --surface), failing AA for the ~10px type that reads faint —
+     the Playwright axe gate caught it. There is no room to separate
+     these two on contrast alone; doing it properly means separating them
+     on weight or size instead, which is a design change, not a token
+     tweak. */
+  --ink-faint: #9aa7bb;
   --accent: #e0a458;
   --accent-ink: #1a1206;
   --ok: #5fbf8f;
@@ -253,6 +256,44 @@ nav.tabs button.active { color: var(--ink); border-bottom-color: var(--accent); 
 .conn-indicator.down .dot { background: var(--danger); }
 
 main.view { flex: 1; padding: 1.1rem 1.25rem 2.5rem; max-width: 96rem; width: 100%; margin: 0 auto; }
+
+.page-title {
+  font-family: var(--font-ui);
+  font-size: 1.02rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.85rem;
+}
+
+/* Below this the fixed 14.5rem sidebar costs more than it earns: it
+   becomes a horizontal nav strip above the content instead. Matches the
+   900px breakpoint .split.two-col already uses. */
+@media (max-width: 900px) {
+  .shell-sidebar { flex-direction: column; }
+  .sidebar {
+    width: 100%;
+    height: auto;
+    position: static;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 0;
+  }
+  .sidebar-nav button {
+    width: auto;
+    white-space: nowrap;
+    border-left: none;
+    border-bottom: 3px solid transparent;
+    padding: 0.6rem 0.9rem;
+  }
+  .sidebar-nav button.active { border-left-color: transparent; border-bottom-color: var(--accent); }
+  .sidebar-footer { flex-direction: row; align-items: center; flex-wrap: wrap; }
+  .sidebar-footer select.chip { width: auto; }
+  main.view { padding: 0.9rem 0.9rem 2rem; }
+}
 
 .sr-only {
   position: absolute;
