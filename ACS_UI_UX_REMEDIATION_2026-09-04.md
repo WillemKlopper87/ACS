@@ -142,5 +142,5 @@ The token system itself is sound (four themes, consistent naming, real
 - [ ] **P4.1 — TypeScript `strict` is off.** `frontend/tsconfig.app.json` sets no
   `strict` and no `strictNullChecks`, so CI's `npm run build` typecheck runs with
   null-safety disabled in a codebase full of optional API fields. *(prior: H-8)*
-- [ ] **P4.2 — `useLive` has no in-flight or abort guard** (`lib/useLive.ts:16-22`),
+- [x] **P4.2 — `useLive` has no in-flight or abort guard** (`lib/useLive.ts:16-22`),
   so overlapping polls commit out-of-order and flicker stale data. *(prior: M-22)*
