@@ -79,6 +79,23 @@ export function Tenancy() {
     }
   }
 
+  // Structural deletes are destructive and the server can legitimately
+  // refuse one (a customer that still owns devices trips a foreign key),
+  // so they confirm first and surface the outcome. These were previously
+  // bare `await api.deleteX(id); load()` click handlers: a rejection
+  // became an unhandled promise rejection, load() never ran, and the
+  // operator saw the row sit there with no indication anything failed.
+  async function remove(kind: string, name: string, del: () => Promise<void>) {
+    if (!window.confirm(`Delete ${kind} "${name}"? This cannot be undone.`)) return;
+    try {
+      await del();
+      toast(`Deleted ${kind} "${name}"`, "info");
+      await load();
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : `Failed to delete ${kind}`, "error");
+    }
+  }
+
   async function runImport(e: React.FormEvent) {
     e.preventDefault();
     setImporting(true);
@@ -111,7 +128,7 @@ export function Tenancy() {
             regions.map((r) => (
               <div className="param-row" key={r.id}>
                 <span className="path">{r.name}</span>
-                <button className="btn" style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }} onClick={async () => { await api.deleteRegion(r.id); load(); }}>
+                <button className="btn danger" style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }} onClick={() => remove("region", r.name, () => api.deleteRegion(r.id))}>
                   Delete
                 </button>
               </div>
@@ -137,7 +154,7 @@ export function Tenancy() {
             customers.map((c) => (
               <div className="param-row" key={c.id}>
                 <span className="path">{c.name} <span className="dim">· {regionName_(c.region_id)}</span></span>
-                <button className="btn" style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }} onClick={async () => { await api.deleteCustomer(c.id); load(); }}>
+                <button className="btn danger" style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }} onClick={() => remove("customer", c.name, () => api.deleteCustomer(c.id))}>
                   Delete
                 </button>
               </div>
@@ -161,7 +178,7 @@ export function Tenancy() {
             projects.map((p) => (
               <div className="param-row" key={p.id}>
                 <span className="path">{p.name}<span className="src">{p.description}</span></span>
-                <button className="btn" style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }} onClick={async () => { await api.deleteProject(p.id); load(); }}>
+                <button className="btn danger" style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }} onClick={() => remove("project", p.name, () => api.deleteProject(p.id))}>
                   Delete
                 </button>
               </div>

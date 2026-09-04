@@ -26,7 +26,7 @@ commit, pushed to `main`.
   Undetected because the integration server is built without `withCORS`.
   *(prior: M-15)*
 
-- [ ] **P0.2 — Tenancy deletes fail silently.**
+- [x] **P0.2 — Tenancy deletes fail silently.**
   `onClick={async () => { await api.deleteRegion(r.id); load(); }}` —
   no `try`/`catch`, no confirmation, no toast (`frontend/src/screens/Tenancy.tsx:114`,
   `:140`, `:164`). A rejected delete (FK violation from devices still owning the
