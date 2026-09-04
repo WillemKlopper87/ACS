@@ -33,7 +33,7 @@ commit, pushed to `main`.
   customer, or P0.1) produces an unhandled promise rejection and zero UI
   feedback; `load()` never runs so the row stays on screen.
 
-- [ ] **P0.3 — `LEASE_EXPIRED_UNSAFE_RETRY` renders as benign grey.**
+- [x] **P0.3 — `LEASE_EXPIRED_UNSAFE_RETRY` renders as benign grey.**
   `TONE_BY_VALUE` (`frontend/src/components/StatusBadge.tsx:4-31`) has no entry
   for it, so it falls through to `neutral`. This is the status meaning "a
   non-repeatable job's lease expired and it was deliberately not retried" — the
@@ -111,7 +111,7 @@ The token system itself is sound (four themes, consistent naming, real
 - [ ] **P2.6 — `--ink-dim` and `--ink-faint` are visually identical in dark**
   (`#98a5bc` vs `#9aa7bb`, `index.css:11-12`) — the two-tier text hierarchy those
   tokens encode does not exist in the default theme.
-- [ ] **P2.7 — Raw enum strings are shown to users** (`HTTP_200_INFORM_RECEIVED`,
+- [x] **P2.7 — Raw enum strings are shown to users** (`HTTP_200_INFORM_RECEIVED`,
   `PERIODIC_FALLBACK_ONLY`, `LEASE_EXPIRED_UNSAFE_RETRY`). Add a label map beside
   the tone map in `StatusBadge.tsx`.
 - [ ] **P2.8 — Login is entirely inline-styled**, bypassing the design system it
