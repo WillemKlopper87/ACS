@@ -132,4 +132,8 @@ type Operator struct {
 	// operator_scopes rows plus GlobalAccess=false means zero access,
 	// not unrestricted access.
 	GlobalAccess bool
+	// DisabledAt is when this operator was taken out of service; nil
+	// means active. A disabled operator cannot log in and holds no
+	// valid sessions -- see Repository.SetDisabled.
+	DisabledAt *time.Time
 }

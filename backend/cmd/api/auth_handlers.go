@@ -415,6 +415,15 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid username or password", http.StatusUnauthorized)
 		return
 	}
+	// Checked after the password comparison, and answered with the same
+	// message, so this cannot be used to probe which accounts exist or
+	// which have been disabled. The bcrypt compare above also keeps the
+	// timing of a disabled account indistinguishable from an active one.
+	if op.DisabledAt != nil {
+		h.logger.Warn("login attempt against a disabled operator", "username", op.Username)
+		http.Error(w, "invalid username or password", http.StatusUnauthorized)
+		return
+	}
 
 	now := time.Now().UTC()
 	claims := auth.Claims{Subject: op.Username, Role: op.Role, IssuedAt: now, ExpiresAt: now.Add(jwtTTL), Version: op.TokenVersion}
@@ -495,10 +504,18 @@ type operatorResponse struct {
 	Role         string `json:"role"`
 	GlobalAccess bool   `json:"global_access"`
 	CreatedAt    string `json:"created_at"`
+	// Null for an active operator; the offboarding timestamp otherwise
+	// (audit 2026-09-04 P1.4).
+	DisabledAt *string `json:"disabled_at"`
 }
 
 func toOperatorResponse(op operators.Operator) operatorResponse {
-	return operatorResponse{ID: op.ID, Username: op.Username, Email: op.Email, Role: op.Role, GlobalAccess: op.GlobalAccess, CreatedAt: op.CreatedAt.Format(time.RFC3339)}
+	var disabledAt *string
+	if op.DisabledAt != nil {
+		s := op.DisabledAt.Format(time.RFC3339)
+		disabledAt = &s
+	}
+	return operatorResponse{ID: op.ID, Username: op.Username, Email: op.Email, Role: op.Role, GlobalAccess: op.GlobalAccess, CreatedAt: op.CreatedAt.Format(time.RFC3339), DisabledAt: disabledAt}
 }
 
 func (h *handler) createOperator(w http.ResponseWriter, r *http.Request) {

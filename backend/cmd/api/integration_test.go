@@ -928,3 +928,125 @@ func TestIntegration_SessionRevocation(t *testing.T) {
 		t.Errorf("bob's login during alice's throttle → %d, want 200", got.code)
 	}
 }
+
+// Offboarding (UI/UX review 2026-09-04 P1.4). An operator who leaves has
+// to stop being able to act immediately, without deleting the row their
+// audit_log entries point at — and the mechanism must not be usable to
+// lock the deployment out of its own admin plane.
+func TestIntegration_OperatorDisable(t *testing.T) {
+	e := newTestEnv(t)
+	e.operator("root", operators.RoleAdmin)
+	e.operator("leaver", operators.RoleReadOnly)
+
+	login := func(user, pass string) resp {
+		return e.call("", "POST", "/api/v1/auth/login", map[string]string{"username": user, "password": pass})
+	}
+	leaver, err := e.h.operators.ByUsername(e.ctx, "leaver")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A live session, established before the account is disabled.
+	r := login("leaver", "pw-leaver")
+	if r.code != 200 {
+		t.Fatalf("login → %d %s", r.code, r.body)
+	}
+	var lr struct {
+		Token string `json:"token"`
+	}
+	_ = json.Unmarshal([]byte(r.body), &lr)
+	if got := e.call(lr.Token, "GET", "/api/v1/devices", nil); got.code != 200 {
+		t.Fatalf("pre-disable → %d", got.code)
+	}
+
+	path := "/api/v1/auth/operators/" + leaver.ID + "/disabled"
+	if got := e.call("root", "PUT", path, map[string]bool{"disabled": true}); got.code != 204 {
+		t.Fatalf("disable → %d %s", got.code, got.body)
+	}
+
+	// The session they already held is dead, not merely un-renewable.
+	if got := e.call(lr.Token, "GET", "/api/v1/devices", nil); got.code != 401 {
+		t.Errorf("existing session after disable → %d, want 401", got.code)
+	}
+	// And they cannot get a new one — with the same message a wrong
+	// password gets, so this can't be used to probe account state.
+	if got := login("leaver", "pw-leaver"); got.code != 401 {
+		t.Errorf("login while disabled → %d, want 401", got.code)
+	}
+
+	// The row survives, so audit attribution still resolves.
+	if _, err := e.h.operators.ByUsername(e.ctx, "leaver"); err != nil {
+		t.Errorf("disabled operator row should still exist: %v", err)
+	}
+
+	// Re-enabling restores login.
+	if got := e.call("root", "PUT", path, map[string]bool{"disabled": false}); got.code != 204 {
+		t.Fatalf("re-enable → %d %s", got.code, got.body)
+	}
+	if got := login("leaver", "pw-leaver"); got.code != 200 {
+		t.Errorf("login after re-enable → %d, want 200", got.code)
+	}
+}
+
+// Disabling must not be usable to lock the deployment out of its own
+// admin plane. Note the interaction between the two guards: because the
+// caller is themselves an active superadmin, any *other* superadmin they
+// target leaves at least two active, so the API path can only ever reach
+// the self-disable refusal. The last-active-superadmin check behind it is
+// deliberate defence in depth for a non-API caller (a future CLI or
+// migration touching the same repository method), and is exercised at
+// that level below rather than pretended to be reachable from here.
+func TestIntegration_OperatorDisableLockoutGuards(t *testing.T) {
+	e := newTestEnv(t)
+	e.operator("root", operators.RoleAdmin)
+	root, err := e.h.operators.ByUsername(e.ctx, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	self := "/api/v1/auth/operators/" + root.ID + "/disabled"
+	if got := e.call("root", "PUT", self, map[string]bool{"disabled": true}); got.code != 409 {
+		t.Errorf("disabling your own account → %d, want 409", got.code)
+	}
+	// Refused means refused: the account still works.
+	if got := e.call("root", "GET", "/api/v1/devices", nil); got.code != 200 {
+		t.Errorf("root after a refused self-disable → %d, want 200", got.code)
+	}
+
+	// A peer superadmin can be disabled, since others remain active.
+	e.operator("root2", operators.RoleAdmin)
+	root2, err := e.h.operators.ByUsername(e.ctx, "root2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e.call("root", "PUT", "/api/v1/auth/operators/"+root2.ID+"/disabled", map[string]bool{"disabled": true}); got.code != 204 {
+		t.Fatalf("disabling a peer superadmin → %d %s", got.code, got.body)
+	}
+
+	// The count the guard reads must now see exactly the one remaining
+	// active superadmin — this is what makes the check meaningful for any
+	// caller that isn't already holding an admin session.
+	n, err := e.h.operators.CountActiveAdmins(e.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("active superadmins after disabling root2 = %d, want 1", n)
+	}
+}
+
+// Only a superadmin may take an operator out of service.
+func TestIntegration_OperatorDisableRequiresAdmin(t *testing.T) {
+	e := newTestEnv(t)
+	e.operator("root", operators.RoleAdmin)
+	e.operator("manager", operators.RoleManager)
+	e.operator("victim", operators.RoleReadOnly)
+	victim, err := e.h.operators.ByUsername(e.ctx, "victim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/auth/operators/" + victim.ID + "/disabled"
+	if got := e.call("manager", "PUT", path, map[string]bool{"disabled": true}); got.code != 403 {
+		t.Errorf("manager disabling an operator → %d, want 403", got.code)
+	}
+}

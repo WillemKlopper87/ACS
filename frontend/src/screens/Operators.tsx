@@ -1,5 +1,5 @@
 import type { ColumnDef } from "@tanstack/react-table";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { Customer, Operator, OperatorScope, Permission, Region, Role, RolePermissionsMatrix } from "../api/types";
 import { DataTable } from "../components/DataTable";
@@ -122,6 +122,34 @@ export function Operators() {
     load();
   }, []);
 
+  // Offboarding: the account stops working immediately (the server also
+  // revokes the sessions it already holds) but the row stays, so every
+  // audit_log entry attributing an action to them still resolves.
+  async function toggleDisabled(op: Operator) {
+    const disabling = !op.disabled_at;
+    if (
+      disabling &&
+      !window.confirm(
+        `Disable "${op.username}"? They are signed out immediately and cannot sign in again until re-enabled. ` +
+          `Their audit history is kept.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.setOperatorDisabled(op.id, disabling);
+      toast(`${disabling ? "Disabled" : "Re-enabled"} "${op.username}"`, "success");
+      await load();
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Failed to update the operator", "error");
+    }
+  }
+
+  // Read through a ref for the same reason the other list screens do: a
+  // fresh closure per render would rebuild the memoized column defs.
+  const toggleDisabledRef = useRef(toggleDisabled);
+  toggleDisabledRef.current = toggleDisabled;
+
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
     setCreateError(null);
@@ -201,6 +229,18 @@ export function Operators() {
           ),
       },
       {
+        id: "status",
+        header: "Status",
+        cell: ({ row }) =>
+          row.original.disabled_at ? (
+            <span className="pill pill-danger" title={`Disabled ${fmtTime(row.original.disabled_at)} UTC`}>
+              disabled
+            </span>
+          ) : (
+            <span className="pill pill-ok">active</span>
+          ),
+      },
+      {
         accessorKey: "created_at",
         header: "Created",
         cell: ({ getValue }) => {
@@ -219,6 +259,17 @@ export function Operators() {
             {row.original.role !== "superadmin" && (
               <button className="btn sm" onClick={() => openScopes(row.original)}>
                 Scopes
+              </button>
+            )}
+            {/* Offboarding. Self-disable is refused server-side too; the
+                button is hidden rather than left to fail, since there is
+                no case where an operator wants to lock themselves out. */}
+            {row.original.username !== myUsername && (
+              <button
+                className={row.original.disabled_at ? "btn sm" : "btn danger sm"}
+                onClick={() => toggleDisabledRef.current(row.original)}
+              >
+                {row.original.disabled_at ? "Re-enable" : "Disable"}
               </button>
             )}
           </span>

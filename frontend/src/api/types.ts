@@ -210,6 +210,10 @@ export interface Operator {
    * superadmin deliberately granted this non-superadmin operator
    * fleet-wide access. Never inferred from zero scope rows. */
   global_access?: boolean;
+  /** When this operator was taken out of service; null/absent while
+   * active. A disabled operator cannot log in and holds no valid
+   * sessions (audit 2026-09-04 P1.4). */
+  disabled_at?: string | null;
   created_at: string;
 }
 

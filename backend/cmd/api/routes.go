@@ -49,6 +49,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("POST", "/api/v1/auth/operators/{id}/scopes", admin, h.setOperatorScopes)
 	route("GET", "/api/v1/auth/operators/{id}/scopes", admin, h.getOperatorScopes)
 	route("PUT", "/api/v1/auth/operators/{id}/global-access", admin, h.setOperatorGlobalAccess) // audit P0.1 — explicit OPERATOR_GLOBAL grant, superadmin-only
+	route("PUT", "/api/v1/auth/operators/{id}/disabled", admin, h.setOperatorDisabled)          // 2026-09-04 P1.4 — offboarding; disabling also revokes live sessions
 
 	// Multi-tenancy (admin-platform backlog): structural CRUD is
 	// superadmin-only (the org chart); assigning a device to a

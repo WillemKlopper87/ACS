@@ -615,6 +615,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/operators/{id}/disabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Take an operator out of service, or return them to it (superadmin only). Disabling revokes every session they currently hold and blocks login; the row is kept so audit_log entries attributing actions to them still resolve. */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["OperatorId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        disabled: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Operator disabled state updated */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Operator not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Refused — disabling your own account, or the last active superadmin */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/regions": {
         parameters: {
             query?: never;
@@ -4832,6 +4888,11 @@ export interface components {
             global_access?: boolean;
             /** Format: date-time */
             created_at?: string;
+            /**
+             * Format: date-time
+             * @description When this operator was taken out of service; null while active. A disabled operator cannot log in and holds no valid sessions.
+             */
+            disabled_at?: string | null;
         };
         RolePermissionsMatrix: {
             roles?: components["schemas"]["Role"][];

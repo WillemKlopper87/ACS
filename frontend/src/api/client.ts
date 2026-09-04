@@ -452,6 +452,10 @@ export const api = {
   getOperatorScopes: (operatorId: string) => request<{ items: OperatorScope[] }>(`/api/v1/auth/operators/${operatorId}/scopes`),
   setOperatorScopes: (operatorId: string, scopes: OperatorScope[]) =>
     request<void>(`/api/v1/auth/operators/${operatorId}/scopes`, { method: "POST", body: JSON.stringify({ scopes }) }),
+  // Offboarding. Disabling also revokes every session the operator
+  // currently holds; the row is kept so audit entries still resolve.
+  setOperatorDisabled: (operatorId: string, disabled: boolean) =>
+    request<void>(`/api/v1/auth/operators/${operatorId}/disabled`, { method: "PUT", body: JSON.stringify({ disabled }) }),
   setOperatorGlobalAccess: (operatorId: string, globalAccess: boolean) =>
     request<void>(`/api/v1/auth/operators/${operatorId}/global-access`, { method: "PUT", body: JSON.stringify({ global_access: globalAccess }) }),
 

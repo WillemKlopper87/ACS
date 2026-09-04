@@ -316,6 +316,25 @@ paths:
         "204": { description: Global access updated }
         "404": { description: Operator not found }
 
+  /api/v1/auth/operators/{id}/disabled:
+    put:
+      tags: [Tenancy]
+      summary: Take an operator out of service, or return them to it (superadmin only). Disabling revokes every session they currently hold and blocks login; the row is kept so audit_log entries attributing actions to them still resolve.
+      parameters: [{ $ref: "#/components/parameters/OperatorId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [disabled]
+              properties:
+                disabled: { type: boolean }
+      responses:
+        "204": { description: Operator disabled state updated }
+        "404": { description: Operator not found }
+        "409": { description: "Refused — disabling your own account, or the last active superadmin" }
+
   # --- Tenancy structural CRUD ---
   /api/v1/regions:
     post:
@@ -1679,6 +1698,11 @@ components:
         role: { $ref: "#/components/schemas/Role" }
         global_access: { type: boolean, description: "Explicit OPERATOR_GLOBAL entitlement (audit P0.1) — true only when a superadmin deliberately granted fleet-wide access." }
         created_at: { type: string, format: date-time }
+        disabled_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: "When this operator was taken out of service; null while active. A disabled operator cannot log in and holds no valid sessions."
 
     RolePermissionsMatrix:
       type: object

@@ -81,7 +81,7 @@ commit, pushed to `main`.
   can only be shipped through a fleet rollout, which is the wrong instrument for
   one-device support work.
 
-- [ ] **P1.4 — Operators cannot be disabled or removed.**
+- [x] **P1.4 — Operators cannot be disabled or removed.**
   The API offers create / list / reset-password / scopes / global-access and no
   delete or disable (`routes.go:42-51`). A departing employee's account cannot be
   offboarded. Needs a backend route plus UI; larger than the rest of P1.

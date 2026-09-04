@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 
+	"acs/internal/operators"
 	"acs/internal/tenancy"
 )
 
@@ -294,6 +295,81 @@ func (h *handler) setOperatorGlobalAccess(w http.ResponseWriter, r *http.Request
 	}
 	actor := operatorFromRequest(r)
 	if err := h.auditor.Record(r.Context(), actor, "", "OperatorGlobalAccessChanged", map[string]any{"operator_id": operatorID, "global_access": req.GlobalAccess}); err != nil {
+		h.logger.Error("failed to write audit record", "err", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// setOperatorDisabled takes an operator out of service, or returns them
+// to it (UI/UX review 2026-09-04 P1.4). Offboarding previously had no
+// mechanism at all: an account could only have its password reset, and
+// deleting the row would orphan every audit_log entry attributing an
+// action to it. Superadmin-only and audited, like every other change to
+// who can do what.
+func (h *handler) setOperatorDisabled(w http.ResponseWriter, r *http.Request) {
+	operatorID := r.PathValue("id")
+	var req struct {
+		Disabled bool `json:"disabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	target, err := h.operators.ByID(r.Context(), operatorID)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to look up operator", "err", err, "operator_id", operatorID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	actor := operatorFromRequest(r)
+	if req.Disabled {
+		// Two lockouts to refuse, both of which leave the deployment
+		// with no in-band way back in. Disabling yourself is the
+		// obvious one; disabling the last active superadmin is the one
+		// that looks fine right up until nobody can re-enable anyone.
+		if target.Username == actor {
+			http.Error(w, "you cannot disable your own account", http.StatusConflict)
+			return
+		}
+		if target.Role == operators.RoleAdmin {
+			active, err := h.operators.CountActiveAdmins(r.Context())
+			if err != nil {
+				h.logger.Error("failed to count active admins", "err", err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			if active <= 1 {
+				http.Error(w, "cannot disable the last active superadmin", http.StatusConflict)
+				return
+			}
+		}
+	}
+
+	if err := h.operators.SetDisabled(r.Context(), operatorID, req.Disabled); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		h.logger.Error("failed to set operator disabled", "err", err, "operator_id", operatorID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	// SetDisabled bumped token_version; drop the cached copy so the
+	// revocation takes effect on the very next request rather than when
+	// the cache entry happens to expire.
+	h.forgetTokenVersion(target.Username)
+
+	action := "OperatorEnabled"
+	if req.Disabled {
+		action = "OperatorDisabled"
+	}
+	if err := h.auditor.Record(r.Context(), actor, "", action, map[string]any{"operator_id": operatorID, "username": target.Username}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)

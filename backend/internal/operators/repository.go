@@ -20,7 +20,7 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
-const operatorColumns = `id, username, COALESCE(email, ''), password_hash, role, created_at, updated_at, token_version, global_access`
+const operatorColumns = `id, username, COALESCE(email, ''), password_hash, role, created_at, updated_at, token_version, global_access, disabled_at`
 
 // Create inserts a new operator with an already-hashed password — callers
 // are responsible for bcrypt-hashing, this package never sees a plaintext
@@ -95,7 +95,7 @@ type scanner interface {
 
 func scanOperator(s scanner) (*Operator, error) {
 	var op Operator
-	if err := s.Scan(&op.ID, &op.Username, &op.Email, &op.PasswordHash, &op.Role, &op.CreatedAt, &op.UpdatedAt, &op.TokenVersion, &op.GlobalAccess); err != nil {
+	if err := s.Scan(&op.ID, &op.Username, &op.Email, &op.PasswordHash, &op.Role, &op.CreatedAt, &op.UpdatedAt, &op.TokenVersion, &op.GlobalAccess, &op.DisabledAt); err != nil {
 		return nil, fmt.Errorf("scan operator: %w", err)
 	}
 	return &op, nil
@@ -117,6 +117,50 @@ func (r *Repository) SetGlobalAccess(ctx context.Context, operatorID string, glo
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// SetDisabled takes an operator out of service, or returns them to it
+// (audit 2026-09-04 P1.4). Disabling bumps token_version in the same
+// statement, so every session the operator already holds is revoked
+// immediately — offboarding that left a valid JWT alive until its own
+// expiry would not be offboarding. Re-enabling only clears the
+// timestamp; it does not restore the revoked sessions.
+func (r *Repository) SetDisabled(ctx context.Context, operatorID string, disabled bool) error {
+	var res sql.Result
+	var err error
+	if disabled {
+		res, err = r.db.ExecContext(ctx, `
+			UPDATE operators
+			SET disabled_at = now(), token_version = token_version + 1, updated_at = now()
+			WHERE id = $1`, operatorID)
+	} else {
+		res, err = r.db.ExecContext(ctx, `
+			UPDATE operators SET disabled_at = NULL, updated_at = now() WHERE id = $1`, operatorID)
+	}
+	if err != nil {
+		return fmt.Errorf("set operator disabled: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set operator disabled: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// CountActiveAdmins counts superadmins still in service. Disabling the
+// last one would leave the deployment with nobody able to re-enable
+// anyone — a lockout with no in-band recovery.
+func (r *Repository) CountActiveAdmins(ctx context.Context) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM operators WHERE role = $1 AND disabled_at IS NULL`, RoleAdmin).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count active admins: %w", err)
+	}
+	return n, nil
 }
 
 // ByID fetches an operator by id — used by admin-facing endpoints that
