@@ -42,6 +42,29 @@ export function RemoteShell({ id, writable }: { id: string; writable: boolean })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // A live shell is a privileged, audited channel and must not outlive
+  // the panel that owns it. The terminal effect below disposed xterm and
+  // the resize listener but never closed the socket: closing this panel
+  // left an authenticated SSH/Telnet bridge session open server-side,
+  // and switching devices left it bound to the *previous* device while
+  // the panel showed the new one's credentials. Declared before that
+  // effect so its cleanup runs first on unmount — the socket goes away
+  // before the terminal it writes into does.
+  useEffect(() => {
+    return () => {
+      const socket = ws.current;
+      if (!socket) return;
+      // Drop the handlers before closing: onclose writes to the terminal
+      // and sets state, neither of which is valid once we're tearing down.
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onclose = null;
+      socket.onerror = null;
+      socket.close();
+      ws.current = null;
+    };
+  }, [id]);
+
   useEffect(() => {
     if (!termRef.current || terminal.current) return;
     const term = new Terminal({
@@ -68,6 +91,9 @@ export function RemoteShell({ id, writable }: { id: string; writable: boolean })
 
   async function connect() {
     if (!selected || !terminal.current) return;
+    // Connecting twice would orphan the first bridge session server-side
+    // with nothing left holding a reference to close it.
+    if (ws.current && ws.current.readyState !== WebSocket.CLOSED) return;
     let url: string;
     try {
       url = await api.cliConnectURL(id, selected);

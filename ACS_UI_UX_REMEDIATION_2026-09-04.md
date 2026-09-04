@@ -48,7 +48,7 @@ commit, pushed to `main`.
 - [x] **P0.5 — Hardcoded `dev` environment badge ships in every build.**
   `frontend/src/App.tsx:85`. *(prior: L-19)*
 
-- [ ] **P0.6 — The SSH/Telnet WebSocket leaks on unmount and device switch.**
+- [x] **P0.6 — The SSH/Telnet WebSocket leaks on unmount and device switch.**
   The only cleanup effect (`frontend/src/components/RemoteShell.tsx:62-66`)
   disposes the xterm instance and the resize listener but never closes
   `ws.current`. Closing the panel leaves an authenticated shell bridge open
