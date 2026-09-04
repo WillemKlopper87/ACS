@@ -2288,6 +2288,8 @@ export interface paths {
                     "application/json": {
                         name: string;
                         description?: string;
+                        /** @description Required for a scoped operator, and must be within their assigned scope (audit P0.2). Omitted/null = platform-global, superadmin/GlobalAccess only. */
+                        customer_id?: string | null;
                     };
                 };
             };
@@ -2681,6 +2683,8 @@ export interface paths {
                         /** @description Job-type-appropriate payload, e.g. DiagnosticsPingPayload for DIAGNOSTICS_PING */
                         payload?: Record<string, never>;
                         interval_seconds: number;
+                        /** @description Required for a scoped operator; target_id's device/group must belong to this same customer (audit P0.6), re-checked again at fire time. Omitted/null = platform-global. */
+                        customer_id?: string | null;
                     };
                 };
             };
@@ -2863,6 +2867,8 @@ export interface paths {
                         model_filter?: string | null;
                         parameter_name: string;
                         desired_value: string;
+                        /** @description Required for a scoped operator (audit P0.5) — a matching model_filter is never sufficient authorization across a tenant boundary. Omitted/null = platform-global. */
+                        customer_id?: string | null;
                     };
                 };
             };
@@ -3041,6 +3047,8 @@ export interface paths {
                         model_filter?: string | null;
                         /** @description Zero-touch: applies automatically on a matching device's first BOOTSTRAP Inform */
                         auto_apply?: boolean;
+                        /** @description Required for a scoped operator (audit P0.4) — bounds both manual /apply targets and auto-apply matching to this customer. Omitted/null = platform-global. */
+                        customer_id?: string | null;
                     };
                 };
             };
@@ -3337,6 +3345,8 @@ export interface paths {
                         current_version_filter?: string | null;
                         canary_percentage?: number;
                         maximum_failure_rate?: number;
+                        /** @description Required for a scoped operator (audit P0.7) — bounds eligibility computation itself, not just a post-hoc filter. Omitted/null = platform-global. */
+                        customer_id?: string | null;
                     };
                 };
             };
@@ -4941,6 +4951,8 @@ export interface components {
             id?: string;
             name?: string;
             description?: string;
+            /** @description Tenant owner (audit P0.2) — null means platform-global. */
+            customer_id?: string | null;
             member_count?: number;
             /** Format: date-time */
             created_at?: string;
@@ -4956,6 +4968,8 @@ export interface components {
             payload?: Record<string, never>;
             interval_seconds?: number;
             enabled?: boolean;
+            /** @description Tenant owner (audit P0.6) — null means platform-global. */
+            customer_id?: string | null;
             /** Format: date-time */
             next_run_at?: string;
             /** Format: date-time */
@@ -4970,6 +4984,8 @@ export interface components {
             parameter_name?: string;
             desired_value?: string;
             enabled?: boolean;
+            /** @description Tenant owner (audit P0.5) — null means platform-global. */
+            customer_id?: string | null;
             /** Format: date-time */
             created_at?: string;
         };
@@ -4985,6 +5001,8 @@ export interface components {
             parameters?: components["schemas"]["TemplateParameter"][];
             model_filter?: string | null;
             auto_apply?: boolean;
+            /** @description Tenant owner (audit P0.4) — null means platform-global. */
+            customer_id?: string | null;
             /** Format: date-time */
             created_at?: string;
         };
@@ -5020,6 +5038,8 @@ export interface components {
             maximum_failure_rate?: number;
             /** @enum {string} */
             status?: "PENDING" | "ELIGIBLE" | "RUNNING" | "BLOCKED" | "COMPLETED";
+            /** @description Tenant owner (audit P0.7) — null means platform-global, and also bounds eligibility computation itself. */
+            customer_id?: string | null;
             /** Format: date-time */
             created_at?: string;
             eligible_devices?: number;

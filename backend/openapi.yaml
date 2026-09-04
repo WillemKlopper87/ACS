@@ -878,7 +878,10 @@ paths:
             schema:
               type: object
               required: [name]
-              properties: { name: { type: string }, description: { type: string } }
+              properties:
+                name: { type: string }
+                description: { type: string }
+                customer_id: { type: string, nullable: true, description: "Required for a scoped operator, and must be within their assigned scope (audit P0.2). Omitted/null = platform-global, superadmin/GlobalAccess only." }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceGroup" } } } }
         "409": { description: A group with this name already exists }
@@ -996,6 +999,7 @@ paths:
                 target_id: { type: string }
                 payload: { type: object, description: "Job-type-appropriate payload, e.g. DiagnosticsPingPayload for DIAGNOSTICS_PING" }
                 interval_seconds: { type: integer, minimum: 60 }
+                customer_id: { type: string, nullable: true, description: "Required for a scoped operator; target_id's device/group must belong to this same customer (audit P0.6), re-checked again at fire time. Omitted/null = platform-global." }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ScheduledJob" } } } }
         "400": { description: interval_seconds below the 60s minimum }
@@ -1046,6 +1050,7 @@ paths:
                 model_filter: { type: string, nullable: true }
                 parameter_name: { type: string }
                 desired_value: { type: string }
+                customer_id: { type: string, nullable: true, description: "Required for a scoped operator (audit P0.5) — a matching model_filter is never sufficient authorization across a tenant boundary. Omitted/null = platform-global." }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Policy" } } } }
     get:
@@ -1096,6 +1101,7 @@ paths:
                 parameters: { type: array, items: { $ref: "#/components/schemas/TemplateParameter" } }
                 model_filter: { type: string, nullable: true, description: "Required if auto_apply is true" }
                 auto_apply: { type: boolean, description: "Zero-touch: applies automatically on a matching device's first BOOTSTRAP Inform" }
+                customer_id: { type: string, nullable: true, description: "Required for a scoped operator (audit P0.4) — bounds both manual /apply targets and auto-apply matching to this customer. Omitted/null = platform-global." }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ConfigTemplate" } } } }
     get:
@@ -1197,6 +1203,7 @@ paths:
                 current_version_filter: { type: string, nullable: true }
                 canary_percentage: { type: integer, minimum: 1, maximum: 100 }
                 maximum_failure_rate: { type: number }
+                customer_id: { type: string, nullable: true, description: "Required for a scoped operator (audit P0.7) — bounds eligibility computation itself, not just a post-hoc filter. Omitted/null = platform-global." }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Rollout" } } } }
     get:
@@ -1812,6 +1819,7 @@ components:
         id: { type: string }
         name: { type: string }
         description: { type: string }
+        customer_id: { type: string, nullable: true, description: "Tenant owner (audit P0.2) — null means platform-global." }
         member_count: { type: integer }
         created_at: { type: string, format: date-time }
         device_ids: { type: array, items: { type: string } }
@@ -1827,6 +1835,7 @@ components:
         payload: { type: object }
         interval_seconds: { type: integer }
         enabled: { type: boolean }
+        customer_id: { type: string, nullable: true, description: "Tenant owner (audit P0.6) — null means platform-global." }
         next_run_at: { type: string, format: date-time }
         last_run_at: { type: string, format: date-time, nullable: true }
         created_at: { type: string, format: date-time }
@@ -1840,6 +1849,7 @@ components:
         parameter_name: { type: string }
         desired_value: { type: string }
         enabled: { type: boolean }
+        customer_id: { type: string, nullable: true, description: "Tenant owner (audit P0.5) — null means platform-global." }
         created_at: { type: string, format: date-time }
 
     TemplateParameter:
@@ -1858,6 +1868,7 @@ components:
         parameters: { type: array, items: { $ref: "#/components/schemas/TemplateParameter" } }
         model_filter: { type: string, nullable: true }
         auto_apply: { type: boolean }
+        customer_id: { type: string, nullable: true, description: "Tenant owner (audit P0.4) — null means platform-global." }
         created_at: { type: string, format: date-time }
 
     ApplyTemplateResult:
@@ -1896,6 +1907,7 @@ components:
         canary_percentage: { type: integer }
         maximum_failure_rate: { type: number }
         status: { type: string, enum: [PENDING, ELIGIBLE, RUNNING, BLOCKED, COMPLETED] }
+        customer_id: { type: string, nullable: true, description: "Tenant owner (audit P0.7) — null means platform-global, and also bounds eligibility computation itself." }
         created_at: { type: string, format: date-time }
         eligible_devices: { type: integer }
         rollback_dispatched_at: { type: string, format: date-time, nullable: true }
