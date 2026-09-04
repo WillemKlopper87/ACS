@@ -52,6 +52,15 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      # The npm bundled with actions/setup-node's node-version: 22 still
+      # calls npm's legacy "quick" audit endpoint, which the registry has
+      # started rejecting (400: "this endpoint is being retired, use the
+      # bulk advisory endpoint instead") -- breaking the audit step below
+      # regardless of this repo's own dependencies. A current npm already
+      # uses the bulk endpoint. Pinned to an exact version verified
+      # locally to audit this project cleanly, for the same reason the
+      # @redocly/cli pin above is exact rather than a floating tag.
+      - run: npm install -g npm@11.4.2
       - run: npm ci
       - run: npm run lint
       - run: npm run build
