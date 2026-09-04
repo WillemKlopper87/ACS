@@ -7,6 +7,7 @@ import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
+import { useCustomers, customerName } from "../lib/useCustomers";
 
 export function Policies() {
   const { role } = useAuth();
@@ -19,8 +20,10 @@ export function Policies() {
   const [modelFilter, setModelFilter] = useState("");
   const [parameterName, setParameterName] = useState("");
   const [desiredValue, setDesiredValue] = useState("");
+  const [customerId, setCustomerId] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const customers = useCustomers();
 
   async function load() {
     setLoading(true);
@@ -49,12 +52,14 @@ export function Policies() {
         model_filter: modelFilter || undefined,
         parameter_name: parameterName,
         desired_value: desiredValue,
+        customer_id: customerId || null,
       });
       toast(`Policy "${name}" created`, "success");
       setName("");
       setModelFilter("");
       setParameterName("");
       setDesiredValue("");
+      setCustomerId("");
       await load();
     } catch (e) {
       setCreateError(e instanceof ApiError ? e.message : "Failed to create policy");
@@ -86,6 +91,7 @@ export function Policies() {
   const columns = useMemo<ColumnDef<Policy, any>[]>(
     () => [
       { accessorKey: "name", header: "Name" },
+      { accessorKey: "customer_id", header: "Customer", cell: ({ getValue }) => <span className="dim">{customerName(customers, getValue() as string | null)}</span> },
       { accessorKey: "model_filter", header: "Model Filter", cell: ({ getValue }) => <span className="dim">{(getValue() as string) || "fleet-wide"}</span> },
       { accessorKey: "parameter_name", header: "Parameter" },
       { accessorKey: "desired_value", header: "Desired Value", cell: ({ getValue }) => <span style={{ color: "var(--accent)" }}>{getValue() as string}</span> },
@@ -119,7 +125,7 @@ export function Policies() {
         ),
       },
     ],
-    [writable],
+    [writable, customers],
   );
 
   return (
@@ -143,6 +149,14 @@ export function Policies() {
           <div className="form-row">
             <input placeholder="Parameter name (e.g. Device.WiFi.SSID.1.SSID)" value={parameterName} onChange={(e) => setParameterName(e.target.value)} required />
             <input placeholder="Desired value" value={desiredValue} onChange={(e) => setDesiredValue(e.target.value)} required />
+          </div>
+          <div className="form-row">
+            <select className="chip" aria-label="Customer" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+              <option value="">Platform-wide (no customer)</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
           </div>
           {createError && <div className="banner error" style={{ marginTop: "0.6rem" }}>{createError}</div>}
           <div className="form-row">

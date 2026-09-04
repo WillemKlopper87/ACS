@@ -8,6 +8,7 @@ import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
 import { useEscape } from "../lib/hotkeys";
+import { useCustomers, customerName } from "../lib/useCustomers";
 
 export function DeviceGroups() {
   const { role } = useAuth();
@@ -21,8 +22,10 @@ export function DeviceGroups() {
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [customerId, setCustomerId] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const customers = useCustomers();
 
   async function load() {
     setLoading(true);
@@ -57,10 +60,11 @@ export function DeviceGroups() {
     setCreateError(null);
     setCreating(true);
     try {
-      await api.createDeviceGroup(name, description || undefined);
+      await api.createDeviceGroup(name, description || undefined, customerId || null);
       toast(`Group "${name}" created`, "success");
       setName("");
       setDescription("");
+      setCustomerId("");
       await load();
     } catch (e) {
       setCreateError(e instanceof ApiError ? e.message : "Failed to create group");
@@ -120,6 +124,7 @@ export function DeviceGroups() {
     () => [
       { accessorKey: "name", header: "Name" },
       { accessorKey: "description", header: "Description", cell: ({ getValue }) => <span className="dim">{(getValue() as string) || "—"}</span> },
+      { accessorKey: "customer_id", header: "Customer", cell: ({ getValue }) => <span className="dim">{customerName(customers, getValue() as string | null)}</span> },
       { accessorKey: "member_count", header: "Members" },
       {
         accessorKey: "created_at",
@@ -146,7 +151,7 @@ export function DeviceGroups() {
         ),
       },
     ],
-    [writable],
+    [writable, customers],
   );
 
   return (
@@ -166,6 +171,14 @@ export function DeviceGroups() {
             </div>
             <div className="form-row">
               <input placeholder="Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+            </div>
+            <div className="form-row">
+              <select className="chip" aria-label="Customer" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+                <option value="">Platform-wide (no customer)</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
             </div>
             {createError && <div className="banner error" style={{ marginTop: "0.6rem" }}>{createError}</div>}
             <div className="form-row">

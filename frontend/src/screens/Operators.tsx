@@ -54,6 +54,7 @@ export function Operators() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [scopeTarget, setScopeTarget] = useState<Operator | null>(null);
   const [scopeSelection, setScopeSelection] = useState<Set<string>>(new Set()); // "region:id" / "customer:id"
+  const [globalAccess, setGlobalAccess] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -73,11 +74,23 @@ export function Operators() {
 
   async function openScopes(op: Operator) {
     setScopeTarget(op);
+    setGlobalAccess(op.global_access ?? false);
     try {
       const res = await api.getOperatorScopes(op.id);
       setScopeSelection(new Set(res.items.map((s) => `${s.type}:${s.id}`)));
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "Failed to load scopes", "error");
+    }
+  }
+
+  async function saveGlobalAccess() {
+    if (!scopeTarget) return;
+    try {
+      await api.setOperatorGlobalAccess(scopeTarget.id, globalAccess);
+      toast(`Global access ${globalAccess ? "granted to" : "revoked from"} "${scopeTarget.username}"`, "success");
+      await load();
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Failed to update global access", "error");
     }
   }
 
@@ -174,6 +187,18 @@ export function Operators() {
           const r = getValue() as Role;
           return <span className={`pill ${ROLE_TONE[r]}`}>{r}</span>;
         },
+      },
+      {
+        id: "global_access",
+        header: "Global Access",
+        cell: ({ row }) =>
+          row.original.role === "superadmin" ? (
+            <span className="dim">—</span>
+          ) : (
+            <span className={`pill ${row.original.global_access ? "pill-warn" : "pill-neutral"}`}>
+              {row.original.global_access ? "granted" : "scoped"}
+            </span>
+          ),
       },
       {
         accessorKey: "created_at",
@@ -287,6 +312,15 @@ export function Operators() {
             No scopes selected means unrestricted (sees the whole fleet) — this is the default for every operator. A
             region scope covers every customer under it automatically.
           </p>
+          <div className="form-row" style={{ marginTop: 0 }}>
+            <label className="dim" style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.82rem" }}>
+              <input type="checkbox" checked={globalAccess} onChange={(e) => setGlobalAccess(e.target.checked)} />
+              Explicit global access — fleet-wide regardless of scopes below (audit P0.1: never inferred from an empty scope list)
+            </label>
+            <button className="btn" onClick={saveGlobalAccess}>
+              Save global access
+            </button>
+          </div>
           <div className="split two-col" style={{ marginTop: 0 }}>
             <div>
               <h4 style={{ fontSize: "0.78rem", color: "var(--ink-faint)", margin: "0 0 0.4rem" }}>Regions</h4>

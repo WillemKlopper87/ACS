@@ -106,6 +106,7 @@ export interface DeviceGroup {
   id: string;
   name: string;
   description?: string;
+  customer_id?: string | null;
   member_count: number;
   created_at: string;
   device_ids?: string[];
@@ -120,6 +121,7 @@ export interface ScheduledJob {
   payload: Record<string, unknown>;
   interval_seconds: number;
   enabled: boolean;
+  customer_id?: string | null;
   next_run_at: string;
   last_run_at?: string;
   created_at: string;
@@ -132,6 +134,7 @@ export interface Policy {
   parameter_name: string;
   desired_value: string;
   enabled: boolean;
+  customer_id?: string | null;
   created_at: string;
 }
 
@@ -145,6 +148,7 @@ export interface Rollout {
   canary_percentage: number;
   maximum_failure_rate: number;
   status: string;
+  customer_id?: string | null;
   created_at: string;
   eligible_devices?: number;
   rollback_dispatched_at?: string;
@@ -202,6 +206,10 @@ export interface Operator {
   username: string;
   email?: string;
   role: Role;
+  /** Explicit OPERATOR_GLOBAL entitlement (audit P0.1) — true only when a
+   * superadmin deliberately granted this non-superadmin operator
+   * fleet-wide access. Never inferred from zero scope rows. */
+  global_access?: boolean;
   created_at: string;
 }
 
@@ -316,6 +324,7 @@ export interface ConfigTemplate {
   parameters: TemplateParameter[];
   model_filter?: string;
   auto_apply: boolean;
+  customer_id?: string | null;
   created_at: string;
 }
 

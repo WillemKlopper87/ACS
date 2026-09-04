@@ -9,6 +9,7 @@ import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
 import { useEscape } from "../lib/hotkeys";
+import { useCustomers, customerName } from "../lib/useCustomers";
 
 export function FirmwareRollouts() {
   const { role } = useAuth();
@@ -26,8 +27,10 @@ export function FirmwareRollouts() {
   const [modelFilter, setModelFilter] = useState("");
   const [canaryPct, setCanaryPct] = useState(10);
   const [maxFailureRate, setMaxFailureRate] = useState(0.2);
+  const [customerId, setCustomerId] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const customers = useCustomers();
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadVendor, setUploadVendor] = useState("");
@@ -80,11 +83,13 @@ export function FirmwareRollouts() {
         model_filter: modelFilter || undefined,
         canary_percentage: canaryPct,
         maximum_failure_rate: maxFailureRate,
+        customer_id: customerId || null,
       });
       toast(`Rollout "${name}" created`, "success");
       setName("");
       setModelFilter("");
       setRollbackImageId("");
+      setCustomerId("");
       await load();
     } catch (e) {
       setCreateError(e instanceof ApiError ? e.message : "Failed to create rollout");
@@ -152,6 +157,7 @@ export function FirmwareRollouts() {
   const columns = useMemo<ColumnDef<Rollout, any>[]>(
     () => [
       { accessorKey: "name", header: "Name" },
+      { accessorKey: "customer_id", header: "Customer", cell: ({ getValue }) => <span className="dim">{customerName(customers, getValue() as string | null)}</span> },
       { accessorKey: "canary_percentage", header: "Canary %", cell: ({ getValue }) => <span className="dim">{getValue() as number}%</span> },
       { accessorKey: "maximum_failure_rate", header: "Max Failure", cell: ({ getValue }) => <span className="dim">{Math.round((getValue() as number) * 100)}%</span> },
       { accessorKey: "status", header: "Status", cell: ({ getValue }) => <StatusBadge value={getValue() as string} /> },
@@ -164,7 +170,7 @@ export function FirmwareRollouts() {
         },
       },
     ],
-    [],
+    [customers],
   );
 
   return (
@@ -235,6 +241,14 @@ export function FirmwareRollouts() {
             </div>
             <div className="form-row">
               <input placeholder="Model filter (manufacturer/product class, optional)" value={modelFilter} onChange={(e) => setModelFilter(e.target.value)} />
+            </div>
+            <div className="form-row">
+              <select className="chip" aria-label="Customer" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+                <option value="">Platform-wide (no customer)</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
             </div>
             <div className="form-row">
               <label className="dim" style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.8rem" }}>

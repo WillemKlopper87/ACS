@@ -8,6 +8,7 @@ import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
 import { useEscape } from "../lib/hotkeys";
+import { useCustomers, customerName } from "../lib/useCustomers";
 
 const emptyRow: TemplateParameter = { name: "", value: "", type: "string" };
 
@@ -31,9 +32,11 @@ export function ConfigTemplates() {
   const [description, setDescription] = useState("");
   const [modelFilter, setModelFilter] = useState("");
   const [autoApply, setAutoApply] = useState(false);
+  const [customerId, setCustomerId] = useState("");
   const [rows, setRows] = useState<TemplateParameter[]>([{ ...emptyRow }]);
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const customers = useCustomers();
 
   const [applyTarget, setApplyTarget] = useState<"devices" | "group">("devices");
   const [deviceIdsInput, setDeviceIdsInput] = useState("");
@@ -89,12 +92,14 @@ export function ConfigTemplates() {
         parameters: validRows,
         model_filter: modelFilter || undefined,
         auto_apply: autoApply,
+        customer_id: customerId || null,
       });
       toast(`Template "${name}" created`, "success");
       setName("");
       setDescription("");
       setModelFilter("");
       setAutoApply(false);
+      setCustomerId("");
       setRows([{ ...emptyRow }]);
       await load();
     } catch (e) {
@@ -154,6 +159,7 @@ export function ConfigTemplates() {
     () => [
       { accessorKey: "name", header: "Name" },
       { accessorKey: "description", header: "Description", cell: ({ getValue }) => <span className="dim">{(getValue() as string) || "—"}</span> },
+      { accessorKey: "customer_id", header: "Customer", cell: ({ getValue }) => <span className="dim">{customerName(customers, getValue() as string | null)}</span> },
       {
         id: "parameters",
         header: "Parameters",
@@ -195,7 +201,7 @@ export function ConfigTemplates() {
         ),
       },
     ],
-    [writable],
+    [writable, customers],
   );
 
   return (
@@ -216,6 +222,12 @@ export function ConfigTemplates() {
             <div className="form-row">
               <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required disabled={!writable} />
               <input placeholder="Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} disabled={!writable} />
+              <select className="chip" aria-label="Customer" value={customerId} onChange={(e) => setCustomerId(e.target.value)} disabled={!writable}>
+                <option value="">Platform-wide (no customer)</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
             </div>
 
             {rows.map((row, i) => (

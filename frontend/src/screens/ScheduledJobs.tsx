@@ -7,6 +7,7 @@ import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
+import { useCustomers, customerName } from "../lib/useCustomers";
 
 const JOB_TYPES = ["GET_PARAMETER", "SET_PARAMETER", "DIAGNOSTICS_PING", "CONNECTION_REQUEST"];
 
@@ -23,8 +24,10 @@ export function ScheduledJobs() {
   const [targetId, setTargetId] = useState("");
   const [intervalSeconds, setIntervalSeconds] = useState(300);
   const [paramPaths, setParamPaths] = useState("Device.DeviceInfo.SoftwareVersion");
+  const [customerId, setCustomerId] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const customers = useCustomers();
 
   async function load() {
     setLoading(true);
@@ -61,10 +64,12 @@ export function ScheduledJobs() {
         target_id: targetId,
         payload,
         interval_seconds: intervalSeconds,
+        customer_id: customerId || null,
       });
       toast(`Schedule "${name}" created`, "success");
       setName("");
       setTargetId("");
+      setCustomerId("");
       await load();
     } catch (e) {
       setCreateError(e instanceof ApiError ? e.message : "Failed to create schedule");
@@ -96,6 +101,7 @@ export function ScheduledJobs() {
   const columns = useMemo<ColumnDef<ScheduledJob, any>[]>(
     () => [
       { accessorKey: "name", header: "Name" },
+      { accessorKey: "customer_id", header: "Customer", cell: ({ getValue }) => <span className="dim">{customerName(customers, getValue() as string | null)}</span> },
       { accessorKey: "job_type", header: "Type", cell: ({ getValue }) => <span className="dim">{getValue() as string}</span> },
       { accessorKey: "target_type", header: "Target", cell: ({ row }) => <span className="dim">{row.original.target_type}: {row.original.target_id.slice(0, 8)}…</span> },
       { accessorKey: "interval_seconds", header: "Interval", cell: ({ getValue }) => <span className="dim">{getValue() as number}s</span> },
@@ -137,7 +143,7 @@ export function ScheduledJobs() {
         ),
       },
     ],
-    [writable],
+    [writable, customers],
   );
 
   return (
@@ -181,6 +187,14 @@ export function ScheduledJobs() {
               onChange={(e) => setIntervalSeconds(Number(e.target.value))}
               style={{ maxWidth: "10rem" }}
             />
+          </div>
+          <div className="form-row">
+            <select className="chip" aria-label="Customer" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+              <option value="">Platform-wide (no customer)</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
           </div>
           {createError && <div className="banner error" style={{ marginTop: "0.6rem" }}>{createError}</div>}
           <div className="form-row">

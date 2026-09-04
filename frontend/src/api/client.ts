@@ -260,8 +260,8 @@ export const api = {
   // --- device groups (build plan §4 Phase 7) ---
   listDeviceGroups: () => request<{ items: DeviceGroup[] }>("/api/v1/device-groups"),
   getDeviceGroup: (id: string) => request<DeviceGroup>(`/api/v1/device-groups/${id}`),
-  createDeviceGroup: (name: string, description?: string) =>
-    request<DeviceGroup>("/api/v1/device-groups", { method: "POST", body: JSON.stringify({ name, description }) }),
+  createDeviceGroup: (name: string, description?: string, customerId?: string | null) =>
+    request<DeviceGroup>("/api/v1/device-groups", { method: "POST", body: JSON.stringify({ name, description, customer_id: customerId }) }),
   deleteDeviceGroup: (id: string) => request<void>(`/api/v1/device-groups/${id}`, { method: "DELETE" }),
   addDeviceGroupMembers: (id: string, deviceIds: string[]) =>
     request<DeviceGroup>(`/api/v1/device-groups/${id}/members`, { method: "POST", body: JSON.stringify({ device_ids: deviceIds }) }),
@@ -277,6 +277,7 @@ export const api = {
     target_id: string;
     payload: Record<string, unknown>;
     interval_seconds: number;
+    customer_id?: string | null;
   }) => request<ScheduledJob>("/api/v1/scheduled-jobs", { method: "POST", body: JSON.stringify(input) }),
   deleteScheduledJob: (id: string) => request<void>(`/api/v1/scheduled-jobs/${id}`, { method: "DELETE" }),
   setScheduledJobEnabled: (id: string, enabled: boolean) =>
@@ -284,7 +285,7 @@ export const api = {
 
   // --- policies (build plan §4 Phase 7) ---
   listPolicies: () => request<{ items: Policy[] }>("/api/v1/policies"),
-  createPolicy: (input: { name: string; model_filter?: string; parameter_name: string; desired_value: string }) =>
+  createPolicy: (input: { name: string; model_filter?: string; parameter_name: string; desired_value: string; customer_id?: string | null }) =>
     request<Policy>("/api/v1/policies", { method: "POST", body: JSON.stringify(input) }),
   deletePolicy: (id: string) => request<void>(`/api/v1/policies/${id}`, { method: "DELETE" }),
   setPolicyEnabled: (id: string, enabled: boolean) =>
@@ -298,6 +299,7 @@ export const api = {
     parameters: TemplateParameter[];
     model_filter?: string;
     auto_apply?: boolean;
+    customer_id?: string | null;
   }) => request<ConfigTemplate>("/api/v1/config-templates", { method: "POST", body: JSON.stringify(input) }),
   deleteTemplate: (id: string) => request<void>(`/api/v1/config-templates/${id}`, { method: "DELETE" }),
   applyTemplate: (id: string, target: { device_ids?: string[]; group_id?: string }) =>
@@ -324,6 +326,7 @@ export const api = {
     current_version_filter?: string;
     canary_percentage?: number;
     maximum_failure_rate?: number;
+    customer_id?: string | null;
   }) => request<Rollout>("/api/v1/firmware/rollouts", { method: "POST", body: JSON.stringify(input) }),
   startRollout: (id: string) => request<{ dispatched: number; batch_size: number; status: string }>(`/api/v1/firmware/rollouts/${id}/start`, { method: "POST" }),
   advanceRollout: (id: string) => request<{ dispatched: number; batch_size: number; status: string; final_wave: boolean }>(`/api/v1/firmware/rollouts/${id}/advance`, { method: "POST" }),
@@ -387,6 +390,8 @@ export const api = {
   getOperatorScopes: (operatorId: string) => request<{ items: OperatorScope[] }>(`/api/v1/auth/operators/${operatorId}/scopes`),
   setOperatorScopes: (operatorId: string, scopes: OperatorScope[]) =>
     request<void>(`/api/v1/auth/operators/${operatorId}/scopes`, { method: "POST", body: JSON.stringify({ scopes }) }),
+  setOperatorGlobalAccess: (operatorId: string, globalAccess: boolean) =>
+    request<void>(`/api/v1/auth/operators/${operatorId}/global-access`, { method: "PUT", body: JSON.stringify({ global_access: globalAccess }) }),
 
   // --- Excel reporting (admin-platform backlog) ---
   updateDeviceLocation: (deviceId: string, location: string) =>
