@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { Credential, Device, Job, ParameterCache, ParameterHistoryEntry } from "../api/types";
+import type { Credential, Device, Job, ParameterCache, ParameterHistoryEntry, UploadedFile } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { DeviceConsole } from "../components/DeviceConsole";
 import { RemoteShell } from "../components/RemoteShell";
 import { DeviceWebGUI } from "../components/DeviceWebGUI";
 import { VPNTunnel } from "../components/VPNTunnel";
 import { DeviceTenancy } from "../components/DeviceTenancy";
-import { timeAgo } from "../lib/format";
+import { fmtBytes, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { useLive } from "../lib/useLive";
@@ -21,6 +21,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   const [params, setParams] = useState<ParameterCache>({});
   const [jobs, setJobs] = useState<Job[]>([]);
   const [credentials, setCredentials] = useState<Credential[]>([]);
+  const [uploads, setUploads] = useState<UploadedFile[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(busy);
@@ -56,16 +57,18 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       if (background && busyRef.current) return;
       if (!background) setError(null);
       try {
-        const [d, p, j, c] = await Promise.all([
+        const [d, p, j, c, u] = await Promise.all([
           api.getDevice(id),
           api.getDeviceParameters(id),
           api.listDeviceJobs(id),
           api.listDeviceCredentials(id),
+          api.listDeviceUploads(id),
         ]);
         setDevice(d);
         setParams(p.parameters);
         setJobs(j.items);
         setCredentials(c.items);
+        setUploads(u.items);
         if (!tagsDirtyRef.current) setTagsInput((d.tags ?? []).join(", "));
         if (!locationDirtyRef.current) setLocationInput(d.location ?? "");
         setError(null);
@@ -208,6 +211,14 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       const res = await api.createUpload(id, fileType);
       return `Upload requested: ${res.command_key} — file lands on receipt once the CPE pushes it`;
     });
+
+  async function handleDownloadUpload(u: UploadedFile) {
+    try {
+      await api.downloadUpload(u.id, u.filename);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Failed to download the uploaded file", "error");
+    }
+  }
 
   async function toggleHistory(path: string) {
     if (historyPath === path) {
@@ -606,9 +617,40 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
             Request log file
           </button>
         </div>
-        <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
-          The CPE pushes the file back independently of this session — watch Recent Jobs for completion, then fetch it via <code>GET /api/v1/devices/{"{id}"}/uploads</code>.
+        <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: uploads.length ? "0.6rem" : 0 }}>
+          The CPE pushes the file back independently of this session, so a request stays PENDING until it arrives — this
+          list refreshes with the rest of the panel.
         </p>
+
+        {uploads.length > 0 && (
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {uploads.map((u) => (
+              <li key={u.id} className="param-row">
+                <span className="path">
+                  {u.filename ?? u.file_type}
+                  <span className="src">
+                    {u.file_type}
+                    {u.file_size_bytes != null && ` · ${fmtBytes(u.file_size_bytes)}`}
+                    {u.received_at ? ` · received ${timeAgo(u.received_at)}` : ` · requested ${timeAgo(u.created_at)}`}
+                    {u.sha256 && ` · sha256 ${u.sha256.slice(0, 12)}…`}
+                  </span>
+                </span>
+                <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  <StatusBadge value={u.status} />
+                  <button
+                    className="btn"
+                    style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }}
+                    disabled={u.status !== "RECEIVED"}
+                    title={u.status === "RECEIVED" ? "Download this file" : "The CPE has not pushed this file yet"}
+                    onClick={() => handleDownloadUpload(u)}
+                  >
+                    Download
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );

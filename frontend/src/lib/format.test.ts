@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { timeAgo, fmtTime, durationSeconds } from "./format";
+import { timeAgo, fmtTime, durationSeconds, fmtBytes } from "./format";
 
 describe("timeAgo", () => {
   it("returns an em dash for an undefined timestamp", () => {
@@ -40,5 +40,32 @@ describe("durationSeconds", () => {
 
   it("handles a sub-second job (completed in the same second)", () => {
     expect(durationSeconds("2026-08-11T14:30:00.000Z", "2026-08-11T14:30:00.250Z")).toBe(0.3);
+  });
+});
+
+describe("fmtBytes", () => {
+  it("keeps raw bytes below 1 KiB", () => {
+    expect(fmtBytes(0)).toBe("0 B");
+    expect(fmtBytes(1023)).toBe("1023 B");
+  });
+
+  it("steps up through binary units", () => {
+    expect(fmtBytes(1024)).toBe("1.0 KiB");
+    expect(fmtBytes(1536)).toBe("1.5 KiB");
+    expect(fmtBytes(1024 * 1024)).toBe("1.0 MiB");
+    expect(fmtBytes(1024 ** 3)).toBe("1.0 GiB");
+  });
+
+  it("drops the decimal once the value is large enough not to need it", () => {
+    expect(fmtBytes(1024 * 15)).toBe("15 KiB");
+  });
+
+  it("does not run past the largest unit it knows", () => {
+    expect(fmtBytes(1024 ** 6)).toMatch(/TiB$/);
+  });
+
+  it("returns a dash rather than NaN for a nonsense size", () => {
+    expect(fmtBytes(Number.NaN)).toBe("—");
+    expect(fmtBytes(-1)).toBe("—");
   });
 });

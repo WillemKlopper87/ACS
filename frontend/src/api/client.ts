@@ -119,6 +119,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// Binary responses (the .xlsx report, device-uploaded config/log files)
+// can't go through request() — they aren't JSON — and can't be a plain
+// <a href> either, because the browser won't attach the Bearer token to
+// one. So: a real fetch, then a Blob saved through a synthetic anchor.
+// The server's Content-Disposition filename wins when it sends one.
+async function download(path: string, fallbackFilename: string) {
+  const { token } = getAuthState();
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  } catch (e) {
+    markApiReachable(false);
+    throw e;
+  }
+  markApiReachable(true);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new ApiError(res.status, body || res.statusText);
+  }
+  const match = (res.headers.get("Content-Disposition") ?? "").match(/filename="([^"]+)"/);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = match?.[1] ?? fallbackFilename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request<LoginResponse>(LOGIN_PATH, {
@@ -249,6 +280,10 @@ export const api = {
       body: JSON.stringify({ file_type: fileType }),
     }),
   listDeviceUploads: (id: string) => request<{ items: UploadedFile[] }>(`/api/v1/devices/${id}/uploads`),
+  // Only valid once the CPE has actually pushed the file (status
+  // RECEIVED); the backend answers 409 before that.
+  downloadUpload: (uploadId: string, filename?: string) =>
+    download(`/api/v1/uploads/${uploadId}/file`, filename || `upload-${uploadId}`),
 
   addObject: (id: string, objectPath: string) =>
     request<QueueResponse>(`/api/v1/devices/${id}/objects`, {
@@ -417,40 +452,9 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ location }),
     }),
-  // Not the generic request() helper — this response is a binary .xlsx
-  // file, not JSON, and needs its own Blob-download handling rather than
-  // res.json(). Auth still goes through the same Bearer header since this
-  // is a real fetch(), not a plain <a href> the browser can't attach a
-  // token to.
-  exportDevicesReport: async (filters: { customer_id?: string; region_id?: string; project_id?: string }) => {
-    const { token } = getAuthState();
+  exportDevicesReport: (filters: { customer_id?: string; region_id?: string; project_id?: string }) => {
     const qs = new URLSearchParams(Object.entries(filters).filter(([, v]) => v) as [string, string][]);
-    let res: Response;
-    try {
-      res = await fetch(`${BASE_URL}/api/v1/reports/devices/export?${qs.toString()}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-    } catch (e) {
-      markApiReachable(false);
-      throw e;
-    }
-    markApiReachable(true);
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new ApiError(res.status, body || res.statusText);
-    }
-    const disposition = res.headers.get("Content-Disposition") ?? "";
-    const match = disposition.match(/filename="([^"]+)"/);
-    const filename = match?.[1] ?? "acs-devices.xlsx";
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    return download(`/api/v1/reports/devices/export?${qs.toString()}`, "acs-devices.xlsx");
   },
 
   // --- customizable dashboard (admin-platform backlog) ---

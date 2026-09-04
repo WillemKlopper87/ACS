@@ -69,7 +69,7 @@ commit, pushed to `main`.
   (`backend/cmd/api/routes.go:41`) and is in the generated client — never
   called. *(prior: H-6)*
 
-- [ ] **P1.2 — Uploaded files can be requested but never retrieved.**
+- [x] **P1.2 — Uploaded files can be requested but never retrieved.**
   `createUpload` is wired (`frontend/src/screens/DeviceDetail.tsx:208`), but
   `GET /api/v1/devices/{id}/uploads` and `GET /api/v1/uploads/{id}/file`
   have no UI at all; `api.listDeviceUploads` is dead code. An operator can ask a
