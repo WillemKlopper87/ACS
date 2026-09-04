@@ -126,6 +126,12 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
 
+  // Revokes every session of the caller server-side. Signing out used to
+  // be purely local (clearAuth), which left a captured token valid until
+  // its own expiry — on a shared machine that is the whole point of
+  // signing out.
+  logout: () => request<void>("/api/v1/auth/logout", { method: "POST" }),
+
   listDevices: (page = 1, pageSize = 100) =>
     request<{ items: Device[]; total: number }>(`/api/v1/devices?page=${page}&page_size=${pageSize}`),
 

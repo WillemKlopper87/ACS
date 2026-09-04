@@ -63,7 +63,7 @@ commit, pushed to `main`.
 
 ## P1 — backend capability with no operator UI
 
-- [ ] **P1.1 — Sign-out never revokes the session server-side.**
+- [x] **P1.1 — Sign-out never revokes the session server-side.**
   `logout: clearAuth` (`frontend/src/auth/AuthContext.tsx:16`) is local only.
   `POST /api/v1/auth/logout` exists and revokes every session of the caller
   (`backend/cmd/api/routes.go:41`) and is in the generated client — never

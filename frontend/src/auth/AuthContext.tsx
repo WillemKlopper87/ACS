@@ -13,5 +13,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthenticated(resp.token, username, resp.role);
   };
 
-  return <AuthContext.Provider value={{ ...state, login, logout: clearAuth }}>{children}</AuthContext.Provider>;
+  // Revoke server-side first, then clear locally. The local clear runs
+  // either way: if the revoke call fails (API down, token already
+  // expired) the operator still gets signed out of this browser rather
+  // than being trapped in a session they asked to end. Best-effort
+  // revocation is strictly better than the previous local-only clear,
+  // which left a captured token valid until its own expiry.
+  const logout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      // Deliberately ignored — see above.
+    } finally {
+      clearAuth();
+    }
+  };
+
+  return <AuthContext.Provider value={{ ...state, login, logout }}>{children}</AuthContext.Provider>;
 }
