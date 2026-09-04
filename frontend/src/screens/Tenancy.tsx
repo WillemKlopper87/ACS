@@ -128,7 +128,7 @@ export function Tenancy() {
             regions.map((r) => (
               <div className="param-row" key={r.id}>
                 <span className="path">{r.name}</span>
-                <button className="btn danger" style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }} onClick={() => remove("region", r.name, () => api.deleteRegion(r.id))}>
+                <button className="btn danger sm" onClick={() => remove("region", r.name, () => api.deleteRegion(r.id))}>
                   Delete
                 </button>
               </div>
@@ -154,7 +154,7 @@ export function Tenancy() {
             customers.map((c) => (
               <div className="param-row" key={c.id}>
                 <span className="path">{c.name} <span className="dim">· {regionName_(c.region_id)}</span></span>
-                <button className="btn danger" style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }} onClick={() => remove("customer", c.name, () => api.deleteCustomer(c.id))}>
+                <button className="btn danger sm" onClick={() => remove("customer", c.name, () => api.deleteCustomer(c.id))}>
                   Delete
                 </button>
               </div>
@@ -178,7 +178,7 @@ export function Tenancy() {
             projects.map((p) => (
               <div className="param-row" key={p.id}>
                 <span className="path">{p.name}<span className="src">{p.description}</span></span>
-                <button className="btn danger" style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }} onClick={() => remove("project", p.name, () => api.deleteProject(p.id))}>
+                <button className="btn danger sm" onClick={() => remove("project", p.name, () => api.deleteProject(p.id))}>
                   Delete
                 </button>
               </div>

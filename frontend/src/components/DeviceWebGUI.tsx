@@ -84,7 +84,7 @@ export function DeviceWebGUI({ id, writable }: { id: string; writable: boolean }
     <div className="panel">
       <h3>
         Device web GUI
-        <button className="btn" style={{ padding: "0.2em 0.6em", fontSize: "0.72rem" }} onClick={() => setShowForm((s) => !s)} disabled={!writable}>
+        <button className="btn sm" onClick={() => setShowForm((s) => !s)} disabled={!writable}>
           {showForm ? "Cancel" : configured ? "Edit" : "Configure"}
         </button>
       </h3>

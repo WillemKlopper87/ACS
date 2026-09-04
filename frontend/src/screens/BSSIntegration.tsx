@@ -282,7 +282,7 @@ export function BSSIntegration() {
                 {webhooks.map((w) => (
                   <div className="param-row" key={w.id}>
                     <span className="path">{w.account_id ?? "fleet-wide"} <span className="dim">→</span> {w.target_url}</span>
-                    <button className="btn danger" style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }} onClick={() => deleteWebhook(w.id)}>
+                    <button className="btn danger sm" onClick={() => deleteWebhook(w.id)}>
                       Delete
                     </button>
                     <span className="src mono">secret {maskSecret(w.secret)} · events {w.event_types.join(", ")}</span>
@@ -330,7 +330,7 @@ export function BSSIntegration() {
                     {c.revoked_at ? (
                       <span className="pill pill-danger">REVOKED</span>
                     ) : (
-                      <button className="btn danger" style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }} onClick={() => revokeOAuthClient(c.id)}>
+                      <button className="btn danger sm" onClick={() => revokeOAuthClient(c.id)}>
                         Revoke
                       </button>
                     )}

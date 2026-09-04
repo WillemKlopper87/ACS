@@ -638,8 +638,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
                 <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                   <StatusBadge value={u.status} />
                   <button
-                    className="btn"
-                    style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }}
+                    className="btn sm"
                     disabled={u.status !== "RECEIVED"}
                     title={u.status === "RECEIVED" ? "Download this file" : "The CPE has not pushed this file yet"}
                     onClick={() => handleDownloadUpload(u)}

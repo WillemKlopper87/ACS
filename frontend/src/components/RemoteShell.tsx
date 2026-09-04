@@ -167,7 +167,7 @@ export function RemoteShell({ id, writable }: { id: string; writable: boolean })
     <div className="panel">
       <h3>
         Remote shell (SSH / Telnet)
-        <button className="btn" style={{ padding: "0.2em 0.6em", fontSize: "0.72rem" }} onClick={() => setShowForm((s) => !s)} disabled={!writable}>
+        <button className="btn sm" onClick={() => setShowForm((s) => !s)} disabled={!writable}>
           {showForm ? "Cancel" : "+ Add credential"}
         </button>
       </h3>

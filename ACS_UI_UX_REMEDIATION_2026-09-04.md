@@ -91,7 +91,7 @@ commit, pushed to `main`.
 The token system itself is sound (four themes, consistent naming, real
 `:focus-visible`, `.sr-only`). These are the places components escape it.
 
-- [ ] **P2.1 — No small-button variant.** `style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }}`
+- [x] **P2.1 — No small-button variant.** `style={{ padding: "0.15em 0.5em", fontSize: "0.72rem" }}`
   is copy-pasted across 5+ files; the sign-out button is a 10-line inline style
   block (`App.tsx:109-122`). Add `.btn.sm` and a ghost variant, then delete the
   inline copies.

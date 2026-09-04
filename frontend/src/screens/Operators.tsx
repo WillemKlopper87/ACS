@@ -213,11 +213,11 @@ export function Operators() {
         header: "",
         cell: ({ row }) => (
           <span style={{ display: "flex", gap: "0.4rem" }}>
-            <button className="btn" style={{ padding: "0.2em 0.6em", fontSize: "0.76rem" }} onClick={() => setResetTarget(row.original)}>
+            <button className="btn sm" onClick={() => setResetTarget(row.original)}>
               Reset password
             </button>
             {row.original.role !== "superadmin" && (
-              <button className="btn" style={{ padding: "0.2em 0.6em", fontSize: "0.76rem" }} onClick={() => openScopes(row.original)}>
+              <button className="btn sm" onClick={() => openScopes(row.original)}>
                 Scopes
               </button>
             )}
@@ -240,7 +240,7 @@ export function Operators() {
     <section>
       {error && (
         <div className="banner error">
-          {error} <button className="btn" style={{ marginLeft: "0.6rem" }} onClick={load}>Retry</button>
+          {error} <button className="btn" onClick={load}>Retry</button>
         </div>
       )}
 

@@ -114,18 +114,7 @@ function AppShell() {
               <span>
                 {username} <span style={{ color: "var(--ink-faint)" }}>({role})</span>
               </span>
-              <button
-                onClick={logout}
-                style={{
-                  background: "none",
-                  border: "1px solid var(--border)",
-                  borderRadius: 4,
-                  color: "var(--ink-dim)",
-                  padding: "0.15em 0.5em",
-                  cursor: "pointer",
-                  fontSize: "0.72rem",
-                }}
-              >
+              <button className="btn ghost sm" onClick={logout}>
                 Sign out
               </button>
             </div>

@@ -258,7 +258,7 @@ export function FleetControl() {
 
       {error && (
         <div className="banner error">
-          {error} <button className="btn" style={{ marginLeft: "0.6rem" }} onClick={() => loadPage()}>Retry</button>
+          {error} <button className="btn" onClick={() => loadPage()}>Retry</button>
         </div>
       )}
 

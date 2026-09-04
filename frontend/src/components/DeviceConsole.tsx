@@ -190,15 +190,13 @@ export function DeviceConsole({ id, writable }: { id: string; writable: boolean 
         Device console
         <span style={{ display: "flex", gap: "0.4rem" }}>
           <button
-            className={`btn ${mode === "command" ? "primary" : ""}`}
-            style={{ padding: "0.2em 0.6em", fontSize: "0.72rem" }}
+            className={`btn sm ${mode === "command" ? "primary" : ""}`}
             onClick={() => setMode("command")}
           >
             Command
           </button>
           <button
-            className={`btn ${mode === "raw" ? "primary" : ""}`}
-            style={{ padding: "0.2em 0.6em", fontSize: "0.72rem" }}
+            className={`btn sm ${mode === "raw" ? "primary" : ""}`}
             onClick={() => setMode("raw")}
           >
             Raw JSON

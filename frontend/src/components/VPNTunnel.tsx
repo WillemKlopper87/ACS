@@ -78,7 +78,7 @@ export function VPNTunnel({ id, writable }: { id: string; writable: boolean }) {
       <h3>
         VPN tunnel
         {!peer && (
-          <button className="btn primary" style={{ padding: "0.2em 0.6em", fontSize: "0.72rem" }} onClick={handleEnroll} disabled={!writable || busy}>
+          <button className="btn primary sm" onClick={handleEnroll} disabled={!writable || busy}>
             Enroll
           </button>
         )}

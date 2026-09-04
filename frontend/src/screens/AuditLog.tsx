@@ -81,7 +81,7 @@ export function AuditLog() {
     <section>
       {error && (
         <div className="banner error">
-          {error} <button className="btn" style={{ marginLeft: "0.6rem" }} onClick={load}>Retry</button>
+          {error} <button className="btn" onClick={load}>Retry</button>
         </div>
       )}
 

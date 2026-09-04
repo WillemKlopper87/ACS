@@ -320,6 +320,18 @@ select.chip {
 .btn.primary:hover:not(:disabled) { filter: brightness(1.06); }
 .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 .btn.danger:hover:not(:disabled) { background: var(--danger-bg); }
+/* The compact button used inline in list rows and panel headers. Every
+   call site used to hand-roll this as a style prop, in two subtly
+   different sizes; one variant so they stay identical. */
+.btn.sm { padding: 0.18em 0.55em; font-size: 0.72rem; }
+/* Chrome-less variant for secondary actions that sit inside other UI
+   (the sidebar's sign-out), where a filled button would outweigh what
+   it does. */
+.btn.ghost { background: none; color: var(--ink-dim); }
+.btn.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--ink); }
+/* Banners pair their message with a single action; the gap belongs to
+   the banner, not to nine copies of an inline margin. */
+.banner .btn { margin-left: 0.6rem; }
 
 .table-wrap { border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); overflow: auto; background: var(--surface); max-height: 62vh; }
 table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.82rem; }
