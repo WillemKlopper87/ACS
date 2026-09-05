@@ -13,6 +13,20 @@ still open in this tree at `57f4c91`.
 carries the `file:line` it was found at. Fixes land one coherent change per
 commit, pushed to `main`.
 
+**Status: complete.** 28 of 29 items fixed; P2.6 closed as won't-fix-on-colour
+with the reason recorded inline. Two corrections worth keeping visible:
+
+- The `--ink-faint` darkening in `205ba09` was **wrong** and broke CI. It was
+  checked against `--surface`, the darkest background, but the token is
+  rendered on `--surface-2` (table headers, hovered rows), where it measured
+  4.25:1 — below AA. The Playwright axe gate caught it; `abcac30` reverted it.
+  The dark theme has no contrast headroom to separate those two tiers, so
+  separating them properly means weight or size, not colour.
+- The last-active-superadmin guard in P1.4 is **unreachable through the API**
+  (the caller is themselves an active superadmin, so any other target leaves at
+  least two). It is kept as defence in depth for a non-API caller, and the
+  tests say so rather than implying otherwise.
+
 ---
 
 ## P0 — functional bugs
