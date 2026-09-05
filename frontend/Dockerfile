@@ -24,6 +24,31 @@ ENV VITE_ENV_LABEL=$VITE_ENV_LABEL
 RUN npm run build
 
 FROM nginx:1.31.5-alpine3.24
+# Re-declared: an ARG from an earlier stage is not in scope here. This is
+# deliberately the *same* argument the bundle was built with above,
+# because the CSP below must name exactly the origin that JS will call.
+# When the two were maintained separately — a hardcoded localhost:8080 in
+# nginx.conf, a build arg for the bundle — every non-localhost deploy
+# silently had all its API calls blocked by the browser, since a CSP
+# violation doesn't surface as a request error in the app. One knob now
+# feeds both.
+ARG VITE_API_BASE_URL=http://localhost:8080
 COPY --from=build /src/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx.conf.template /tmp/default.conf.template
+# Renders the template, then `nginx -t` validates the result — so a bad
+# VITE_API_BASE_URL fails the build rather than the first request. The
+# case statement rejects a scheme-less value for the same reason: it
+# would otherwise produce a CSP that silently matches nothing.
+RUN set -eu; \
+    api="${VITE_API_BASE_URL%/}"; \
+    case "$api" in \
+      https://*) ws="wss://${api#https://}" ;; \
+      http://*)  ws="ws://${api#http://}"   ;; \
+      *) echo "VITE_API_BASE_URL must be an absolute http(s) URL, got: '$api'" >&2; exit 1 ;; \
+    esac; \
+    export API_ORIGIN="$api" API_WS_ORIGIN="$ws"; \
+    envsubst '$API_ORIGIN $API_WS_ORIGIN' \
+      < /tmp/default.conf.template > /etc/nginx/conf.d/default.conf; \
+    rm /tmp/default.conf.template; \
+    nginx -t
 EXPOSE 80
