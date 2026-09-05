@@ -158,3 +158,19 @@ The token system itself is sound (four themes, consistent naming, real
   null-safety disabled in a codebase full of optional API fields. *(prior: H-8)*
 - [x] **P4.2 — `useLive` has no in-flight or abort guard** (`lib/useLive.ts:16-22`),
   so overlapping polls commit out-of-order and flicker stale data. *(prior: M-22)*
+
+## Follow-up raised while closing this list
+
+- [ ] **The frontend image ships a full Alpine userland; the backend images
+  don't.** `frontend/Dockerfile` runs stock `nginx:*-alpine` as root, while the
+  three backend images are distroless nonroot. That userland is the sole reason
+  the 2026-09-05 util-linux CVEs (`CVE-2026-53612` and six siblings, in
+  `libuuid`) failed the Trivy gate on `acs-frontend` alone — the vulnerable
+  binaries are mount/nsenter helpers this container never invokes. No fix was
+  available at the time (Alpine v3.24 ships util-linux 2.42.1-r0, v3.23 ships
+  2.41.6-r0; the fixed 2.42.3-r0 is committed to 3.24-stable but published only
+  to edge, and `1.31.5-alpine3.24` is already the newest nginx tag on that
+  line), so they are ignored in `.trivyignore.yaml` **with a hard
+  `expired_at: 2026-10-17`** — delete that block once Alpine publishes the fix,
+  rather than extending the date. Serving the built SPA from a minimal static
+  server would remove this whole class of finding permanently.

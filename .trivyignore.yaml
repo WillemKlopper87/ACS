@@ -1,0 +1,54 @@
+# Time-boxed, justified exceptions for the CI container scan.
+#
+# Every entry MUST carry an expired_at. Once that date passes Trivy stops
+# honouring the entry and the scan fails again, so nothing here can rot
+# into a permanent silent exemption — which is the whole failure mode a
+# blanket ignore file invites.
+#
+# Adding an entry requires: (a) the vulnerable code is genuinely not
+# reachable in how we run the image, and (b) no fixed package exists yet.
+# If a fix exists, bump the base image instead.
+
+vulnerabilities:
+  # util-linux privileged mount-helper CVEs, present in the nginx base
+  # image (frontend) via libuuid.
+  #
+  # Not reachable here: this image's only workload is nginx serving
+  # static files. It never invokes mount(8), nsenter or X-mount.subdir —
+  # the vulnerable binaries — and the container is not privileged.
+  # libuuid is a transitive dependency; the mount helpers are not the
+  # reason it is installed.
+  #
+  # No fix available as of 2026-09-05, which is why these are ignored
+  # rather than patched: Alpine v3.24 ships util-linux 2.42.1-r0 and
+  # v3.23 ships 2.41.6-r0 (both affected). The fixed 2.42.3-r0 is
+  # committed to the 3.24-stable branch but only published to edge so
+  # far. nginx:1.31.5-alpine3.24 is already the newest nginx tag on that
+  # Alpine line, so bumping the base image does not help either.
+  #
+  # Clearing this: once Alpine publishes 2.42.3-r0 to v3.24, a rebuild
+  # picks it up — delete this whole block then, don't extend the date.
+  # The durable fix is to stop shipping a full Alpine userland in the
+  # frontend image at all (the three backend images are already
+  # distroless nonroot); that is tracked separately.
+  - id: CVE-2026-53612
+    statement: "util-linux mount(8) TOCTOU; mount is never invoked in this image. No fixed package in Alpine v3.24 yet."
+    expired_at: 2026-10-17
+  - id: CVE-2026-53613
+    statement: "util-linux mount(8) TOCTOU; mount is never invoked in this image. No fixed package in Alpine v3.24 yet."
+    expired_at: 2026-10-17
+  - id: CVE-2026-53614
+    statement: "util-linux SUID mount(8) nosuid/noexec bypass; mount is never invoked in this image. No fixed package in Alpine v3.24 yet."
+    expired_at: 2026-10-17
+  - id: CVE-2026-76642
+    statement: "util-linux external mount helper failure handling; mount is never invoked in this image. No fixed package in Alpine v3.24 yet."
+    expired_at: 2026-10-17
+  - id: CVE-2026-78408
+    statement: "util-linux nsenter --join-cgroup root leak; nsenter is never invoked in this image. No fixed package in Alpine v3.24 yet."
+    expired_at: 2026-10-17
+  - id: CVE-2026-78409
+    statement: "util-linux X-mount.subdir detached tree; mount is never invoked in this image. No fixed package in Alpine v3.24 yet."
+    expired_at: 2026-10-17
+  - id: CVE-2026-78410
+    statement: "util-linux restricted bind mounts do not pin the target; mount is never invoked in this image. No fixed package in Alpine v3.24 yet."
+    expired_at: 2026-10-17

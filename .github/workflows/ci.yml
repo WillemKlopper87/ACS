@@ -206,6 +206,10 @@ jobs:
       matrix:
         image: [acs-acs, acs-api, acs-bssadapter, acs-frontend]
     steps:
+      # Checkout first: it cleans the workspace, so it has to run before
+      # the images land in it. Nothing is built here — this is only for
+      # .trivyignore.yaml below.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: images
@@ -218,6 +222,9 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
           severity: HIGH,CRITICAL
+          # Every entry in here carries an expired_at, so an exception
+          # cannot quietly outlive its justification — see the file.
+          trivyignores: .trivyignore.yaml
 
   security:
     name: secrets scan
