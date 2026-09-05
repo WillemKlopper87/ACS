@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,9 +27,39 @@ const (
 	TargetGroup  = "GROUP"
 )
 
+// SchedulableJobTypes is the set cmd/api's schedule_worker.go can
+// actually dispatch — deliberately a subset of jobs.Type*, because a
+// schedule fires unattended and on repeat: a recurring REBOOT or
+// FACTORY_RESET is not something to make reachable by typing a string
+// into a request body.
+//
+// This is the source of truth for both ends. The worker's switch refuses
+// anything it doesn't recognise, so an unlisted type was never dispatched
+// — but the API used to accept one anyway, storing a schedule that shows
+// as enabled in the console, never fires, and logs an error on every tick
+// forever. Validating here makes that a 400 at creation instead.
+var SchedulableJobTypes = map[string]bool{
+	"SET_PARAMETER":      true,
+	"GET_PARAMETER":      true,
+	"DIAGNOSTICS_PING":   true,
+	"CONNECTION_REQUEST": true,
+}
+
+// SchedulableJobTypeList returns the set as a sorted slice, for error
+// messages and tests.
+func SchedulableJobTypeList() []string {
+	out := make([]string, 0, len(SchedulableJobTypes))
+	for t := range SchedulableJobTypes {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
 var (
-	ErrNotFound         = errors.New("scheduled job not found")
-	ErrIntervalTooShort = errors.New("interval_seconds must be at least 60")
+	ErrNotFound              = errors.New("scheduled job not found")
+	ErrIntervalTooShort      = errors.New("interval_seconds must be at least 60")
+	ErrJobTypeNotSchedulable = errors.New("job_type is not one a schedule can run")
 )
 
 // MinIntervalSeconds guards against an operator fat-fingering a 1-second

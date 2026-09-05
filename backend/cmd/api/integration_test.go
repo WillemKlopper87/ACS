@@ -1050,3 +1050,34 @@ func TestIntegration_OperatorDisableRequiresAdmin(t *testing.T) {
 		t.Errorf("manager disabling an operator → %d, want 403", got.code)
 	}
 }
+
+// A schedule fires unattended and on repeat, so createScheduledJob must
+// refuse a job_type the worker cannot dispatch. The worker's switch
+// already declined to run one, so nothing unlisted was ever executed —
+// but accepting it stored a schedule that reads as enabled in the
+// console, never fires, and logs an error on every tick forever.
+func TestIntegration_ScheduledJobTypeValidation(t *testing.T) {
+	e := newTestEnv(t)
+	e.operator("root", operators.RoleAdmin)
+	dev := e.device("AABBCC-SCHED-1", nil)
+
+	body := func(jobType string) map[string]any {
+		return map[string]any{
+			"name": "probe", "job_type": jobType,
+			"target_type": "DEVICE", "target_id": dev,
+			"payload":          map[string]any{"paths": []string{"Device.DeviceInfo.SoftwareVersion"}},
+			"interval_seconds": 300,
+		}
+	}
+
+	if got := e.call("root", "POST", "/api/v1/scheduled-jobs", body("GET_PARAMETER")); got.code != 201 {
+		t.Fatalf("a schedulable job_type → %d %s, want 201", got.code, got.body)
+	}
+	// Destructive one-shots are the ones that matter here.
+	for _, jobType := range []string{"FACTORY_RESET", "REBOOT", "FIRMWARE_DOWNLOAD", "NOT_A_JOB_TYPE"} {
+		got := e.call("root", "POST", "/api/v1/scheduled-jobs", body(jobType))
+		if got.code != 400 {
+			t.Errorf("job_type %s → %d, want 400 (%s)", jobType, got.code, got.body)
+		}
+	}
+}

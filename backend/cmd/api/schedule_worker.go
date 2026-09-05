@@ -99,6 +99,11 @@ func (w *scheduleWorker) fire(ctx context.Context, sj *scheduler.ScheduledJob) {
 	}
 
 	var payload any
+	// The cases below must stay in step with
+	// scheduler.SchedulableJobTypes, which is what createScheduledJob
+	// validates against — TestSchedulableJobTypesMatchWorker asserts they
+	// agree, so adding one place without the other fails the build's
+	// tests rather than silently accepting a schedule that never fires.
 	switch sj.JobType {
 	case jobs.TypeSetParameter:
 		var p jobs.SetParameterPayload

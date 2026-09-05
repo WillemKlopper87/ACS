@@ -4,7 +4,9 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"acs/internal/scheduler"
@@ -81,6 +83,17 @@ func (h *handler) createScheduledJob(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == "" || req.JobType == "" || req.TargetType == "" || req.TargetID == "" {
 		http.Error(w, "name, job_type, target_type, and target_id are required", http.StatusBadRequest)
+		return
+	}
+	// Refuse a job_type the worker cannot dispatch. Its switch already
+	// declines to run one, so nothing unlisted was ever executed — but
+	// accepting it here stored a schedule that reads as enabled in the
+	// console, never fires, and logs an error every tick for as long as
+	// it exists. Rejecting it up front is the difference between a clear
+	// 400 and a schedule that silently does nothing forever.
+	if !scheduler.SchedulableJobTypes[req.JobType] {
+		http.Error(w, fmt.Sprintf("job_type %q cannot be scheduled; supported: %s",
+			req.JobType, strings.Join(scheduler.SchedulableJobTypeList(), ", ")), http.StatusBadRequest)
 		return
 	}
 
