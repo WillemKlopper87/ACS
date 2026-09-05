@@ -221,25 +221,36 @@ export function ConfigTemplates() {
           </p>
           <form onSubmit={onCreate}>
             <div className="form-row">
-              <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required disabled={!writable} />
-              <input placeholder="Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} disabled={!writable} />
-              <select className="chip" aria-label="Customer" value={customerId} onChange={(e) => setCustomerId(e.target.value)} disabled={!writable}>
-                <option value="">Platform-wide (no customer)</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+              <label className="field">
+                <span>Name</span>
+                <input value={name} onChange={(e) => setName(e.target.value)} required disabled={!writable} />
+              </label>
+              <label className="field">
+                <span>Description (optional)</span>
+                <input value={description} onChange={(e) => setDescription(e.target.value)} disabled={!writable} />
+              </label>
+              <label className="field">
+                <span>Customer</span>
+                <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} disabled={!writable}>
+                  <option value="">Platform-wide (no customer)</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
             </div>
 
             {rows.map((row, i) => (
               <div className="form-row" key={i}>
                 <input
+                  aria-label={`Parameter ${i + 1} path`}
                   placeholder="Parameter path, e.g. Device.WiFi.SSID.1.SSID"
                   value={row.name}
                   onChange={(e) => updateRow(i, { name: e.target.value })}
                   disabled={!writable}
                 />
                 <input
+                  aria-label={`Parameter ${i + 1} value`}
                   placeholder="Value"
                   value={row.value}
                   onChange={(e) => updateRow(i, { value: e.target.value })}
@@ -267,6 +278,7 @@ export function ConfigTemplates() {
                 Auto-apply on first BOOTSTRAP to devices matching:
               </label>
               <input
+                aria-label="Auto-apply model filter"
                 placeholder="Model filter (manufacturer or product class)"
                 value={modelFilter}
                 onChange={(e) => setModelFilter(e.target.value)}
@@ -309,6 +321,7 @@ export function ConfigTemplates() {
                 </select>
                 {applyTarget === "devices" ? (
                   <input
+                    aria-label="Device IDs to apply this template to"
                     placeholder="Device IDs (comma or space separated)"
                     value={deviceIdsInput}
                     onChange={(e) => setDeviceIdsInput(e.target.value)}
@@ -316,6 +329,7 @@ export function ConfigTemplates() {
                   />
                 ) : (
                   <input
+                    aria-label="Group ID to apply this template to"
                     placeholder="Group ID"
                     value={groupIdInput}
                     onChange={(e) => setGroupIdInput(e.target.value)}

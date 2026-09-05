@@ -159,43 +159,64 @@ export function ScheduledJobs() {
         <h3>Create scheduled job</h3>
         <form onSubmit={onCreate}>
           <div className="form-row">
-            <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
-            <select className="chip" aria-label="Job type" value={jobType} onChange={(e) => setJobType(e.target.value)}>
-              {JOB_TYPES.map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
+            <label className="field">
+              <span>Name</span>
+              <input value={name} onChange={(e) => setName(e.target.value)} required />
+            </label>
+            <label className="field">
+              <span>Job type</span>
+              <select value={jobType} onChange={(e) => setJobType(e.target.value)}>
+                {JOB_TYPES.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </label>
           </div>
           <div className="form-row">
-            <select className="chip" aria-label="Target type" value={targetType} onChange={(e) => setTargetType(e.target.value as "DEVICE" | "GROUP")}>
-              <option value="DEVICE">Device</option>
-              <option value="GROUP">Group</option>
-            </select>
-            <input placeholder="Target device/group ID" value={targetId} onChange={(e) => setTargetId(e.target.value)} required />
+            <label className="field">
+              <span>Target type</span>
+              <select value={targetType} onChange={(e) => setTargetType(e.target.value as "DEVICE" | "GROUP")}>
+                <option value="DEVICE">Device</option>
+                <option value="GROUP">Group</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Target {targetType === "DEVICE" ? "device" : "group"} ID</span>
+              <input value={targetId} onChange={(e) => setTargetId(e.target.value)} required />
+            </label>
           </div>
           <div className="form-row">
-            <input
-              placeholder={jobType === "GET_PARAMETER" ? "Comma-separated parameter paths" : jobType === "DIAGNOSTICS_PING" ? "Ping host" : "(no payload needed)"}
-              value={paramPaths}
-              onChange={(e) => setParamPaths(e.target.value)}
-              disabled={jobType !== "GET_PARAMETER" && jobType !== "DIAGNOSTICS_PING"}
-            />
-            <input
-              type="number"
-              min={60}
-              placeholder="Interval (seconds)"
-              value={intervalSeconds}
-              onChange={(e) => setIntervalSeconds(Number(e.target.value))}
-              style={{ maxWidth: "10rem" }}
-            />
+            <label className="field">
+              <span>
+                {jobType === "GET_PARAMETER" ? "Parameter paths" : jobType === "DIAGNOSTICS_PING" ? "Ping host" : "Payload"}
+              </span>
+              <input
+                placeholder={jobType === "GET_PARAMETER" ? "comma-separated" : jobType === "DIAGNOSTICS_PING" ? "e.g. 8.8.8.8" : "(none needed for this job type)"}
+                value={paramPaths}
+                onChange={(e) => setParamPaths(e.target.value)}
+                disabled={jobType !== "GET_PARAMETER" && jobType !== "DIAGNOSTICS_PING"}
+              />
+            </label>
+            <label className="field" style={{ maxWidth: "10rem" }}>
+              <span>Interval (seconds)</span>
+              <input
+                type="number"
+                min={60}
+                value={intervalSeconds}
+                onChange={(e) => setIntervalSeconds(Number(e.target.value))}
+              />
+            </label>
           </div>
           <div className="form-row">
-            <select className="chip" aria-label="Customer" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-              <option value="">Platform-wide (no customer)</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+            <label className="field">
+              <span>Customer</span>
+              <select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+                <option value="">Platform-wide (no customer)</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </label>
           </div>
           {createError && <div className="banner error" style={{ marginTop: "0.6rem" }}>{createError}</div>}
           <div className="form-row">

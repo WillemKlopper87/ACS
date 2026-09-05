@@ -211,7 +211,12 @@ export function Dashboard() {
           {widgets.map((w, i) => (
             <div key={w.id} className="param-row">
               <span className="path" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <input type="checkbox" checked={w.enabled} onChange={() => toggleWidget(w.id)} />
+                <input
+                  type="checkbox"
+                  aria-label={`Show the ${WIDGET_TITLE[w.id] ?? w.id} widget`}
+                  checked={w.enabled}
+                  onChange={() => toggleWidget(w.id)}
+                />
                 {WIDGET_TITLE[w.id] ?? w.id}
               </span>
               <span style={{ display: "flex", gap: "0.3rem" }}>

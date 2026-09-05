@@ -193,14 +193,26 @@ export function FirmwareRollouts() {
             />
           </div>
           <div className="form-row">
-            <input placeholder="Vendor" value={uploadVendor} onChange={(e) => setUploadVendor(e.target.value)} disabled={uploading || !writable} required />
-            <input placeholder="Model" value={uploadModel} onChange={(e) => setUploadModel(e.target.value)} disabled={uploading || !writable} required />
-            <input placeholder="Version" value={uploadVersion} onChange={(e) => setUploadVersion(e.target.value)} disabled={uploading || !writable} required />
-            <select className="chip" aria-label="Release channel" value={uploadChannel} onChange={(e) => setUploadChannel(e.target.value)} disabled={uploading || !writable}>
-              <option value="stable">stable</option>
-              <option value="beta">beta</option>
-              <option value="canary">canary</option>
-            </select>
+            <label className="field">
+              <span>Vendor</span>
+              <input value={uploadVendor} onChange={(e) => setUploadVendor(e.target.value)} disabled={uploading || !writable} required />
+            </label>
+            <label className="field">
+              <span>Model</span>
+              <input value={uploadModel} onChange={(e) => setUploadModel(e.target.value)} disabled={uploading || !writable} required />
+            </label>
+            <label className="field">
+              <span>Version</span>
+              <input value={uploadVersion} onChange={(e) => setUploadVersion(e.target.value)} disabled={uploading || !writable} required />
+            </label>
+            <label className="field">
+              <span>Release channel</span>
+              <select value={uploadChannel} onChange={(e) => setUploadChannel(e.target.value)} disabled={uploading || !writable}>
+                <option value="stable">stable</option>
+                <option value="beta">beta</option>
+                <option value="canary">canary</option>
+              </select>
+            </label>
           </div>
           {uploadError && <div className="banner error" style={{ marginTop: "0.6rem" }}>{uploadError}</div>}
           <div className="form-row">
@@ -216,15 +228,21 @@ export function FirmwareRollouts() {
           <h3>Create canary rollout</h3>
           <form onSubmit={onCreate}>
             <div className="form-row">
-              <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
-              <select className="chip" aria-label="Firmware image" value={imageId} onChange={(e) => setImageId(e.target.value)} required>
-                {images.length === 0 && <option value="">No firmware images</option>}
-                {images.map((img) => (
-                  <option key={img.id} value={img.id}>
-                    {img.vendor} {img.model} v{img.version}
-                  </option>
-                ))}
-              </select>
+              <label className="field">
+                <span>Name</span>
+                <input value={name} onChange={(e) => setName(e.target.value)} required />
+              </label>
+              <label className="field">
+                <span>Firmware image</span>
+                <select value={imageId} onChange={(e) => setImageId(e.target.value)} required>
+                  {images.length === 0 && <option value="">No firmware images</option>}
+                  {images.map((img) => (
+                    <option key={img.id} value={img.id}>
+                      {img.vendor} {img.model} v{img.version}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
             <div className="form-row">
               <label className="dim" style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.8rem", flex: 1 }}>
@@ -240,15 +258,21 @@ export function FirmwareRollouts() {
               </label>
             </div>
             <div className="form-row">
-              <input placeholder="Model filter (manufacturer/product class, optional)" value={modelFilter} onChange={(e) => setModelFilter(e.target.value)} />
+              <label className="field">
+                <span>Model filter (optional)</span>
+                <input placeholder="manufacturer or product class" value={modelFilter} onChange={(e) => setModelFilter(e.target.value)} />
+              </label>
             </div>
             <div className="form-row">
-              <select className="chip" aria-label="Customer" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-                <option value="">Platform-wide (no customer)</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+              <label className="field">
+                <span>Customer</span>
+                <select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+                  <option value="">Platform-wide (no customer)</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
             </div>
             <div className="form-row">
               <label className="dim" style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.8rem" }}>

@@ -178,10 +178,10 @@ export function RemoteShell({ id, writable }: { id: string; writable: boolean })
             <option value="SSH">SSH</option>
             <option value="TELNET">TELNET</option>
           </select>
-          <input placeholder="Host / IP" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} />
-          <input type="number" placeholder="Port" value={form.port} onChange={(e) => setForm({ ...form, port: Number(e.target.value) })} style={{ maxWidth: "6rem" }} />
-          <input placeholder="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-          <input type="password" placeholder="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          <input aria-label="Host / IP" placeholder="Host / IP" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} />
+          <input aria-label="Port" type="number" placeholder="Port" value={form.port} onChange={(e) => setForm({ ...form, port: Number(e.target.value) })} style={{ maxWidth: "6rem" }} />
+          <input aria-label="Username" placeholder="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+          <input aria-label="Password" type="password" placeholder="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
           <button className="btn primary" onClick={handleCreateCredential}>
             Save
           </button>

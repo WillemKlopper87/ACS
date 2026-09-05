@@ -248,9 +248,9 @@ export function BSSIntegration() {
               Workflow A. <code>oui_serial</code> must belong to a device that has already sent at least one Inform.
             </p>
             <form onSubmit={createMapping} className="form-row" style={{ flexWrap: "wrap" }}>
-              <input placeholder="account_id" value={mappingAccountId} onChange={(e) => setMappingAccountId(e.target.value)} required />
-              <input placeholder="oui_serial" value={mappingOuiSerial} onChange={(e) => setMappingOuiSerial(e.target.value)} required />
-              <input placeholder="service_plan (optional)" value={mappingServicePlan} onChange={(e) => setMappingServicePlan(e.target.value)} />
+              <input aria-label="account_id" placeholder="account_id" value={mappingAccountId} onChange={(e) => setMappingAccountId(e.target.value)} required />
+              <input aria-label="oui_serial" placeholder="oui_serial" value={mappingOuiSerial} onChange={(e) => setMappingOuiSerial(e.target.value)} required />
+              <input aria-label="service_plan (optional)" placeholder="service_plan (optional)" value={mappingServicePlan} onChange={(e) => setMappingServicePlan(e.target.value)} />
               <button type="submit" className="btn primary">Create</button>
             </form>
             {mappings.length === 0 ? (
@@ -274,9 +274,9 @@ export function BSSIntegration() {
               JOB_COMPLETED delivery targets. Leave account_id blank for a fleet-wide subscription.
             </p>
             <form onSubmit={createWebhook} className="form-row" style={{ flexWrap: "wrap" }}>
-              <input placeholder="account_id (optional)" value={webhookAccountId} onChange={(e) => setWebhookAccountId(e.target.value)} />
-              <input placeholder="https://target-url" value={webhookTargetUrl} onChange={(e) => setWebhookTargetUrl(e.target.value)} required />
-              <input placeholder="HMAC secret" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} required />
+              <input aria-label="account_id (optional)" placeholder="account_id (optional)" value={webhookAccountId} onChange={(e) => setWebhookAccountId(e.target.value)} />
+              <input aria-label="https://target-url" placeholder="https://target-url" value={webhookTargetUrl} onChange={(e) => setWebhookTargetUrl(e.target.value)} required />
+              <input aria-label="HMAC secret" placeholder="HMAC secret" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} required />
               <button type="submit" className="btn primary">Create</button>
             </form>
             {webhooks.length === 0 ? (
@@ -303,7 +303,7 @@ export function BSSIntegration() {
               after creation — copy it now, it can't be retrieved again.
             </p>
             <form onSubmit={createOAuthClient} className="form-row" style={{ flexWrap: "wrap" }}>
-              <input placeholder="Integration name, e.g. Salesforce Comm Cloud" value={oauthClientName} onChange={(e) => setOauthClientName(e.target.value)} required />
+              <input aria-label="Integration name, e.g. Salesforce Comm Cloud" placeholder="Integration name, e.g. Salesforce Comm Cloud" value={oauthClientName} onChange={(e) => setOauthClientName(e.target.value)} required />
               <button type="submit" className="btn primary">Register</button>
             </form>
             {newClientSecret && (
@@ -441,7 +441,7 @@ export function BSSIntegration() {
           <div className="panel">
             <h3>Mapping lookup (Workflow A)</h3>
             <form onSubmit={runMappingLookup} className="form-row" style={{ flexWrap: "wrap" }}>
-              <input placeholder="account_id" value={lookupAccountId} onChange={(e) => setLookupAccountId(e.target.value)} required />
+              <input aria-label="account_id" placeholder="account_id" value={lookupAccountId} onChange={(e) => setLookupAccountId(e.target.value)} required />
               <button type="submit" className="btn primary" disabled={running === "lookup"}>{running === "lookup" ? "Running…" : "Run"}</button>
             </form>
             {lookupResult && <ResultCard result={lookupResult} />}
@@ -450,7 +450,7 @@ export function BSSIntegration() {
           <div className="panel">
             <h3>Job status lookup (Workflow C)</h3>
             <form onSubmit={runJobStatus} className="form-row" style={{ flexWrap: "wrap" }}>
-              <input placeholder="command_key" value={commandKey} onChange={(e) => setCommandKey(e.target.value)} required />
+              <input aria-label="command_key" placeholder="command_key" value={commandKey} onChange={(e) => setCommandKey(e.target.value)} required />
               <button type="submit" className="btn primary" disabled={running === "job"}>{running === "job" ? "Running…" : "Run"}</button>
             </form>
             {jobResult && <ResultCard result={jobResult} />}
@@ -462,9 +462,9 @@ export function BSSIntegration() {
               This is a real order — it queues a genuine MODIFY_WIFI job against the account's mapped device, not a dry run.
             </p>
             <form onSubmit={runOrderDispatch} className="form-row" style={{ flexWrap: "wrap" }}>
-              <input placeholder="external_order_id" value={orderId} onChange={(e) => setOrderId(e.target.value)} required />
-              <input placeholder="account_id" value={orderAccountId} onChange={(e) => setOrderAccountId(e.target.value)} required />
-              <input placeholder="wifi_ssid" value={orderSsid} onChange={(e) => setOrderSsid(e.target.value)} required />
+              <input aria-label="external_order_id" placeholder="external_order_id" value={orderId} onChange={(e) => setOrderId(e.target.value)} required />
+              <input aria-label="account_id" placeholder="account_id" value={orderAccountId} onChange={(e) => setOrderAccountId(e.target.value)} required />
+              <input aria-label="wifi_ssid" placeholder="wifi_ssid" value={orderSsid} onChange={(e) => setOrderSsid(e.target.value)} required />
               <button type="submit" className="btn primary" disabled={running === "order"}>{running === "order" ? "Running…" : "Send order"}</button>
             </form>
             {orderResult && <ResultCard result={orderResult} />}

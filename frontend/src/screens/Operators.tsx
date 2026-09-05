@@ -303,21 +303,32 @@ export function Operators() {
         </p>
         <form onSubmit={onCreate}>
           <div className="form-row">
-            <input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} required autoComplete="off" />
-            <input placeholder="Email (optional)" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
-            <input
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="new-password"
-            />
-            <select className="chip" aria-label="Role" value={newRole} onChange={(e) => setNewRole(e.target.value as Role)}>
-              {ROLES.map((r) => (
-                <option key={r} value={r}>{r}</option>
-              ))}
-            </select>
+            <label className="field">
+              <span>Username</span>
+              <input value={username} onChange={(e) => setUsername(e.target.value)} required autoComplete="off" />
+            </label>
+            <label className="field">
+              <span>Email (optional)</span>
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
+            </label>
+            <label className="field">
+              <span>Password</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="new-password"
+              />
+            </label>
+            <label className="field">
+              <span>Role</span>
+              <select value={newRole} onChange={(e) => setNewRole(e.target.value as Role)}>
+                {ROLES.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+            </label>
           </div>
           {createError && <div className="banner error" style={{ marginTop: "0.6rem" }}>{createError}</div>}
           <div className="form-row">
@@ -336,7 +347,7 @@ export function Operators() {
           </h3>
           <form onSubmit={onResetPassword}>
             <div className="form-row" style={{ marginTop: 0 }}>
-              <input
+              <input aria-label="New password (min 8 characters)"
                 type="password"
                 placeholder="New password (min 8 characters)"
                 value={resetPassword}
@@ -438,7 +449,12 @@ export function Operators() {
                     const granted = matrix.matrix[r]?.[perm] ?? false;
                     return (
                       <td key={r} style={{ textAlign: "center" }}>
-                        <input type="checkbox" checked={granted} onChange={() => togglePermission(r, perm, granted)} />
+                        <input
+                          type="checkbox"
+                          aria-label={`${PERMISSION_LABEL[perm]} — ${r}`}
+                          checked={granted}
+                          onChange={() => togglePermission(r, perm, granted)}
+                        />
                       </td>
                     );
                   })}

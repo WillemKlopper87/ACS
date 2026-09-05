@@ -91,7 +91,7 @@ export function AuditLog() {
             <circle cx="11" cy="11" r="7" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <input placeholder="Filter by actor, device, details…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input aria-label="Filter by actor, device, details" placeholder="Filter by actor, device, details…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <select className="chip" aria-label="Filter by action" value={actionFilter} onChange={(e) => setActionFilter(e.target.value)}>
           <option value="">All actions</option>

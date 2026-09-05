@@ -119,7 +119,10 @@ export function Tenancy() {
         <div className="panel">
           <h3>Regions</h3>
           <form onSubmit={createRegion} className="form-row" style={{ marginTop: 0 }}>
-            <input placeholder="Region name" value={regionName} onChange={(e) => setRegionName(e.target.value)} required />
+            <label className="field">
+              <span>Region name</span>
+              <input value={regionName} onChange={(e) => setRegionName(e.target.value)} required />
+            </label>
             <button type="submit" className="btn primary">Add</button>
           </form>
           {regions.length === 0 ? (
@@ -139,13 +142,19 @@ export function Tenancy() {
         <div className="panel">
           <h3>Customers (ISPs)</h3>
           <form onSubmit={createCustomer} className="form-row" style={{ marginTop: 0, flexWrap: "wrap" }}>
-            <input placeholder="Customer name" value={customerName} onChange={(e) => setCustomerName(e.target.value)} required />
-            <select className="chip" aria-label="Region" value={customerRegion} onChange={(e) => setCustomerRegion(e.target.value)}>
-              <option value="">No region</option>
-              {regions.map((r) => (
-                <option key={r.id} value={r.id}>{r.name}</option>
-              ))}
-            </select>
+            <label className="field">
+              <span>Customer name</span>
+              <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} required />
+            </label>
+            <label className="field">
+              <span>Region</span>
+              <select value={customerRegion} onChange={(e) => setCustomerRegion(e.target.value)}>
+                <option value="">No region</option>
+                {regions.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name}</option>
+                ))}
+              </select>
+            </label>
             <button type="submit" className="btn primary">Add</button>
           </form>
           {customers.length === 0 ? (
@@ -168,8 +177,14 @@ export function Tenancy() {
             Cross-cutting tags — a device can belong to several, independent of its customer/region.
           </p>
           <form onSubmit={createProject} className="form-row" style={{ marginTop: 0, flexWrap: "wrap" }}>
-            <input placeholder="Project name" value={projectName} onChange={(e) => setProjectName(e.target.value)} required />
-            <input placeholder="Description (optional)" value={projectDesc} onChange={(e) => setProjectDesc(e.target.value)} />
+            <label className="field">
+              <span>Project name</span>
+              <input value={projectName} onChange={(e) => setProjectName(e.target.value)} required />
+            </label>
+            <label className="field">
+              <span>Description (optional)</span>
+              <input value={projectDesc} onChange={(e) => setProjectDesc(e.target.value)} />
+            </label>
             <button type="submit" className="btn primary">Add</button>
           </form>
           {projects.length === 0 ? (
@@ -205,6 +220,7 @@ export function Tenancy() {
               </button>
             </div>
             <textarea
+              aria-label="Device import data"
               value={importBody}
               onChange={(e) => setImportBody(e.target.value)}
               rows={6}

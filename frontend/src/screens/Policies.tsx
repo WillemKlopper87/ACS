@@ -144,20 +144,35 @@ export function Policies() {
         </p>
         <form onSubmit={onCreate}>
           <div className="form-row">
-            <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
-            <input placeholder="Model filter (manufacturer/product class, optional)" value={modelFilter} onChange={(e) => setModelFilter(e.target.value)} />
+            <label className="field">
+              <span>Name</span>
+              <input value={name} onChange={(e) => setName(e.target.value)} required />
+            </label>
+            <label className="field">
+              <span>Model filter (optional)</span>
+              <input placeholder="manufacturer or product class" value={modelFilter} onChange={(e) => setModelFilter(e.target.value)} />
+            </label>
           </div>
           <div className="form-row">
-            <input placeholder="Parameter name (e.g. Device.WiFi.SSID.1.SSID)" value={parameterName} onChange={(e) => setParameterName(e.target.value)} required />
-            <input placeholder="Desired value" value={desiredValue} onChange={(e) => setDesiredValue(e.target.value)} required />
+            <label className="field">
+              <span>Parameter name</span>
+              <input placeholder="e.g. Device.WiFi.SSID.1.SSID" value={parameterName} onChange={(e) => setParameterName(e.target.value)} required />
+            </label>
+            <label className="field">
+              <span>Desired value</span>
+              <input value={desiredValue} onChange={(e) => setDesiredValue(e.target.value)} required />
+            </label>
           </div>
           <div className="form-row">
-            <select className="chip" aria-label="Customer" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-              <option value="">Platform-wide (no customer)</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+            <label className="field">
+              <span>Customer</span>
+              <select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+                <option value="">Platform-wide (no customer)</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </label>
           </div>
           {createError && <div className="banner error" style={{ marginTop: "0.6rem" }}>{createError}</div>}
           <div className="form-row">

@@ -169,18 +169,27 @@ export function DeviceGroups() {
           <h3>Create group</h3>
           <form onSubmit={onCreate}>
             <div className="form-row">
-              <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
+              <label className="field">
+                <span>Name</span>
+                <input value={name} onChange={(e) => setName(e.target.value)} required />
+              </label>
             </div>
             <div className="form-row">
-              <input placeholder="Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+              <label className="field">
+                <span>Description (optional)</span>
+                <input value={description} onChange={(e) => setDescription(e.target.value)} />
+              </label>
             </div>
             <div className="form-row">
-              <select className="chip" aria-label="Customer" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-                <option value="">Platform-wide (no customer)</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+              <label className="field">
+                <span>Customer</span>
+                <select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+                  <option value="">Platform-wide (no customer)</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
             </div>
             {createError && <div className="banner error" style={{ marginTop: "0.6rem" }}>{createError}</div>}
             <div className="form-row">
@@ -203,7 +212,7 @@ export function DeviceGroups() {
           {selected ? (
             <>
               <div className="form-row">
-                <input
+                <input aria-label="Device IDs (comma or space separated)"
                   placeholder="Device IDs (comma or space separated)"
                   value={memberInput}
                   onChange={(e) => setMemberInput(e.target.value)}

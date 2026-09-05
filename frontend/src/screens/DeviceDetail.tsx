@@ -390,7 +390,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
         </div>
 
         <div className="form-row">
-          <input
+          <input aria-label="New WiFi SSID"
             placeholder="New WiFi SSID…"
             value={ssidInput}
             onChange={(e) => setSsidInput(e.target.value)}
@@ -404,6 +404,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
         <div className="form-row">
           <input
             type="number"
+            aria-label="Schedule inform delay (seconds)"
             min={60}
             value={scheduleDelay}
             onChange={(e) => setScheduleDelay(Number(e.target.value))}
@@ -421,7 +422,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
         </div>
 
         <div className="form-row">
-          <input
+          <input aria-label="Tags (comma-separated)"
             placeholder="Tags (comma-separated)"
             value={tagsInput}
             onChange={(e) => {
@@ -436,7 +437,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
         </div>
 
         <div className="form-row">
-          <input
+          <input aria-label="Location (e.g. Rack 4, POP-West)"
             placeholder="Location (e.g. Rack 4, POP-West)"
             value={locationInput}
             onChange={(e) => {
@@ -553,7 +554,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       <div className="panel">
         <h3>Diagnostics</h3>
         <div className="form-row" style={{ marginTop: 0 }}>
-          <input
+          <input aria-label="Ping host (e.g. 8.8.8.8)"
             placeholder="Ping host (e.g. 8.8.8.8)"
             value={pingHost}
             onChange={(e) => setPingHost(e.target.value)}
@@ -564,7 +565,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
           </button>
         </div>
         <div className="form-row">
-          <input
+          <input aria-label="Traceroute host"
             placeholder="Traceroute host"
             value={tracerouteHost}
             onChange={(e) => setTracerouteHost(e.target.value)}
@@ -587,7 +588,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       <div className="panel">
         <h3>Object management</h3>
         <div className="form-row" style={{ marginTop: 0 }}>
-          <input
+          <input aria-label="Object path, e.g. Device.WiFi.SSID"
             placeholder="Object path, e.g. Device.WiFi.SSID."
             value={objectPath}
             onChange={(e) => setObjectPath(e.target.value)}
@@ -608,7 +609,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       <div className="panel">
         <h3>Parameter attributes</h3>
         <div className="form-row" style={{ marginTop: 0 }}>
-          <input
+          <input aria-label="Parameter path to set, e.g. Device.DeviceInfo.SoftwareVersion"
             placeholder="Parameter path to set, e.g. Device.DeviceInfo.SoftwareVersion"
             value={attrSetPath}
             onChange={(e) => setAttrSetPath(e.target.value)}
@@ -630,7 +631,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
           </button>
         </div>
         <div className="form-row">
-          <input
+          <input aria-label="Paths to read, comma-separated"
             placeholder="Paths to read, comma-separated"
             value={attrGetPaths}
             onChange={(e) => setAttrGetPaths(e.target.value)}

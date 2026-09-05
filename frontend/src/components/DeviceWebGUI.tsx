@@ -91,9 +91,9 @@ export function DeviceWebGUI({ id, writable }: { id: string; writable: boolean }
 
       {showForm && (
         <div className="form-row" style={{ marginTop: 0, flexWrap: "wrap" }}>
-          <input placeholder="Base URL, e.g. http://192.168.1.1" value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} style={{ minWidth: "14rem" }} />
-          <input placeholder="Username (optional)" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-          <input type="password" placeholder="Password (optional)" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          <input aria-label="Base URL, e.g. http://192.168.1.1" placeholder="Base URL, e.g. http://192.168.1.1" value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} style={{ minWidth: "14rem" }} />
+          <input aria-label="Username (optional)" placeholder="Username (optional)" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+          <input aria-label="Password (optional)" type="password" placeholder="Password (optional)" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
           <button className="btn primary" onClick={handleSave}>
             Save
           </button>

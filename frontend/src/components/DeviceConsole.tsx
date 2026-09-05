@@ -235,6 +235,7 @@ export function DeviceConsole({ id, writable }: { id: string; writable: boolean 
       {mode === "command" ? (
         <div className="form-row">
           <input
+            aria-label="Device console command"
             placeholder='Type a command — try "help"'
             value={input}
             disabled={busy || !writable}
@@ -282,6 +283,7 @@ export function DeviceConsole({ id, writable }: { id: string; writable: boolean 
             </button>
           </div>
           <textarea
+            aria-label="Raw CWMP JSON body"
             value={rawBody}
             disabled={busy || !writable}
             onChange={(e) => setRawBody(e.target.value)}

@@ -292,7 +292,7 @@ export function FleetControl() {
             <circle cx="11" cy="11" r="7" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <input ref={searchRef} placeholder="Filter this page… (press /)" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input aria-label="Filter this page" ref={searchRef} placeholder="Filter this page… (press /)" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         {hasActiveFilter && matchCount !== null && (
           <button className="btn" disabled={selectingAll || matchCount === 0} onClick={selectAllMatching}>
@@ -351,7 +351,7 @@ export function FleetControl() {
               <option value="APPLY_TEMPLATE">Apply config template</option>
             </select>
             {actionType === "SET_PARAMETER" && (
-              <input
+              <input aria-label="New SSID"
                 placeholder="New SSID…"
                 value={ssidValue}
                 onChange={(e) => setSsidValue(e.target.value)}

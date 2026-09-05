@@ -134,7 +134,7 @@ The token system itself is sound (four themes, consistent naming, real
   target is a bare `div` `onClick`.
 - [x] **P3.5 — Error toasts auto-dismiss after 4.2s** regardless of severity
   (`lib/toast.ts:27`).
-- [ ] **P3.6 — Placeholder-as-label throughout the create forms** — no accessible
+- [x] **P3.6 — Placeholder-as-label throughout the create forms** — no accessible
   name, and the text vanishes once the field has content.
 
 ## P4 — quality
