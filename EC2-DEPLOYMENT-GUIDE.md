@@ -624,7 +624,11 @@ sudo systemctl restart nginx  # or restart your HTTP server
 Before going to production:
 
 - [ ] Enable TLS on CWMP (set `ACS_TLS_CERT` and `ACS_TLS_KEY` to valid certificates — Let's Encrypt works)
-- [ ] Enable JWT signing (`ACS_JWT_SIGNING_SECRET` is set)
+- [x] JWT signing (`ACS_JWT_SIGNING_SECRET`, min 32 bytes) — no longer a
+      pre-production step: `cmd/api` refuses to start without it, so if the
+      service is running at all this is already satisfied. The only way past
+      it is the explicit `ACS_INSECURE_DEV_MODE=true` escape hatch, which must
+      never be set on a public host.
 - [ ] **If running `cmd/bssadapter`, set `ACS_INTERNAL_SERVICE_TOKEN`** — the same value on both `cmd/api` and `cmd/bssadapter`. Enabling `ACS_JWT_SIGNING_SECRET` (above) without this breaks BSS order dispatch and job-status lookups with `401`s the moment bssadapter calls back into the API — both processes log a `WARN` at startup if this is unset, easy to miss if you're not watching logs on first deploy.
 - [ ] If running `cmd/bssadapter` for real BSS/CRM integrations, set `ACS_BSS_OAUTH_SIGNING_SECRET` and move integrations onto OAuth2 client-credentials (`bss-integration-guide.md` §3) rather than the legacy shared `ACS_BSS_API_TOKEN`
 - [ ] Enable credential encryption (`ACS_CREDENTIAL_ENCRYPTION_KEY` is set) — this also covers device CLI/SSH credentials and VPN peer private keys, not just Connection Request credentials

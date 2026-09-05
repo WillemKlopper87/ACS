@@ -16,10 +16,10 @@ frontend:
 |---|---|---|---|---|
 | CWMP gateway | `cmd/acs` | `:7547` (HTTP/HTTPS) | CWMP/SOAP | the CPE (outbound Inform) |
 | STUN server | `cmd/acs` (same process) | `:3478` (UDP) | RFC 5389 STUN | the CPE's STUN client, if enabled |
-| REST API | `cmd/api` | `:8080` | HTTPS/JSON | the console (frontend), and operator tooling |
+| REST API | `cmd/api` | `:8080` | HTTP/JSON (put a TLS proxy in front) | the console (frontend), and operator tooling |
 | BSS adapter | `cmd/bssadapter` | `ACS_BSS_ADDR` | HTTP/JSON | your external BSS, if wired up — not required for device testing |
-| Console | `frontend` (Vite) | `:5173` dev / static build | HTTPS | you, in a browser |
-| Database | Postgres 16 | `:5432` | — | `cmd/acs`, `cmd/api` |
+| Console | `frontend` (Vite) | `:5173` dev / static build | HTTP (put a TLS proxy in front) | you, in a browser |
+| Database | Postgres 18 | `:5432` | — | `cmd/acs`, `cmd/api` |
 
 By default only Postgres/Prometheus/Grafana run in Docker
 (`infra/docker-compose.yml`); `cmd/acs`, `cmd/api`, `cmd/bssadapter` run

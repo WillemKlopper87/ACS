@@ -15,10 +15,11 @@ function AuthCard({ children }: { children: React.ReactNode }) {
   );
 }
 
-// No router in this app — the emailed reset link is just
-// "<frontend>/?token=..." (see cmd/api's ACS_FRONTEND_BASE_URL), and this
-// component checks for that query param itself rather than pulling in a
-// routing dependency for one page.
+// The emailed reset link is just "<frontend>/?token=..." (see cmd/api's
+// ACS_FRONTEND_BASE_URL) — a query param on whatever path the console is
+// served from, not a route of its own. So this component reads it
+// directly rather than adding a route for one page. (The app does use
+// react-router elsewhere; it just isn't involved here.)
 function ResetPasswordForm({ token }: { token: string }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");

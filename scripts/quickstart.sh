@@ -37,7 +37,9 @@ fi
 REPO_URL="${REPO_URL:-https://github.com/WillemKlopper87/ACS.git}"
 GIT_REF="${GIT_REF:-main}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/ACS}"
-GO_VERSION="${GO_VERSION:-1.26.5}"
+# Must match the `go` line in backend/go.mod. Step 5 re-checks this
+# against the cloned tree and says so if they have drifted.
+GO_VERSION="${GO_VERSION:-1.26.6}"
 
 case "$(uname -m)" in
   x86_64) GO_ARCH=amd64 ;;
@@ -64,7 +66,7 @@ sudo apt-get install -y \
 
 echo ""
 echo "=== 2/6: Go $GO_VERSION ==="
-# go.mod pins a specific version (currently 1.26.5) — install that exact
+# go.mod pins a specific version — install that exact
 # toolchain rather than an older "1.22+" minimum. Go's automatic toolchain
 # switching (GOTOOLCHAIN=auto, the default since 1.21) *would* fetch the
 # right version on first build even if this installed an older one, but
@@ -84,11 +86,14 @@ grep -q '/usr/local/go/bin' ~/.bashrc || echo 'export PATH=$PATH:/usr/local/go/b
 export PATH="$PATH:/usr/local/go/bin"
 
 echo ""
-echo "=== 3/6: Node.js 20 LTS ==="
-if command -v node >/dev/null && [ "$(node --version | cut -d. -f1)" = "v20" ]; then
-  echo "Node 20 already installed, skipping."
+# 22, matching .github/workflows/ci.yml and frontend/Dockerfile — a
+# local build on a different major than CI is a needless source of
+# "works here, fails there".
+echo "=== 3/6: Node.js 22 LTS ==="
+if command -v node >/dev/null && [ "$(node --version | cut -d. -f1)" = "v22" ]; then
+  echo "Node 22 already installed, skipping."
 else
-  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
   sudo apt-get install -y nodejs
 fi
 
@@ -117,6 +122,19 @@ else
   git clone --branch "$GIT_REF" "$REPO_URL" "$INSTALL_DIR"
 fi
 chmod +x "$INSTALL_DIR"/scripts/*.sh
+
+# GO_VERSION above is a literal, because Go has to be installed before the
+# repo is cloned. Now that go.mod is on disk, say so if it has moved on —
+# this pin had silently drifted from go.mod once already, and the symptom
+# (a second toolchain downloaded on first build) is easy to miss.
+GOMOD_GO="$(awk '/^go /{print $2; exit}' "$INSTALL_DIR/backend/go.mod" 2>/dev/null || true)"
+if [ -n "$GOMOD_GO" ] && [ "$GOMOD_GO" != "$GO_VERSION" ]; then
+  echo ""
+  echo "NOTE: this script installed Go $GO_VERSION, but backend/go.mod asks for $GOMOD_GO."
+  echo "      The build still works — GOTOOLCHAIN=auto fetches $GOMOD_GO on demand — but the"
+  echo "      first 'go build' will download a second toolchain. Update GO_VERSION in this"
+  echo "      script to $GOMOD_GO to avoid that."
+fi
 
 echo ""
 echo "=== 6/6: Build and start the stack ==="
