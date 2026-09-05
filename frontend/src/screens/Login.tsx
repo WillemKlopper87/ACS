@@ -2,20 +2,11 @@ import { useState, type FormEvent } from "react";
 import { useAuth } from "../auth/useAuth";
 import { api, ApiError } from "../api/client";
 
-const fieldStyle = {
-  background: "var(--surface-2)",
-  border: "1px solid var(--border)",
-  borderRadius: 6,
-  padding: "0.5rem 0.6rem",
-  color: "var(--ink)",
-  fontSize: "0.88rem",
-} as const;
-
 function AuthCard({ children }: { children: React.ReactNode }) {
   return (
-    <main aria-labelledby="auth-heading" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)" }}>
-      <div className="panel" style={{ width: "22rem", display: "flex", flexDirection: "column", gap: "0.9rem" }}>
-        <h1 id="auth-heading" style={{ display: "flex", alignItems: "baseline", gap: "0.5rem", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "1rem", margin: 0 }}>
+    <main aria-labelledby="auth-heading" className="auth-shell">
+      <div className="panel auth-card">
+        <h1 id="auth-heading">
           <span style={{ color: "var(--accent)" }}>●</span> ACS<span style={{ color: "var(--ink-faint)" }}>/</span>console
         </h1>
         {children}
@@ -60,7 +51,7 @@ function ResetPasswordForm({ token }: { token: string }) {
   if (done) {
     return (
       <AuthCard>
-        <p style={{ margin: 0, color: "var(--ink-dim)", fontSize: "0.85rem" }}>
+        <p className="auth-note">
           Password reset. <a href={window.location.pathname}>Sign in</a> with your new password.
         </p>
       </AuthCard>
@@ -69,21 +60,17 @@ function ResetPasswordForm({ token }: { token: string }) {
 
   return (
     <AuthCard>
-      <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}>
-        <p style={{ margin: 0, color: "var(--ink-dim)", fontSize: "0.85rem" }}>Choose a new password.</p>
-        <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-          <span style={{ fontSize: "0.75rem", color: "var(--ink-dim)" }}>New password</span>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus autoComplete="new-password" style={fieldStyle} />
+      <form onSubmit={onSubmit}>
+        <p className="auth-note">Choose a new password.</p>
+        <label className="field">
+          <span>New password</span>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus autoComplete="new-password" />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-          <span style={{ fontSize: "0.75rem", color: "var(--ink-dim)" }}>Confirm password</span>
-          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" style={fieldStyle} />
+        <label className="field">
+          <span>Confirm password</span>
+          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" />
         </label>
-        {error && (
-          <div style={{ color: "var(--danger)", fontSize: "0.82rem", background: "var(--danger-bg)", borderRadius: 6, padding: "0.5rem 0.6rem" }}>
-            {error}
-          </div>
-        )}
+        {error && <div className="banner error" style={{ marginBottom: 0 }}>{error}</div>}
         <button type="submit" className="btn primary" disabled={submitting || !password || !confirm}>
           {submitting ? "Resetting…" : "Reset password"}
         </button>
@@ -114,7 +101,7 @@ function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
   if (sent) {
     return (
       <AuthCard>
-        <p style={{ margin: 0, color: "var(--ink-dim)", fontSize: "0.85rem" }}>
+        <p className="auth-note">
           If an account with that username has an email on file, a reset link has been sent. It expires in 4 hours.
         </p>
         <button className="btn" onClick={onBack}>Back to sign in</button>
@@ -124,11 +111,11 @@ function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
 
   return (
     <AuthCard>
-      <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}>
-        <p style={{ margin: 0, color: "var(--ink-dim)", fontSize: "0.85rem" }}>Enter your username to receive a reset link by email.</p>
-        <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-          <span style={{ fontSize: "0.75rem", color: "var(--ink-dim)" }}>Username</span>
-          <input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" style={fieldStyle} />
+      <form onSubmit={onSubmit}>
+        <p className="auth-note">Enter your username to receive a reset link by email.</p>
+        <label className="field">
+          <span>Username</span>
+          <input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" />
         </label>
         <button type="submit" className="btn primary" disabled={submitting || !username}>
           {submitting ? "Sending…" : "Send reset link"}
@@ -166,29 +153,25 @@ export function Login() {
 
   return (
     <AuthCard>
-      <form onSubmit={onSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}>
-        <p style={{ margin: 0, color: "var(--ink-dim)", fontSize: "0.85rem" }}>Sign in to continue.</p>
+      <form onSubmit={onSubmit}>
+        <p className="auth-note">Sign in to continue.</p>
 
-        <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-          <span style={{ fontSize: "0.75rem", color: "var(--ink-dim)" }}>Username</span>
-          <input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" style={fieldStyle} />
+        <label className="field">
+          <span>Username</span>
+          <input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" />
         </label>
 
-        <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-          <span style={{ fontSize: "0.75rem", color: "var(--ink-dim)" }}>Password</span>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" style={fieldStyle} />
+        <label className="field">
+          <span>Password</span>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
         </label>
 
-        {error && (
-          <div style={{ color: "var(--danger)", fontSize: "0.82rem", background: "var(--danger-bg)", borderRadius: 6, padding: "0.5rem 0.6rem" }}>
-            {error}
-          </div>
-        )}
+        {error && <div className="banner error" style={{ marginBottom: 0 }}>{error}</div>}
 
         <button type="submit" className="btn primary" disabled={submitting || !username || !password}>
           {submitting ? "Signing in…" : "Sign in"}
         </button>
-        <button type="button" className="btn" style={{ fontSize: "0.78rem" }} onClick={() => setForgotPassword(true)}>
+        <button type="button" className="btn" onClick={() => setForgotPassword(true)}>
           Forgot password?
         </button>
       </form>

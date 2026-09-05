@@ -114,7 +114,7 @@ The token system itself is sound (four themes, consistent naming, real
 - [x] **P2.7 — Raw enum strings are shown to users** (`HTTP_200_INFORM_RECEIVED`,
   `PERIODIC_FALLBACK_ONLY`, `LEASE_EXPIRED_UNSAFE_RETRY`). Add a label map beside
   the tone map in `StatusBadge.tsx`.
-- [ ] **P2.8 — Login is entirely inline-styled**, bypassing the design system it
+- [x] **P2.8 — Login is entirely inline-styled**, bypassing the design system it
   sits next to (`frontend/src/screens/Login.tsx:5-87`).
 - [x] **P2.9 — No `prefers-reduced-motion` guard**, and `dot-pulse` animates
   infinitely on every `.pill-ok::before` (`index.css:430`) — hundreds of
