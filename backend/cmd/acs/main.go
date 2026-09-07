@@ -185,16 +185,7 @@ func main() {
 	go runLivenessReaper(ctx, h.devices, logger)
 	go runDigestReplayReaper(ctx, digestReplayStore, logger)
 
-	mux := http.NewServeMux()
-	// Catch-all rather than exact "/cwmp": CPEs in the field get provisioned
-	// with ACS URLs like "http://host:7547/", "/cwmp/", or "/acs", and a 404
-	// on the path mismatch looks to the operator exactly like "device won't
-	// connect". Any POST that reaches this server is treated as CWMP;
-	// handleCWMP logs the path so misconfigured device URLs stay visible.
-	mux.HandleFunc("/", h.handleCWMP)
-	mux.Handle("GET /metrics", metrics.Handler())
-	mux.Handle("GET /healthz", observability.LivenessHandler())
-	mux.Handle("GET /readyz", observability.ReadinessHandler(db))
+	mux := newACSMux(h.handleCWMP, metrics, db)
 
 	addr := envOr("ACS_ADDR", ":7547")
 	server := &http.Server{
