@@ -1,0 +1,753 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Find and reach the CPEs that are down. Scoped by region and customer, mapped by the coordinates on each device, and linked back into the operator console. Entirely Postgres-backed: locating an individual device needs per-device rows, which is not something Prometheus labels can carry.",
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Not online (in scope)",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "acs-postgres-ds"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "acs-postgres-ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS \"Not online\"\n  FROM devices d\n  JOIN customers c ON c.id = d.customer_id\n  JOIN regions   r ON r.id = c.region_id\n WHERE (cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))\n   AND d.online_status <> 'ONLINE'",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "text": {
+          "valueSize": 42
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "Mapped vs unmapped",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "acs-postgres-ds"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 5,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "acs-postgres-ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) FILTER (WHERE d.latitude IS NOT NULL AND d.longitude IS NOT NULL) AS \"On the map\",\n         count(*) FILTER (WHERE d.latitude IS NULL OR d.longitude IS NULL)     AS \"No coordinates\"\n  FROM devices d\n  JOIN customers c ON c.id = d.customer_id\n  JOIN regions   r ON r.id = c.region_id\n WHERE (cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "text": {
+          "valueSize": 30
+        }
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "description": "A device with no coordinates cannot be plotted. Set them in the console: Device Detail, next to Location."
+    },
+    {
+      "id": 3,
+      "title": "Unassigned devices",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "acs-postgres-ds"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 11,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "acs-postgres-ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS \"No customer\"\n  FROM devices d\n WHERE d.customer_id IS NULL",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "text": {
+          "valueSize": 42
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Deliberately ignores the Region/Customer filter: these devices belong to no tenant, so no filter would ever show them. They are invisible to every other panel here."
+    },
+    {
+      "id": 4,
+      "title": "Longest outage (in scope)",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "acs-postgres-ds"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "acs-postgres-ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(d.last_inform_at)), 0) AS \"Down for\"\n  FROM devices d\n  JOIN customers c ON c.id = d.customer_id\n  JOIN regions   r ON r.id = c.region_id\n WHERE (cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))\n   AND d.online_status <> 'ONLINE'",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "text": {
+          "valueSize": 42
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 5400
+              },
+              {
+                "color": "red",
+                "value": 86400
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "title": "Device sites",
+      "type": "geomap",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "acs-postgres-ds"
+      },
+      "gridPos": {
+        "h": 13,
+        "w": 14,
+        "x": 0,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "acs-postgres-ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT d.latitude, d.longitude,\n         d.serial_number AS \"Serial\",\n         d.location      AS \"Site\",\n         c.name          AS \"Customer\",\n         r.name          AS \"Region\",\n         d.online_status AS \"Status\",\n         d.id::text      AS device_id,\n         CASE d.online_status WHEN 'ONLINE' THEN 0 WHEN 'OFFLINE' THEN 1 ELSE 2 END AS status_rank\n  FROM devices d\n  JOIN customers c ON c.id = d.customer_id\n  JOIN regions   r ON r.id = c.region_id\n WHERE (cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))\n   AND d.latitude IS NOT NULL AND d.longitude IS NOT NULL",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "basemap": {
+          "config": {},
+          "name": "Basemap",
+          "type": "osm-standard"
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": true,
+          "showDebug": false,
+          "showMeasure": false,
+          "showScale": false,
+          "showZoom": true
+        },
+        "tooltip": {
+          "mode": "details"
+        },
+        "view": {
+          "allLayers": true,
+          "id": "fit",
+          "lat": 0,
+          "lon": 0,
+          "zoom": 5
+        },
+        "layers": [
+          {
+            "name": "Devices",
+            "type": "markers",
+            "config": {
+              "showLegend": true,
+              "style": {
+                "color": {
+                  "field": "status_rank",
+                  "fixed": "dark-green"
+                },
+                "opacity": 0.9,
+                "rotation": {
+                  "fixed": 0,
+                  "max": 360,
+                  "min": -360,
+                  "mode": "mod"
+                },
+                "size": {
+                  "fixed": 7,
+                  "max": 15,
+                  "min": 4
+                },
+                "symbol": {
+                  "fixed": "img/icons/marker/circle.svg",
+                  "mode": "fixed"
+                },
+                "symbolAlign": {
+                  "horizontal": "center",
+                  "vertical": "center"
+                },
+                "textConfig": {
+                  "fontSize": 12,
+                  "offsetX": 0,
+                  "offsetY": 0,
+                  "textAlign": "center",
+                  "textBaseline": "middle"
+                }
+              }
+            },
+            "location": {
+              "latitude": "latitude",
+              "longitude": "longitude",
+              "mode": "coords"
+            },
+            "tooltip": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "Open in ACS console",
+              "url": "${console_url}/fleet?device=${__data.fields.device_id}",
+              "targetBlank": true
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "description": "Green online, orange offline, red unreachable. Click a pin to open that device in the console. Basemap tiles are fetched from the internet by the browser; with no egress the markers still plot on a blank canvas."
+    },
+    {
+      "id": 6,
+      "title": "Not online by region",
+      "type": "barchart",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "acs-postgres-ds"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 10,
+        "x": 14,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "acs-postgres-ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT r.name AS \"Region\",\n         count(*) FILTER (WHERE d.online_status = 'OFFLINE')     AS \"Offline\",\n         count(*) FILTER (WHERE d.online_status = 'UNREACHABLE') AS \"Unreachable\"\n  FROM devices d\n  JOIN customers c ON c.id = d.customer_id\n  JOIN regions   r ON r.id = c.region_id\n WHERE (cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))\n GROUP BY r.name\n ORDER BY 3 DESC, 2 DESC",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "stacking": "normal",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Offline"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unreachable"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "description": "Where to send someone first."
+    },
+    {
+      "id": 7,
+      "title": "Customer health",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "acs-postgres-ds"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 10,
+        "x": 14,
+        "y": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "acs-postgres-ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT c.name AS \"Customer\",\n         count(*) AS \"Devices\",\n         count(*) FILTER (WHERE d.online_status <> 'ONLINE') AS \"Not online\",\n         round(100.0 * count(*) FILTER (WHERE d.online_status = 'ONLINE') / NULLIF(count(*), 0), 1) AS \"Online %\"\n  FROM devices d\n  JOIN customers c ON c.id = d.customer_id\n  JOIN regions   r ON r.id = c.region_id\n WHERE (cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))\n GROUP BY c.name\n ORDER BY 3 DESC, 1",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Online %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "gradient",
+                  "type": "gauge"
+                }
+              },
+              {
+                "id": "max",
+                "value": 100
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 80
+                    },
+                    {
+                      "color": "green",
+                      "value": 95
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "title": "Devices to visit",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "acs-postgres-ds"
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "acs-postgres-ds"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT d.serial_number AS \"Serial\",\n         d.manufacturer || ' ' || d.product_class AS \"Model\",\n         r.name AS \"Region\",\n         c.name AS \"Customer\",\n         COALESCE(d.location, '\u2014') AS \"Site\",\n         d.online_status AS \"Status\",\n         EXTRACT(EPOCH FROM now() - d.last_inform_at) AS \"Down for\",\n         d.last_inform_at AS \"Last Inform\",\n         CASE WHEN d.latitude IS NULL THEN 'no fix'\n              ELSE round(d.latitude::numeric, 5) || ', ' || round(d.longitude::numeric, 5) END AS \"Coordinates\",\n         d.id::text AS device_id\n  FROM devices d\n  JOIN customers c ON c.id = d.customer_id\n  JOIN regions   r ON r.id = c.region_id\n WHERE (cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))\n   AND d.online_status <> 'ONLINE'\n ORDER BY d.last_inform_at ASC NULLS FIRST\n LIMIT 500",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "links": [
+            {
+              "title": "Open in ACS console",
+              "url": "${console_url}/fleet?device=${__data.fields.device_id}",
+              "targetBlank": true
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Down for"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "basic",
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "orange",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 86400
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "device_id"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "description": "Longest outage first. Every row links into the console's device drill-down; the device_id column is hidden and exists only to build that link."
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": [
+    "acs"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "region",
+        "label": "Region",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "acs-postgres-ds"
+        },
+        "query": "SELECT name FROM regions ORDER BY name",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1,
+        "hide": 0,
+        "regex": "",
+        "skipUrlSync": false,
+        "definition": "SELECT name FROM regions ORDER BY name"
+      },
+      {
+        "name": "customer",
+        "label": "Customer",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "acs-postgres-ds"
+        },
+        "query": "SELECT c.name FROM customers c JOIN regions r ON r.id = c.region_id WHERE (cardinality(ARRAY[${region:sqlstring}]::text[]) = 0 OR r.name = ANY (ARRAY[${region:sqlstring}]::text[])) ORDER BY c.name",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1,
+        "hide": 0,
+        "regex": "",
+        "skipUrlSync": false,
+        "definition": "customers in the selected regions"
+      },
+      {
+        "name": "console_url",
+        "label": "Console URL",
+        "type": "constant",
+        "query": "http://localhost:5173",
+        "current": {
+          "selected": false,
+          "text": "http://localhost:5173",
+          "value": "http://localhost:5173"
+        },
+        "hide": 0,
+        "description": "Base URL of the operator console, used by the map and table links."
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "ACS Tenancy & Site Locator",
+  "uid": "acs-tenancy-locator",
+  "version": 1,
+  "weekStart": ""
+}

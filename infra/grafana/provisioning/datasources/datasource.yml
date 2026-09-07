@@ -7,3 +7,28 @@ datasources:
     url: http://prometheus:9090
     isDefault: true
     editable: false
+
+  # Tenancy, BSS order/webhook state and per-device fault-finding are
+  # relational and high-cardinality (serial, location, last inform), which
+  # is exactly what does not belong in Prometheus labels. Those panels
+  # query Postgres directly instead.
+  #
+  # The credentials are a SELECT-only role created by
+  # scripts/grafana-db-role.sh — never the application's own acs user, so
+  # a Grafana editor cannot write to the ACS schema. The password comes
+  # from the environment; it is never committed.
+  - name: ACS Postgres
+    type: postgres
+    uid: acs-postgres-ds
+    access: proxy
+    url: postgres:5432
+    database: acs
+    user: grafana_ro
+    isDefault: false
+    editable: false
+    secureJsonData:
+      password: $ACS_GRAFANA_DB_PASSWORD
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1800
+      timescaledb: false
