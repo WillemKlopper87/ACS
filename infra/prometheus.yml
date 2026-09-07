@@ -12,18 +12,26 @@ alerting:
     - static_configs:
         - targets: ['alertmanager:9093']
 
-# Two target sets per job: host.docker.internal (the documented `go run`
-# dev workflow) and the in-network container names (the opt-in
-# "containerized" docker-compose profile, infra/Dockerfile.*). Only one
-# set is ever actually running at a time; the other just shows "down" in
-# Prometheus, which is harmless and avoids needing two separate configs.
+# Targets for the DEFAULT workflow: the three Go services run on the host
+# via `go run` (deployment-testing-onboarding-guide.md §3) while Postgres,
+# Prometheus, Alertmanager and Grafana run in compose.
+#
+# This file used to list both host.docker.internal AND the container names
+# in every job, on the assumption that "only one set is ever actually
+# running at a time; the other just shows down". That assumption is wrong
+# for the containerized profile: those containers publish their ports on
+# the host, so host.docker.internal reaches the very same process as the
+# container name. Both targets came up, every counter was scraped twice,
+# and every sum() in a dashboard or alert double-counted — one device
+# rendered as two. The container targets now live in
+# prometheus.containerized.yml, selected via ACS_PROMETHEUS_CONFIG.
 scrape_configs:
   - job_name: acs
     static_configs:
-      - targets: ['host.docker.internal:7547', 'acs:7547']
+      - targets: ['host.docker.internal:7547']
   - job_name: api
     static_configs:
-      - targets: ['host.docker.internal:8080', 'api:8080']
+      - targets: ['host.docker.internal:8080']
   - job_name: bssadapter
     static_configs:
-      - targets: ['host.docker.internal:8090', 'bssadapter:8090']
+      - targets: ['host.docker.internal:8090']
