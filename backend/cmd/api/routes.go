@@ -81,6 +81,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	routePerm("PUT", "/api/v1/devices/{id}/parameters", operators.PermDevicesWrite, h.putParameters)
 	routePerm("POST", "/api/v1/devices/{id}/parameters/get", operators.PermDevicesWrite, h.createGetParametersLive)
 	routePerm("PUT", "/api/v1/devices/{id}/tags", operators.PermDevicesWrite, h.updateDeviceTags)
+	routePerm("PUT", "/api/v1/devices/{id}/label", operators.PermDevicesWrite, h.updateDeviceLabel) // operator-facing device name
 	routePerm("PUT", "/api/v1/devices/{id}/location", operators.PermDevicesWrite, h.updateDeviceLocation)
 	route("GET", "/api/v1/reports/devices/export", ro, h.exportDevicesExcel)
 
