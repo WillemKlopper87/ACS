@@ -20,6 +20,22 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
+    # Hashed build output must NOT fall through to index.html. Vite names
+    # these files by content hash, so after a deploy an already-open tab
+    # still asks for the previous hash. With the fallback above, nginx
+    # answered that request with index.html — 200, Content-Type text/html —
+    # and the browser then refused to evaluate HTML as an ES module,
+    # surfacing as "Failed to fetch dynamically imported module" on any
+    # lazily loaded screen. A 404 here is the honest answer, and it is what
+    # lets the app recognise a stale bundle and reload itself.
+    #
+    # The filenames are content-addressed, so they can be cached hard.
+    location /assets/ {
+        try_files $uri =404;
+        expires 1y;
+        add_header Cache-Control "public, immutable" always;
+    }
+
     # Browser-side hardening (audit P1.5 / missing security headers).
     # HSTS is intentionally not set here: this listener is plain HTTP
     # behind whatever terminates TLS; emit Strict-Transport-Security from

@@ -22,9 +22,27 @@ function statusPillClass(status: string) {
   return "pill pill-pending"; // PENDING_ACTIVE
 }
 
-function maskSecret(secret: string) {
-  if (secret.length <= 8) return "•".repeat(secret.length);
-  return `${secret.slice(0, 4)}${"•".repeat(6)}${secret.slice(-2)}`;
+// Exported for its regression test. The subscription carries no secret —
+// see BSSWebhookSubscription — so this row shows what an operator can
+// actually act on: who it is for, where it posts, and which events.
+export function WebhookRow({
+  subscription,
+  onDelete,
+}: {
+  subscription: BSSWebhookSubscription;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="param-row">
+      <span className="path">
+        {subscription.account_id ?? "fleet-wide"} <span className="dim">→</span> {subscription.target_url}
+      </span>
+      <button className="btn danger sm" onClick={onDelete}>
+        Delete
+      </button>
+      <span className="src mono">events {subscription.event_types.join(", ")}</span>
+    </div>
+  );
 }
 
 function ResultCard({ result }: { result: BSSAdapterCallResult }) {
@@ -284,13 +302,7 @@ export function BSSIntegration() {
             ) : (
               <div style={{ maxHeight: "22rem", overflowY: "auto", marginTop: "0.75rem" }}>
                 {webhooks.map((w) => (
-                  <div className="param-row" key={w.id}>
-                    <span className="path">{w.account_id ?? "fleet-wide"} <span className="dim">→</span> {w.target_url}</span>
-                    <button className="btn danger sm" onClick={() => deleteWebhook(w.id, w.target_url)}>
-                      Delete
-                    </button>
-                    <span className="src mono">secret {maskSecret(w.secret)} · events {w.event_types.join(", ")}</span>
-                  </div>
+                  <WebhookRow key={w.id} subscription={w} onDelete={() => deleteWebhook(w.id, w.target_url)} />
                 ))}
               </div>
             )}
