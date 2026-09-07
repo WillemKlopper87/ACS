@@ -547,14 +547,45 @@ paths:
       responses:
         "200": { description: OK }
 
+  /api/v1/devices/{id}/label:
+    put:
+      tags: [devices]
+      summary: Set the operator-facing device name (devices.write permission)
+      description: >-
+        The human name for a unit, e.g. "Mrs Dlamini, 14 Oak Ave". Identity
+        remains oui_serial; labels need not be unique. An empty string clears it.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 120 }
+      responses:
+        "200": { description: Updated }
+        "400": { description: Label contains control characters or exceeds 120 characters }
+        "404": { description: No such device in the caller's scope }
   /api/v1/devices/{id}/location:
     put:
       tags: [Devices]
-      summary: Set free-text device location (devices.write permission — no structured address/GPS fields)
+      summary: Set device location (devices.write permission — free-text label plus optional map coordinates)
       parameters: [{ $ref: "#/components/parameters/DeviceId" }]
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, properties: { location: { type: string } } } } }
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                location: { type: string, description: Free-text label, e.g. "Rack 4, POP-West" }
+                latitude: { type: number, format: double, minimum: -90, maximum: 90, nullable: true }
+                longitude: { type: number, format: double, minimum: -180, maximum: 180, nullable: true }
+              description: >-
+                Replaces the whole location resource. latitude and longitude must
+                be supplied together; omitting both clears any stored fix.
       responses:
         "200": { description: OK }
 
@@ -1765,7 +1796,10 @@ components:
         udp_connection_request_address: { type: string }
         nat_detected: { type: boolean }
         customer_id: { type: string }
+        label: { type: string, description: Operator-chosen name for the unit }
         location: { type: string }
+        latitude: { type: number, format: double, nullable: true }
+        longitude: { type: number, format: double, nullable: true }
 
     DeviceGroupCount:
       type: object

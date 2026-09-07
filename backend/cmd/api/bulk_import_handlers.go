@@ -21,6 +21,7 @@ type importRow struct {
 	OUI          string   `json:"oui" xml:"oui"`
 	ProductClass string   `json:"product_class" xml:"product_class"`
 	SerialNumber string   `json:"serial_number" xml:"serial_number"`
+	Label        string   `json:"label,omitempty" xml:"label,omitempty"`
 	CustomerID   string   `json:"customer_id,omitempty" xml:"customer_id,omitempty"`
 	Tags         []string `json:"tags,omitempty" xml:"tags>tag,omitempty"`
 }
@@ -83,6 +84,9 @@ func parseImportBody(format string, body io.Reader) ([]importRow, error) {
 				OUI:          rec[col["oui"]],
 				ProductClass: rec[col["product_class"]],
 				SerialNumber: rec[col["serial_number"]],
+			}
+			if i, ok := col["label"]; ok && i < len(rec) {
+				row.Label = rec[i]
 			}
 			if i, ok := col["customer_id"]; ok && i < len(rec) {
 				row.CustomerID = rec[i]

@@ -103,7 +103,7 @@ export function FleetControl() {
     return devices.filter(
       (d) =>
         (!activeGroup || deviceGroupKey(d) === activeGroup) &&
-        (!q || `${d.oui_serial} ${d.manufacturer} ${d.product_class}`.toLowerCase().includes(q)),
+        (!q || `${d.label ?? ""} ${d.oui_serial} ${d.manufacturer} ${d.product_class}`.toLowerCase().includes(q)),
     );
   }, [devices, activeGroup, search]);
 
@@ -208,7 +208,22 @@ export function FleetControl() {
 
   const columns = useMemo<ColumnDef<Device, any>[]>(
     () => [
-      { accessorKey: "oui_serial", header: "Device" },
+      {
+        id: "device",
+        header: "Device",
+        accessorFn: (d) => d.label || d.oui_serial,
+        cell: ({ row }) => {
+          const d = row.original;
+          return d.label ? (
+            <div>
+              <div>{d.label}</div>
+              <div className="dim mono" style={{ fontSize: "0.72rem" }}>{d.oui_serial}</div>
+            </div>
+          ) : (
+            <span className="mono">{d.oui_serial}</span>
+          );
+        },
+      },
       {
         id: "vendor",
         header: "Vendor / Model",

@@ -47,7 +47,17 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   useEffect(() => {
     tagsDirtyRef.current = tagsDirty;
   }, [tagsDirty]);
+  const [labelInput, setLabelInput] = useState("");
+  const [labelDirty, setLabelDirty] = useState(false);
+  const labelDirtyRef = useRef(labelDirty);
+  useEffect(() => {
+    labelDirtyRef.current = labelDirty;
+  }, [labelDirty]);
   const [locationInput, setLocationInput] = useState("");
+  // Kept as strings so a half-typed "-25." doesn't get coerced to a number
+  // mid-keystroke; parsed and validated once, on save.
+  const [latInput, setLatInput] = useState("");
+  const [lonInput, setLonInput] = useState("");
   const [locationDirty, setLocationDirty] = useState(false);
   const locationDirtyRef = useRef(locationDirty);
   useEffect(() => {
@@ -72,7 +82,12 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
         setCredentials(c.items);
         setUploads(u.items);
         if (!tagsDirtyRef.current) setTagsInput((d.tags ?? []).join(", "));
-        if (!locationDirtyRef.current) setLocationInput(d.location ?? "");
+        if (!labelDirtyRef.current) setLabelInput(d.label ?? "");
+        if (!locationDirtyRef.current) {
+          setLocationInput(d.location ?? "");
+          setLatInput(d.latitude == null ? "" : String(d.latitude));
+          setLonInput(d.longitude == null ? "" : String(d.longitude));
+        }
         setError(null);
       } catch (e) {
         if (!background) setError(e instanceof ApiError ? `${e.status}: ${e.message}` : "Failed to load device detail");
@@ -157,11 +172,38 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       return `Tags saved: ${tags.length === 0 ? "(none)" : tags.join(", ")}`;
     });
 
+  const handleSaveLabel = () =>
+    withBusy(async () => {
+      await api.updateDeviceLabel(id, labelInput.trim());
+      setLabelDirty(false);
+      return `Name saved: ${labelInput.trim() || "(cleared)"}`;
+    });
+
   const handleSaveLocation = () =>
     withBusy(async () => {
-      await api.updateDeviceLocation(id, locationInput.trim());
+      const lat = latInput.trim();
+      const lon = lonInput.trim();
+      // Mirror the server rule rather than round-tripping a 400: a lone
+      // coordinate cannot be plotted, so it is rejected here too.
+      if ((lat === "") !== (lon === "")) {
+        throw new ApiError(400, "Enter both latitude and longitude, or leave both blank");
+      }
+      let latitude: number | null = null;
+      let longitude: number | null = null;
+      if (lat !== "") {
+        latitude = Number(lat);
+        longitude = Number(lon);
+        if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+          throw new ApiError(400, "Latitude must be a number between -90 and 90");
+        }
+        if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+          throw new ApiError(400, "Longitude must be a number between -180 and 180");
+        }
+      }
+      await api.updateDeviceLocation(id, locationInput.trim(), latitude, longitude);
       setLocationDirty(false);
-      return `Location saved: ${locationInput.trim() || "(none)"}`;
+      const where = latitude === null ? "no map fix" : `${latitude}, ${longitude}`;
+      return `Location saved: ${locationInput.trim() || "(none)"} (${where})`;
     });
 
   const handlePing = () =>
@@ -338,7 +380,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
     <div className="split two-col">
       <div className="panel">
         <h3>
-          Device detail — {device.oui_serial}
+          Device detail — {device.label || device.oui_serial}
           <span style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
             <button
               className={`btn live-toggle ${live ? "on" : ""}`}
@@ -352,6 +394,8 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
           </span>
         </h3>
         <dl className="kv">
+          <dt>Identity (oui_serial)</dt>
+          <dd className="mono">{device.oui_serial}</dd>
           <dt>Manufacturer / Model</dt>
           <dd style={{ fontFamily: "var(--font-ui)" }}>
             {device.manufacturer} {device.product_class}
@@ -422,6 +466,21 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
         </div>
 
         <div className="form-row">
+          <input aria-label="Device name (shown instead of the identifier everywhere in the console)"
+            placeholder="Name this device — e.g. Mrs Dlamini, 14 Oak Ave"
+            value={labelInput}
+            onChange={(e) => {
+              setLabelInput(e.target.value);
+              setLabelDirty(true);
+            }}
+            disabled={busy || !writable}
+          />
+          <button className="btn" onClick={handleSaveLabel} disabled={busy || !writable}>
+            Save name
+          </button>
+        </div>
+
+        <div className="form-row">
           <input aria-label="Tags (comma-separated)"
             placeholder="Tags (comma-separated)"
             value={tagsInput}
@@ -442,6 +501,28 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
             value={locationInput}
             onChange={(e) => {
               setLocationInput(e.target.value);
+              setLocationDirty(true);
+            }}
+            disabled={busy || !writable}
+          />
+          <input aria-label="Latitude (optional, for the site map)"
+            placeholder="Latitude"
+            inputMode="decimal"
+            style={{ maxWidth: "9rem" }}
+            value={latInput}
+            onChange={(e) => {
+              setLatInput(e.target.value);
+              setLocationDirty(true);
+            }}
+            disabled={busy || !writable}
+          />
+          <input aria-label="Longitude (optional, for the site map)"
+            placeholder="Longitude"
+            inputMode="decimal"
+            style={{ maxWidth: "9rem" }}
+            value={lonInput}
+            onChange={(e) => {
+              setLonInput(e.target.value);
               setLocationDirty(true);
             }}
             disabled={busy || !writable}

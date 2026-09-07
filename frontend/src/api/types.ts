@@ -22,7 +22,12 @@ export interface Device {
   udp_connection_request_address?: string;
   nat_detected?: boolean;
   customer_id?: string;
+  /** Operator-chosen name for this unit — identity stays oui_serial; this need not be unique. */
+  label?: string;
   location?: string;
+  /** Optional survey fix, set together. Drives the Tenancy & Site Locator map. */
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export interface Job {
@@ -372,9 +377,16 @@ export interface BSSWebhookSubscription {
   id: string;
   account_id: string | null;
   target_url: string;
-  secret: string;
   event_types: string[];
   created_at: string;
+  /**
+   * There is deliberately no `secret` here. The HMAC signing secret is
+   * write-only: bss-integration-guide.md promises it is never returned by
+   * any endpoint after creation, and the API's DTO omits it (audit H-7).
+   * This type previously declared it as required, which let the screen
+   * read .length off undefined and crash as soon as one subscription
+   * existed. Do not re-add it.
+   */
 }
 
 export interface BSSStats {

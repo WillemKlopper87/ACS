@@ -25,7 +25,8 @@ const deviceColumns = `id, oui_serial, manufacturer, oui, product_class, serial_
 	connection_request_url, connection_request_mode, last_connection_request_at,
 	last_connection_request_status, last_inform_after_connection_request_at,
 	first_seen_at, last_updated_at, tags, cwmp_auth_mode, data_model_root_confirmed_at,
-	udp_connection_request_address, nat_detected, customer_id, location`
+	udp_connection_request_address, nat_detected, customer_id, location,
+	latitude, longitude, label`
 
 // UpsertFromInform records (or refreshes) a device from an Inform message.
 // data_model_root is left untouched (defaulting to UNKNOWN for a new
@@ -271,11 +272,30 @@ func (r *Repository) UpdateTags(ctx context.Context, deviceID string, tags []str
 // backlog: Excel reporting's "location" column) — operator-entered
 // metadata, same shape as UpdateTags since TR-069 has no standard
 // location parameter.
-func (r *Repository) UpdateLocation(ctx context.Context, deviceID, location string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE devices SET location = $2, last_updated_at = now() WHERE id = $1`,
-		deviceID, nullIfEmpty(location))
+// lat/lon are the machine-readable half added in migration 0050, and are
+// set independently of the label: a device can have a description with no
+// survey fix, or a fix with no description. Passing nil for either clears
+// it, which is how an operator corrects a bad pin.
+func (r *Repository) UpdateLocation(ctx context.Context, deviceID, location string, latitude, longitude *float64) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE devices
+		SET location = $2, latitude = $3, longitude = $4, last_updated_at = now()
+		WHERE id = $1`,
+		deviceID, nullIfEmpty(location), latitude, longitude)
 	if err != nil {
 		return fmt.Errorf("update device location: %w", err)
+	}
+	return nil
+}
+
+// UpdateLabel sets (or, with an empty string, clears) the operator-facing
+// name for a device. Deliberately separate from UpdateLocation: renaming a
+// unit and recording where it sits are different acts, done at different
+// times, by different people.
+func (r *Repository) UpdateLabel(ctx context.Context, deviceID, label string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE devices SET label = $2, last_updated_at = now() WHERE id = $1`,
+		deviceID, nullIfEmpty(label))
+	if err != nil {
+		return fmt.Errorf("update device label: %w", err)
 	}
 	return nil
 }
@@ -307,13 +327,16 @@ func scanDevice(s scanner) (*Device, error) {
 	var natDetected sql.NullBool
 	var customerID sql.NullString
 	var location sql.NullString
+	var latitude, longitude sql.NullFloat64
+	var label sql.NullString
 
 	if err := s.Scan(&d.ID, &d.OUISerial, &d.Manufacturer, &d.OUI, &d.ProductClass, &d.SerialNumber,
 		&d.DataModelRoot, &d.OnlineStatus, &lastInformAt, &eventCodes,
 		&connectionRequestURL, &d.ConnectionRequestMode, &lastConnectionRequestAt,
 		&lastConnectionRequestStatus, &lastInformAfterCR,
 		&d.FirstSeenAt, &d.LastUpdatedAt, &tags, &d.CWMPAuthMode, &dataModelRootConfirmedAt,
-		&udpConnectionRequestAddress, &natDetected, &customerID, &location); err != nil {
+		&udpConnectionRequestAddress, &natDetected, &customerID, &location,
+		&latitude, &longitude, &label); err != nil {
 		return nil, fmt.Errorf("scan device: %w", err)
 	}
 	if customerID.Valid {
@@ -321,6 +344,15 @@ func scanDevice(s scanner) (*Device, error) {
 	}
 	if location.Valid {
 		d.Location = &location.String
+	}
+	if label.Valid {
+		d.Label = &label.String
+	}
+	if latitude.Valid {
+		d.Latitude = &latitude.Float64
+	}
+	if longitude.Valid {
+		d.Longitude = &longitude.Float64
 	}
 	if dataModelRootConfirmedAt.Valid {
 		t := dataModelRootConfirmedAt.Time

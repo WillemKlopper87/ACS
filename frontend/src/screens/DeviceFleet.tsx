@@ -75,7 +75,7 @@ export function DeviceFleet() {
     const q = search.toLowerCase();
     return devices.filter(
       (d) =>
-        (!q || `${d.oui_serial} ${d.manufacturer} ${d.product_class}`.toLowerCase().includes(q)) &&
+        (!q || `${d.label ?? ""} ${d.oui_serial} ${d.manufacturer} ${d.product_class}`.toLowerCase().includes(q)) &&
         (!vendorFilter || d.manufacturer === vendorFilter),
     );
   }, [devices, search, vendorFilter]);
@@ -92,7 +92,25 @@ export function DeviceFleet() {
 
   const columns = useMemo<ColumnDef<Device, any>[]>(
     () => [
-      { accessorKey: "oui_serial", header: "Device" },
+      {
+        id: "device",
+        header: "Device",
+        accessorFn: (d) => d.label || d.oui_serial,
+        cell: ({ row }) => {
+          const d = row.original;
+          // The label is what an operator actually calls this unit; the
+          // identifier is still shown, just demoted to a subtitle, so a
+          // device with no label yet still reads exactly as it always did.
+          return d.label ? (
+            <div>
+              <div>{d.label}</div>
+              <div className="dim mono" style={{ fontSize: "0.72rem" }}>{d.oui_serial}</div>
+            </div>
+          ) : (
+            <span className="mono">{d.oui_serial}</span>
+          );
+        },
+      },
       {
         id: "vendor",
         header: "Vendor / Model",
@@ -170,9 +188,9 @@ export function DeviceFleet() {
             <circle cx="11" cy="11" r="7" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <input aria-label="Filter by serial, model, manufacturer"
+          <input aria-label="Filter by name, serial, model, manufacturer"
             ref={searchRef}
-            placeholder="Filter by serial, model, manufacturer… (press /)"
+            placeholder="Filter by name, serial, model, manufacturer… (press /)"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />

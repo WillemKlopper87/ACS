@@ -459,12 +459,30 @@ export const api = {
   setOperatorGlobalAccess: (operatorId: string, globalAccess: boolean) =>
     request<void>(`/api/v1/auth/operators/${operatorId}/global-access`, { method: "PUT", body: JSON.stringify({ global_access: globalAccess }) }),
 
-  // --- Excel reporting (admin-platform backlog) ---
-  updateDeviceLocation: (deviceId: string, location: string) =>
-    request<{ device_id: string; location: string }>(`/api/v1/devices/${deviceId}/location`, {
+  // The operator-facing name for a unit — separate from location, which is
+  // where it sits rather than what it is called. Empty string clears it.
+  updateDeviceLabel: (deviceId: string, label: string) =>
+    request<{ device_id: string; label: string }>(`/api/v1/devices/${deviceId}/label`, {
       method: "PUT",
-      body: JSON.stringify({ location }),
+      body: JSON.stringify({ label }),
     }),
+
+  // --- Excel reporting (admin-platform backlog) ---
+  // PUT replaces the whole location resource: latitude/longitude must be
+  // sent together, and sending neither clears any stored map fix.
+  updateDeviceLocation: (
+    deviceId: string,
+    location: string,
+    latitude?: number | null,
+    longitude?: number | null,
+  ) =>
+    request<{ device_id: string; location: string; latitude: number | null; longitude: number | null }>(
+      `/api/v1/devices/${deviceId}/location`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ location, latitude: latitude ?? null, longitude: longitude ?? null }),
+      },
+    ),
   exportDevicesReport: (filters: { customer_id?: string; region_id?: string; project_id?: string }) => {
     const qs = new URLSearchParams(Object.entries(filters).filter(([, v]) => v) as [string, string][]);
     return download(`/api/v1/reports/devices/export?${qs.toString()}`, "acs-devices.xlsx");

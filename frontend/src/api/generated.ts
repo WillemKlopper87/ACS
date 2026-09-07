@@ -1403,7 +1403,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Set free-text device location (devices.write permission — no structured address/GPS fields) */
+        /** Set device location (devices.write permission — free-text label plus optional map coordinates) */
         put: {
             parameters: {
                 query?: never;
@@ -1417,7 +1417,12 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** @description Free-text label */
                         location?: string;
+                        /** Format: double */
+                        latitude?: number | null;
+                        /** Format: double */
+                        longitude?: number | null;
                     };
                 };
             };
@@ -4950,6 +4955,10 @@ export interface components {
             nat_detected?: boolean;
             customer_id?: string;
             location?: string;
+            /** Format: double */
+            latitude?: number | null;
+            /** Format: double */
+            longitude?: number | null;
         };
         DeviceGroupCount: {
             Manufacturer?: string;

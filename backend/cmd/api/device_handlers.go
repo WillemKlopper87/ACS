@@ -38,7 +38,10 @@ type deviceResponse struct {
 	UDPConnectionRequestAddress *string  `json:"udp_connection_request_address,omitempty"`
 	NATDetected                 *bool    `json:"nat_detected,omitempty"`
 	CustomerID                  *string  `json:"customer_id,omitempty"`
+	Label                       *string  `json:"label,omitempty"`
 	Location                    *string  `json:"location,omitempty"`
+	Latitude                    *float64 `json:"latitude,omitempty"`
+	Longitude                   *float64 `json:"longitude,omitempty"`
 }
 
 func toResponse(d devices.Device) deviceResponse {
@@ -60,7 +63,10 @@ func toResponse(d devices.Device) deviceResponse {
 		UDPConnectionRequestAddress: d.UDPConnectionRequestAddress,
 		NATDetected:                 d.NATDetected,
 		CustomerID:                  d.CustomerID,
+		Label:                       d.Label,
 		Location:                    d.Location,
+		Latitude:                    d.Latitude,
+		Longitude:                   d.Longitude,
 	}
 	if d.LastInformAt != nil {
 		s := d.LastInformAt.Format(time.RFC3339)

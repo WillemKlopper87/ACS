@@ -235,6 +235,7 @@ func (r *Repository) InformRecencyBuckets(ctx context.Context, customerIDs []str
 // not fabricated.
 type ReportRow struct {
 	SerialNumber    string
+	Label           string
 	Manufacturer    string
 	ProductClass    string
 	OnlineStatus    string
@@ -271,7 +272,7 @@ func (r *Repository) ReportRows(ctx context.Context, customerIDs []string, scope
 	}
 
 	query := `
-		SELECT d.serial_number, d.manufacturer, d.product_class, d.online_status,
+		SELECT d.serial_number, COALESCE(d.label, ''), d.manufacturer, d.product_class, d.online_status,
 			COALESCE(d.location, ''), COALESCE(c.name, ''), COALESCE(reg.name, ''),
 			COALESCE(p.parameters->'Device.DeviceInfo.SoftwareVersion'->>'value', ''),
 			COALESCE(p.parameters->'Device.WiFi.SSID.1.SSID'->>'value', ''),
@@ -295,7 +296,7 @@ func (r *Repository) ReportRows(ctx context.Context, customerIDs []string, scope
 	var out []ReportRow
 	for rows.Next() {
 		var row ReportRow
-		if err := rows.Scan(&row.SerialNumber, &row.Manufacturer, &row.ProductClass, &row.OnlineStatus,
+		if err := rows.Scan(&row.SerialNumber, &row.Label, &row.Manufacturer, &row.ProductClass, &row.OnlineStatus,
 			&row.Location, &row.CustomerName, &row.RegionName, &row.SoftwareVersion, &row.SSID, &row.MACAddress); err != nil {
 			return nil, fmt.Errorf("scan report row: %w", err)
 		}

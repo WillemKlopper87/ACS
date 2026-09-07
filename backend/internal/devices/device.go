@@ -30,6 +30,11 @@ type Device struct {
 	NATDetected                        *bool
 	CustomerID                         *string
 	Location                           *string
+	// Label is the operator-chosen name for this unit — the thing a human
+	// calls it. Identity remains OUISerial; this never has to be unique.
+	Label     *string
+	Latitude  *float64
+	Longitude *float64
 }
 
 // Data model root values (design doc v3 §7.1's data_model_root check
