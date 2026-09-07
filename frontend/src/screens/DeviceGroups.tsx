@@ -9,6 +9,9 @@ import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
 import { useEscape } from "../lib/hotkeys";
 import { useCustomers, customerName } from "../lib/useCustomers";
+import { DevicePicker } from "../components/DevicePicker";
+import { StatusBadge } from "../components/StatusBadge";
+import type { Device } from "../api/types";
 
 export function DeviceGroups() {
   const { role } = useAuth();
@@ -19,6 +22,11 @@ export function DeviceGroups() {
   const [selected, setSelected] = useState<DeviceGroup | null>(null);
   const [memberInput, setMemberInput] = useState("");
   const [memberError, setMemberError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  // Membership is stored as device ids. Rendering those ids raw made the
+  // list unreadable, so the fleet is fetched once and used to resolve each
+  // id to something an operator recognises.
+  const [fleet, setFleet] = useState<Device[]>([]);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -43,6 +51,12 @@ export function DeviceGroups() {
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    api.listDevices(1, 500).then((res) => setFleet(res.items)).catch(() => setFleet([]));
+  }, []);
+
+  const deviceById = useMemo(() => new Map(fleet.map((d) => [d.id, d])), [fleet]);
 
   useEscape(() => setSelected(null), selected !== null);
 
@@ -92,20 +106,64 @@ export function DeviceGroups() {
   const onDeleteRef = useRef(onDelete);
   onDeleteRef.current = onDelete;
 
-  async function onAddMembers() {
+  async function addMembers(ids: string[]) {
+    if (!selected || ids.length === 0) return;
+    await api.addDeviceGroupMembers(selected.id, ids);
+    toast(`${ids.length} device${ids.length === 1 ? "" : "s"} added to "${selected.name}"`, "success");
+    await openGroup(selected);
+    await load();
+  }
+
+  // The paste box takes serial numbers, not device ids: a serial is printed
+  // on the device and is what appears in a spreadsheet or a ticket, whereas
+  // the id is an internal UUID. Anything that does not resolve is reported
+  // rather than silently dropped.
+  async function onAddPastedSerials() {
     if (!selected) return;
     setMemberError(null);
-    const ids = memberInput
-      .split(/[\s,]+/)
-      .map((s) => s.trim())
+    const tokens = memberInput
+      .split(/[\s,;]+/)
+      .map((t) => t.trim())
       .filter(Boolean);
-    if (ids.length === 0) return;
+    if (tokens.length === 0) return;
+
+    const bySerial = new Map(fleet.map((d) => [d.serial_number?.toLowerCase() ?? "", d]));
+    const byOUISerial = new Map(fleet.map((d) => [d.oui_serial?.toLowerCase() ?? "", d]));
+    const byLabel = new Map(fleet.filter((d) => d.label).map((d) => [d.label!.toLowerCase(), d]));
+    const ids: string[] = [];
+    const unknown: string[] = [];
+    const wrongCustomer: string[] = [];
+    for (const token of tokens) {
+      const key = token.toLowerCase();
+      const match = bySerial.get(key) ?? byOUISerial.get(key) ?? byLabel.get(key) ?? deviceById.get(token);
+      if (!match) {
+        unknown.push(token);
+        continue;
+      }
+      // The API enforces this too, but its rejection names the device by
+      // UUID — which is the very thing an operator cannot recognise. Check
+      // it here so the message can say "SN000002" instead.
+      if (selected.customer_id && match.customer_id !== selected.customer_id) {
+        wrongCustomer.push(match.serial_number || token);
+        continue;
+      }
+      ids.push(match.id);
+    }
+
+    const problems: string[] = [];
+    if (unknown.length > 0) problems.push(`not found: ${unknown.join(", ")}`);
+    if (wrongCustomer.length > 0) {
+      problems.push(`belongs to another customer: ${wrongCustomer.join(", ")}`);
+    }
+
+    if (ids.length === 0) {
+      setMemberError(problems.join("; ") || "Nothing to add");
+      return;
+    }
     try {
-      await api.addDeviceGroupMembers(selected.id, ids);
-      toast(`${ids.length} member${ids.length === 1 ? "" : "s"} added`, "success");
+      await addMembers(ids);
       setMemberInput("");
-      await openGroup(selected);
-      await load();
+      setMemberError(problems.length > 0 ? `Added ${ids.length}. Skipped — ${problems.join("; ")}` : null);
     } catch (e) {
       setMemberError(e instanceof ApiError ? e.message : "Failed to add members");
     }
@@ -212,37 +270,52 @@ export function DeviceGroups() {
           {selected ? (
             <>
               <div className="form-row">
-                <input aria-label="Device IDs (comma or space separated)"
-                  placeholder="Device IDs (comma or space separated)"
+                <button className="btn primary" onClick={() => setPicking(true)} disabled={!writable}>
+                  Add devices…
+                </button>
+                <span className="dim" style={{ fontSize: "0.8rem" }}>
+                  or paste serial numbers:
+                </span>
+              </div>
+              <div className="form-row">
+                <input aria-label="Serial numbers (comma or space separated)"
+                  placeholder="SN000123, SN000124…"
                   value={memberInput}
                   onChange={(e) => setMemberInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") onAddPastedSerials();
+                  }}
                 />
-                <button className="btn" onClick={onAddMembers} disabled={!writable || !memberInput.trim()}>
+                <button className="btn" onClick={onAddPastedSerials} disabled={!writable || !memberInput.trim()}>
                   Add
                 </button>
               </div>
               {memberError && <div className="banner error" style={{ marginTop: "0.6rem" }}>{memberError}</div>}
-              <ul style={{ listStyle: "none", margin: "0.75rem 0 0", padding: 0, maxHeight: "16rem", overflow: "auto" }}>
+              <ul className="member-list">
                 {(selected.device_ids ?? []).length === 0 && <li className="dim">No members yet.</li>}
-                {(selected.device_ids ?? []).map((id) => (
-                  <li
-                    key={id}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      fontFamily: "var(--font-mono)",
-                      fontSize: "0.8rem",
-                      padding: "0.3rem 0",
-                      borderBottom: "1px solid var(--border)",
-                    }}
-                  >
-                    <span>{id}</span>
-                    <button className="close-detail" disabled={!writable} onClick={() => onRemoveMember(id)}>
-                      ✕
-                    </button>
-                  </li>
-                ))}
+                {(selected.device_ids ?? []).map((id) => {
+                  const d = deviceById.get(id);
+                  return (
+                    <li key={id}>
+                      <span className="pick-serial">{d?.label || d?.serial_number || id}</span>
+                      <span className="dim">
+                        {d
+                          ? `${d.label ? `${d.serial_number} · ` : ""}${d.manufacturer} ${d.product_class}`
+                          : "not in the first 500 devices"}
+                        {d?.location ? ` · ${d.location}` : ""}
+                      </span>
+                      {d && <StatusBadge value={d.online_status} />}
+                      <button
+                        className="close-detail"
+                        disabled={!writable}
+                        aria-label={`Remove ${d?.serial_number ?? id} from ${selected.name}`}
+                        onClick={() => onRemoveMember(id)}
+                      >
+                        ✕
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             </>
           ) : (
@@ -252,6 +325,18 @@ export function DeviceGroups() {
           )}
         </div>
       </div>
+
+      {picking && selected && (
+        <DevicePicker
+          title={`Add devices to "${selected.name}"`}
+          confirmLabel="Add to group"
+          excludeIds={selected.device_ids ?? []}
+          customerId={selected.customer_id}
+          customerLabel={customerName(customers, selected.customer_id)}
+          onConfirm={addMembers}
+          onClose={() => setPicking(false)}
+        />
+      )}
 
       {loading && groups.length === 0 ? (
         <div className="loading">Loading groups…</div>
