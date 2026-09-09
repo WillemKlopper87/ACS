@@ -345,7 +345,12 @@ Each delivery carries `Content-Type: application/json` plus:
 | `Webhook-Timestamp` | Unix seconds at send time. Fresh per attempt. |
 | `Webhook-Signature` | `v1,<hex>` where `<hex>` is HMAC-SHA256 over `<Webhook-Id>.<Webhook-Timestamp>.<raw body>` using your subscription secret. |
 | `X-Webhook-Event` | Event type. |
-| `X-Webhook-Signature` | Deprecated. Same hex as the `v1` scheme above, without the prefix. |
+
+**Breaking change:** the old `X-Webhook-Signature` header (a body-only
+HMAC, with no id or timestamp bound in) has been removed, not deprecated.
+A body-only signature is replayable — keeping it around, even as a
+fallback, would defeat the point of this change. If your integration
+verified `X-Webhook-Signature`, switch to `Webhook-Signature`.
 
 Verify by recomputing the HMAC over the concatenation — not over the body
 alone — and reject deliveries whose `Webhook-Timestamp` is outside a

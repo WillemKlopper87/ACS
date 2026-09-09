@@ -194,10 +194,6 @@ func (h *handler) sendWebhookDelivery(ctx context.Context, client *http.Client, 
 	req.Header.Set("Webhook-Timestamp", timestamp)
 	req.Header.Set("Webhook-Signature", "v1,"+signature)
 	req.Header.Set("X-Webhook-Event", d.EventType)
-	// Retained for consumers written against the previous contract. It
-	// carries the same value as Webhook-Signature's v1 scheme but without
-	// the scheme prefix; new consumers should verify Webhook-Signature.
-	req.Header.Set("X-Webhook-Signature", signature)
 
 	resp, err := client.Do(req)
 	if err != nil {
