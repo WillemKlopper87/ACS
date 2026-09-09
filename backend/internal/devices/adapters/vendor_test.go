@@ -26,16 +26,22 @@ func TestGenericCellularFallbackUsesRealTR181Paths(t *testing.T) {
 	}
 }
 
-// TestGenericCellularFallbackAvoidsStatsAndSINR guards the two specific
-// mistakes that were shipped: signal metrics under .Stats., and SINR, which
-// TR-181 does not define.
-func TestGenericCellularFallbackAvoidsStatsAndSINR(t *testing.T) {
+// TestGenericCellularFallbackAvoidsStatsAndSNR guards the two specific
+// mistakes that were shipped: signal metrics under .Stats., and a
+// non-existent SNR-family field -- TR-181 defines neither. The field that
+// actually shipped was spelled "SNR", not "SINR", and "SNR" is not a
+// substring of "SINR" (or vice versa: "SINR" is not a substring of "SNR"),
+// so the guard checks both spellings explicitly rather than relying on one
+// substring check to catch the other. RSRQ/RSRP/RSSI must not trip it --
+// none of those contain "N", so neither spelling matches them.
+func TestGenericCellularFallbackAvoidsStatsAndSNR(t *testing.T) {
 	for _, p := range genericCellularFallback {
 		if strings.Contains(p, ".Stats.") {
 			t.Errorf("%q puts a signal metric under .Stats., which holds only packet counters", p)
 		}
-		if strings.Contains(strings.ToUpper(p), "SINR") {
-			t.Errorf("%q uses SINR, which is not defined anywhere in TR-181", p)
+		upper := strings.ToUpper(p)
+		if strings.Contains(upper, "SNR") || strings.Contains(upper, "SINR") {
+			t.Errorf("%q uses SNR/SINR, which is not defined anywhere in TR-181", p)
 		}
 	}
 }
