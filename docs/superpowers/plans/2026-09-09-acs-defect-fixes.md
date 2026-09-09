@@ -574,6 +574,18 @@ and replace the header block with:
 	req.Header.Set("X-Webhook-Signature", signature)
 ```
 
+**SUPERSEDED during execution:** retaining `X-Webhook-Signature` as shown
+above was ruled Critical and was not done. A body-only HMAC is
+replayable — a receiver that still trusted it after the migration would
+gain nothing from the new id/timestamp binding, so keeping the header
+alive (even flagged deprecated) would defeat the purpose of this task.
+The old header was removed outright instead: `sendWebhookDelivery` sets
+only `Content-Type`, `Webhook-Id`, `Webhook-Timestamp`,
+`Webhook-Signature`, and `X-Webhook-Event` — do not add back
+`req.Header.Set("X-Webhook-Signature", signature)` if re-running this
+step; see `backend/cmd/bssadapter/webhook_worker.go` for the header set
+actually shipped.
+
 Update the `sendWebhookDelivery` doc comment to describe the signed string
 rather than the old body-only scheme. Add `"strconv"` to the import block if it
 is not already present (`time` already is).
@@ -599,6 +611,13 @@ Each delivery carries:
 | `X-Webhook-Event` | Event type. |
 | `X-Webhook-Signature` | Deprecated. Same hex as the `v1` scheme above, without the prefix. |
 
+**SUPERSEDED during execution:** there is no `X-Webhook-Signature` row.
+The header was removed, not deprecated (see the Step 5 note above) — the
+committed `bss-integration-guide.md` instead documents the removal as a
+breaking change and tells integrators to switch to `Webhook-Signature`.
+Do not add a deprecated `X-Webhook-Signature` row if re-running this
+step.
+
 Verify by recomputing the HMAC over the concatenation — not over the body
 alone — and reject deliveries whose `Webhook-Timestamp` is outside a
 tolerance window (5 minutes is the common choice). Deduplicate on
@@ -621,6 +640,16 @@ with Webhook-Id, Webhook-Timestamp and Webhook-Signature headers. The old
 X-Webhook-Signature header is retained, marked deprecated, for consumers
 written against the previous contract."
 ```
+
+**SUPERSEDED during execution:** the commit message quoted above does not
+describe what was actually committed. The real change (see commit
+`029c8e8 fix(bss): remove legacy X-Webhook-Signature header, not
+deprecate it` on `design/usp-controller`) removed the header entirely,
+because a body-only signature is replayable and a "deprecated" fallback
+that still verifies is not actually deprecated — it is a standing
+downgrade path. Do not stage or commit `req.Header.Set("X-Webhook-Signature",
+...)`, and do not reuse the "retained ... deprecated" wording above for
+any future commit message describing this area.
 
 ---
 
@@ -679,7 +708,43 @@ job asserting that. Selecting `postgres` no longer requires another service's
 secrets, while starting Grafana with an unset password still fails loudly —
 it just fails in Grafana's own startup rather than in file interpolation.
 
+**SUPERSEDED during execution — do not repeat this step.** The safety
+claim above is false. The platform's fail-closed placeholder check
+(`backend/internal/config`) only covers ACS's own secrets in
+`cmd/api`/`cmd/acs`/`cmd/bssadapter`; the `grafana/grafana` image accepts
+any password including `change-me`, and `scripts/grafana-db-role.sh`
+checks only that `ACS_GRAFANA_DB_PASSWORD` is non-empty. Defaulting
+either `${VAR:-change-me}` operator means any later unfiltered `docker
+compose up` in that environment silently boots Grafana with admin
+password `change-me` — **this reopens audit finding P1.5**
+(`ACS_CODEBASE_AUDIT_2026-08-28.md`), the exact finding the `:?`
+mandatory-variable operators were added to close. This step was applied
+and then reverted in the same branch (`137e154 fix(infra): unbreak the
+documented compose quick start` introduced the `:-change-me` defaults;
+`fab43d9 docs: fix compose quick-start blocker via documentation, not
+config` reverted them). `infra/docker-compose.yml:78` and `:84` must stay
+on the `${VAR:?set VAR}` mandatory-variable form.
+
+The actual fix is documentation-only: give operators a working command
+that supplies throwaway values for the Grafana variables inline, on a
+single command, without `export`, so they can never leak into a later
+`docker compose up` that starts Grafana for real — see
+`README.md` and `deployment-testing-onboarding-guide.md`, and
+`scripts/start.sh` for the same pattern used non-interactively
+(`GRAFANA_ADMIN_PASSWORD=unused-postgres-only
+ACS_GRAFANA_DB_PASSWORD=unused-postgres-only docker compose ... up -d
+postgres`).
+
 - [ ] **Step 3: Verify interpolation now succeeds**
+
+**SUPERSEDED during execution:** Step 2 was not applied (see the note
+above), so `infra/docker-compose.yml:78` and `:84` are still the
+mandatory `${VAR:?set VAR}` form. Run as written below, this step is
+expected to FAIL with the same `required variable … is missing a value`
+errors quoted at the top of this task — that is correct, not a
+regression. Do not "fix" it by reintroducing the `:-change-me` defaults.
+Skip straight to the documentation-only fix described in the Step 2 note
+(command-line values passed inline, not exported, never `change-me`).
 
 Run from the repository root:
 
@@ -688,9 +753,17 @@ env -u GRAFANA_ADMIN_PASSWORD -u ACS_GRAFANA_DB_PASSWORD \
   docker compose -f infra/docker-compose.yml config >/dev/null && echo "CONFIG OK"
 ```
 
-Expected: prints `CONFIG OK`.
+Expected (as originally written, now superseded): prints `CONFIG OK`.
 
 - [ ] **Step 4: Verify the documented quick start actually runs**
+
+**SUPERSEDED during execution:** same as Step 3 — this command fails
+without the reverted config change. Verify the actual fix instead by
+running the throwaway-value command now documented in `README.md` /
+`deployment-testing-onboarding-guide.md`
+(`GRAFANA_ADMIN_PASSWORD=unused-postgres-only
+ACS_GRAFANA_DB_PASSWORD=unused-postgres-only docker compose -f
+infra/docker-compose.yml up -d postgres`), which does succeed.
 
 Run from the repository root:
 
@@ -700,10 +773,21 @@ env -u GRAFANA_ADMIN_PASSWORD -u ACS_GRAFANA_DB_PASSWORD \
 docker compose -f infra/docker-compose.yml ps postgres
 ```
 
-Expected: the container starts and reports healthy. Then stop it:
+Expected (as originally written, now superseded): the container starts and reports healthy. Then stop it:
 `docker compose -f infra/docker-compose.yml down`.
 
 - [ ] **Step 5: Commit**
+
+**SUPERSEDED during execution:** the commit message quoted below
+describes a change that was reverted; it does not describe what shipped.
+`infra/docker-compose.yml` was not modified by the real fix — the
+mandatory `:?` operators were left in place. The actual changes landed in
+`README.md`, `deployment-testing-onboarding-guide.md`, and
+`scripts/start.sh` (see commits `fab43d9 docs: fix compose quick-start
+blocker via documentation, not config` and `c0ed1be fix(scripts): supply
+grafana variables inline in start.sh compose call` on
+`design/usp-controller`). Do not reuse the message below for any future
+commit describing this area.
 
 ```bash
 git add infra/docker-compose.yml
