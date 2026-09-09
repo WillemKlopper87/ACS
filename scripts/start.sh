@@ -22,7 +22,12 @@ echo "=== Stopping any previous ACS processes ==="
 sleep 1
 
 echo "=== Starting Postgres ==="
-(cd "$ROOT/infra" && docker compose up -d postgres)
+# Docker Compose interpolates the entire file before service selection, so
+# Grafana's mandatory variables must resolve even when starting only Postgres.
+# These values are unused in this context (Grafana is not being started);
+# they exist only to satisfy interpolation and must never be treated as real
+# Grafana credentials.
+(cd "$ROOT/infra" && GRAFANA_ADMIN_PASSWORD=unused-postgres-only ACS_GRAFANA_DB_PASSWORD=unused-postgres-only docker compose up -d postgres)
 echo "Waiting for Postgres to accept connections..."
 until docker exec infra-postgres-1 pg_isready -U acs >/dev/null 2>&1; do sleep 1; done
 echo "Postgres is up."
