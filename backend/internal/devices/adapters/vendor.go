@@ -43,14 +43,20 @@ func lastPathSegment(path string) string {
 	return path
 }
 
-// genericCellularFallback is the standard TR-181 Cellular path set used
-// when a device's manufacturer doesn't match any known vendor catalog —
-// the same fallback a GenieACS provision script falls back to for an
-// unrecognized vendor rather than giving up.
+// genericCellularFallback is the standard TR-181 Cellular signal-quality
+// path set used when a device's manufacturer doesn't match any known
+// vendor catalog.
+//
+// These sit directly on Device.Cellular.Interface.{i} — verified against
+// TR-181 Issue 2.19, whose profile index lists RSSI/RSRP/RSRQ on the
+// Interface object and confines Stats. to byte/packet counters. There is
+// deliberately no SINR entry: TR-181 does not define one at all, so any
+// device reporting SINR does so through a vendor extension, which is the
+// per-vendor catalog's job rather than this fallback's.
 var genericCellularFallback = []string{
-	"Device.Cellular.Interface.1.Stats.RSRP",
-	"Device.Cellular.Interface.1.Stats.RSRQ",
-	"Device.Cellular.Interface.1.Stats.SNR",
+	"Device.Cellular.Interface.1.RSRP",
+	"Device.Cellular.Interface.1.RSRQ",
+	"Device.Cellular.Interface.1.RSSI",
 }
 
 // Registry holds every vendor's parsed catalog, loaded once at startup.
