@@ -165,7 +165,7 @@ paths:
               properties:
                 account_id: { type: string, nullable: true, description: "Omit for a fleet-wide subscription" }
                 target_url: { type: string }
-                secret: { type: string, description: "HMAC-SHA256 signing secret — deliveries carry X-Webhook-Signature: hex(HMAC-SHA256(secret, body))" }
+                secret: { type: string, description: "HMAC-SHA256 signing secret — deliveries carry Webhook-Id, Webhook-Timestamp, and Webhook-Signature: v1,<hex>, where <hex> is HMAC-SHA256 over '<Webhook-Id>.<Webhook-Timestamp>.<raw body>', hex-encoded" }
                 event_types: { type: array, items: { type: string, example: JOB_COMPLETED } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/WebhookSubscription" } } } }

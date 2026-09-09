@@ -1395,6 +1395,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/label": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set the operator-facing device name (devices.write permission)
+         * @description The human name for a unit, e.g. "Mrs Dlamini, 14 Oak Ave". Identity remains oui_serial; labels need not be unique. An empty string clears it.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        label?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Label contains control characters or exceeds 120 characters */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description No such device in the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/location": {
         parameters: {
             query?: never;
@@ -3948,7 +4007,7 @@ export interface paths {
                         /** @description null = fleet-wide subscription */
                         account_id?: string | null;
                         target_url: string;
-                        /** @description HMAC-SHA256 signing secret for X-Webhook-Signature */
+                        /** @description HMAC-SHA256 signing secret — deliveries carry Webhook-Id, Webhook-Timestamp, and Webhook-Signature: v1,<hex>, where <hex> is HMAC-SHA256 over '<Webhook-Id>.<Webhook-Timestamp>.<raw body>', hex-encoded */
                         secret: string;
                         event_types: string[];
                     };
@@ -4954,6 +5013,8 @@ export interface components {
             udp_connection_request_address?: string;
             nat_detected?: boolean;
             customer_id?: string;
+            /** @description Operator-chosen name for the unit */
+            label?: string;
             location?: string;
             /** Format: double */
             latitude?: number | null;
