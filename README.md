@@ -31,10 +31,13 @@ opt-out is `ACS_INSECURE_DEV_MODE=true`, for isolated local development.
 Bare-metal (Postgres from compose, services via `go run`):
 
 ```bash
+export GRAFANA_ADMIN_PASSWORD=change-me ACS_GRAFANA_DB_PASSWORD=change-me
 docker compose -f infra/docker-compose.yml up -d postgres
 source scripts/gen-env.sh            # generates and persists real secrets in ~/.acs-secrets.env
 scripts/start.sh
 ```
+
+Note: `docker compose` interpolates the entire file before selecting services, so the Grafana service's mandatory password variables must resolve even when starting only Postgres. These throwaway values are safe for local development; a real deployment must set real passwords via `ACS_POSTGRES_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, and `ACS_GRAFANA_DB_PASSWORD`.
 
 Fully containerized:
 

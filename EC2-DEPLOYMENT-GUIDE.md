@@ -205,6 +205,7 @@ From the repo root:
 
 ```bash
 cd infra
+export GRAFANA_ADMIN_PASSWORD=<real-password> ACS_GRAFANA_DB_PASSWORD=<real-password>
 docker compose up -d postgres
 
 # Wait a few seconds for it to initialize, then verify:
@@ -215,6 +216,8 @@ docker compose logs postgres
 psql -h localhost -U acs -d acs -c "SELECT 1"
 # Password: acs (or whatever you configured in docker-compose.yml)
 ```
+
+Note: `docker compose` interpolates the entire file before selecting services, so the Grafana service's mandatory password variables must be set even when starting only Postgres.
 
 ## 5. Backend Build & Setup
 

@@ -68,11 +68,14 @@ URL field — everything below calls it `<ACS_URL>` (e.g.
 
 ```bash
 cd ACS/infra
+export GRAFANA_ADMIN_PASSWORD=change-me ACS_GRAFANA_DB_PASSWORD=change-me
 docker compose up -d postgres        # add prometheus/grafana too if you want metrics dashboards
 
 cd ../backend
 export ACS_POSTGRES_DSN="postgres://acs:acs@localhost:5432/acs?sslmode=disable"
 ```
+
+Note: `docker compose` interpolates the entire file before selecting services, so the Grafana service's mandatory password variables must be set even when starting only Postgres. Use real passwords for production.
 
 Set these before starting `cmd/acs` and `cmd/api` — this is the realistic
 minimum for a device test, not the full production list (see §7 for
