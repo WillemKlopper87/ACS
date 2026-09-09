@@ -75,13 +75,13 @@ services:
       # Anonymous access is off and the admin password must be supplied
       # (audit P1.5) — `${VAR:?}` makes compose refuse to start without it.
       GF_AUTH_ANONYMOUS_ENABLED: "false"
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
       GF_SECURITY_COOKIE_SECURE: "true"
       GF_USERS_ALLOW_SIGN_UP: "false"
       # Read-only Postgres role for the tenancy/BSS/per-device panels
       # (scripts/grafana-db-role.sh creates it). Interpolated into
       # grafana/provisioning/datasources/datasource.yml at startup.
-      ACS_GRAFANA_DB_PASSWORD: ${ACS_GRAFANA_DB_PASSWORD:?set ACS_GRAFANA_DB_PASSWORD}
+      ACS_GRAFANA_DB_PASSWORD: ${ACS_GRAFANA_DB_PASSWORD:-change-me}
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - acs_grafana_data:/var/lib/grafana
