@@ -37,7 +37,7 @@ Compatibility must not become a reason to disable authentication globally. Prefe
 
 | Vendor | Model (catalog) | Data model | Mock: Inform/session | Mock: SPV / fault | Mock: Download / TransferComplete | Real device | Firmware tested | Notes |
 |---|---|---|---|---|---|---|---|---|
-| Huawei | 5G CPE Pro | TR-181 (expected) | ✅ | ✅ (shared path) | ✅ (shared path) | not yet | — | Some firmwares may require Basic fallback or an older TLS floor; record exact firmware behaviour rather than enabling either fleet-wide. |
+| Huawei | 5G CPE Pro | TR-181 (expected) | ✅ | ✅ (shared path) | ✅ (shared path) | not yet | — | Some firmwares may require Basic fallback or an older TLS floor; record exact firmware behaviour rather than enabling either fleet-wide. Bare `WLANConfiguration.{i}.KeyPassphrase` is advertised but non-writable on EchoLife ONTs (HG8546M, HG8145V5, HG8245H, EG8141A5); writes must target `PreSharedKey.1.KeyPassphrase`, which is now the preferred TR-098 candidate. A TR-098 device implementing only the bare form is a known unqualified case until writability-aware candidate selection lands. |
 | Nokia | FastMile 5G | TR-181 | ✅ | ✅ | ✅ | not yet | — | |
 | Teltonika | RUTX50 | TR-181 | ✅ | ✅ | ✅ | not yet | — | |
 | Zyxel | NR7101 / NR5103 | TR-181 | ✅ (primary mock profile) | ✅ | ✅ | not yet | — | |

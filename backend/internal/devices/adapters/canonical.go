@@ -70,7 +70,7 @@ var igd1Paths = map[CanonicalParameter]string{
 	ManagementServerUsername:              "InternetGatewayDevice.ManagementServer.Username",
 	ManagementServerPassword:              "InternetGatewayDevice.ManagementServer.Password",
 	WiFiSSID:                              "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
-	WiFiKeyPassphrase:                     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase",
+	WiFiKeyPassphrase:                     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase",
 }
 
 // igd1PathAlternates lists additional, less-preferred TR-098 locations for
@@ -79,8 +79,15 @@ var igd1Paths = map[CanonicalParameter]string{
 // TR-098 Issue 1.8 defines both WLANConfiguration.{i}.KeyPassphrase and
 // WLANConfiguration.{i}.PreSharedKey.{i}.KeyPassphrase, and real devices
 // disagree about which one is writable, so a single path cannot express
-// the truth. Preference order is set in igd1Paths; this holds the rest.
-var igd1PathAlternates = map[CanonicalParameter][]string{}
+// the truth. Huawei EchoLife ONTs -- the largest TR-098 fleet -- advertise
+// the bare KeyPassphrase as non-writable and only accept the PreSharedKey
+// form, so that leads; the bare form stays as a candidate for the simpler
+// devices that implement only it.
+var igd1PathAlternates = map[CanonicalParameter][]string{
+	WiFiKeyPassphrase: {
+		"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase",
+	},
+}
 
 // ResolvePathCandidates returns every known path for a canonical parameter
 // under the given data-model root, most-preferred first, or nil when the
