@@ -161,7 +161,7 @@ task adds the candidate list; Task 3 changes which one is preferred.
 
 **Interfaces:**
 - Consumes: existing `CanonicalParameter` constants, `device2Paths`, `igd1Paths`, and `ResolvePath` from `canonical.go`.
-- Produces: `func ResolvePathCandidates(root string, p CanonicalParameter) []string` — returns candidate paths in preference order, most-preferred first; returns `nil` when the parameter is unknown for that root. `ResolvePath` keeps its existing signature `(string, bool)` and returns the first candidate.
+- Produces: `func ResolvePathCandidates(root string, p CanonicalParameter) []string` — returns candidate paths in preference order, most-preferred first; returns `nil` when the parameter is unknown for that root. `ResolvePath` keeps its existing signature `(string, bool)` and returns the first candidate. Also declares `var igd1PathAlternates map[CanonicalParameter][]string`, empty here and populated by Task 3.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -211,6 +211,10 @@ Expected: compile FAIL — `undefined: ResolvePathCandidates`.
 In `backend/internal/devices/adapters/canonical.go`, add after the existing
 `ResolvePath` function:
 
+`canonical.go` already imports `acs/internal/devices` and the existing
+`ResolvePath` branches on `devices.DataModelRootIGD1`. Use that same constant —
+do **not** introduce a local copy of the root string.
+
 ```go
 // igd1PathAlternates lists additional, less-preferred TR-098 locations for
 // a canonical parameter, appended after the igd1Paths entry.
@@ -231,7 +235,7 @@ var igd1PathAlternates = map[CanonicalParameter][]string{}
 // what ResolvePath returns.
 func ResolvePathCandidates(root string, p CanonicalParameter) []string {
 	table, alternates := device2Paths, map[CanonicalParameter][]string(nil)
-	if root == DataModelRootIGD1Value {
+	if root == devices.DataModelRootIGD1 {
 		table, alternates = igd1Paths, igd1PathAlternates
 	}
 	primary, ok := table[p]
@@ -245,18 +249,7 @@ func ResolvePathCandidates(root string, p CanonicalParameter) []string {
 }
 ```
 
-Then, still in `canonical.go`, add this constant near the top of the file so the
-package does not need to import `internal/devices` (which would create an import
-cycle — `devices` already imports nothing from `adapters`, but keeping
-`adapters` free of the dependency preserves that):
-
-```go
-// DataModelRootIGD1Value mirrors devices.DataModelRootIGD1 without taking a
-// dependency on that package.
-const DataModelRootIGD1Value = "IGD1"
-```
-
-Finally, rewrite `ResolvePath`'s body to delegate, keeping its signature and
+Then rewrite `ResolvePath`'s body to delegate, keeping its signature and
 its existing TR-181-first fallback behaviour:
 
 ```go
@@ -376,8 +369,10 @@ In `backend/internal/devices/adapters/canonical.go`, change the
 	WiFiKeyPassphrase:                     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase",
 ```
 
-and populate `igd1PathAlternates` (added empty in Task 2) with the older form as
-the fallback candidate:
+and **replace** the `igd1PathAlternates` declaration that Task 2 added — this is
+an edit of the existing `var` block, not a second declaration; adding a second
+one is a duplicate-declaration compile error — so that it carries the older form
+as the fallback candidate:
 
 ```go
 // igd1PathAlternates lists additional, less-preferred TR-098 locations for

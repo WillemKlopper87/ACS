@@ -17,3 +17,6 @@ infra/.env.containerized
 # Playwright artifacts
 frontend/test-results/
 frontend/playwright-report/
+
+# Subagent-driven-development scratch workspace (ledger, briefs, review packages)
+.superpowers/
