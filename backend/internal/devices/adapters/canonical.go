@@ -73,6 +73,38 @@ var igd1Paths = map[CanonicalParameter]string{
 	WiFiKeyPassphrase:                     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase",
 }
 
+// igd1PathAlternates lists additional, less-preferred TR-098 locations for
+// a canonical parameter, appended after the igd1Paths entry.
+//
+// TR-098 Issue 1.8 defines both WLANConfiguration.{i}.KeyPassphrase and
+// WLANConfiguration.{i}.PreSharedKey.{i}.KeyPassphrase, and real devices
+// disagree about which one is writable, so a single path cannot express
+// the truth. Preference order is set in igd1Paths; this holds the rest.
+var igd1PathAlternates = map[CanonicalParameter][]string{}
+
+// ResolvePathCandidates returns every known path for a canonical parameter
+// under the given data-model root, most-preferred first, or nil when the
+// parameter is unknown for that root.
+//
+// Callers that know which paths a device actually advertises (and whether
+// they are writable) should pick the first candidate the device supports.
+// Callers without that information should use the first entry, which is
+// what ResolvePath returns.
+func ResolvePathCandidates(root string, p CanonicalParameter) []string {
+	table, alternates := device2Paths, map[CanonicalParameter][]string(nil)
+	if root == devices.DataModelRootIGD1 {
+		table, alternates = igd1Paths, igd1PathAlternates
+	}
+	primary, ok := table[p]
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, 1+len(alternates[p]))
+	out = append(out, primary)
+	out = append(out, alternates[p]...)
+	return out
+}
+
 // ResolvePath maps a CanonicalParameter to the actual path for the given
 // data_model_root (design doc v3 §6.3's resolve_path). Falls back to the
 // TR-181 (device2Paths) entry for DataModelRootUnknown/DataModelRootDevice2
@@ -80,12 +112,11 @@ var igd1Paths = map[CanonicalParameter]string{
 // plan §3) everywhere else, so this only changes behavior once discovery
 // has actually confirmed IGD1.
 func ResolvePath(root string, p CanonicalParameter) (string, bool) {
-	if root == devices.DataModelRootIGD1 {
-		path, ok := igd1Paths[p]
-		return path, ok
+	cands := ResolvePathCandidates(root, p)
+	if len(cands) == 0 {
+		return "", false
 	}
-	path, ok := device2Paths[p]
-	return path, ok
+	return cands[0], true
 }
 
 // Diagnostic kinds for DiagnosticsPrefix.

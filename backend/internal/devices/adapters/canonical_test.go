@@ -66,3 +66,34 @@ func TestWiFiAssociatedDevicesPrefix(t *testing.T) {
 		t.Errorf("IGD1 prefix = %q, want InternetGatewayDevice.LANDevice.1.WLANConfiguration.", got)
 	}
 }
+
+func TestResolvePathCandidatesSinglePathParameters(t *testing.T) {
+	got := ResolvePathCandidates(devices.DataModelRootDevice2, DeviceInfoSoftwareVersion)
+	want := []string{"Device.DeviceInfo.SoftwareVersion"}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("ResolvePathCandidates(DEVICE2, software_version) = %v, want %v", got, want)
+	}
+}
+
+func TestResolvePathCandidatesUnknownParameterReturnsNil(t *testing.T) {
+	if got := ResolvePathCandidates(devices.DataModelRootDevice2, CanonicalParameter("nope.not.real")); got != nil {
+		t.Errorf("ResolvePathCandidates for an unknown parameter = %v, want nil", got)
+	}
+}
+
+// ResolvePath must stay consistent with ResolvePathCandidates: it returns
+// the single most-preferred candidate.
+func TestResolvePathReturnsFirstCandidate(t *testing.T) {
+	for _, root := range []string{devices.DataModelRootDevice2, devices.DataModelRootIGD1} {
+		for _, p := range []CanonicalParameter{DeviceInfoSoftwareVersion, WiFiSSID, WiFiKeyPassphrase} {
+			cands := ResolvePathCandidates(root, p)
+			path, ok := ResolvePath(root, p)
+			if len(cands) == 0 {
+				t.Fatalf("root %q param %q: no candidates", root, p)
+			}
+			if !ok || path != cands[0] {
+				t.Errorf("root %q param %q: ResolvePath = (%q, %v), want (%q, true)", root, p, path, ok, cands[0])
+			}
+		}
+	}
+}
