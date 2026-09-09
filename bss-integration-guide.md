@@ -337,15 +337,20 @@ Once an order's underlying job reaches a terminal status (`SUCCESS`, `FAILED`, o
 
 (`fault_code`/`fault_string` are also present, `null` unless `status` is `FAILED`.)
 
-Every delivery carries:
+Each delivery carries `Content-Type: application/json` plus:
 
-```
-Content-Type: application/json
-X-Webhook-Event: JOB_COMPLETED
-X-Webhook-Signature: <hex HMAC-SHA256 of the raw body, keyed on your subscription's secret>
-```
+| Header | Value |
+|---|---|
+| `Webhook-Id` | Unique delivery id. Stable across retries of the same delivery — use it as your idempotency key. |
+| `Webhook-Timestamp` | Unix seconds at send time. Fresh per attempt. |
+| `Webhook-Signature` | `v1,<hex>` where `<hex>` is HMAC-SHA256 over `<Webhook-Id>.<Webhook-Timestamp>.<raw body>` using your subscription secret. |
+| `X-Webhook-Event` | Event type. |
+| `X-Webhook-Signature` | Deprecated. Same hex as the `v1` scheme above, without the prefix. |
 
-Verify it the standard way: `hex(HMAC-SHA256(secret, request_body))` should equal `X-Webhook-Signature`. Reject anything that doesn't match.
+Verify by recomputing the HMAC over the concatenation — not over the body
+alone — and reject deliveries whose `Webhook-Timestamp` is outside a
+tolerance window (5 minutes is the common choice). Deduplicate on
+`Webhook-Id`: delivery is at-least-once, so the same id can arrive twice.
 
 Your endpoint must respond `2xx` to acknowledge. A non-2xx or a failed request is retried with exponential backoff (2^attempts minutes) up to 8 attempts, after which the delivery is left `FAILED` — there's no operator-facing UI onto individual delivery status yet, so a persistently-failing `target_url` needs to be diagnosed from `cmd/bssadapter`'s own logs for now.
 
