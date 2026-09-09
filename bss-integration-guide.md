@@ -346,6 +346,14 @@ Each delivery carries `Content-Type: application/json` plus:
 | `Webhook-Signature` | `v1,<hex>` where `<hex>` is HMAC-SHA256 over `<Webhook-Id>.<Webhook-Timestamp>.<raw body>` using your subscription secret. |
 | `X-Webhook-Event` | Event type. |
 
+This scheme is modelled on [Standard Webhooks](https://www.standardwebhooks.com/)
+(same `<id>.<timestamp>.<body>` signed-string construction and header
+names) but is **not wire-compatible** with it: `<hex>` above is
+hex-encoded HMAC-SHA256 with a plain shared secret, whereas Standard
+Webhooks base64-encodes the MAC and expects a `whsec_`-prefixed,
+base64-decoded secret. Verify against the construction documented here,
+not with an off-the-shelf Standard Webhooks verifier library.
+
 **Breaking change:** the old `X-Webhook-Signature` header (a body-only
 HMAC, with no id or timestamp bound in) has been removed, not deprecated.
 A body-only signature is replayable — keeping it around, even as a

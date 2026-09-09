@@ -160,12 +160,17 @@ func (h *handler) deliverDueWebhooks(ctx context.Context, client *http.Client) {
 	}
 }
 
-// sendWebhookDelivery POSTs one delivery, signed per the Standard Webhooks
-// convention: Webhook-Signature is "v1," + hex(HMAC-SHA256(secret,
+// sendWebhookDelivery POSTs one delivery, signed with a scheme modelled on
+// Standard Webhooks: Webhook-Signature is "v1," + hex(HMAC-SHA256(secret,
 // "<id>.<timestamp>.<body>")). Binding the delivery id and the send-time
 // timestamp into the signed string, not just the body, is what lets a
 // receiver reject a captured-and-replayed delivery and dedupe legitimate
 // retries — a body-only HMAC (the previous scheme) gives it neither.
+//
+// This is not wire-compatible with stock Standard Webhooks verifiers: we
+// hex-encode the MAC and use a plain shared secret, where Standard
+// Webhooks base64-encodes it and expects a whsec_-prefixed, base64-decoded
+// secret. Only the signed-string construction and header names match.
 func (h *handler) sendWebhookDelivery(ctx context.Context, client *http.Client, d bss.WebhookDelivery) bool {
 	// audit H-7: re-checked at send time, not just at subscription
 	// creation — a target allowed when the subscription was created
@@ -209,8 +214,12 @@ func (h *handler) sendWebhookDelivery(ctx context.Context, client *http.Client, 
 	return ok
 }
 
-// webhookSignature signs a delivery the way Standard Webhooks specifies:
-// HMAC-SHA256 over "<msg-id>.<timestamp>.<payload>", hex-encoded.
+// webhookSignature signs a delivery using a scheme modelled on Standard
+// Webhooks' signed-string construction: HMAC-SHA256 over
+// "<msg-id>.<timestamp>.<payload>", hex-encoded (Standard Webhooks itself
+// base64-encodes the MAC and uses a whsec_-prefixed, base64-decoded
+// secret -- deliberately not replicated here, so this is not wire-compatible
+// with off-the-shelf Standard Webhooks verifier libraries).
 //
 // Binding the id and timestamp into the signed string is what makes the
 // signature non-replayable. Signing the body alone -- which this worker
