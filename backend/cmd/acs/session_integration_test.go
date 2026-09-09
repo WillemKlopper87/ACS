@@ -52,9 +52,10 @@ type mockCPE struct {
 	user, pass string
 }
 
-// tryPost performs a CWMP POST and returns any transport error to the
-// caller instead of aborting the test, so it is safe to call from worker
-// goroutines that need to record their own failures.
+// tryPost performs a CWMP POST and returns any transport or protocol error
+// to the caller instead of aborting the test, so it is safe to call from
+// any goroutine, including worker goroutines that need to record their own
+// failures. It never calls t.Fatal/t.Fatalf.
 func (c *mockCPE) tryPost(body string) (int, string, error) {
 	c.t.Helper()
 	for attempt := 0; attempt < 2; attempt++ {
@@ -82,21 +83,21 @@ func (c *mockCPE) tryPost(body string) (int, string, error) {
 			hdr := res.Header.Get("WWW-Authenticate")
 			m := regexp.MustCompile(`nonce="([^"]+)"`).FindStringSubmatch(hdr)
 			if m == nil {
-				c.t.Fatalf("401 without a Digest nonce: %q", hdr)
+				return 0, "", fmt.Errorf("401 without a Digest nonce: %q", hdr)
 			}
 			c.nonce, c.nc = m[1], 0
 			continue
 		}
 		return res.StatusCode, string(b), nil
 	}
-	c.t.Fatal("still unauthorized after answering the challenge")
-	return 0, "", nil
+	return 0, "", fmt.Errorf("still unauthorized after answering the challenge")
 }
 
-// post performs a CWMP POST and aborts the test on a transport error.
-// Safe only from the goroutine running the test: t.Fatal elsewhere runs
-// runtime.Goexit() and silently kills the caller. Concurrent callers must
-// use tryPost and handle the error themselves.
+// post performs a CWMP POST and aborts the test on any error tryPost
+// returns (transport or protocol). Safe only from the goroutine running
+// the test: t.Fatal elsewhere runs runtime.Goexit() and silently kills
+// the caller. Concurrent callers must use tryPost and handle the error
+// themselves.
 func (c *mockCPE) post(body string) (int, string) {
 	c.t.Helper()
 	code, body2, err := c.tryPost(body)
