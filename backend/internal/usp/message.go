@@ -3,6 +3,8 @@ package usp
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 
 	"acs/internal/usp/uspproto"
 
@@ -47,14 +49,21 @@ func EncodeGet(msgID string, paths []string, maxDepth uint32) ([]byte, error) {
 // allowPartial false means the agent applies all of it or none, which is
 // what a configuration write generally wants: a half-applied Set leaves
 // a device in a state no operator asked for.
+//
+// Every parameter is encoded with Required: true, which tells the agent
+// to fail the entire Set if that single parameter fails, regardless of
+// allowPartial. A per-parameter required flag -- for a caller that wants
+// a best-effort write where some parameters may legitimately fail -- is
+// a later plan's concern; this function offers no way to request it.
 func EncodeSet(msgID string, allowPartial bool, updates map[string]map[string]string) ([]byte, error) {
 	objs := make([]*uspproto.Set_UpdateObject, 0, len(updates))
-	for objPath, params := range updates {
+	for _, objPath := range slices.Sorted(maps.Keys(updates)) {
+		params := updates[objPath]
 		settings := make([]*uspproto.Set_UpdateParamSetting, 0, len(params))
-		for name, value := range params {
+		for _, name := range slices.Sorted(maps.Keys(params)) {
 			settings = append(settings, &uspproto.Set_UpdateParamSetting{
 				Param:    name,
-				Value:    value,
+				Value:    params[name],
 				Required: true,
 			})
 		}
@@ -73,12 +82,17 @@ func EncodeSet(msgID string, allowPartial bool, updates map[string]map[string]st
 
 // EncodeAdd builds an Add creating one instance of a multi-instance
 // object, with optional initial parameter values.
+//
+// As with EncodeSet, every parameter is encoded with Required: true, so
+// the agent fails the whole Add if any single initial value is
+// rejected. A per-parameter required flag is a later plan's concern if
+// a best-effort creation is ever needed.
 func EncodeAdd(msgID string, allowPartial bool, objPath string, params map[string]string) ([]byte, error) {
 	settings := make([]*uspproto.Add_CreateParamSetting, 0, len(params))
-	for name, value := range params {
+	for _, name := range slices.Sorted(maps.Keys(params)) {
 		settings = append(settings, &uspproto.Add_CreateParamSetting{
 			Param:    name,
-			Value:    value,
+			Value:    params[name],
 			Required: true,
 		})
 	}

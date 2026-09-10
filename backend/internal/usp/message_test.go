@@ -1,6 +1,7 @@
 package usp
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -197,5 +198,46 @@ func TestDecodeMsgEmptyIsMalformed(t *testing.T) {
 	}
 	if _, err := DecodeMsg(wire); !errors.Is(err, ErrMalformedMessage) {
 		t.Errorf("Msg with nil Body gave %v, want ErrMalformedMessage", err)
+	}
+}
+
+// EncodeSet and EncodeAdd iterate maps; without sorting the parameter
+// and object-path keys before encoding, identical input can produce
+// different wire bytes from run to run. Two objects and two parameters
+// per object give map iteration enough entries that this would actually
+// flip byte order on an unsorted implementation, rather than passing by
+// accident with a single-entry map.
+func TestEncodeSetAddDeterministic(t *testing.T) {
+	updates := map[string]map[string]string{
+		"Device.WiFi.SSID.1.": {"SSID": "acs-test", "Enable": "true"},
+		"Device.WiFi.SSID.2.": {"SSID": "acs-guest", "Enable": "false"},
+	}
+	first, err := EncodeSet("m-det-1", false, updates)
+	if err != nil {
+		t.Fatalf("EncodeSet: %v", err)
+	}
+	for i := 0; i < 10; i++ {
+		again, err := EncodeSet("m-det-1", false, updates)
+		if err != nil {
+			t.Fatalf("EncodeSet: %v", err)
+		}
+		if !bytes.Equal(first, again) {
+			t.Fatalf("EncodeSet produced different bytes across runs on iteration %d: non-deterministic map ordering", i)
+		}
+	}
+
+	params := map[string]string{"SSID": "acs-test", "Enable": "true"}
+	firstAdd, err := EncodeAdd("m-det-2", false, "Device.WiFi.SSID.", params)
+	if err != nil {
+		t.Fatalf("EncodeAdd: %v", err)
+	}
+	for i := 0; i < 10; i++ {
+		again, err := EncodeAdd("m-det-2", false, "Device.WiFi.SSID.", params)
+		if err != nil {
+			t.Fatalf("EncodeAdd: %v", err)
+		}
+		if !bytes.Equal(firstAdd, again) {
+			t.Fatalf("EncodeAdd produced different bytes across runs on iteration %d: non-deterministic map ordering", i)
+		}
 	}
 }
