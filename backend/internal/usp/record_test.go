@@ -115,9 +115,102 @@ func TestDecodeRecordNoPayload(t *testing.T) {
 		case *uspproto.Record_NoSessionContext:
 			rec.RecordType = v
 		}
-		if _, err := DecodeRecord(mustMarshalRecord(t, rec), testController); !errors.Is(err, ErrNoPayload) {
+		got, err := DecodeRecord(mustMarshalRecord(t, rec), testController)
+		if !errors.Is(err, ErrNoPayload) {
 			t.Errorf("%s: got %v, want ErrNoPayload", name, err)
 		}
+		if got == nil {
+			t.Fatalf("%s: record is nil; a lifecycle record must be returned so its type can be read", name)
+		}
+		if name == "empty_no_session_context" && got.Type != RecordNoSessionContext {
+			t.Errorf("%s: Type = %v, want RecordNoSessionContext", name, got.Type)
+		}
+	}
+}
+
+func TestDecodeRecordConnectTypes(t *testing.T) {
+	cases := map[string]struct {
+		rt   any
+		want RecordType
+	}{
+		"websocket": {&uspproto.Record_WebsocketConnect{WebsocketConnect: &uspproto.WebSocketConnectRecord{}}, RecordWebSocketConnect},
+		"mqtt":      {&uspproto.Record_MqttConnect{MqttConnect: &uspproto.MQTTConnectRecord{Version: uspproto.MQTTConnectRecord_V5, SubscribedTopic: "/usp/agent"}}, RecordMQTTConnect},
+		"stomp":     {&uspproto.Record_StompConnect{StompConnect: &uspproto.STOMPConnectRecord{}}, RecordSTOMPConnect},
+		"uds":       {&uspproto.Record_UdsConnect{UdsConnect: &uspproto.UDSConnectRecord{}}, RecordUDSConnect},
+	}
+	for name, c := range cases {
+		rec := &uspproto.Record{Version: RecordVersion, ToId: string(testController), FromId: string(testAgent), PayloadSecurity: uspproto.Record_PLAINTEXT}
+		switch v := c.rt.(type) {
+		case *uspproto.Record_WebsocketConnect:
+			rec.RecordType = v
+		case *uspproto.Record_MqttConnect:
+			rec.RecordType = v
+		case *uspproto.Record_StompConnect:
+			rec.RecordType = v
+		case *uspproto.Record_UdsConnect:
+			rec.RecordType = v
+		}
+		got, err := DecodeRecord(mustMarshalRecord(t, rec), testController)
+		if !errors.Is(err, ErrNoPayload) {
+			t.Errorf("%s: err = %v, want ErrNoPayload", name, err)
+		}
+		if got == nil {
+			t.Fatalf("%s: record is nil; a connect record must be returned so its type can be read", name)
+		}
+		if got.Type != c.want {
+			t.Errorf("%s: Type = %v, want %v", name, got.Type, c.want)
+		}
+		if got.From != testAgent {
+			t.Errorf("%s: From = %q, want %q -- the sender must be known even without a payload", name, got.From, testAgent)
+		}
+	}
+}
+
+func TestDecodeRecordDisconnectCarriesReason(t *testing.T) {
+	rec := &uspproto.Record{
+		Version: RecordVersion, ToId: string(testController), FromId: string(testAgent),
+		PayloadSecurity: uspproto.Record_PLAINTEXT,
+		RecordType:      &uspproto.Record_Disconnect{Disconnect: &uspproto.DisconnectRecord{Reason: "agent shutting down", ReasonCode: 7005}},
+	}
+	got, err := DecodeRecord(mustMarshalRecord(t, rec), testController)
+	if !errors.Is(err, ErrNoPayload) {
+		t.Fatalf("err = %v, want ErrNoPayload", err)
+	}
+	if got == nil || got.Type != RecordDisconnect {
+		t.Fatalf("got %+v, want a RecordDisconnect", got)
+	}
+	if got.DisconnectReason != "agent shutting down" || got.DisconnectCode != 7005 {
+		t.Errorf("disconnect detail = (%q, %d), want (agent shutting down, 7005)", got.DisconnectReason, got.DisconnectCode)
+	}
+}
+
+// Session context exists for segmentation and end-to-end encryption, both
+// out of scope and both refused by the reference agent. It must be
+// refused distinctly, not mistaken for an empty message.
+func TestDecodeRecordSessionContextUnsupported(t *testing.T) {
+	rec := &uspproto.Record{
+		Version: RecordVersion, ToId: string(testController), FromId: string(testAgent),
+		PayloadSecurity: uspproto.Record_PLAINTEXT,
+		RecordType:      &uspproto.Record_SessionContext{SessionContext: &uspproto.SessionContextRecord{SessionId: 1, Payload: [][]byte{[]byte("x")}}},
+	}
+	got, err := DecodeRecord(mustMarshalRecord(t, rec), testController)
+	if !errors.Is(err, ErrSessionContextUnsupported) {
+		t.Errorf("err = %v, want ErrSessionContextUnsupported", err)
+	}
+	if errors.Is(err, ErrNoPayload) {
+		t.Error("a session-context record must not be reported as ErrNoPayload; it carries a payload we refuse")
+	}
+	if got == nil || got.Type != RecordSessionContext {
+		t.Errorf("got %+v, want Type RecordSessionContext", got)
+	}
+}
+
+func TestRecordTypeString(t *testing.T) {
+	if RecordDisconnect.String() == "" || RecordUnknown.String() == "" {
+		t.Error("RecordType.String() must never be empty; it is logged")
+	}
+	if RecordType(999).String() == RecordUnknown.String() && RecordUnknown.String() == "" {
+		t.Error("unmapped types must render")
 	}
 }
 
