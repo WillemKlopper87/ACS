@@ -275,3 +275,107 @@ func TestSwapDevice_NothingToSwapIsTypedError(t *testing.T) {
 		t.Errorf("got %v, want ErrNoDeviceForRole", err)
 	}
 }
+
+func TestValidRole(t *testing.T) {
+	for _, role := range []string{RoleGateway, RoleONT, RoleExtender, RoleSTB, RoleATA, RoleOther} {
+		if !ValidRole(role) {
+			t.Errorf("ValidRole(%q) = false, want true", role)
+		}
+	}
+	for _, role := range []string{"", "router", "GATEWAY", "ont "} {
+		if ValidRole(role) {
+			t.Errorf("ValidRole(%q) = true, want false", role)
+		}
+	}
+}
+
+func TestValidUnassignReason(t *testing.T) {
+	for _, reason := range []string{ReasonRMA, ReasonUpgrade, ReasonReturn, ReasonMoved, ReasonCorrected} {
+		if !ValidUnassignReason(reason) {
+			t.Errorf("ValidUnassignReason(%q) = false, want true", reason)
+		}
+	}
+	for _, reason := range []string{"", "broken", "RMA"} {
+		if ValidUnassignReason(reason) {
+			t.Errorf("ValidUnassignReason(%q) = true, want false", reason)
+		}
+	}
+}
+
+// An invalid role must never reach the database as a CHECK-constraint
+// violation (23514) — it should be rejected as ErrInvalidRole before the
+// INSERT even runs.
+func TestAssignDevice_InvalidRoleIsTypedError(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, devA, "S-A")
+
+	_, err := r.AssignDevice(ctx, "acct", "S-A", "router", "")
+	if !errors.Is(err, ErrInvalidRole) {
+		t.Errorf("got %v, want ErrInvalidRole", err)
+	}
+}
+
+func TestUnassignDevice_InvalidRoleAndReasonAreTypedErrors(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, devA, "S-A")
+	if _, err := r.AssignDevice(ctx, "acct", "S-A", RoleGateway, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.UnassignDevice(ctx, "acct", "router", ReasonRMA); !errors.Is(err, ErrInvalidRole) {
+		t.Errorf("invalid role: got %v, want ErrInvalidRole", err)
+	}
+	if err := r.UnassignDevice(ctx, "acct", RoleGateway, "broken"); !errors.Is(err, ErrInvalidUnassignReason) {
+		t.Errorf("invalid reason: got %v, want ErrInvalidUnassignReason", err)
+	}
+}
+
+func TestSwapDevice_InvalidRoleAndReasonAreTypedErrors(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, devA, "S-A")
+	seedDevice(t, ctx, r, devB, "S-B")
+	if _, err := r.AssignDevice(ctx, "acct", "S-A", RoleGateway, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := r.SwapDevice(ctx, "acct", "router", "S-B", ReasonRMA); !errors.Is(err, ErrInvalidRole) {
+		t.Errorf("invalid role: got %v, want ErrInvalidRole", err)
+	}
+	if _, err := r.SwapDevice(ctx, "acct", RoleGateway, "S-B", "broken"); !errors.Is(err, ErrInvalidUnassignReason) {
+		t.Errorf("invalid reason: got %v, want ErrInvalidUnassignReason", err)
+	}
+}
+
+// Assigning the same device to the account under a second role must be
+// reported as ErrDeviceAlreadyAssigned (account_device_mappings_active_idx),
+// not ErrRoleAlreadyAssigned — the role itself is free, the device is the
+// problem.
+func TestAssignDevice_SameDeviceSecondRoleIsDeviceAlreadyAssigned(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, devA, "S-A")
+
+	if _, err := r.AssignDevice(ctx, "acct", "S-A", RoleGateway, ""); err != nil {
+		t.Fatalf("first assign: %v", err)
+	}
+	_, err := r.AssignDevice(ctx, "acct", "S-A", RoleONT, "")
+	if !errors.Is(err, ErrDeviceAlreadyAssigned) {
+		t.Errorf("got %v, want ErrDeviceAlreadyAssigned", err)
+	}
+	if errors.Is(err, ErrRoleAlreadyAssigned) {
+		t.Errorf("got ErrRoleAlreadyAssigned too — the role (ont) was actually free, this must not be reported as a role conflict")
+	}
+}
+
+func TestDeviceIDForSerial(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, devA, "S-A")
+
+	id, err := r.DeviceIDForSerial(ctx, "S-A")
+	if err != nil || id != devA {
+		t.Errorf("DeviceIDForSerial(S-A) = (%q, %v), want (%q, nil)", id, err, devA)
+	}
+	_, err = r.DeviceIDForSerial(ctx, "NO-SUCH")
+	if !errors.Is(err, ErrDeviceNotFound) {
+		t.Errorf("got %v, want ErrDeviceNotFound", err)
+	}
+}

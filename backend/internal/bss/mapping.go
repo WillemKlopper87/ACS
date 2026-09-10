@@ -60,16 +60,67 @@ var ErrDeviceNotFound = errors.New("no device found for oui_serial")
 var ErrNoDeviceForRole = errors.New("no active device assigned in that role")
 
 // ErrRoleAlreadyAssigned is returned when an account already has an active
-// device in the requested role, or the same device is already active for
-// the account. Both are unique-index violations; the caller must
-// UnassignDevice or SwapDevice first.
+// device in the requested role (account_device_mappings_active_role_idx).
+// The caller must UnassignDevice or SwapDevice first.
 var ErrRoleAlreadyAssigned = errors.New("account already has an active device in that role")
+
+// ErrDeviceAlreadyAssigned is returned when the device being assigned is
+// already actively assigned to the account, under some role — possibly a
+// different one than requested (account_device_mappings_active_idx). This
+// is a distinct condition from ErrRoleAlreadyAssigned: that one means the
+// *role* is taken by some device, this one means the *device* is already
+// active for the account.
+var ErrDeviceAlreadyAssigned = errors.New("device is already actively assigned to this account")
+
+// ErrInvalidRole is returned when role isn't one of the Role* constants —
+// a client-side validation error, not a database failure, so callers can
+// map it to 400 instead of 500. Checked before the database sees it so a
+// CHECK-constraint violation (SQLSTATE 23514) never has to propagate.
+var ErrInvalidRole = errors.New("unknown device role")
+
+// ErrInvalidUnassignReason is ErrInvalidRole's counterpart for
+// unassign_reason.
+var ErrInvalidUnassignReason = errors.New("unknown unassign reason")
+
+// validRoles and validReasons are derived from the Role*/Reason* constants
+// above rather than hand-written, so they cannot drift from the CHECK
+// constraints in migration 0052.
+var validRoles = map[string]bool{
+	RoleGateway: true, RoleONT: true, RoleExtender: true,
+	RoleSTB: true, RoleATA: true, RoleOther: true,
+}
+
+var validReasons = map[string]bool{
+	ReasonRMA: true, ReasonUpgrade: true, ReasonReturn: true,
+	ReasonMoved: true, ReasonCorrected: true,
+}
+
+// ValidRole reports whether role is one of the Role* constants.
+func ValidRole(role string) bool { return validRoles[role] }
+
+// ValidUnassignReason reports whether reason is one of the Reason*
+// constants.
+func ValidUnassignReason(reason string) bool { return validReasons[reason] }
 
 // isUniqueViolation reports whether err is Postgres 23505, the code both
 // partial unique indexes raise. Same shape as internal/operators.
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// uniqueViolationErr maps a 23505 to the typed error matching which of the
+// two partial unique indexes raised it — account_device_mappings_active_idx
+// means the device itself is already active for the account (possibly
+// under a different role); account_device_mappings_active_role_idx means
+// the role slot is taken. Falls back to ErrRoleAlreadyAssigned if the
+// constraint name doesn't match either (defensive; should not happen).
+func uniqueViolationErr(err error, accountID, role string) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.ConstraintName == "account_device_mappings_active_idx" {
+		return fmt.Errorf("%w: account %s", ErrDeviceAlreadyAssigned, accountID)
+	}
+	return fmt.Errorf("%w: account %s role %s", ErrRoleAlreadyAssigned, accountID, role)
 }
 
 // AccountDeviceMapping is a row of account_device_mappings. JSON tags
@@ -129,7 +180,7 @@ func insertAssignment(ctx context.Context, q interface {
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, id, accountID, deviceID, ouiSerial, servicePlan, StatusActive, role)
 	if isUniqueViolation(err) {
-		return fmt.Errorf("%w: account %s role %s", ErrRoleAlreadyAssigned, accountID, role)
+		return uniqueViolationErr(err, accountID, role)
 	}
 	if err != nil {
 		return fmt.Errorf("insert assignment: %w", err)
@@ -137,9 +188,20 @@ func insertAssignment(ctx context.Context, q interface {
 	return nil
 }
 
+// DeviceIDForSerial resolves an oui_serial to a devices.id, or
+// ErrDeviceNotFound. Exported so callers (cmd/bssadapter's createMapping)
+// can validate a caller-supplied device_uuid against the real resolution
+// *before* writing an assignment row, rather than after.
+func (r *Repository) DeviceIDForSerial(ctx context.Context, ouiSerial string) (string, error) {
+	return resolveDeviceID(ctx, r.db, ouiSerial)
+}
+
 // AssignDevice resolves oui_serial against the devices table and records
 // that the device now serves the account in the given role.
 func (r *Repository) AssignDevice(ctx context.Context, accountID, ouiSerial, role, servicePlan string) (*AccountDeviceMapping, error) {
+	if !ValidRole(role) {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidRole, role)
+	}
 	deviceID, err := resolveDeviceID(ctx, r.db, ouiSerial)
 	if err != nil {
 		return nil, err
@@ -153,6 +215,12 @@ func (r *Repository) AssignDevice(ctx context.Context, accountID, ouiSerial, rol
 // UnassignDevice ends the account's current assignment in the given role,
 // recording why. The row stays as history.
 func (r *Repository) UnassignDevice(ctx context.Context, accountID, role, reason string) error {
+	if !ValidRole(role) {
+		return fmt.Errorf("%w: %s", ErrInvalidRole, role)
+	}
+	if !ValidUnassignReason(reason) {
+		return fmt.Errorf("%w: %s", ErrInvalidUnassignReason, reason)
+	}
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE account_device_mappings
 		   SET unassigned_at = now(), unassign_reason = $3, updated_at = now()
@@ -177,6 +245,12 @@ func (r *Repository) UnassignDevice(ctx context.Context, accountID, role, reason
 // the addressing defect this model exists to fix. The service plan
 // carries over to the replacement.
 func (r *Repository) SwapDevice(ctx context.Context, accountID, role, newOUISerial, reason string) (*AccountDeviceMapping, error) {
+	if !ValidRole(role) {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidRole, role)
+	}
+	if !ValidUnassignReason(reason) {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidUnassignReason, reason)
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin swap: %w", err)
