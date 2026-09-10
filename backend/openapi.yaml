@@ -1350,7 +1350,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/BSSMapping" } } } } } } }
     post:
       tags: [BSS Admin]
-      summary: Create an account-device mapping from the console (superadmin) — the same upsert POST /bss/v1/mappings performs
+      summary: Assign a device to an account in a role from the console (superadmin) — same role-addressable assignment as POST /bss/v1/mappings; a role already filled for the account returns 409
       requestBody:
         required: true
         content:
@@ -1362,8 +1362,30 @@ paths:
                 account_id: { type: string }
                 oui_serial: { type: string }
                 service_plan: { type: string }
+                role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "Defaults to gateway when omitted." }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/BSSMapping" } } } }
+
+  /api/v1/bss/mappings/{account_id}/history:
+    get:
+      tags: [BSS Admin]
+      summary: Full assignment history for an account (superadmin) — current and released assignments, oldest first
+      parameters: [{ name: account_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/BSSMapping" } } } } } } }
+
+  /api/v1/bss/mappings/{account_id}/{role}:
+    delete:
+      tags: [BSS Admin]
+      summary: Unassign the device currently serving an account in a role (superadmin) — the operator escape hatch for a role slot filled in error; 404 if the role has no active assignment
+      parameters:
+        - { name: account_id, in: path, required: true, schema: { type: string } }
+        - { name: role, in: path, required: true, schema: { type: string, enum: [gateway, ont, extender, stb, ata, other] } }
+        - { name: reason, in: query, required: true, schema: { type: string, enum: [rma, upgrade, return, moved, corrected] } }
+      responses:
+        "204": { description: Unassigned }
+        "400": { description: Missing or invalid reason }
+        "404": { description: No active device assigned in that role }
 
   /api/v1/bss/oauth-clients:
     get:
@@ -2087,6 +2109,9 @@ components:
         oui_serial: { type: string }
         service_plan: { type: string }
         status: { type: string, enum: [PENDING_ACTIVE, ACTIVE, SUSPENDED, TERMINATED] }
+        role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "What the device does for this account. At most one active mapping exists per (account_id, role)." }
+        assigned_at: { type: string, format: date-time }
+        unassigned_at: { type: string, format: date-time, nullable: true, description: "Null while the mapping is current; set once released — the row then remains as history." }
 
     BSSWebhookSubscription:
       type: object
