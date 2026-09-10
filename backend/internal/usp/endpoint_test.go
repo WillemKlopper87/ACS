@@ -69,6 +69,8 @@ func TestOUISerialOnlyForWellFormedOSEndpoints(t *testing.T) {
 		"os::",                 // empty instance
 		"os::-trailing",        // empty OUI component
 		"os::trailing-",        // empty serial component
+		"os::aa-bb-",           // multi-hyphen with empty serial: first-hyphen split would wrongly accept
+		"os::-aa-bb",           // multi-hyphen with empty OUI: last-hyphen split would wrongly accept
 		"nonsense",             // no separator at all
 		"",                     // empty
 	} {

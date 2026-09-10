@@ -80,8 +80,13 @@ func (e EndpointID) OUISerial() (ouiSerial string, ok bool) {
 		return "", false
 	}
 	instance := e.Instance()
-	oui, serial, found := strings.Cut(instance, "-")
-	if !found || oui == "" || serial == "" {
+	// Both components must be non-empty. A serial may itself contain
+	// hyphens, so neither "first hyphen" nor "last hyphen" alone is the
+	// right split: a leading hyphen means an empty OUI, a trailing one an
+	// empty serial, and either must be refused.
+	if !strings.Contains(instance, "-") ||
+		strings.HasPrefix(instance, "-") ||
+		strings.HasSuffix(instance, "-") {
 		return "", false
 	}
 	return instance, true
