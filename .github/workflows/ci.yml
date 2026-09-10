@@ -144,6 +144,12 @@ jobs:
         env:
           ACS_TEST_POSTGRES_DSN: postgres://acs:acs@localhost:5432/acs?sslmode=disable
         run: go test -race -count=1 -p 1 -run Integration ./cmd/api/ ./cmd/acs/  # -p 1: both suites reset the same database, so packages must not run concurrently
+      - name: DB-backed repository tests (assignment constraints, Digest replay, lease recovery, dashboard SQL, OAuth revocation)
+        env:
+          ACS_TEST_POSTGRES_DSN: postgres://acs:acs@localhost:5432/acs?sslmode=disable
+        # These packages' DB-backed tests are not named *Integration*, so the
+        # step above never ran them. -p 1: every one resets the same database.
+        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/
       - name: placeholder secrets are refused (fail-closed)
         run: |
           set +e
