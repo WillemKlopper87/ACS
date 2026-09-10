@@ -89,6 +89,8 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	// superadmin-only, same posture as the Tenancy structural CRUD above.
 	route("GET", "/api/v1/bss/mappings", admin, h.listBSSMappings)
 	route("POST", "/api/v1/bss/mappings", admin, h.createBSSMapping)
+	route("GET", "/api/v1/bss/mappings/{account_id}/history", admin, h.getBSSMappingHistory)
+	route("DELETE", "/api/v1/bss/mappings/{account_id}/{role}", admin, h.deleteBSSMapping)
 	route("GET", "/api/v1/bss/oauth-clients", admin, h.listBSSOAuthClients)
 	route("POST", "/api/v1/bss/oauth-clients", admin, h.createBSSOAuthClient)
 	route("DELETE", "/api/v1/bss/oauth-clients/{id}", admin, h.revokeBSSOAuthClient)

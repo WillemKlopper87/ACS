@@ -130,6 +130,14 @@ func (h *handler) createBSSMapping(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no device found for that oui_serial — it must have sent at least one Inform first", http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, bss.ErrInvalidRole) || errors.Is(err, bss.ErrInvalidUnassignReason) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if errors.Is(err, bss.ErrDeviceAlreadyAssigned) {
+		http.Error(w, "this device is already actively assigned to the account, under some role", http.StatusConflict)
+		return
+	}
 	if errors.Is(err, bss.ErrRoleAlreadyAssigned) {
 		http.Error(w, "the account already has an active device in that role", http.StatusConflict)
 		return
@@ -141,11 +149,67 @@ func (h *handler) createBSSMapping(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := operatorFromRequest(r)
 	if err := h.auditor.Record(r.Context(), actor, mapping.DeviceID, "BSSMappingCreatedByAdmin", map[string]any{
-		"account_id": req.AccountID, "oui_serial": req.OUISerial,
+		"account_id": req.AccountID, "oui_serial": req.OUISerial, "role": mapping.Role,
 	}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
 	writeJSON(w, http.StatusOK, mapping)
+}
+
+// getBSSMappingHistory returns every assignment an account has ever had,
+// current and released — the operator-console escape hatch for auditing
+// how a role slot filled up, and (paired with deleteBSSMapping below) for
+// clearing a wedged one without going through the BSS adapter itself.
+func (h *handler) getBSSMappingHistory(w http.ResponseWriter, r *http.Request) {
+	accountID := r.PathValue("account_id")
+	items, err := h.bssMappings.AssignmentHistory(r.Context(), accountID)
+	if err != nil {
+		h.logger.Error("failed to fetch bss mapping history", "err", err, "account_id", accountID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if items == nil {
+		items = []bss.AccountDeviceMapping{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// deleteBSSMapping ends the account's current assignment in the given
+// role, recording why via the required reason query parameter. This is
+// the operator-console counterpart to createBSSMapping, and the escape
+// hatch an operator needs when a mapping request left a role slot wedged
+// (a rejected device_uuid mismatch, or any other stuck state) — an
+// integrator that hit 409 ErrRoleAlreadyAssigned on a retry can be
+// unblocked here without touching the database directly.
+func (h *handler) deleteBSSMapping(w http.ResponseWriter, r *http.Request) {
+	accountID := r.PathValue("account_id")
+	role := r.PathValue("role")
+	reason := r.URL.Query().Get("reason")
+	if reason == "" {
+		http.Error(w, "reason query parameter is required", http.StatusBadRequest)
+		return
+	}
+	err := h.bssMappings.UnassignDevice(r.Context(), accountID, role, reason)
+	if errors.Is(err, bss.ErrInvalidRole) || errors.Is(err, bss.ErrInvalidUnassignReason) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if errors.Is(err, bss.ErrNoDeviceForRole) {
+		http.Error(w, "no active device assigned in that role", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to unassign bss mapping", "err", err, "account_id", accountID, "role", role)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	actor := operatorFromRequest(r)
+	if err := h.auditor.Record(r.Context(), actor, "", "BSSMappingUnassignedByAdmin", map[string]any{
+		"account_id": accountID, "role": role, "reason": reason,
+	}); err != nil {
+		h.logger.Error("failed to write audit record", "err", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // webhookSubscriptionResponse omits bss.WebhookSubscription.Secret (audit
