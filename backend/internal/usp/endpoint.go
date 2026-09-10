@@ -64,16 +64,20 @@ func (e EndpointID) split() (authority, instance string, ok bool) {
 	return authority, instance, true
 }
 
-// OUISerial extracts an "<OUI>-<SerialNumber>" identity from an endpoint
-// id, and reports whether the id had that exact shape.
+// OUISerial returns the validated "<OUI>-<SerialNumber>" instance from
+// a well-formed "os::" endpoint id, and reports whether the id had that
+// shape. It does not split the instance into OUI and serial parts: it
+// only checks that the instance contains a hyphen and neither starts
+// nor ends with one, then returns the whole thing back.
 //
 // This is an OPTIMISATION for an agent already in the registry, not a
-// way to establish identity. It succeeds only for the "os::" authority
-// with an instance that splits into two non-empty parts on its last
-// hyphen -- the form the Broadband Forum reference agent derives from
-// ManufacturerOUI and SerialNumber. Every other shape returns false, so
-// a caller cannot mint a device record from an opaque id and produce a
-// duplicate fleet.
+// way to establish identity. Callers must match the result against
+// registryOUI + "-" + registrySerial as a whole string comparison, never
+// by splitting it -- a serial number may itself contain hyphens, so
+// there is no hyphen position (first, last, or otherwise) that reliably
+// separates OUI from serial. Every shape that fails validation returns
+// false, so a caller cannot mint a device record from an opaque id and
+// produce a duplicate fleet.
 func (e EndpointID) OUISerial() (ouiSerial string, ok bool) {
 	authority, _, valid := e.split()
 	if !valid || authority != "os" {

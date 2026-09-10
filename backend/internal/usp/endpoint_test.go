@@ -54,8 +54,9 @@ func TestOUISerialOnlyForWellFormedOSEndpoints(t *testing.T) {
 		t.Errorf("OUISerial() = (%q, %v), want (012345-0800270B57FF, true)", ouiSerial, ok)
 	}
 
-	// A serial containing a hyphen: split on the LAST hyphen, so the OUI
-	// is the first component and the serial keeps its own hyphens.
+	// A serial containing a hyphen: OUISerial does not split at all, so
+	// the whole instance comes back unchanged regardless of how many
+	// hyphens it contains.
 	ouiSerial, ok = EndpointID("os::012345-ABC-123").OUISerial()
 	if !ok || ouiSerial != "012345-ABC-123" {
 		t.Errorf("OUISerial() = (%q, %v), want the whole instance back", ouiSerial, ok)
