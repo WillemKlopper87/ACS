@@ -53,12 +53,22 @@ type WebSocket struct {
 	cfg WebSocketConfig
 	log *slog.Logger
 
+	mu       sync.Mutex
 	listener net.Listener
 	server   *http.Server
-
-	mu   sync.Mutex
-	addr string
+	addr     string
+	// cancel ends runCtx (see Start), the context every connection's read
+	// loop is bound to. Canceling it makes coder/websocket force-close
+	// each outstanding Read immediately, so Stop by itself -- without
+	// depending on the caller's ctx -- closes every connection this
+	// transport owns, per the Transport.Stop contract.
+	cancel context.CancelFunc
 }
+
+var (
+	_ Transport = (*WebSocket)(nil)
+	_ Conn      = (*wsConn)(nil)
+)
 
 // NewWebSocket validates cfg and constructs a WebSocket transport. It
 // does not start listening -- call Start for that.
@@ -92,10 +102,15 @@ func (w *WebSocket) Start(ctx context.Context, h Handler) error {
 		ln = tls.NewListener(ln, w.cfg.TLS)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc(w.cfg.Path, w.handle(ctx, h))
+	// runCtx bounds every connection's read loop rather than ctx directly,
+	// so Stop can force all of them closed (via cancel) regardless of
+	// whether the caller ever cancels ctx.
+	runCtx, cancel := context.WithCancel(ctx)
 
-	w.server = &http.Server{
+	mux := http.NewServeMux()
+	mux.HandleFunc(w.cfg.Path, w.handle(runCtx, h))
+
+	server := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -103,10 +118,12 @@ func (w *WebSocket) Start(ctx context.Context, h Handler) error {
 	w.mu.Lock()
 	w.listener = ln
 	w.addr = ln.Addr().String()
+	w.server = server
+	w.cancel = cancel
 	w.mu.Unlock()
 
 	go func() {
-		if err := w.server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			w.log.Error("mtp: WebSocket server exited", "error", err)
 		}
 	}()
@@ -124,7 +141,16 @@ func (w *WebSocket) Start(ctx context.Context, h Handler) error {
 func (w *WebSocket) Stop(ctx context.Context) error {
 	w.mu.Lock()
 	server := w.server
+	cancel := w.cancel
 	w.mu.Unlock()
+
+	// Cancel first: every read loop's outstanding Read is bound to
+	// runCtx, and coder/websocket force-closes a connection as soon as
+	// that context is canceled, unblocking each read loop without
+	// waiting on a graceful close handshake with its peer.
+	if cancel != nil {
+		cancel()
+	}
 	if server == nil {
 		return nil
 	}
@@ -173,7 +199,9 @@ func (w *WebSocket) handle(ctx context.Context, h Handler) http.HandlerFunc {
 		// Defence in depth: Accept only negotiates the subprotocol if the
 		// client offered it, but confirm the result explicitly.
 		if conn.Subprotocol() != subprotocol {
-			conn.Close(websocket.StatusProtocolError, "subprotocol "+subprotocol+" required")
+			if err := conn.Close(websocket.StatusProtocolError, "subprotocol "+subprotocol+" required"); err != nil {
+				w.log.Warn("mtp: WebSocket close after subprotocol mismatch failed", "error", err)
+			}
 			return
 		}
 
@@ -218,6 +246,13 @@ func (c *wsConn) Send(ctx context.Context, record []byte) error {
 	return c.conn.Write(ctx, websocket.MessageBinary, record)
 }
 
+// Close ends the connection with StatusNormalClosure and reason. Per
+// the controller ruling on R-WS.16, Conn.Close keeps this single-arg
+// shape and always sends StatusNormalClosure with the given reason
+// text; only transport-detected protocol violations use other status
+// codes (non-binary frame -> StatusUnsupportedData, missing
+// subprotocol -> StatusProtocolError), and those are issued directly
+// by the transport, not through this method.
 func (c *wsConn) Close(reason string) error {
 	return c.conn.Close(websocket.StatusNormalClosure, reason)
 }
@@ -240,13 +275,18 @@ func (c *wsConn) readLoop(ctx context.Context, h Handler) {
 			break
 		}
 		if typ != websocket.MessageBinary {
-			// R-WS.14: a frame that is not binary closes the connection.
-			// Conn.Close performs the full close handshake and waits (up
-			// to 5s) for the peer's close frame in reply; the peer cannot
-			// send that reply until it observes this side disconnect, so
-			// the handshake is started in the background and the read
-			// loop exits -- and fires OnDisconnect -- immediately.
-			go c.conn.Close(websocket.StatusUnsupportedData, "only binary frames are accepted")
+			// R-WS.14: a frame that is not binary closes the connection
+			// with StatusUnsupportedData. This runs synchronously, on the
+			// read loop itself, and completes before OnDisconnect fires:
+			// coder/websocket's Close is otherwise idempotent-but-racy --
+			// "additional calls to Close are no-ops" only once the first
+			// call has actually written its close frame -- so a detached
+			// goroutine here could let a Handler's own Close call (e.g.
+			// from OnDisconnect) win the race and overwrite this status
+			// with StatusNormalClosure on the wire. Running it inline
+			// guarantees this frame is sent, and casClosing latched,
+			// before any Handler code can call Close again.
+			_ = c.conn.Close(websocket.StatusUnsupportedData, "only binary frames are accepted")
 			terminalErr = fmt.Errorf("mtp: WebSocket received non-binary frame type %v", typ)
 			break
 		}

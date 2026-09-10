@@ -21,6 +21,10 @@ type recordingHandler struct {
 	connected    chan struct{}
 	received     chan struct{}
 	disconnected chan struct{}
+	// onDisconnect, when set, is invoked from OnDisconnect before the
+	// disconnected channel is signaled -- used to exercise a Handler
+	// that calls Conn.Close from its own OnDisconnect callback.
+	onDisconnect func(Conn)
 }
 
 func newRecordingHandler() *recordingHandler {
@@ -43,7 +47,11 @@ func (h *recordingHandler) OnRecord(in Inbound) {
 func (h *recordingHandler) OnDisconnect(c Conn, _ error) {
 	h.mu.Lock()
 	h.disconnects = append(h.disconnects, c)
+	hook := h.onDisconnect
 	h.mu.Unlock()
+	if hook != nil {
+		hook(c)
+	}
 	h.disconnected <- struct{}{}
 }
 
@@ -156,16 +164,39 @@ func TestWebSocketDeliversBinaryRecord(t *testing.T) {
 
 func TestWebSocketRejectsTextFrame(t *testing.T) {
 	h := newRecordingHandler()
+	// The transport closes synchronously, on the read loop, before firing
+	// OnDisconnect (see websocket.go), so a Handler that calls Conn.Close
+	// from OnDisconnect must not be able to overwrite the StatusUnsupportedData
+	// close already sent -- exercise that race here.
+	h.onDisconnect = func(c Conn) { _ = c.Close("cleanup") }
 	_, url := startWS(t, h)
 	c := dial(t, url+"?eid=os%3A%3A012345-AAAA", "v1.usp")
 	defer c.CloseNow()
 	waitFor(t, h.connected, "OnConnect")
+
+	// Read concurrently: the server's close handshake needs an active
+	// reader on this side to ack it, and that ack must not wait on
+	// OnDisconnect (which itself waits on the server's close completing).
+	type readResult struct {
+		err error
+	}
+	resultCh := make(chan readResult, 1)
+	go func() {
+		_, _, err := c.Read(context.Background())
+		resultCh <- readResult{err: err}
+	}()
+
 	_ = c.Write(context.Background(), websocket.MessageText, []byte("not a record"))
 	waitFor(t, h.disconnected, "OnDisconnect after a text frame")
+
 	// The client must observe a close status, not a silent drop.
-	_, _, err := c.Read(context.Background())
-	if websocket.CloseStatus(err) != websocket.StatusUnsupportedData {
-		t.Errorf("client saw close status %v, want StatusUnsupportedData (R-WS.14)", websocket.CloseStatus(err))
+	select {
+	case res := <-resultCh:
+		if websocket.CloseStatus(res.err) != websocket.StatusUnsupportedData {
+			t.Errorf("client saw close status %v, want StatusUnsupportedData (R-WS.14)", websocket.CloseStatus(res.err))
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for client Read after text frame")
 	}
 }
 
@@ -207,5 +238,33 @@ func TestWebSocketDisconnectOnce(t *testing.T) {
 func TestWebSocketPlaintextRequiresOptIn(t *testing.T) {
 	if _, err := NewWebSocket(WebSocketConfig{Addr: "127.0.0.1:0"}, slog.Default()); err == nil {
 		t.Error("NewWebSocket with no TLS and no AllowPlaintext succeeded; plaintext must be opt-in")
+	}
+}
+
+func TestWebSocketStopClosesConnections(t *testing.T) {
+	h := newRecordingHandler()
+	ws, err := NewWebSocket(WebSocketConfig{Addr: "127.0.0.1:0", AllowPlaintext: true}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Start with context.Background(): nothing external ever cancels this
+	// transport's ctx, so Stop alone must be the thing that tears the
+	// connection down (Transport.Stop's "closing any connections it owns").
+	if err := ws.Start(context.Background(), h); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ws.Stop(context.Background()) })
+
+	c := dial(t, "ws://"+ws.Addr()+"/usp?eid=os%3A%3A012345-AAAA", "v1.usp")
+	defer c.CloseNow()
+	waitFor(t, h.connected, "OnConnect")
+
+	if err := ws.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	waitFor(t, h.disconnected, "OnDisconnect after Stop")
+
+	if _, _, err := c.Read(context.Background()); err == nil {
+		t.Error("client Read succeeded after server Stop; want a close error")
 	}
 }
