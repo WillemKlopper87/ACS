@@ -316,7 +316,7 @@ EOF
   - `func FormatEndpointID(authority, instance string) EndpointID` — joins with `::`, percent-encoding `instance` per the USP rules.
   - `func (e EndpointID) Authority() string` — the part before `::`, or `""` if malformed.
   - `func (e EndpointID) Instance() string` — the part after `::`, percent-decoded, or `""` if malformed.
-  - `func (e EndpointID) OUISerial() (ouiSerial string, ok bool)` — returns the `<OUI>-<Serial>` identity **only** for a well-formed `os::` endpoint whose instance splits into exactly two non-empty parts on the last `-`; `ok` is false for every other shape.
+  - `func (e EndpointID) OUISerial() (ouiSerial string, ok bool)` — returns the whole `<OUI>-<Serial>` instance **only** for a well-formed `os::` endpoint whose instance contains at least one `-`, and neither starts nor ends with one (so both the OUI and the serial are non-empty; a serial may itself contain hyphens); `ok` is false for every other shape.
   - `func PercentEncodeUSP(s string) string` and `func PercentDecodeUSP(s string) (string, error)`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -395,6 +395,8 @@ func TestOUISerialOnlyForWellFormedOSEndpoints(t *testing.T) {
 		"os::",                       // empty instance
 		"os::-trailing",              // empty OUI component
 		"os::trailing-",              // empty serial component
+		"os::aa-bb-",                 // multi-hyphen with empty serial: first-hyphen split would wrongly accept
+		"os::-aa-bb",                 // multi-hyphen with empty OUI: last-hyphen split would wrongly accept
 		"nonsense",                   // no separator at all
 		"",                           // empty
 	} {
@@ -515,8 +517,13 @@ func (e EndpointID) OUISerial() (ouiSerial string, ok bool) {
 		return "", false
 	}
 	instance := e.Instance()
-	oui, serial, found := strings.Cut(instance, "-")
-	if !found || oui == "" || serial == "" {
+	// Both components must be non-empty. A serial may itself contain
+	// hyphens, so neither "first hyphen" nor "last hyphen" alone is the
+	// right split: a leading hyphen means an empty OUI, a trailing one an
+	// empty serial, and either must be refused.
+	if !strings.Contains(instance, "-") ||
+		strings.HasPrefix(instance, "-") ||
+		strings.HasSuffix(instance, "-") {
 		return "", false
 	}
 	return instance, true
