@@ -39,7 +39,7 @@ jobs:
           export PATH="/tmp/protoc/bin:$(go env GOPATH)/bin:$PATH"
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
           ./internal/usp/proto/generate.sh
-          git diff --exit-code -- internal/usp/uspproto/
+          test -z "$(git status --porcelain -uall -- internal/usp/uspproto/)" || { git status --porcelain -uall -- internal/usp/uspproto/; exit 1; }
         working-directory: backend
       - run: go vet ./...
       - run: go build ./...
