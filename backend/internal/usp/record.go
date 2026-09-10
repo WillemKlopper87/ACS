@@ -127,13 +127,6 @@ type DecodedRecord struct {
 // rather than none at all. Every other error path -- malformed wire
 // bytes, an unsupported version, non-plaintext payload security, or a
 // record addressed to someone else -- returns a nil record.
-// errNoPayload wraps ErrNoPayload with the concrete oneof type that
-// carried no message, shared by every DecodeRecord branch that reports
-// it.
-func errNoPayload(rt any) error {
-	return fmt.Errorf("%w: record type %T", ErrNoPayload, rt)
-}
-
 func DecodeRecord(wire []byte, us EndpointID) (*DecodedRecord, error) {
 	var rec uspproto.Record
 	if err := proto.Unmarshal(wire, &rec); err != nil {
@@ -188,4 +181,11 @@ func DecodeRecord(wire []byte, us EndpointID) (*DecodedRecord, error) {
 		out.Type = RecordUnknown
 		return out, errNoPayload(rt)
 	}
+}
+
+// errNoPayload wraps ErrNoPayload with the concrete oneof type that
+// carried no message, shared by every DecodeRecord branch that reports
+// it.
+func errNoPayload(rt any) error {
+	return fmt.Errorf("%w: record type %T", ErrNoPayload, rt)
 }
