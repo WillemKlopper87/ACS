@@ -1159,6 +1159,27 @@ func TestDecodeMsgGarbage(t *testing.T) {
 		t.Errorf("got %v, want ErrMalformedMessage", err)
 	}
 }
+
+// A field-less protobuf is valid wire and unmarshals with nil Header and
+// nil Body -- a distinct path from unparseable bytes, and one a truncated
+// or attacker-crafted record can reach. It must be ErrMalformedMessage too.
+func TestDecodeMsgEmptyIsMalformed(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeMsg(wire); !errors.Is(err, ErrMalformedMessage) {
+		t.Errorf("empty Msg gave %v, want ErrMalformedMessage", err)
+	}
+	// Header present but Body absent must also be refused.
+	wire, err = proto.Marshal(&uspproto.Msg{Header: &uspproto.Header{MsgId: "m-9", MsgType: uspproto.Header_GET}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeMsg(wire); !errors.Is(err, ErrMalformedMessage) {
+		t.Errorf("Msg with nil Body gave %v, want ErrMalformedMessage", err)
+	}
+}
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
