@@ -1514,6 +1514,15 @@ func TestErrorFromMsgNilForNonError(t *testing.T) {
 	if got := ErrorFromMsg(nil); got != nil {
 		t.Errorf("ErrorFromMsg(nil) = %+v, want nil", got)
 	}
+	// A Body_Error wrapper whose inner Error is nil is a malformed inbound
+	// message. It must yield nil, not a nil-pointer dereference.
+	hollow := &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: "m-3", MsgType: uspproto.Header_ERROR},
+		Body:   &uspproto.Body{MsgBody: &uspproto.Body_Error{Error: nil}},
+	}
+	if got := ErrorFromMsg(hollow); got != nil {
+		t.Errorf("ErrorFromMsg on a Body_Error with nil Error = %+v, want nil", got)
+	}
 }
 
 // The four codes later plans branch on must be matchable with errors.Is,
