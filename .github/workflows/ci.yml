@@ -30,6 +30,17 @@ jobs:
         run: |
           out=$(gofmt -l .)
           if [ -n "$out" ]; then echo "unformatted:"; echo "$out"; exit 1; fi
+      - name: USP protobuf bindings match their .proto
+        run: |
+          PROTOC_VERSION=29.3
+          curl -sSL -o /tmp/protoc.zip \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          unzip -q -o /tmp/protoc.zip -d /tmp/protoc
+          export PATH="/tmp/protoc/bin:$(go env GOPATH)/bin:$PATH"
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          ./internal/usp/proto/generate.sh
+          git diff --exit-code -- internal/usp/uspproto/
+        working-directory: backend
       - run: go vet ./...
       - run: go build ./...
       - run: go test -race -count=1 ./...
