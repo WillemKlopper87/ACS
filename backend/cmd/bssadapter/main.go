@@ -495,9 +495,39 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve and validate device_uuid *before* writing anything. Doing
+	// this after AssignDevice used to commit the row, then reject the
+	// caller with a 400 that left the role slot wedged — their corrected
+	// retry got 409 ErrRoleAlreadyAssigned for a mapping this handler
+	// itself created. See internal/bss.Repository.DeviceIDForSerial.
+	if req.DeviceUUID != "" {
+		resolvedID, err := h.mappings.DeviceIDForSerial(r.Context(), req.OUISerial)
+		if errors.Is(err, bss.ErrDeviceNotFound) {
+			writeError(w, http.StatusNotFound, "ErrDeviceNotMapped", err.Error())
+			return
+		}
+		if err != nil {
+			h.logger.Error("failed to resolve device for mapping", "err", err, "account_id", req.AccountID)
+			writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+			return
+		}
+		if req.DeviceUUID != resolvedID {
+			writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "device_uuid does not match the device resolved from oui_serial")
+			return
+		}
+	}
+
 	mapping, err := h.mappings.AssignDevice(r.Context(), req.AccountID, req.OUISerial, roleOrDefault(req.Role), req.ServicePlan)
 	if errors.Is(err, bss.ErrDeviceNotFound) {
 		writeError(w, http.StatusNotFound, "ErrDeviceNotMapped", err.Error())
+		return
+	}
+	if errors.Is(err, bss.ErrInvalidRole) || errors.Is(err, bss.ErrInvalidUnassignReason) {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", err.Error())
+		return
+	}
+	if errors.Is(err, bss.ErrDeviceAlreadyAssigned) {
+		writeError(w, http.StatusConflict, "ErrDeviceAlreadyAssigned", "this device is already actively assigned to the account, under some role")
 		return
 	}
 	if errors.Is(err, bss.ErrRoleAlreadyAssigned) {
@@ -507,10 +537,6 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Error("failed to create mapping", "err", err, "account_id", req.AccountID)
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
-		return
-	}
-	if req.DeviceUUID != "" && req.DeviceUUID != mapping.DeviceID {
-		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "device_uuid does not match the device resolved from oui_serial")
 		return
 	}
 
