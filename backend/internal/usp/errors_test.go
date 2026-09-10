@@ -14,6 +14,8 @@ func TestErrorCodeString(t *testing.T) {
 		ErrCodeObjectDoesNotExist: "object does not exist",
 		ErrCodePermissionDenied:   "permission denied",
 		ErrCodeCommandFailure:     "command failure",
+		ErrCodeInvalidPath:        "invalid path",
+		ErrCodeInvalidCommandArgs: "invalid command arguments",
 	}
 	for code, want := range cases {
 		if got := code.String(); got != want {
@@ -23,6 +25,12 @@ func TestErrorCodeString(t *testing.T) {
 	// An unmapped code must still render usefully rather than blankly.
 	if got := ErrorCode(7999).String(); !strings.Contains(got, "7999") {
 		t.Errorf("unknown code rendered as %q, want it to mention 7999", got)
+	}
+	// The highest defined constant must render with its name, not fall
+	// back to the bare number -- otherwise the table's upper bound has
+	// silently drifted from errorCodeText.
+	if got := ErrCodeInvalidCommandArgs.String(); got != "invalid command arguments" {
+		t.Errorf("highest defined code rendered as %q, want its name", got)
 	}
 }
 
@@ -56,6 +64,38 @@ func TestErrorFromMsg(t *testing.T) {
 	// lands in a job's failure detail.
 	if s := uspErr.Error(); !strings.Contains(s, "7013") || !strings.Contains(s, "read-only") {
 		t.Errorf("Error() = %q, want it to mention 7013 and the message", s)
+	}
+}
+
+// A nil *USPError must be safe to call methods on: a caller that returns
+// ErrorFromMsg's result through an error interface gets a nil-receiver
+// call the moment something does err.Error() or errors.Is(err, ...).
+func TestUSPErrorNilReceiverSafe(t *testing.T) {
+	var e *USPError
+	if got := e.Error(); got != "usp: <nil>" {
+		t.Errorf("(*USPError)(nil).Error() = %q, want %q", got, "usp: <nil>")
+	}
+	if e.Is(ErrNotWriteable) {
+		t.Error("(*USPError)(nil).Is(ErrNotWriteable) = true, want false")
+	}
+}
+
+// This is the trap itself, made harmless: assigning a nil *USPError to
+// an error interface produces a non-nil interface value, so a caller
+// must not rely on `err != nil` alone -- but calling Error() on it must
+// not panic now that the receiver is nil-safe.
+func TestErrorFromMsgTypedNilTrapIsHarmless(t *testing.T) {
+	msg := &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: "m-nil", MsgType: uspproto.Header_GET_RESP},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Response{Response: &uspproto.Response{
+			RespType: &uspproto.Response_GetResp{GetResp: &uspproto.GetResp{}},
+		}}},
+	}
+	var err error = ErrorFromMsg(msg)
+	if err != nil {
+		// This is the trap: err is a non-nil interface wrapping a nil
+		// *USPError. It must not panic when exercised.
+		_ = err.Error()
 	}
 }
 

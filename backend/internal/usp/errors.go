@@ -7,7 +7,7 @@ import (
 	"acs/internal/usp/uspproto"
 )
 
-// ErrorCode is a USP error code. The table runs 7000-7026 (design §3.3).
+// ErrorCode is a USP error code. The table runs 7000-7027 (design §3.3).
 type ErrorCode uint32
 
 const (
@@ -37,6 +37,8 @@ const (
 	ErrCodeCommandCanceled      ErrorCode = 7023
 	ErrCodeDeleteFailure        ErrorCode = 7024
 	ErrCodeDuplicateKey         ErrorCode = 7025
+	ErrCodeInvalidPath          ErrorCode = 7026
+	ErrCodeInvalidCommandArgs   ErrorCode = 7027
 )
 
 var errorCodeText = map[ErrorCode]string{
@@ -66,6 +68,8 @@ var errorCodeText = map[ErrorCode]string{
 	ErrCodeCommandCanceled:      "command canceled",
 	ErrCodeDeleteFailure:        "delete failure",
 	ErrCodeDuplicateKey:         "object exists with duplicate key",
+	ErrCodeInvalidPath:          "invalid path",
+	ErrCodeInvalidCommandArgs:   "invalid command arguments",
 }
 
 // String renders a code's meaning, falling back to the number so an
@@ -115,6 +119,9 @@ type USPError struct {
 }
 
 func (e *USPError) Error() string {
+	if e == nil {
+		return "usp: <nil>"
+	}
 	if e.Message == "" {
 		return fmt.Sprintf("usp error %d (%s)", uint32(e.Code), e.Code)
 	}
@@ -123,11 +130,26 @@ func (e *USPError) Error() string {
 
 // Is lets errors.Is match a USPError against the sentinel for its code.
 func (e *USPError) Is(target error) bool {
+	if e == nil {
+		return false
+	}
 	return sentinelForCode[e.Code] == target && target != nil
 }
 
 // ErrorFromMsg extracts a USPError from a message, or nil when the
 // message is not an Error body.
+//
+// WARNING: the result is a typed *USPError, not the error interface. A
+// nil *USPError assigned to an error interface variable produces a
+// non-nil interface value (the classic Go typed-nil trap), so a caller
+// that does `var err error = ErrorFromMsg(msg)` and then checks
+// `err != nil` will take the error branch even for a normal response.
+// Compare the *USPError result to nil before it is ever assigned to an
+// error interface, e.g.:
+//
+//	if uspErr := ErrorFromMsg(msg); uspErr != nil {
+//	    return uspErr
+//	}
 func ErrorFromMsg(msg *uspproto.Msg) *USPError {
 	if msg == nil {
 		return nil
