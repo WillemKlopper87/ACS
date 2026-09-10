@@ -116,15 +116,24 @@ type DecodedRecord struct {
 // rule in the other direction, and honouring a misaddressed record would
 // make the endpoint id meaningless as an access control.
 //
-// A connect or disconnect record is well-formed but carries no message;
-// callers get ErrNoPayload alongside a non-nil *DecodedRecord whose Type
-// (and, for a disconnect, DisconnectReason/DisconnectCode) identifies
-// the lifecycle event, so they can errors.Is(err, ErrNoPayload) and then
-// inspect the record rather than discard it. A session-context record is
-// an unsupported feature, not an empty message: it is reported as
-// ErrSessionContextUnsupported, also with a non-nil record carrying
-// Type == RecordSessionContext. Every other error path returns a nil
-// record.
+// A well-formed record that carries no usable message still returns a
+// non-nil *DecodedRecord alongside an error, so a caller can identify
+// what happened via Type (and, for a disconnect, DisconnectReason /
+// DisconnectCode) rather than discard the record: this covers an empty
+// NoSessionContext payload, any of the four connect record types, a
+// disconnect record, and an unrecognised record type, all reported as
+// ErrNoPayload; and a session-context record, reported as the distinct
+// ErrSessionContextUnsupported since it carries a payload we refuse
+// rather than none at all. Every other error path -- malformed wire
+// bytes, an unsupported version, non-plaintext payload security, or a
+// record addressed to someone else -- returns a nil record.
+// errNoPayload wraps ErrNoPayload with the concrete oneof type that
+// carried no message, shared by every DecodeRecord branch that reports
+// it.
+func errNoPayload(rt any) error {
+	return fmt.Errorf("%w: record type %T", ErrNoPayload, rt)
+}
+
 func DecodeRecord(wire []byte, us EndpointID) (*DecodedRecord, error) {
 	var rec uspproto.Record
 	if err := proto.Unmarshal(wire, &rec); err != nil {
@@ -157,26 +166,26 @@ func DecodeRecord(wire []byte, us EndpointID) (*DecodedRecord, error) {
 		return out, nil
 	case *uspproto.Record_SessionContext:
 		out.Type = RecordSessionContext
-		return out, fmt.Errorf("%w", ErrSessionContextUnsupported)
+		return out, fmt.Errorf("%w: record type %T", ErrSessionContextUnsupported, rt)
 	case *uspproto.Record_WebsocketConnect:
 		out.Type = RecordWebSocketConnect
-		return out, fmt.Errorf("%w: record type %T", ErrNoPayload, rt)
+		return out, errNoPayload(rt)
 	case *uspproto.Record_MqttConnect:
 		out.Type = RecordMQTTConnect
-		return out, fmt.Errorf("%w: record type %T", ErrNoPayload, rt)
+		return out, errNoPayload(rt)
 	case *uspproto.Record_StompConnect:
 		out.Type = RecordSTOMPConnect
-		return out, fmt.Errorf("%w: record type %T", ErrNoPayload, rt)
+		return out, errNoPayload(rt)
 	case *uspproto.Record_UdsConnect:
 		out.Type = RecordUDSConnect
-		return out, fmt.Errorf("%w: record type %T", ErrNoPayload, rt)
+		return out, errNoPayload(rt)
 	case *uspproto.Record_Disconnect:
 		out.Type = RecordDisconnect
 		out.DisconnectReason = rt.Disconnect.GetReason()
 		out.DisconnectCode = rt.Disconnect.GetReasonCode()
-		return out, fmt.Errorf("%w: record type %T", ErrNoPayload, rt)
+		return out, errNoPayload(rt)
 	default:
 		out.Type = RecordUnknown
-		return out, fmt.Errorf("%w: record type %T", ErrNoPayload, rt)
+		return out, errNoPayload(rt)
 	}
 }
