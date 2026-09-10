@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -57,6 +58,19 @@ var ErrDeviceNotFound = errors.New("no device found for oui_serial")
 // the requested role. It is a typed error rather than sql.ErrNoRows so a
 // caller can distinguish "no such device" from any other query failure.
 var ErrNoDeviceForRole = errors.New("no active device assigned in that role")
+
+// ErrRoleAlreadyAssigned is returned when an account already has an active
+// device in the requested role, or the same device is already active for
+// the account. Both are unique-index violations; the caller must
+// UnassignDevice or SwapDevice first.
+var ErrRoleAlreadyAssigned = errors.New("account already has an active device in that role")
+
+// isUniqueViolation reports whether err is Postgres 23505, the code both
+// partial unique indexes raise. Same shape as internal/operators.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
 
 // AccountDeviceMapping is a row of account_device_mappings. JSON tags
 // matter here (unlike a purely-internal repository type) because the
@@ -113,6 +127,118 @@ func (r *Repository) CreateMapping(ctx context.Context, accountID, ouiSerial, se
 	}
 
 	return r.getByAccountDevice(ctx, accountID, deviceID)
+}
+
+// resolveDeviceID turns an oui_serial into a devices.id, or ErrDeviceNotFound.
+// q is either the pool or a transaction so AssignDevice and SwapDevice share it.
+func resolveDeviceID(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, ouiSerial string) (string, error) {
+	var deviceID string
+	err := q.QueryRowContext(ctx, `SELECT id FROM devices WHERE oui_serial = $1`, ouiSerial).Scan(&deviceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("%w: %s", ErrDeviceNotFound, ouiSerial)
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve device: %w", err)
+	}
+	return deviceID, nil
+}
+
+// insertAssignment writes one active assignment row. It is a plain INSERT,
+// not an upsert: the partial unique indexes decide whether it is allowed,
+// and a violation surfaces as ErrRoleAlreadyAssigned.
+func insertAssignment(ctx context.Context, q interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, id, accountID, deviceID, ouiSerial, role string, servicePlan any) error {
+	_, err := q.ExecContext(ctx, `
+		INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, service_plan, status, role)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, id, accountID, deviceID, ouiSerial, servicePlan, StatusActive, role)
+	if isUniqueViolation(err) {
+		return fmt.Errorf("%w: account %s role %s", ErrRoleAlreadyAssigned, accountID, role)
+	}
+	if err != nil {
+		return fmt.Errorf("insert assignment: %w", err)
+	}
+	return nil
+}
+
+// AssignDevice resolves oui_serial against the devices table and records
+// that the device now serves the account in the given role.
+func (r *Repository) AssignDevice(ctx context.Context, accountID, ouiSerial, role, servicePlan string) (*AccountDeviceMapping, error) {
+	deviceID, err := resolveDeviceID(ctx, r.db, ouiSerial)
+	if err != nil {
+		return nil, err
+	}
+	if err := insertAssignment(ctx, r.db, uuid.New().String(), accountID, deviceID, ouiSerial, role, nullIfEmpty(servicePlan)); err != nil {
+		return nil, err
+	}
+	return r.getByAccountDevice(ctx, accountID, deviceID)
+}
+
+// UnassignDevice ends the account's current assignment in the given role,
+// recording why. The row stays as history.
+func (r *Repository) UnassignDevice(ctx context.Context, accountID, role, reason string) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE account_device_mappings
+		   SET unassigned_at = now(), unassign_reason = $3, updated_at = now()
+		 WHERE account_id = $1 AND role = $2 AND unassigned_at IS NULL
+	`, accountID, role, reason)
+	if err != nil {
+		return fmt.Errorf("unassign device: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: account %s role %s", ErrNoDeviceForRole, accountID, role)
+	}
+	return nil
+}
+
+// SwapDevice replaces the device serving an account in a role: close the
+// old assignment, then open the new one, in one transaction.
+//
+// The order and the transaction are both load-bearing. The role-unique
+// index rejects the insert while the old row is active, so close must
+// come first; and if the insert then fails, the close must roll back or
+// the account is left with no device in that role at all -- worse than
+// the addressing defect this model exists to fix. The service plan
+// carries over to the replacement.
+func (r *Repository) SwapDevice(ctx context.Context, accountID, role, newOUISerial, reason string) (*AccountDeviceMapping, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin swap: %w", err)
+	}
+	defer tx.Rollback()
+
+	var servicePlan sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		UPDATE account_device_mappings
+		   SET unassigned_at = now(), unassign_reason = $3, updated_at = now()
+		 WHERE account_id = $1 AND role = $2 AND unassigned_at IS NULL
+		 RETURNING service_plan
+	`, accountID, role, reason).Scan(&servicePlan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: account %s role %s", ErrNoDeviceForRole, accountID, role)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("release old assignment: %w", err)
+	}
+
+	newDeviceID, err := resolveDeviceID(ctx, tx, newOUISerial)
+	if err != nil {
+		return nil, err // deferred Rollback restores the old assignment
+	}
+	var plan any
+	if servicePlan.Valid {
+		plan = servicePlan.String
+	}
+	if err := insertAssignment(ctx, tx, uuid.New().String(), accountID, newDeviceID, newOUISerial, role, plan); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit swap: %w", err)
+	}
+	return r.getByAccountDevice(ctx, accountID, newDeviceID)
 }
 
 func (r *Repository) getByAccountDevice(ctx context.Context, accountID, deviceID string) (*AccountDeviceMapping, error) {

@@ -151,3 +151,127 @@ func TestReleasedAssignmentsAreHistoryNotCurrent(t *testing.T) {
 		t.Errorf("second history row should be current (UnassignedAt nil), got %+v", hist[1])
 	}
 }
+
+func TestAssignDevice_RejectsSecondDeviceInSameRole(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, devA, "S-A")
+	seedDevice(t, ctx, r, devB, "S-B")
+
+	if _, err := r.AssignDevice(ctx, "acct", "S-A", RoleGateway, "plan-1"); err != nil {
+		t.Fatalf("first assign: %v", err)
+	}
+	_, err := r.AssignDevice(ctx, "acct", "S-B", RoleGateway, "plan-1")
+	if !errors.Is(err, ErrRoleAlreadyAssigned) {
+		t.Errorf("second gateway returned %v, want ErrRoleAlreadyAssigned", err)
+	}
+	// A different role is fine.
+	if _, err := r.AssignDevice(ctx, "acct", "S-B", RoleONT, "plan-1"); err != nil {
+		t.Errorf("assigning S-B as ont failed: %v", err)
+	}
+}
+
+func TestAssignDevice_UnknownSerialIsDeviceNotFound(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	_, err := r.AssignDevice(ctx, "acct", "NO-SUCH", RoleGateway, "")
+	if !errors.Is(err, ErrDeviceNotFound) {
+		t.Errorf("got %v, want ErrDeviceNotFound", err)
+	}
+}
+
+func TestUnassignThenReassignSameDevice(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, devA, "S-A")
+
+	if _, err := r.AssignDevice(ctx, "acct", "S-A", RoleGateway, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.UnassignDevice(ctx, "acct", RoleGateway, ReasonReturn); err != nil {
+		t.Fatalf("unassign: %v", err)
+	}
+	if _, err := r.ActiveDeviceForAccount(ctx, "acct", RoleGateway); !errors.Is(err, ErrNoDeviceForRole) {
+		t.Errorf("after unassign, gateway resolved: %v", err)
+	}
+	// The released device can come back — to the same account, even.
+	if _, err := r.AssignDevice(ctx, "acct", "S-A", RoleGateway, ""); err != nil {
+		t.Fatalf("reassign after release: %v", err)
+	}
+	hist, err := r.AssignmentHistory(ctx, "acct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) != 2 || hist[0].UnassignReason != ReasonReturn || hist[1].UnassignedAt != nil {
+		t.Errorf("history = %+v, want [released(return), current]", hist)
+	}
+}
+
+func TestUnassignDevice_NothingToReleaseIsTypedError(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	err := r.UnassignDevice(ctx, "acct", RoleGateway, ReasonRMA)
+	if !errors.Is(err, ErrNoDeviceForRole) {
+		t.Errorf("got %v, want ErrNoDeviceForRole", err)
+	}
+}
+
+// SwapDevice is the reason the temporal model exists. Close-then-open in
+// one transaction: after it, exactly one gateway is active, it is the new
+// device, and the old one is in history with the reason recorded.
+func TestSwapDevice_ClosesOldOpensNewAtomically(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, devA, "S-A")
+	seedDevice(t, ctx, r, devB, "S-B")
+	if _, err := r.AssignDevice(ctx, "acct", "S-A", RoleGateway, "plan-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := r.SwapDevice(ctx, "acct", RoleGateway, "S-B", ReasonRMA)
+	if err != nil {
+		t.Fatalf("swap: %v", err)
+	}
+	if got.DeviceID != devB || got.UnassignedAt != nil {
+		t.Errorf("swap returned %+v, want current assignment of %s", got, devB)
+	}
+	cur, err := r.ActiveDeviceForAccount(ctx, "acct", RoleGateway)
+	if err != nil || cur.DeviceID != devB {
+		t.Errorf("after swap, active gateway = %+v (err %v), want %s", cur, err, devB)
+	}
+	hist, err := r.AssignmentHistory(ctx, "acct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) != 2 || hist[0].DeviceID != devA || hist[0].UnassignReason != ReasonRMA {
+		t.Errorf("history = %+v, want old device released with reason rma first", hist)
+	}
+	// The service plan carries over to the replacement.
+	if got.ServicePlan != "plan-1" {
+		t.Errorf("service_plan after swap = %q, want plan-1 carried over", got.ServicePlan)
+	}
+}
+
+// If the replacement cannot be inserted, the release must roll back —
+// otherwise the account is left with NO gateway, worse than the defect
+// being fixed. An unknown serial is the cheapest way to force that path.
+func TestSwapDevice_RollsBackReleaseWhenInsertFails(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, devA, "S-A")
+	if _, err := r.AssignDevice(ctx, "acct", "S-A", RoleGateway, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := r.SwapDevice(ctx, "acct", RoleGateway, "NO-SUCH", ReasonRMA)
+	if !errors.Is(err, ErrDeviceNotFound) {
+		t.Fatalf("swap to unknown serial returned %v, want ErrDeviceNotFound", err)
+	}
+	cur, err := r.ActiveDeviceForAccount(ctx, "acct", RoleGateway)
+	if err != nil || cur.DeviceID != devA {
+		t.Errorf("after failed swap, active gateway = %+v (err %v); the release was not rolled back", cur, err)
+	}
+}
+
+func TestSwapDevice_NothingToSwapIsTypedError(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, devB, "S-B")
+	_, err := r.SwapDevice(ctx, "acct", RoleGateway, "S-B", ReasonRMA)
+	if !errors.Is(err, ErrNoDeviceForRole) {
+		t.Errorf("got %v, want ErrNoDeviceForRole", err)
+	}
+}
