@@ -14,6 +14,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -107,6 +108,7 @@ type createBSSMappingRequest struct {
 	AccountID   string `json:"account_id"`
 	OUISerial   string `json:"oui_serial"`
 	ServicePlan string `json:"service_plan"`
+	Role        string `json:"role"`
 }
 
 func (h *handler) createBSSMapping(w http.ResponseWriter, r *http.Request) {
@@ -119,9 +121,17 @@ func (h *handler) createBSSMapping(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "account_id and oui_serial are required", http.StatusBadRequest)
 		return
 	}
-	mapping, err := h.bssMappings.CreateMapping(r.Context(), req.AccountID, req.OUISerial, req.ServicePlan)
-	if err == bss.ErrDeviceNotFound {
+	role := req.Role
+	if role == "" {
+		role = bss.RoleGateway
+	}
+	mapping, err := h.bssMappings.AssignDevice(r.Context(), req.AccountID, req.OUISerial, role, req.ServicePlan)
+	if errors.Is(err, bss.ErrDeviceNotFound) {
 		http.Error(w, "no device found for that oui_serial — it must have sent at least one Inform first", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, bss.ErrRoleAlreadyAssigned) {
+		http.Error(w, "the account already has an active device in that role", http.StatusConflict)
 		return
 	}
 	if err != nil {

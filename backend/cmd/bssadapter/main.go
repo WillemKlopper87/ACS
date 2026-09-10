@@ -18,7 +18,6 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -459,6 +458,7 @@ type createMappingRequest struct {
 	OUISerial   string `json:"oui_serial"`
 	DeviceUUID  string `json:"device_uuid"`
 	ServicePlan string `json:"service_plan"`
+	Role        string `json:"role"` // optional; defaults to gateway
 }
 
 type mappingResponse struct {
@@ -467,6 +467,17 @@ type mappingResponse struct {
 	OUISerial   string `json:"oui_serial"`
 	ServicePlan string `json:"service_plan,omitempty"`
 	Status      string `json:"status"`
+	Role        string `json:"role"`
+}
+
+// roleOrDefault applies the contract rule for callers that name no role:
+// they target the gateway. An account with no gateway assigned gets a
+// clean ErrNoDeviceForRole rather than an arbitrary device.
+func roleOrDefault(role string) string {
+	if role == "" {
+		return bss.RoleGateway
+	}
+	return role
 }
 
 // createMapping implements Workflow A. Unlike the reference draft, it
@@ -484,9 +495,13 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mapping, err := h.mappings.CreateMapping(r.Context(), req.AccountID, req.OUISerial, req.ServicePlan)
+	mapping, err := h.mappings.AssignDevice(r.Context(), req.AccountID, req.OUISerial, roleOrDefault(req.Role), req.ServicePlan)
 	if errors.Is(err, bss.ErrDeviceNotFound) {
 		writeError(w, http.StatusNotFound, "ErrDeviceNotMapped", err.Error())
+		return
+	}
+	if errors.Is(err, bss.ErrRoleAlreadyAssigned) {
+		writeError(w, http.StatusConflict, "ErrRoleAlreadyAssigned", "the account already has an active device in that role; unassign or swap it first")
 		return
 	}
 	if err != nil {
@@ -500,7 +515,7 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.auditor.Record(r.Context(), "bss:"+req.AccountID, mapping.DeviceID, "BSSMappingCreated", map[string]any{
-		"account_id": req.AccountID, "oui_serial": req.OUISerial, "service_plan": req.ServicePlan,
+		"account_id": req.AccountID, "oui_serial": req.OUISerial, "service_plan": req.ServicePlan, "role": mapping.Role,
 	}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
@@ -508,7 +523,7 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, mappingResponse{
 		AccountID: mapping.AccountID, DeviceUUID: mapping.DeviceID, OUISerial: mapping.OUISerial,
-		ServicePlan: mapping.ServicePlan, Status: mapping.Status,
+		ServicePlan: mapping.ServicePlan, Status: mapping.Status, Role: mapping.Role,
 	})
 }
 
@@ -525,7 +540,7 @@ func (h *handler) listMappings(w http.ResponseWriter, r *http.Request) {
 	for _, m := range list {
 		items = append(items, mappingResponse{
 			AccountID: m.AccountID, DeviceUUID: m.DeviceID, OUISerial: m.OUISerial,
-			ServicePlan: m.ServicePlan, Status: m.Status,
+			ServicePlan: m.ServicePlan, Status: m.Status, Role: m.Role,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -538,6 +553,7 @@ type createOrderRequest struct {
 	AccountID       string            `json:"account_id"`
 	ServiceType     string            `json:"service_type"`
 	Action          string            `json:"action"`
+	Role            string            `json:"role"` // optional; defaults to gateway
 	Parameters      map[string]string `json:"parameters"`
 }
 
@@ -581,13 +597,13 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mapping, err := h.mappings.PrimaryDeviceForAccount(r.Context(), req.AccountID)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "ErrDeviceNotMapped", "no active device is mapped to this account")
+	mapping, err := h.mappings.ActiveDeviceForAccount(r.Context(), req.AccountID, roleOrDefault(req.Role))
+	if errors.Is(err, bss.ErrNoDeviceForRole) {
+		writeError(w, http.StatusNotFound, "ErrDeviceNotMapped", "no active device is assigned to this account in the requested role")
 		return
 	}
 	if err != nil {
-		h.logger.Error("failed to resolve account mapping", "err", err, "account_id", req.AccountID)
+		h.logger.Error("failed to resolve account device", "err", err, "account_id", req.AccountID, "role", roleOrDefault(req.Role))
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}

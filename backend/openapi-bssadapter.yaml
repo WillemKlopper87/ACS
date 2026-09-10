@@ -90,10 +90,12 @@ paths:
                 oui_serial: { type: string }
                 device_uuid: { type: string, description: "Optional — if supplied, must match what oui_serial actually resolves to" }
                 service_plan: { type: string }
+                role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "Optional. Defaults to gateway." }
       responses:
         "200": { description: Mapping created/updated, content: { application/json: { schema: { $ref: "#/components/schemas/Mapping" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { description: "ErrDeviceNotMapped — no device found for that oui_serial", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "409": { description: "ErrRoleAlreadyAssigned — the account already has an active device in that role", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
 
   /bss/v1/mappings/{account_id}:
     get:
@@ -130,6 +132,7 @@ paths:
                 account_id: { type: string }
                 service_type: { type: string }
                 action: { type: string, enum: [MODIFY_WIFI, SUSPEND, ACTIVATE], description: "SUSPEND/ACTIVATE need ACS_WALLED_GARDEN_* configured server-side or return 400 (build plan §5.3)" }
+                role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "Optional. Defaults to gateway." }
                 parameters:
                   type: object
                   additionalProperties: { type: string }
@@ -224,6 +227,7 @@ components:
         oui_serial: { type: string }
         service_plan: { type: string }
         status: { type: string, enum: [PENDING_ACTIVE, ACTIVE, SUSPENDED, TERMINATED] }
+        role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "What the device does for this account. One active device per role per account." }
 
     Order:
       type: object

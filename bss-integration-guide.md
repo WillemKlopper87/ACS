@@ -69,6 +69,8 @@ Unknown `oui_serial` (`404`):
 }
 ```
 
+Every assignment carries a `role` (`gateway`, `ont`, `extender`, `stb`, `ata`, `other`). A mapping request that omits `role` targets `gateway`, so existing integrations that never sent it keep working unchanged. An account may have at most one *active* device per role — a second `POST /bss/v1/mappings` naming a role that's already assigned gets a `409 ErrRoleAlreadyAssigned` rather than silently displacing the current device; replace a device in a role by unassigning or swapping the existing mapping first, not by creating a second one.
+
 List an account's mapped devices:
 
 ```http
@@ -100,6 +102,8 @@ Content-Type: application/json
 ```
 
 `action` must currently be `MODIFY_WIFI`. `parameters` needs at least one of `wifi_ssid` / `wifi_password` — either alone is fine (only the fields you send get written).
+
+An order also accepts an optional `role`, resolved the same way a mapping's role is: an order that names no role targets the account's `gateway`. The order dispatches against whichever device is currently the *active* assignment for that role on the account — not whichever device was most recently touched — so if an account has more than one device (a gateway and an extender, say), naming the role is how you address the right one.
 
 #### 2. ACS Immediate Response — captured, `202 Accepted`
 

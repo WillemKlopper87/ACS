@@ -102,33 +102,6 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
-// CreateMapping resolves oui_serial against the real devices table and
-// upserts the account/device link (Workflow A in the BSS integration
-// guide).
-func (r *Repository) CreateMapping(ctx context.Context, accountID, ouiSerial, servicePlan string) (*AccountDeviceMapping, error) {
-	var deviceID string
-	err := r.db.QueryRowContext(ctx, `SELECT id FROM devices WHERE oui_serial = $1`, ouiSerial).Scan(&deviceID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("%w: %s", ErrDeviceNotFound, ouiSerial)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("resolve device for mapping: %w", err)
-	}
-
-	_, err = r.db.ExecContext(ctx, `
-		INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, service_plan, status)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (account_id, device_id) DO UPDATE SET
-			service_plan = EXCLUDED.service_plan,
-			updated_at = now()
-	`, uuid.New().String(), accountID, deviceID, ouiSerial, nullIfEmpty(servicePlan), StatusActive)
-	if err != nil {
-		return nil, fmt.Errorf("create mapping: %w", err)
-	}
-
-	return r.getByAccountDevice(ctx, accountID, deviceID)
-}
-
 // resolveDeviceID turns an oui_serial into a devices.id, or ErrDeviceNotFound.
 // q is either the pool or a transaction so AssignDevice and SwapDevice share it.
 func resolveDeviceID(ctx context.Context, q interface {
@@ -267,22 +240,6 @@ func (r *Repository) ListByAccount(ctx context.Context, accountID string) ([]Acc
 		out = append(out, *m)
 	}
 	return out, rows.Err()
-}
-
-// PrimaryDeviceForAccount returns the account's most recently mapped
-// active device — the mapping an order dispatch resolves against.
-// Phase 8b assumes one primary device per account, matching every
-// example in the BSS integration guide; an account genuinely managing
-// multiple devices needs the order to name a device explicitly, which
-// isn't part of this phase's scope.
-func (r *Repository) PrimaryDeviceForAccount(ctx context.Context, accountID string) (*AccountDeviceMapping, error) {
-	row := r.db.QueryRowContext(ctx,
-		"SELECT "+mappingColumns+` FROM account_device_mappings
-		WHERE account_id = $1 AND status = 'ACTIVE'
-		ORDER BY updated_at DESC
-		LIMIT 1`,
-		accountID)
-	return scanMapping(row)
 }
 
 // ListAll returns every currently assigned account-device mapping, newest
