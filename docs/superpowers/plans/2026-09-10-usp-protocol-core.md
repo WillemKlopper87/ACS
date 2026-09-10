@@ -758,6 +758,9 @@ func TestDecodeRecordNoPayload(t *testing.T) {
 	for name, rt := range map[string]any{
 		"websocket_connect": &uspproto.Record_WebsocketConnect{WebsocketConnect: &uspproto.WebSocketConnectRecord{}},
 		"disconnect":        &uspproto.Record_Disconnect{Disconnect: &uspproto.DisconnectRecord{Reason: "bye"}},
+		// A NoSessionContext record whose payload is empty is a distinct
+		// branch from a connect/disconnect record and must also be ErrNoPayload.
+		"empty_no_session_context": &uspproto.Record_NoSessionContext{NoSessionContext: &uspproto.NoSessionContextRecord{Payload: nil}},
 	} {
 		rec := &uspproto.Record{
 			Version: RecordVersion, ToId: string(testController), FromId: string(testAgent),
@@ -767,6 +770,8 @@ func TestDecodeRecordNoPayload(t *testing.T) {
 		case *uspproto.Record_WebsocketConnect:
 			rec.RecordType = v
 		case *uspproto.Record_Disconnect:
+			rec.RecordType = v
+		case *uspproto.Record_NoSessionContext:
 			rec.RecordType = v
 		}
 		if _, err := DecodeRecord(mustMarshalRecord(t, rec), testController); !errors.Is(err, ErrNoPayload) {
