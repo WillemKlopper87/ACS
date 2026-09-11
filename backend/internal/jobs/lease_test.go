@@ -108,3 +108,42 @@ func TestRecoverExpiredLeases_NonRepeatableTypesDeadLetterNotRequeue(t *testing.
 		t.Errorf("SetParameter after stale lease = status %s, want QUEUED (idempotent RPCs still requeue)", gotSet.Status)
 	}
 }
+
+// TestLeaseForTypesFiltersByType covers LeaseForTypes's type parameter: a
+// USP dispatch worker that can only build requests for a subset of job
+// types must never lease one outside that subset, even though it's the
+// oldest QUEUED job for the device.
+func TestLeaseForTypesFiltersByType(t *testing.T) {
+	repo, _, deviceID := newLeaseTestDB(t)
+	ctx := context.Background()
+
+	upload, err := repo.Create(ctx, deviceID, jobs.TypeUpload,
+		jobs.UploadPayload{FileType: "1 Vendor Configuration File", URL: "http://example.com/upload"}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	getParam, err := repo.Create(ctx, deviceID, jobs.TypeGetParameter,
+		jobs.GetParameterPayload{Paths: []string{"Device.DeviceInfo."}}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leased, err := repo.LeaseForTypes(ctx, deviceID, []string{jobs.TypeGetParameter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leased == nil || leased.ID != getParam.ID {
+		t.Fatalf("LeaseForTypes([]string{TypeGetParameter}) = %+v, want the GetParameter job", leased)
+	}
+	if leased.Status != jobs.StatusRPCSent {
+		t.Errorf("leased job status = %s, want RPC_SENT", leased.Status)
+	}
+
+	gotUpload, err := repo.ByID(ctx, upload.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotUpload.Status != jobs.StatusQueued {
+		t.Errorf("Upload job status = %s, want QUEUED (untouched by a GetParameter-only lease)", gotUpload.Status)
+	}
+}

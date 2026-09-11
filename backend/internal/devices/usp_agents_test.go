@@ -176,3 +176,37 @@ func TestGetUspAgentByEndpointIDNotFound(t *testing.T) {
 		t.Errorf("got %v, want ErrUspAgentNotFound", err)
 	}
 }
+
+// TestGetUspAgentByDeviceID covers the reverse of
+// TestGetUspAgentByEndpointID: dispatch needs device_id -> endpoint_id ->
+// live mtp.Conn, and this is the first hop.
+func TestGetUspAgentByDeviceID(t *testing.T) {
+	ctx, r := newDevicesTestRepo(t)
+	d, err := r.UpsertFromOnBoard(ctx, "001122", "Router", "ABC123")
+	if err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+	if err := r.LinkUspAgent(ctx, d.ID, "os::endpoint", "MQTT", nil); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+
+	agent, err := r.GetUspAgentByDeviceID(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if agent.DeviceID != d.ID || agent.EndpointID != "os::endpoint" || agent.MTPKind != "MQTT" {
+		t.Errorf("agent = %+v, want device %s, endpoint os::endpoint, MQTT", agent, d.ID)
+	}
+}
+
+func TestGetUspAgentByDeviceIDNotFound(t *testing.T) {
+	ctx, r := newDevicesTestRepo(t)
+	d, err := r.UpsertFromOnBoard(ctx, "001122", "Router", "ABC123")
+	if err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+	_, err = r.GetUspAgentByDeviceID(ctx, d.ID)
+	if !errors.Is(err, ErrUspAgentNotFound) {
+		t.Errorf("got %v, want ErrUspAgentNotFound", err)
+	}
+}

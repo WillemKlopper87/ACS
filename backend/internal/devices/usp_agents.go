@@ -35,7 +35,7 @@ type UspAgent struct {
 var ErrEndpointIDInUse = errors.New("usp endpoint id already linked to a different device")
 
 // ErrUspAgentNotFound is returned when no usp_agents row exists for a given
-// endpoint id.
+// endpoint id or device id.
 var ErrUspAgentNotFound = errors.New("no usp_agents row for endpoint id")
 
 const uspAgentColumns = `device_id, endpoint_id, mtp_kind, connected, last_connected_at, last_seen_at, supported_protocol_versions, controller_role`
@@ -118,6 +118,22 @@ func (r *Repository) GetUspAgentByEndpointID(ctx context.Context, endpointID str
 	agent, err := scanUspAgent(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: %s", ErrUspAgentNotFound, endpointID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return agent, nil
+}
+
+// GetUspAgentByDeviceID looks up the usp_agents row for a device by its
+// device_id (the table's primary key, so this is a point lookup) — the
+// reverse of GetUspAgentByEndpointID. USP dispatch needs device_id ->
+// endpoint_id -> live mtp.Conn, and this is the first hop.
+func (r *Repository) GetUspAgentByDeviceID(ctx context.Context, deviceID string) (*UspAgent, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT `+uspAgentColumns+` FROM usp_agents WHERE device_id = $1`, deviceID)
+	agent, err := scanUspAgent(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", ErrUspAgentNotFound, deviceID)
 	}
 	if err != nil {
 		return nil, err

@@ -36,6 +36,17 @@ var LeaseOwner = func() string {
 // retried request) can never dispatch the same job twice. Returns nil,
 // nil if there is no queued work.
 func (r *Repository) Lease(ctx context.Context, deviceID string) (*Job, error) {
+	return r.LeaseForTypes(ctx, deviceID, sessionDispatchableTypes)
+}
+
+// LeaseForTypes is Lease parameterized on the type filter instead of the
+// hardcoded sessionDispatchableTypes — the general form a dispatcher that
+// can only build requests for a subset of job types needs (e.g. a USP
+// dispatch worker that can't render every CWMP-shaped job as a USP
+// request). Lease is just LeaseForTypes called with
+// sessionDispatchableTypes, so every existing caller's behavior is
+// unchanged.
+func (r *Repository) LeaseForTypes(ctx context.Context, deviceID string, types []string) (*Job, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin lease tx: %w", err)
@@ -48,7 +59,7 @@ func (r *Repository) Lease(ctx context.Context, deviceID string) (*Job, error) {
 		ORDER BY created_at ASC
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
-	`, deviceID, sessionDispatchableTypes)
+	`, deviceID, types)
 
 	job, err := scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
