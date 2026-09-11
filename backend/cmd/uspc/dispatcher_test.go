@@ -539,6 +539,61 @@ func TestErrorMappingUnmappedCode(t *testing.T) {
 	}
 }
 
+// TestErrorMappingNotWriteableAsync covers the same ErrNotWriteable (7013)
+// typed handling as TestErrorMappingNotWriteable, but driven through
+// handleOperationComplete's async CmdFailure path instead of
+// handleResponse's sync Error path -- proving classifyAndFail's shared
+// routing actually works from both call sites, not just the sync one.
+// Without this, a future change that broke the oc.ErrCode -> USPError.Code
+// mapping in handleOperationComplete, or reverted that call site back to
+// the old flat resolveFailure, would go uncaught: the only pre-existing
+// test on this path (TestHandleOperationCompleteResolvesFailure) uses code
+// 7012, which is unmapped and exercises the default case either way.
+func TestErrorMappingNotWriteableAsync(t *testing.T) {
+	jobsRepo, deviceID := newDispatcherTestDB(t)
+	ctx := context.Background()
+	// TypeReboot mirrors TestHandleOperationCompleteResolvesFailure's own
+	// setup -- the job type doesn't matter to what this test exercises
+	// (classifyAndFail's typed-code routing from the async path), only
+	// that it reaches RPC_SENT via LeaseForTypes below.
+	job, err := jobsRepo.Create(ctx, deviceID, jobs.TypeReboot, jobs.RebootPayload{}, "test")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if _, err := jobsRepo.LeaseForTypes(ctx, deviceID, []string{jobs.TypeReboot}); err != nil {
+		t.Fatalf("lease job: %v", err)
+	}
+
+	store := newFakeIdentityStore()
+	registry := mtp.NewRegistry()
+	d := newDispatcher(jobsRepo, store, registry, ctrl, slog.Default())
+
+	oc := &usp.OperationComplete{
+		CommandKey: job.CommandKey,
+		Failed:     true,
+		ErrCode:    7013,
+		ErrMsg:     "Device.WiFi.SSID is read-only",
+	}
+	if err := d.handleOperationComplete(ctx, deviceID, oc); err != nil {
+		t.Fatalf("handleOperationComplete() = %v, want nil", err)
+	}
+
+	gotJob, err := jobsRepo.ByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusFailed {
+		t.Errorf("job status = %s, want FAILED", gotJob.Status)
+	}
+	if gotJob.FaultCode == nil || *gotJob.FaultCode != "7013" {
+		t.Errorf("job fault_code = %v, want 7013", gotJob.FaultCode)
+	}
+	wantFaultString := "parameter is not writeable: Device.WiFi.SSID is read-only"
+	if gotJob.FaultString == nil || *gotJob.FaultString != wantFaultString {
+		t.Errorf("job fault_string = %v, want %q -- same typed prefix the sync path (TestErrorMappingNotWriteable) produces, proving classifyAndFail's routing from handleOperationComplete", gotJob.FaultString, wantFaultString)
+	}
+}
+
 // TestDispatcherForgetRemovesPendingForConn covers fix round 1, Important
 // 1: forget must drop every pending entry sent on c, mirroring
 // probe.forget's exact discipline.
