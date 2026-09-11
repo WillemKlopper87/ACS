@@ -29,19 +29,30 @@ import (
 	"acs/internal/usp/uspproto"
 )
 
-// uspDispatchableTypes are the job types dispatch.go's buildUSPRequest
-// knows how to render as a USP request -- the ten of internal/jobs'
-// fifteen types dispatch.go's own package doc describes as "have a USP
-// equivalent" (the other five are CWMP-only and never reach this list).
-// FIRMWARE_DOWNLOAD is deliberately included even though buildUSPRequest
-// currently always returns ErrUnsupportedOverUSP for it (the missing
-// instance-selection step, see dispatch.go): it belongs on this
-// leasable list so LeaseForTypes still picks it up in dispatch order
-// rather than silently starving behind it, and tryDispatch's
-// ErrUnsupportedOverUSP handling requeues it immediately rather than
-// leaving it falsely RPC_SENT. internal/jobs itself stays protocol-
-// agnostic -- this subset is cmd/uspc's own concern, not something
-// internal/jobs needs to know.
+// uspDispatchableTypes are the job types dispatch.go's buildUSPRequest can
+// actually render as a USP request today -- nine of internal/jobs'
+// fifteen types (the other five are CWMP-only and never reach this list).
+// FIRMWARE_DOWNLOAD is deliberately EXCLUDED (fix round 1, Important 2)
+// even though dispatch.go's own package doc calls it one of "the ten
+// types [that] have a USP equivalent" in principle: buildUSPRequest
+// unconditionally returns ErrUnsupportedOverUSP for it today (the missing
+// instance-selection step), so leasing for it would only ever repeat the
+// same lease-then-requeue cycle forever. That isn't a harmless no-op: a
+// prior version of this list included FIRMWARE_DOWNLOAD reasoning that
+// requeuing it would keep other work unstarved, but the opposite is true
+// -- LeaseForTypes always takes the OLDEST queued matching job, so a
+// dispatchable-but-never-buildable job at the front of a device's queue
+// would starve every genuinely dispatchable job queued behind it, on
+// every trigger (NOTIFY, reconnect, sweep -- every 30s, forever), while
+// its own attempts counter grows unbounded (Requeue clears the lease
+// without touching attempts, so RecoverExpiredLeases' stale-lease reaper
+// never sees it as expired either). Leasing for a type this dispatcher
+// can never build is the bug; the fix is to never lease for it, not to
+// requeue faster. A later plan that adds the missing instance-discovery
+// step can add FIRMWARE_DOWNLOAD back here once buildUSPRequest can
+// actually build it. internal/jobs itself stays protocol-agnostic -- this
+// subset is cmd/uspc's own concern, not something internal/jobs needs to
+// know.
 var uspDispatchableTypes = []string{
 	jobs.TypeGetParameter,
 	jobs.TypeSetParameter,
@@ -52,7 +63,6 @@ var uspDispatchableTypes = []string{
 	jobs.TypeDiagnosticsPing,
 	jobs.TypeDiagnosticsTraceroute,
 	jobs.TypeParameterDiscovery,
-	jobs.TypeFirmwareDownload,
 }
 
 // dispatchSweepInterval sets how often periodicSweep re-checks every
@@ -158,11 +168,18 @@ func (d *dispatcher) tryDispatch(ctx context.Context, deviceID string) error {
 	msgID := usp.NewMsgID()
 	msgBytes, err := buildUSPRequest(msgID, job)
 	if errors.Is(err, ErrUnsupportedOverUSP) {
-		// The lease already consumed an attempt and left the job RPC_SENT;
-		// left alone it would sit there forever since no agent will ever
-		// answer an RPC that was never sent. Requeue immediately so it goes
-		// back to QUEUED for a human (or a later plan that adds real
-		// support) rather than falsely appearing in-flight.
+		// Defensive default, not a normal path: every type currently in
+		// uspDispatchableTypes maps to a real USP request (see that var's
+		// own doc comment -- FIRMWARE_DOWNLOAD, the one type that always
+		// returned this sentinel, was removed from the leasable list in fix
+		// round 1 rather than relying on this branch to paper over leasing
+		// for it). This guards only against a future edit to
+		// uspDispatchableTypes accidentally reintroducing a type
+		// buildUSPRequest can't build. The lease already consumed an
+		// attempt and left the job RPC_SENT; left alone it would sit there
+		// forever since no agent will ever answer an RPC that was never
+		// sent, so requeue immediately rather than falsely appearing
+		// in-flight.
 		d.log.Warn("uspc: dispatcher: leased job has no USP mapping, requeuing", "job_id", job.ID, "job_type", job.Type, "device_id", deviceID)
 		requeueCtx, requeueCancel := context.WithTimeout(ctx, dbCallTimeout)
 		defer requeueCancel()
@@ -240,6 +257,14 @@ func responseSummary(msg *uspproto.Msg) dispatchResultDetail {
 // delete-on-match, tolerate a nil msg/header or an unrecognised msg_id
 // without panicking, since this is called on every inbound message that
 // the OnBoardRequest and probe fallthroughs didn't already claim.
+//
+// On a match it also re-triggers tryDispatch for the same device (fix
+// round 1, Minor 5): without this, a device with several jobs queued back
+// to back would only ever drain one job per periodicSweep interval (30s)
+// once its first dispatch completed, instead of as fast as the device
+// itself answers. This runs regardless of whether the completed job
+// itself succeeded or failed -- either way the device is still connected
+// and may have more queued work.
 func (d *dispatcher) handleResponse(from usp.EndpointID, msg *uspproto.Msg) (matched bool) {
 	if msg == nil || msg.GetHeader() == nil {
 		return false
@@ -257,20 +282,54 @@ func (d *dispatcher) handleResponse(from usp.EndpointID, msg *uspproto.Msg) (mat
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
-	defer cancel()
 
 	if uspErr := usp.ErrorFromMsg(msg); uspErr != nil {
 		d.log.Warn("uspc: dispatcher: dispatched job's request was answered with an error", "job_id", entry.job.ID, "endpoint", from, "msg_id", msgID, "error", uspErr)
 		if err := d.jobsRepo.MarkFailed(ctx, entry.job.ID, strconv.Itoa(int(uspErr.Code)), uspErr.Message); err != nil {
 			d.log.Warn("uspc: dispatcher: failed to mark job failed", "job_id", entry.job.ID, "endpoint", from, "error", err)
 		}
-		return true
-	}
-
-	if err := d.jobsRepo.MarkSuccessWithDetail(ctx, entry.job.ID, responseSummary(msg)); err != nil {
+	} else if err := d.jobsRepo.MarkSuccessWithDetail(ctx, entry.job.ID, responseSummary(msg)); err != nil {
 		d.log.Warn("uspc: dispatcher: failed to mark job success", "job_id", entry.job.ID, "endpoint", from, "error", err)
 	}
+	cancel()
+
+	// handleResponse runs inline on the transport's read-loop goroutine
+	// (same hazard as resolveAndMarkReconciled -- see its own doc
+	// comment), so this re-trigger gets its own single bounded context
+	// rather than chaining unboundedly off whatever budget the Mark* call
+	// above left behind.
+	retryCtx, retryCancel := context.WithTimeout(context.Background(), dbCallTimeout)
+	defer retryCancel()
+	if err := d.tryDispatch(retryCtx, entry.job.DeviceID); err != nil {
+		d.log.Warn("uspc: dispatcher: failed to trigger dispatch for next queued job", "device_id", entry.job.DeviceID, "endpoint", from, "error", err)
+	}
 	return true
+}
+
+// forget drops every pending dispatch sent on c (fix round 1, Important
+// 1). Called from handler.OnDisconnect, mirroring probe.forget's exact
+// shape and rationale: without this, a job dispatched to a device that
+// then disconnects (or never answers) leaks its pendingDispatch entry
+// forever, and worse -- after RecoverExpiredLeases requeues the stranded
+// job and a later trigger re-dispatches it under a fresh msg_id, the OLD
+// entry would still be live in pending. A late/spurious response on that
+// stale msg_id (e.g. a slow reply arriving after a reconnect) would then
+// match it and call MarkSuccessWithDetail/MarkFailed with no status
+// guard, overwriting whatever state the re-dispatch is now in. Keyed on
+// the disconnecting Conn itself, not its endpoint id, for the same
+// takeover-race reason probe.forget documents: a reconnect can register a
+// new Conn for the same endpoint id before the old Conn's disconnect
+// callback lands, and keying on endpoint id alone would let a stale
+// disconnect delete the new connection's just-dispatched entry out from
+// under it.
+func (d *dispatcher) forget(c mtp.Conn) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for id, entry := range d.pending {
+		if entry.conn == c {
+			delete(d.pending, id)
+		}
+	}
 }
 
 // periodicSweep calls tryDispatch, every interval, for the device id of

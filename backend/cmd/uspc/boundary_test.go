@@ -75,3 +75,34 @@ func TestForbiddenPrefixesIsCurrentlyEmpty(t *testing.T) {
 		t.Fatalf("forbiddenPrefixes = %v, want empty -- update this test's expectations (and its doc comment) if a new boundary is deliberately being drawn", forbiddenPrefixes)
 	}
 }
+
+// TestForbiddenImportBoundaryPredicate covers forbiddenImport's own
+// path-boundary logic directly (fix round 1, Minor 6): with
+// forbiddenPrefixes currently empty in production, TestUSPCImportsNoDomainPackages
+// never actually exercises the exact-match-or-"/"-boundary predicate --
+// only that an empty list matches nothing. This temporarily seeds
+// forbiddenPrefixes with a known value (restored via t.Cleanup) so the
+// predicate's boundary behaviour -- in particular that a sibling package
+// merely sharing a prefix does NOT trip it -- is independently verified,
+// not just present and untested.
+func TestForbiddenImportBoundaryPredicate(t *testing.T) {
+	orig := forbiddenPrefixes
+	forbiddenPrefixes = []string{"acs/internal/store"}
+	t.Cleanup(func() { forbiddenPrefixes = orig })
+
+	tests := []struct {
+		imported string
+		want     bool
+	}{
+		{"acs/internal/store", true},
+		{"acs/internal/store/migrations", true},
+		{"acs/internal/storefront", false}, // shares a prefix, not a subtree
+		{"acs/internal/other", false},
+		{"acs/internal", false}, // a parent of the forbidden root is not itself forbidden
+	}
+	for _, tt := range tests {
+		if got := forbiddenImport(tt.imported); got != tt.want {
+			t.Errorf("forbiddenImport(%q) = %v, want %v", tt.imported, got, tt.want)
+		}
+	}
+}

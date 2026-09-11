@@ -177,9 +177,64 @@ func TestTryDispatchSendsAndTracks(t *testing.T) {
 // buildUSPRequest cannot render over USP (FIRMWARE_DOWNLOAD -- see
 // dispatch.go's own doc comment on why it's still in
 // uspDispatchableTypes despite always returning ErrUnsupportedOverUSP
-// today). Left alone the lease would strand it RPC_SENT forever, since
-// no agent will ever answer an RPC that was never sent.
+// today). uspDispatchableTypes no longer includes FIRMWARE_DOWNLOAD (fix
+// round 1, Important 2: leasing for a type that can never build a USP
+// request lets it sit at the front of a device's queue and starve every
+// other dispatchable job behind it, on every trigger, forever -- see that
+// var's own doc comment). This confirms the exclusion actually holds: a
+// FIRMWARE_DOWNLOAD job is never leased, so it can never even reach
+// buildUSPRequest in the first place.
+func TestTryDispatchNeverLeasesFirmwareDownload(t *testing.T) {
+	jobsRepo, deviceID := newDispatcherTestDB(t)
+	ctx := context.Background()
+	job, err := jobsRepo.Create(ctx, deviceID, jobs.TypeFirmwareDownload,
+		jobs.FirmwareDownloadPayload{FirmwareImageID: "fw-1", URL: "https://example.test/fw.bin", FileSize: 100}, "test")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	store := newFakeIdentityStore()
+	registry := mtp.NewRegistry()
+	c := &captureConn{id: agent}
+	registerAgent(store, registry, deviceID, c)
+	d := newDispatcher(jobsRepo, store, registry, ctrl, slog.Default())
+
+	if err := d.tryDispatch(ctx, deviceID); err != nil {
+		t.Fatalf("tryDispatch() = %v, want nil", err)
+	}
+	if len(c.sent) != 0 {
+		t.Errorf("c.sent = %d records, want 0: FIRMWARE_DOWNLOAD must never be leased, let alone sent", len(c.sent))
+	}
+	if len(d.pending) != 0 {
+		t.Errorf("pending = %+v, want none", d.pending)
+	}
+
+	gotJob, err := jobsRepo.ByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusQueued {
+		t.Errorf("job status = %s, want QUEUED (never leased, so never touched)", gotJob.Status)
+	}
+	if gotJob.Attempts != 0 {
+		t.Errorf("job attempts = %d, want 0 (never leased)", gotJob.Attempts)
+	}
+}
+
+// TestTryDispatchRequeuesUnsupportedType covers tryDispatch's
+// ErrUnsupportedOverUSP handling as the defensive guard it now is (fix
+// round 1, Important 2): with FIRMWARE_DOWNLOAD removed from
+// uspDispatchableTypes, no currently-leasable type can actually produce
+// ErrUnsupportedOverUSP from buildUSPRequest, so this test exercises the
+// guard the way a future accidental edit to uspDispatchableTypes would --
+// by temporarily reinstating FIRMWARE_DOWNLOAD onto the leasable list for
+// the duration of this test only, restored via t.Cleanup, and confirming
+// the lease is still cleanly requeued rather than left stranded RPC_SENT.
 func TestTryDispatchRequeuesUnsupportedType(t *testing.T) {
+	origTypes := uspDispatchableTypes
+	uspDispatchableTypes = append(append([]string{}, origTypes...), jobs.TypeFirmwareDownload)
+	t.Cleanup(func() { uspDispatchableTypes = origTypes })
+
 	jobsRepo, deviceID := newDispatcherTestDB(t)
 	ctx := context.Background()
 	job, err := jobsRepo.Create(ctx, deviceID, jobs.TypeFirmwareDownload,
@@ -298,6 +353,116 @@ func TestHandleResponseResolvesFailure(t *testing.T) {
 	}
 	if gotJob.FaultString == nil || *gotJob.FaultString != "invalid path" {
 		t.Errorf("job fault_string = %v, want %q", gotJob.FaultString, "invalid path")
+	}
+}
+
+// TestDispatcherForgetRemovesPendingForConn covers fix round 1, Important
+// 1: forget must drop every pending entry sent on c, mirroring
+// probe.forget's exact discipline.
+func TestDispatcherForgetRemovesPendingForConn(t *testing.T) {
+	d, _, _, _, c := dispatchTestSetup(t)
+	if len(d.pending) != 1 {
+		t.Fatalf("pending = %+v, want exactly 1 entry before forget", d.pending)
+	}
+
+	d.forget(c)
+
+	if len(d.pending) != 0 {
+		t.Errorf("pending = %+v, want none after forget(c)", d.pending)
+	}
+}
+
+// TestDispatcherForgetPreventsStaleResponseAfterDisconnect is the
+// regression test for the exact hazard Important 1 named: without
+// forget, a late response on a msg_id whose connection already
+// disconnected would still match in pending and call
+// MarkSuccessWithDetail/MarkFailed with no status guard -- dangerous in
+// particular once RecoverExpiredLeases has requeued the stranded job and
+// a later trigger has re-dispatched it under a fresh msg_id, since the
+// stale entry would then silently overwrite the re-dispatch's state.
+// This proves forget breaks that: once forgotten, the old msg_id no
+// longer matches at all.
+func TestDispatcherForgetPreventsStaleResponseAfterDisconnect(t *testing.T) {
+	d, jobsRepo, jobID, msgID, c := dispatchTestSetup(t)
+
+	d.forget(c)
+	if len(d.pending) != 0 {
+		t.Fatalf("pending = %+v, want none after forget", d.pending)
+	}
+
+	if matched := d.handleResponse(agent, getResp(msgID, nil)); matched {
+		t.Error("handleResponse matched a msg_id forget already dropped -- a late response could overwrite a since-re-dispatched job's state")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusRPCSent {
+		t.Errorf("job status = %s, want RPC_SENT (untouched -- the forgotten response must not have resolved it)", gotJob.Status)
+	}
+}
+
+// TestHandleResponseTriggersNextQueuedDispatch covers fix round 1, Minor
+// 5: resolving one dispatched job must immediately try to dispatch the
+// next queued job for the same device, rather than leaving it to wait
+// for the next periodic sweep (up to dispatchSweepInterval later).
+func TestHandleResponseTriggersNextQueuedDispatch(t *testing.T) {
+	jobsRepo, deviceID := newDispatcherTestDB(t)
+	ctx := context.Background()
+	job1, err := jobsRepo.Create(ctx, deviceID, jobs.TypeGetParameter,
+		jobs.GetParameterPayload{Paths: []string{"Device.DeviceInfo."}}, "test")
+	if err != nil {
+		t.Fatalf("create job1: %v", err)
+	}
+	job2, err := jobsRepo.Create(ctx, deviceID, jobs.TypeGetParameter,
+		jobs.GetParameterPayload{Paths: []string{"Device.WiFi."}}, "test")
+	if err != nil {
+		t.Fatalf("create job2: %v", err)
+	}
+
+	store := newFakeIdentityStore()
+	registry := mtp.NewRegistry()
+	c := &captureConn{id: agent}
+	registerAgent(store, registry, deviceID, c)
+	d := newDispatcher(jobsRepo, store, registry, ctrl, slog.Default())
+
+	if err := d.tryDispatch(ctx, deviceID); err != nil {
+		t.Fatalf("tryDispatch() = %v, want nil", err)
+	}
+	if len(c.sent) != 1 {
+		t.Fatalf("c.sent = %d records, want 1 after the first dispatch", len(c.sent))
+	}
+	rec, err := usp.DecodeRecord(c.sent[0], agent)
+	if err != nil {
+		t.Fatalf("decode dispatched record: %v", err)
+	}
+	sentMsg, err := usp.DecodeMsg(rec.Payload)
+	if err != nil {
+		t.Fatalf("decode dispatched msg: %v", err)
+	}
+	msgID := sentMsg.GetHeader().GetMsgId()
+
+	if matched := d.handleResponse(agent, getResp(msgID, nil)); !matched {
+		t.Fatal("handleResponse did not match the first dispatched job's msg_id")
+	}
+	if len(c.sent) != 2 {
+		t.Fatalf("c.sent = %d records, want 2: the second queued job must be dispatched immediately after the first resolves, not wait for the next sweep", len(c.sent))
+	}
+
+	got1, err := jobsRepo.ByID(ctx, job1.ID)
+	if err != nil {
+		t.Fatalf("ByID job1: %v", err)
+	}
+	if got1.Status != jobs.StatusSuccess {
+		t.Errorf("job1 status = %s, want SUCCESS", got1.Status)
+	}
+	got2, err := jobsRepo.ByID(ctx, job2.ID)
+	if err != nil {
+		t.Fatalf("ByID job2: %v", err)
+	}
+	if got2.Status != jobs.StatusRPCSent {
+		t.Errorf("job2 status = %s, want RPC_SENT (dispatched by handleResponse's re-trigger)", got2.Status)
 	}
 }
 

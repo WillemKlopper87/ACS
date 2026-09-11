@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -124,42 +125,60 @@ func run(logger *slog.Logger) error {
 		dispatcher:   disp,
 	}
 
+	// dispatchCtx bounds the two dispatch goroutines below independently of
+	// ctx's own cancellation timing (fix round 1, Important 4): waitForShutdown's
+	// http-server-error branch calls shutdown without ever canceling ctx
+	// itself (ctx is only canceled by run's own deferred stop(), after
+	// shutdown has already returned), so a goroutine that only stopped on
+	// ctx.Done() would never receive a stop signal on that path and
+	// dispatchWG.Wait() below would block for the full shutdown timeout for
+	// nothing. dispatchCancel is called explicitly inside shutdown instead,
+	// so both shutdown paths behave the same way.
+	dispatchCtx, dispatchCancel := context.WithCancel(ctx)
+	defer dispatchCancel()
+	var dispatchWG sync.WaitGroup
+
 	ws, mq, err := newTransports(cfg, tlsConfig, logger)
 	if err != nil {
-		shutdown(logger, server, nil, nil, nil, db)
+		shutdown(logger, server, nil, nil, nil, db, dispatchCancel, &dispatchWG)
 		return err
 	}
 
 	if err := startTransports(ctx, ws, mq, h); err != nil {
-		shutdown(logger, server, ws, mq, nil, db)
+		shutdown(logger, server, ws, mq, nil, db, dispatchCancel, &dispatchWG)
 		return err
 	}
 
 	// jobs.Listen and the two goroutines below are the push (NOTIFY) and
 	// safety-net (periodic sweep) dispatch triggers (design S6.1); the
 	// third trigger, a fresh identity reconcile, runs inline from
-	// handler.resolveAndMarkReconciled and needs no wiring here. Both
-	// goroutines are stopped by ctx alone -- listener's own listenCtx is
-	// derived from ctx (jobs.Listen), so canceling ctx ends its
-	// Notifications() channel and the drain loop below exits with it; the
-	// sweep goroutine selects on ctx.Done() directly. listener itself is
-	// still closed explicitly in shutdown (see its call sites below),
-	// matching this function's existing explicit-stop pattern for ws/mq
-	// rather than relying on ctx cancellation alone to release its
-	// dedicated *sql.DB connection promptly.
+	// handler.resolveAndMarkReconciled and needs no wiring here.
+	// drainDispatchNotifications's own loop actually ends when
+	// listener.Notifications() closes (which shutdown's explicit
+	// listener.Close() call causes); periodicSweep's loop ends on
+	// dispatchCtx.Done(). Both are tracked on dispatchWG so shutdown can
+	// wait for them to actually finish, not just signal them to stop (see
+	// shutdown's own doc comment).
 	listener, err := jobs.Listen(ctx, db, jobs.NotifyChannel, logger)
 	if err != nil {
-		shutdown(logger, server, ws, mq, nil, db)
+		shutdown(logger, server, ws, mq, nil, db, dispatchCancel, &dispatchWG)
 		return fmt.Errorf("start job queue listener: %w", err)
 	}
-	go drainDispatchNotifications(ctx, listener, disp, logger)
-	go disp.periodicSweep(ctx, registry, dispatchSweepInterval)
+	dispatchWG.Add(2)
+	go func() {
+		defer dispatchWG.Done()
+		drainDispatchNotifications(dispatchCtx, listener, disp, logger)
+	}()
+	go func() {
+		defer dispatchWG.Done()
+		disp.periodicSweep(dispatchCtx, registry, dispatchSweepInterval)
+	}()
 
 	ready.Store(true)
 	logger.Info("uspc listening", "controller_id", cfg.ControllerID,
 		"ws_addr", ws.Addr(), "mqtt_addr", mq.Addr(), "http_addr", cfg.HTTPAddr, "tls", tlsConfig != nil)
 
-	return waitForShutdown(ctx, logger, server, serverErrCh, ws, mq, listener, db)
+	return waitForShutdown(ctx, logger, server, serverErrCh, ws, mq, listener, db, dispatchCancel, &dispatchWG)
 }
 
 // drainDispatchNotifications forwards every device id delivered on
@@ -277,30 +296,40 @@ func startHTTPServer(addr string, metrics *observability.Metrics, ready *atomic.
 
 // waitForShutdown blocks until ctx is canceled or the HTTP server itself
 // fails, then drains everything.
-func waitForShutdown(ctx context.Context, logger *slog.Logger, server *http.Server, serverErrCh <-chan error, ws *mtp.WebSocket, mq *mtp.MQTT, listener *jobs.QueueListener, db *sql.DB) error {
+func waitForShutdown(ctx context.Context, logger *slog.Logger, server *http.Server, serverErrCh <-chan error, ws *mtp.WebSocket, mq *mtp.MQTT, listener *jobs.QueueListener, db *sql.DB, dispatchCancel context.CancelFunc, dispatchWG *sync.WaitGroup) error {
 	select {
 	case err := <-serverErrCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			shutdown(logger, server, ws, mq, listener, db)
+			shutdown(logger, server, ws, mq, listener, db, dispatchCancel, dispatchWG)
 			return fmt.Errorf("http server error: %w", err)
 		}
 	case <-ctx.Done():
 		logger.Info("shutting down")
 	}
-	shutdown(logger, server, ws, mq, listener, db)
+	shutdown(logger, server, ws, mq, listener, db, dispatchCancel, dispatchWG)
 	return nil
 }
 
 // shutdown drains server and, when non-nil, both transports and the job
-// queue listener, then closes db, logging (rather than failing the
-// caller) on any error. ws, mq and listener are nil when called from an
-// early-return path where the HTTP server was already started but the
-// piece in question never got as far as existing. db is closed last,
-// after the transports, the job queue listener, and the HTTP server have
-// all stopped, so in-flight identity reconciliation and dispatch work is
-// not cut off mid-shutdown, and listener's dedicated connection is
-// released back to db's pool before db itself closes.
-func shutdown(logger *slog.Logger, server *http.Server, ws *mtp.WebSocket, mq *mtp.MQTT, listener *jobs.QueueListener, db *sql.DB) {
+// queue listener, waits (bounded by the same shutdownCtx timeout the rest
+// of this function already uses) for the two dispatch goroutines
+// (drainDispatchNotifications, periodicSweep) tracked on dispatchWG to
+// actually finish -- not merely signaled to stop via dispatchCancel --
+// then closes db, logging (rather than failing the caller) on any error.
+// ws, mq and listener are nil when called from an early-return path where
+// the HTTP server was already started but the piece in question never
+// got as far as existing; dispatchCancel/dispatchWG are always non-nil
+// (constructed before the first shutdown call site in run), guarding them
+// anyway costs nothing and keeps this function safe to call from a future
+// early-return path that predates their construction. db is closed last,
+// after the transports, the job queue listener, and the dispatch
+// goroutines have all stopped, so in-flight identity reconciliation and
+// dispatch work is not cut off mid-shutdown (fix round 1, Important 4 --
+// this used to only be true for identity reconciliation, since nothing
+// waited for the dispatch goroutines to actually exit before db.Close()
+// ran), and listener's dedicated connection is released back to db's pool
+// before db itself closes.
+func shutdown(logger *slog.Logger, server *http.Server, ws *mtp.WebSocket, mq *mtp.MQTT, listener *jobs.QueueListener, db *sql.DB, dispatchCancel context.CancelFunc, dispatchWG *sync.WaitGroup) {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
@@ -319,6 +348,21 @@ func shutdown(logger *slog.Logger, server *http.Server, ws *mtp.WebSocket, mq *m
 	if listener != nil {
 		if err := listener.Close(); err != nil {
 			logger.Warn("job queue listener shutdown did not complete cleanly", "err", err)
+		}
+	}
+	if dispatchCancel != nil {
+		dispatchCancel()
+	}
+	if dispatchWG != nil {
+		dispatchDone := make(chan struct{})
+		go func() {
+			dispatchWG.Wait()
+			close(dispatchDone)
+		}()
+		select {
+		case <-dispatchDone:
+		case <-shutdownCtx.Done():
+			logger.Warn("dispatch goroutines (NOTIFY drain / periodic sweep) did not stop within the shutdown timeout")
 		}
 	}
 	if db != nil {

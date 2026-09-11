@@ -269,12 +269,16 @@ func (h *handler) logReconcileFailure(c mtp.Conn, msg string, err error) {
 // newly-known device id -- the "job queued before device connected"
 // trigger path (design S6.1). That call is given a fresh
 // context.Background(), not ctx: ctx is bound by this function's own
-// dbCallTimeout and is about to be canceled by the defer above, but
-// tryDispatch does its own work (a lease, possibly a send) that can
-// legitimately outlast this function's own budget -- it bounds each of
-// its own calls itself. A dispatch-trigger failure is logged at Warn,
-// not treated as a reconciliation failure: the reconciliation itself
-// already succeeded.
+// dbCallTimeout and is about to be canceled by the defer above. But it is
+// NOT given an unbounded context either (fix round 1, Important 3):
+// OnRecord/resolveAndMarkReconciled run inline on the transport's own
+// read-loop goroutine (dbCallTimeout's own doc comment names this exact
+// hazard), and tryDispatch chains up to three independently-timed calls
+// (a lookup, a lease, a send) that could otherwise block that goroutine
+// for their combined worst case rather than a single known budget. A
+// single dbCallTimeout wrapped around the whole call caps it at one bound
+// instead. A dispatch-trigger failure is logged at Warn, not treated as a
+// reconciliation failure: the reconciliation itself already succeeded.
 func (h *handler) resolveAndMarkReconciled(c mtp.Conn) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
 	defer cancel()
@@ -285,7 +289,9 @@ func (h *handler) resolveAndMarkReconciled(c mtp.Conn) {
 	}
 	h.markReconciled(c, agentRow.DeviceID)
 
-	if err := h.dispatcher.tryDispatch(context.Background(), agentRow.DeviceID); err != nil {
+	dispatchCtx, dispatchCancel := context.WithTimeout(context.Background(), dbCallTimeout)
+	defer dispatchCancel()
+	if err := h.dispatcher.tryDispatch(dispatchCtx, agentRow.DeviceID); err != nil {
 		h.log.Warn("uspc: reconciled connection but failed to trigger dispatch for its device", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", agentRow.DeviceID, "error", err)
 	}
 }
@@ -337,6 +343,7 @@ func deviceInfoFromGetResp(msg *uspproto.Msg) (oui, productClass, serialNumber s
 func (h *handler) OnDisconnect(c mtp.Conn, err error) {
 	removed := h.registry.Remove(c)
 	h.probe.forget(c)
+	h.dispatcher.forget(c)
 	h.metrics.connections.WithLabelValues(string(c.Kind())).Dec()
 
 	if removed {
