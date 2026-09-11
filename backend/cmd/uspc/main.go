@@ -44,7 +44,9 @@ func main() {
 
 // run does everything main() would otherwise do inline, so main() stays
 // a one-liner and every step here stays testable-by-inspection: load
-// config, wire the transports and HTTP server, block until shutdown.
+// config, start the HTTP server (so /readyz can genuinely report 503
+// while the transports are still coming up), wire and start the
+// transports, then block until shutdown.
 func run(logger *slog.Logger) error {
 	cfg, err := loadConfig(os.Getenv, logger)
 	if err != nil {
@@ -68,28 +70,35 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("load TLS configuration: %w", err)
 	}
 
+	var ready atomic.Bool
+	server, serverErrCh := startHTTPServer(cfg.HTTPAddr, metrics, &ready)
+	logger.Info("uspc http server listening", "addr", cfg.HTTPAddr)
+
+	p := newProbe(cfg.ControllerID, logger)
+	p.setMetrics(uspm)
 	h := &handler{
 		log:          logger,
 		registry:     mtp.NewRegistry(),
-		probe:        newProbe(cfg.ControllerID, logger),
+		probe:        p,
 		controllerID: cfg.ControllerID,
 		metrics:      uspm,
 	}
 
 	ws, mq, err := newTransports(cfg, tlsConfig, logger)
 	if err != nil {
+		shutdown(logger, server, nil, nil)
 		return err
 	}
 
-	var ready atomic.Bool
 	if err := startTransports(ctx, ws, mq, h); err != nil {
+		shutdown(logger, server, ws, mq)
 		return err
 	}
 	ready.Store(true)
 	logger.Info("uspc listening", "controller_id", cfg.ControllerID,
 		"ws_addr", ws.Addr(), "mqtt_addr", mq.Addr(), "http_addr", cfg.HTTPAddr, "tls", tlsConfig != nil)
 
-	return serveHTTP(ctx, logger, cfg.HTTPAddr, metrics, &ready, ws, mq)
+	return waitForShutdown(ctx, logger, server, serverErrCh, ws, mq)
 }
 
 // loadTLSConfig builds the shared *tls.Config both transports serve
@@ -147,10 +156,13 @@ func startTransports(ctx context.Context, ws *mtp.WebSocket, mq *mtp.MQTT, h *ha
 	return nil
 }
 
-// serveHTTP runs the /healthz, /readyz, /metrics server until ctx is
-// canceled or the server itself fails, then drains it and both
-// transports.
-func serveHTTP(ctx context.Context, logger *slog.Logger, addr string, metrics *observability.Metrics, ready *atomic.Bool, ws *mtp.WebSocket, mq *mtp.MQTT) error {
+// startHTTPServer mounts /healthz, /readyz, /metrics and starts serving
+// in the background, returning immediately -- so run can start it before
+// the transports exist, and /readyz genuinely answers 503 (ready is
+// still false) for the window between the HTTP server coming up and the
+// transports finishing Start, rather than only ever being reachable
+// once both are already true.
+func startHTTPServer(addr string, metrics *observability.Metrics, ready *atomic.Bool) (*http.Server, <-chan error) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", metrics.Handler())
 	mux.Handle("GET /healthz", observability.LivenessHandler())
@@ -164,28 +176,45 @@ func serveHTTP(ctx context.Context, logger *slog.Logger, addr string, metrics *o
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- server.ListenAndServe() }()
+	return server, errCh
+}
 
+// waitForShutdown blocks until ctx is canceled or the HTTP server itself
+// fails, then drains everything.
+func waitForShutdown(ctx context.Context, logger *slog.Logger, server *http.Server, serverErrCh <-chan error, ws *mtp.WebSocket, mq *mtp.MQTT) error {
 	select {
-	case err := <-errCh:
+	case err := <-serverErrCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			shutdown(logger, server, ws, mq)
 			return fmt.Errorf("http server error: %w", err)
 		}
 	case <-ctx.Done():
 		logger.Info("shutting down")
 	}
+	shutdown(logger, server, ws, mq)
+	return nil
+}
 
+// shutdown drains server and, when non-nil, both transports, logging
+// (rather than failing the caller) on any error. ws and mq are nil when
+// called from an early-return path where the HTTP server was already
+// started but the transports never got as far as existing.
+func shutdown(logger *slog.Logger, server *http.Server, ws *mtp.WebSocket, mq *mtp.MQTT) {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("http shutdown did not complete cleanly", "err", err)
 	}
-	if err := ws.Stop(shutdownCtx); err != nil {
-		logger.Warn("WebSocket shutdown did not complete cleanly", "err", err)
+	if ws != nil {
+		if err := ws.Stop(shutdownCtx); err != nil {
+			logger.Warn("WebSocket shutdown did not complete cleanly", "err", err)
+		}
 	}
-	if err := mq.Stop(shutdownCtx); err != nil {
-		logger.Warn("MQTT shutdown did not complete cleanly", "err", err)
+	if mq != nil {
+		if err := mq.Stop(shutdownCtx); err != nil {
+			logger.Warn("MQTT shutdown did not complete cleanly", "err", err)
+		}
 	}
-	return nil
 }
 
 // readinessHandler reports 200 once ready is true -- both transports

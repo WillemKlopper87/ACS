@@ -52,7 +52,9 @@ func (h *handler) OnRecord(in mtp.Inbound) {
 
 	switch {
 	case err == nil:
-		h.metrics.records.WithLabelValues(kind, "in", "ok").Inc()
+		// "ok" is recorded below, only once DecodeMsg has also succeeded:
+		// a well-formed Record envelope wrapping an undecodable message
+		// payload is not actually an "ok" record.
 	case errors.Is(err, usp.ErrNoPayload):
 		h.metrics.records.WithLabelValues(kind, "in", "no_payload").Inc()
 		h.log.Info("uspc: record carries no message payload", "endpoint", in.Conn.Endpoint(), "mtp", kind,
@@ -75,9 +77,11 @@ func (h *handler) OnRecord(in mtp.Inbound) {
 
 	msg, err := usp.DecodeMsg(rec.Payload)
 	if err != nil {
+		h.metrics.records.WithLabelValues(kind, "in", "decode_error").Inc()
 		h.log.Warn("uspc: failed to decode message payload", "endpoint", in.Conn.Endpoint(), "mtp", kind, "error", err)
 		return
 	}
+	h.metrics.records.WithLabelValues(kind, "in", "ok").Inc()
 	h.probe.handle(rec.From, msg)
 }
 
@@ -85,7 +89,7 @@ func (h *handler) OnRecord(in mtp.Inbound) {
 // outstanding probes, so neither leaks past the connection's life.
 func (h *handler) OnDisconnect(c mtp.Conn, err error) {
 	h.registry.Remove(c)
-	h.probe.forget(c.Endpoint())
+	h.probe.forget(c)
 	h.metrics.connections.WithLabelValues(string(c.Kind())).Dec()
 
 	if err != nil {
