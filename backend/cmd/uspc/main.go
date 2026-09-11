@@ -29,7 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"acs/internal/config"
 	"acs/internal/observability"
 	"acs/internal/usp/mtp"
 )
@@ -52,11 +51,15 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	config.LogSummary(logger,
-		config.Secret{Env: "ACS_USP_CONTROLLER_ID"},
-		config.Secret{Env: "ACS_USP_TLS_CERT"},
-		config.Secret{Env: "ACS_USP_TLS_KEY"},
-	)
+	// None of these three are secrets: ACS_USP_TLS_CERT/ACS_USP_TLS_KEY
+	// are file paths, not key material, and ACS_USP_CONTROLLER_ID is
+	// deliberately published to every connected agent (see loadConfig's
+	// doc comment) -- config.LogSummary's redact-to-"set (N bytes)"
+	// treatment would only hide information useful in a startup summary,
+	// so these are logged plainly instead of passed through it.
+	logger.Info("config", "var", "ACS_USP_CONTROLLER_ID", "value", cfg.ControllerID)
+	logger.Info("config", "var", "ACS_USP_TLS_CERT", "value", cfg.TLSCert)
+	logger.Info("config", "var", "ACS_USP_TLS_KEY", "value", cfg.TLSKey)
 	logger.Warn("agent allowlisting is not implemented in this build; do not expose uspc to an untrusted network")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

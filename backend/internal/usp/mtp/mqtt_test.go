@@ -3,6 +3,7 @@ package mtp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"math"
 	"net"
@@ -262,5 +263,73 @@ func TestMQTTOnPublishV311(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for Send's publish to be captured")
+	}
+}
+
+// TestMQTTSendHonoursContextTimeout proves that mqttConn.Send does not
+// block past ctx's deadline even when the underlying publish call
+// itself hangs -- the scenario a wedged agent socket produces in
+// production, since mochi-mqtt runs inline subscription handlers
+// synchronously on the publishing goroutine. The underlying publish is
+// faked via publishFn (a test-only seam) rather than a real stalled
+// TCP client, since that is the cheapest reliable way to force a hang
+// without flaking.
+func TestMQTTSendHonoursContextTimeout(t *testing.T) {
+	m, err := NewMQTT(MQTTConfig{Addr: "127.0.0.1:0", ControllerTopic: "/usp/controller", ControllerEndpointID: testControllerEID, AllowPlaintext: true}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newRecordingHandler()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(ctx, h); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = m.Stop(context.Background()) }()
+
+	agentCl := newMQTTAgentClient(t, m, "agent-wedged", 5)
+	wire, err := usp.EncodeRecord(usp.EndpointID("agent-wedged"), testControllerEID, []byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pk := packets.Packet{
+		FixedHeader: packets.FixedHeader{Type: packets.Publish},
+		TopicName:   "/usp/controller",
+		Payload:     wire,
+		Properties: packets.Properties{
+			ResponseTopic: "/usp/agent-wedged",
+			ContentType:   ContentTypeUSP,
+		},
+	}
+	if err := m.server.InjectPacket(agentCl, pk); err != nil {
+		t.Fatalf("InjectPacket: %v", err)
+	}
+	waitFor(t, h.connected, "OnConnect")
+
+	h.mu.Lock()
+	conn := h.connects[0].(*mqttConn)
+	h.mu.Unlock()
+
+	// hangReleased is only closed for cleanup bookkeeping -- Send must
+	// return long before the fake publish call ever unblocks.
+	hangReleased := make(chan struct{})
+	conn.publishFn = func(byte, string, []byte) error {
+		<-hangReleased
+		return nil
+	}
+	defer close(hangReleased)
+
+	sendCtx, sendCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer sendCancel()
+
+	start := time.Now()
+	err = conn.Send(sendCtx, []byte("reply"))
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Send error = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed > time.Second {
+		t.Errorf("Send took %v to return after its context expired; want it to return promptly", elapsed)
 	}
 }

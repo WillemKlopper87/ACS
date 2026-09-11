@@ -54,6 +54,7 @@ type WebSocket struct {
 	log *slog.Logger
 
 	mu       sync.Mutex
+	started  bool
 	listener net.Listener
 	server   *http.Server
 	addr     string
@@ -92,8 +93,17 @@ func NewWebSocket(cfg WebSocketConfig, log *slog.Logger) (*WebSocket, error) {
 func (w *WebSocket) Kind() Kind { return KindWebSocket }
 
 // Start begins accepting WebSocket connections and runs until ctx is
-// canceled or Stop is called.
+// canceled or Stop is called. Calling Start more than once returns an
+// error rather than leaking a second listener/server/goroutine.
 func (w *WebSocket) Start(ctx context.Context, h Handler) error {
+	w.mu.Lock()
+	if w.started {
+		w.mu.Unlock()
+		return errors.New("mtp: WebSocket already started")
+	}
+	w.started = true
+	w.mu.Unlock()
+
 	ln, err := net.Listen("tcp", w.cfg.Addr)
 	if err != nil {
 		return fmt.Errorf("mtp: WebSocket listen: %w", err)

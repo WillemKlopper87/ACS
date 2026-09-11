@@ -86,20 +86,24 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 		return serviceConfig{}, fmt.Errorf("uspc: invalid configuration:\n  - %s", strings.Join(problems, "\n  - "))
 	}
 
+	if log == nil {
+		log = slog.Default()
+	}
+
 	return serviceConfig{
 		ControllerID: usp.FormatEndpointID("self", rawID),
 
-		WSAddr: envOrDefault(getenv, "ACS_USP_WS_ADDR", ":9877"),
-		WSPath: envOrDefault(getenv, "ACS_USP_WS_PATH", "/usp"),
+		WSAddr: envOrDefault(getenv, log, "ACS_USP_WS_ADDR", ":9877"),
+		WSPath: envOrDefault(getenv, log, "ACS_USP_WS_PATH", "/usp"),
 
-		MQTTAddr:            envOrDefault(getenv, "ACS_USP_MQTT_ADDR", ":1883"),
-		MQTTControllerTopic: envOrDefault(getenv, "ACS_USP_MQTT_CONTROLLER_TOPIC", "/usp/controller"),
+		MQTTAddr:            envOrDefault(getenv, log, "ACS_USP_MQTT_ADDR", ":1883"),
+		MQTTControllerTopic: envOrDefault(getenv, log, "ACS_USP_MQTT_CONTROLLER_TOPIC", "/usp/controller"),
 
 		TLSCert:        tlsCert,
 		TLSKey:         tlsKey,
 		AllowPlaintext: allowPlaintext,
 
-		HTTPAddr: envOrDefault(getenv, "ACS_USP_HTTP_ADDR", ":8092"),
+		HTTPAddr: envOrDefault(getenv, log, "ACS_USP_HTTP_ADDR", ":8092"),
 	}, nil
 }
 
@@ -128,10 +132,15 @@ func isPlaceholderControllerID(id string) bool {
 	return placeholderControllerIDs[norm]
 }
 
-// envOrDefault returns getenv(key), or fallback when that is empty.
-func envOrDefault(getenv func(string) string, key, fallback string) string {
+// envOrDefault returns getenv(key), or fallback when that is empty --
+// logging at debug level whenever the fallback is the value actually
+// applied, so a summary of this service's effective configuration is
+// available without having to cross-reference every env var against
+// its default.
+func envOrDefault(getenv func(string) string, log *slog.Logger, key, fallback string) string {
 	if v := getenv(key); v != "" {
 		return v
 	}
+	log.Debug("uspc: applying default", "key", key, "value", fallback)
 	return fallback
 }

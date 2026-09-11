@@ -219,9 +219,11 @@ func (m *MQTT) inlineClient() (*mqttserver.Client, error) {
 	return cl, nil
 }
 
-// onPublish is the inline subscription handler for cfg.ControllerTopic
-// + "/#": it fires for every PUBLISH an agent sends toward this
-// controller.
+// onPublish is the inline subscription handler registered for both
+// cfg.ControllerTopic and cfg.ControllerTopic + "/#" (see the two
+// Subscribe calls in Start): it fires for every PUBLISH an agent sends
+// toward this controller, whether addressed to the bare controller
+// topic (MQTT 5) or a nested one (MQTT 3.1.1's reply-to suffix).
 //
 // The cl the broker passes to an inline subscription handler is always
 // the broker's own inline client, never the client that actually
@@ -368,6 +370,12 @@ type mqttConn struct {
 	mu              sync.RWMutex
 	protocolVersion byte
 	replyTopic      string
+
+	// publishFn is what Send races against ctx; it defaults to c.publish
+	// and is only ever overridden in tests, to simulate a publish call
+	// that blocks (standing in for a real wedged agent socket) without
+	// needing an actual stalled TCP client.
+	publishFn func(protocolVersion byte, replyTopic string, record []byte) error
 }
 
 func (c *mqttConn) setReplyState(protocolVersion byte, replyTopic string) {
@@ -393,6 +401,17 @@ func (c *mqttConn) RemoteAddr() string       { return c.remoteAddr }
 // properties on an outbound publish. A v3.1.1 agent gets a PUBLISH to
 // its reply topic suffixed with this controller's own reply-to, so it
 // knows where to address its next record.
+//
+// Both InjectPacket and Publish take no context and can block: mochi-
+// mqtt v2.7.9 runs every inline subscription handler synchronously,
+// on the publishing client's own broker read goroutine
+// (publishToSubscribers -> inlineSubscription.Handler), so a wedged
+// MQTT agent socket can block a publish to it indefinitely. Send
+// therefore runs the actual publish in a goroutine and races it
+// against ctx, returning ctx.Err() on timeout. The abandoned goroutine
+// may still complete the publish in the background after Send has
+// returned -- that is an accepted tradeoff here: a late or lost reply
+// to a connection already deemed wedged is harmless.
 func (c *mqttConn) Send(ctx context.Context, record []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -403,6 +422,27 @@ func (c *mqttConn) Send(ctx context.Context, record []byte) error {
 		return errors.New("mtp: MQTT Conn has no reply topic")
 	}
 
+	fn := c.publishFn
+	if fn == nil {
+		fn = c.publish
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- fn(protocolVersion, replyTopic, record)
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// publish performs the actual, potentially-blocking MQTT publish for
+// Send.
+func (c *mqttConn) publish(protocolVersion byte, replyTopic string, record []byte) error {
 	if protocolVersion == 5 {
 		inline, err := c.transport.inlineClient()
 		if err != nil {

@@ -252,6 +252,8 @@ ACS_INTERNAL_API_URL (where cmd/api lives, default http://localhost:8080),
 ACS_INTERNAL_SERVICE_TOKEN (same value as cmd/api's, above)
 
 # cmd/uspc (TR-369/USP controller: WebSocket + MQTT MTPs)
+# NOTE: cmd/uspc has no agent allowlist yet -- any agent that completes
+# the handshake is accepted. Do not expose it to an untrusted network.
 ACS_USP_CONTROLLER_ID (required, >=8 bytes, [A-Za-z0-9._-]+, not a
   placeholder -- this controller's endpoint id is self:: plus this value,
   stored verbatim in every connected agent's controller table),

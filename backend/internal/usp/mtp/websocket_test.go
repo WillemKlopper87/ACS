@@ -268,3 +268,20 @@ func TestWebSocketStopClosesConnections(t *testing.T) {
 		t.Error("client Read succeeded after server Stop; want a close error")
 	}
 }
+
+func TestWebSocketStartRejectsSecondCall(t *testing.T) {
+	ws, err := NewWebSocket(WebSocketConfig{Addr: "127.0.0.1:0", AllowPlaintext: true}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := ws.Start(ctx, newRecordingHandler()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ws.Stop(context.Background()) }()
+
+	if err := ws.Start(ctx, newRecordingHandler()); err == nil {
+		t.Error("second Start call succeeded; want an error")
+	}
+}
