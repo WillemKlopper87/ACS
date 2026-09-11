@@ -7,7 +7,7 @@
 #     placeholder "proto::agent-id".
 #   - Device.LocalAgent.Controller.1.EndpointID: must be exactly
 #     "self::" + $ACS_USP_CONTROLLER_ID from the matching CI step, since
-#     cmd/uspc refuses records whose From does not match its own
+#     cmd/uspc refuses records whose To does not match its own
 #     configured controller id.
 #   - Device.LocalAgent.Controller.1.MTP.1.WebSocket.Host/Port/Path: point
 #     at cmd/uspc's WebSocket listener (ACS_USP_WS_ADDR/ACS_USP_WS_PATH),

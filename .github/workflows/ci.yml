@@ -258,6 +258,7 @@ jobs:
     # already fails.
     needs: [go]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       # cmd/uspc's own env (backend/cmd/uspc/config.go, main.go).
       # ACS_USP_CONTROLLER_ID must be >=8 bytes, match
@@ -308,10 +309,28 @@ jobs:
           rm -f /tmp/uspc-ws.log /tmp/obuspa-ws.log
           /tmp/uspc > /tmp/uspc-ws.log 2>&1 &
           uspc_pid=$!
-          sleep 2
+          ready=0
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8092/readyz >/dev/null 2>&1 && { ready=1; break; }
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "FAIL: uspc did not become ready (GET /readyz) within 20s"
+            cat /tmp/uspc-ws.log
+            kill "$uspc_pid" 2>/dev/null || true
+            exit 1
+          fi
           docker run -d --name obuspa-ws --network host \
             -v "$PWD/ci/usp:/ci/usp:ro" \
             obuspa:ci -p -v4 -r /ci/usp/obuspa-websocket.txt -t /etc/obuspa/certs -f /tmp/usp-ws.db
+          sleep 2
+          if [ "$(docker inspect -f '{{.State.Running}}' obuspa-ws 2>/dev/null)" != "true" ]; then
+            echo "FAIL: obuspa-ws container is not running shortly after start"
+            docker logs obuspa-ws || true
+            docker rm -f obuspa-ws >/dev/null 2>&1 || true
+            kill "$uspc_pid" 2>/dev/null || true
+            exit 1
+          fi
           docker logs -f obuspa-ws > /tmp/obuspa-ws.log 2>&1 &
           logs_pid=$!
           rc=0
@@ -327,10 +346,28 @@ jobs:
           rm -f /tmp/uspc-mqtt5.log /tmp/obuspa-mqtt5.log
           /tmp/uspc > /tmp/uspc-mqtt5.log 2>&1 &
           uspc_pid=$!
-          sleep 2
+          ready=0
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8092/readyz >/dev/null 2>&1 && { ready=1; break; }
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "FAIL: uspc did not become ready (GET /readyz) within 20s"
+            cat /tmp/uspc-mqtt5.log
+            kill "$uspc_pid" 2>/dev/null || true
+            exit 1
+          fi
           docker run -d --name obuspa-mqtt5 --network host \
             -v "$PWD/ci/usp:/ci/usp:ro" \
             obuspa:ci -p -v4 -r /ci/usp/obuspa-mqtt-v5.txt -t /etc/obuspa/certs -f /tmp/usp-mqtt5.db
+          sleep 2
+          if [ "$(docker inspect -f '{{.State.Running}}' obuspa-mqtt5 2>/dev/null)" != "true" ]; then
+            echo "FAIL: obuspa-mqtt5 container is not running shortly after start"
+            docker logs obuspa-mqtt5 || true
+            docker rm -f obuspa-mqtt5 >/dev/null 2>&1 || true
+            kill "$uspc_pid" 2>/dev/null || true
+            exit 1
+          fi
           docker logs -f obuspa-mqtt5 > /tmp/obuspa-mqtt5.log 2>&1 &
           logs_pid=$!
           rc=0
@@ -346,10 +383,28 @@ jobs:
           rm -f /tmp/uspc-mqtt311.log /tmp/obuspa-mqtt311.log
           /tmp/uspc > /tmp/uspc-mqtt311.log 2>&1 &
           uspc_pid=$!
-          sleep 2
+          ready=0
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8092/readyz >/dev/null 2>&1 && { ready=1; break; }
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "FAIL: uspc did not become ready (GET /readyz) within 20s"
+            cat /tmp/uspc-mqtt311.log
+            kill "$uspc_pid" 2>/dev/null || true
+            exit 1
+          fi
           docker run -d --name obuspa-mqtt311 --network host \
             -v "$PWD/ci/usp:/ci/usp:ro" \
             obuspa:ci -p -v4 -r /ci/usp/obuspa-mqtt-v311.txt -t /etc/obuspa/certs -f /tmp/usp-mqtt311.db
+          sleep 2
+          if [ "$(docker inspect -f '{{.State.Running}}' obuspa-mqtt311 2>/dev/null)" != "true" ]; then
+            echo "FAIL: obuspa-mqtt311 container is not running shortly after start"
+            docker logs obuspa-mqtt311 || true
+            docker rm -f obuspa-mqtt311 >/dev/null 2>&1 || true
+            kill "$uspc_pid" 2>/dev/null || true
+            exit 1
+          fi
           docker logs -f obuspa-mqtt311 > /tmp/obuspa-mqtt311.log 2>&1 &
           logs_pid=$!
           rc=0

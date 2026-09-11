@@ -8,7 +8,7 @@
 #     of the upstream placeholder "controller.cdroutertest.com".
 #   - Device.LocalAgent.EndpointID / Controller.1.EndpointID: same fixed
 #     test agent id and "self::"+$ACS_USP_CONTROLLER_ID controller id as
-#     the WebSocket config -- cmd/uspc refuses records whose From does
+#     the WebSocket config -- cmd/uspc refuses records whose To does
 #     not match its own configured controller id.
 #   - Device.LocalAgent.Controller.1.MTP.1.MQTT.Topic: matches
 #     ACS_USP_MQTT_CONTROLLER_TOPIC ("/usp/controller") instead of the

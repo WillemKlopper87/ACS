@@ -23,14 +23,16 @@ set -euo pipefail
 log="$1"; agent="$2"; mtp="$3"; obuspa_log="${4:-}"
 
 for _ in $(seq 1 60); do
-  if [ -f "$log" ] \
-     && grep -q 'msg="usp probe: parameter"' "$log" \
-     && grep -q "endpoint=$agent" "$log" \
-     && grep -q "mtp=$mtp" "$log" \
-     && grep -q "param_path=Device.DeviceInfo.SoftwareVersion" "$log"; then
-    echo "OK: $agent answered the probe Get over $mtp"
-    grep 'msg="usp probe: parameter"' "$log" | grep "endpoint=$agent" | grep "mtp=$mtp" | tail -5
-    exit 0
+  if [ -f "$log" ]; then
+    matches=$(grep 'msg="usp probe: parameter"' "$log" 2>/dev/null \
+      | grep "endpoint=$agent" \
+      | grep "mtp=$mtp" \
+      | grep "param_path=Device.DeviceInfo.SoftwareVersion" || true)
+    if [ -n "$matches" ]; then
+      echo "OK: $agent answered the probe Get over $mtp"
+      echo "$matches" | tail -5
+      exit 0
+    fi
   fi
   sleep 1
 done
