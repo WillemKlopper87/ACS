@@ -12,7 +12,7 @@ func TestLinkUspAgentReconnect(t *testing.T) {
 		t.Fatalf("seed device: %v", err)
 	}
 
-	if err := r.LinkUspAgent(ctx, d.ID, "os::001122-ABC123", "WebSocket"); err != nil {
+	if err := r.LinkUspAgent(ctx, d.ID, "os::001122-ABC123", "WebSocket", nil); err != nil {
 		t.Fatalf("first link: %v", err)
 	}
 	agent, err := r.GetUspAgentByEndpointID(ctx, "os::001122-ABC123")
@@ -25,7 +25,7 @@ func TestLinkUspAgentReconnect(t *testing.T) {
 
 	// Reconnect: same device, new endpoint id and MTP kind — same row,
 	// updated in place, not a second row.
-	if err := r.LinkUspAgent(ctx, d.ID, "os::001122-ABC123-v2", "MQTT"); err != nil {
+	if err := r.LinkUspAgent(ctx, d.ID, "os::001122-ABC123-v2", "MQTT", nil); err != nil {
 		t.Fatalf("reconnect link: %v", err)
 	}
 	agent, err = r.GetUspAgentByEndpointID(ctx, "os::001122-ABC123-v2")
@@ -54,10 +54,10 @@ func TestLinkUspAgentEndpointCollision(t *testing.T) {
 		t.Fatalf("seed device B: %v", err)
 	}
 
-	if err := r.LinkUspAgent(ctx, dA.ID, "shared-endpoint", "WebSocket"); err != nil {
+	if err := r.LinkUspAgent(ctx, dA.ID, "shared-endpoint", "WebSocket", nil); err != nil {
 		t.Fatalf("link A: %v", err)
 	}
-	err = r.LinkUspAgent(ctx, dB.ID, "shared-endpoint", "WebSocket")
+	err = r.LinkUspAgent(ctx, dB.ID, "shared-endpoint", "WebSocket", nil)
 	if !errors.Is(err, ErrEndpointIDInUse) {
 		t.Errorf("link B with A's endpoint id returned %v, want ErrEndpointIDInUse", err)
 	}
@@ -75,11 +75,11 @@ func TestMarkUspAgentDisconnected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
-	if err := r.LinkUspAgent(ctx, d.ID, "os::endpoint", "WebSocket"); err != nil {
+	if err := r.LinkUspAgent(ctx, d.ID, "os::endpoint", "WebSocket", nil); err != nil {
 		t.Fatalf("link: %v", err)
 	}
 
-	if err := r.MarkUspAgentDisconnected(ctx, d.ID); err != nil {
+	if err := r.MarkUspAgentDisconnected(ctx, d.ID, "os::endpoint"); err != nil {
 		t.Fatalf("mark disconnected: %v", err)
 	}
 	agent, err := r.GetUspAgentByEndpointID(ctx, "os::endpoint")
@@ -93,8 +93,60 @@ func TestMarkUspAgentDisconnected(t *testing.T) {
 
 func TestMarkUspAgentDisconnectedUnknownDevice(t *testing.T) {
 	ctx, r := newDevicesTestRepo(t)
-	if err := r.MarkUspAgentDisconnected(ctx, "00000000-0000-0000-0000-000000000000"); err != nil {
+	if err := r.MarkUspAgentDisconnected(ctx, "00000000-0000-0000-0000-000000000000", "no-such-endpoint"); err != nil {
 		t.Errorf("MarkUspAgentDisconnected for unknown device = %v, want nil (no-op)", err)
+	}
+}
+
+// TestMarkUspAgentDisconnectedStaleEndpointIsNoOp proves the
+// endpoint-aware guard (final-review finding 3): a device reconnects
+// under a NEW endpoint id (LinkUspAgent retargets the single per-device
+// row in place, as TestLinkUspAgentReconnect covers), and only afterward
+// does the OLD endpoint's connection get around to disconnecting -- e.g. a
+// delayed teardown from the connection that was superseded. That stale
+// disconnect must be a no-op: the row's endpoint_id is now the NEW
+// endpoint id, not the old one, so `connected` must stay true.
+func TestMarkUspAgentDisconnectedStaleEndpointIsNoOp(t *testing.T) {
+	ctx, r := newDevicesTestRepo(t)
+	d, err := r.UpsertFromOnBoard(ctx, "001122", "Router", "ABC123")
+	if err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+	if err := r.LinkUspAgent(ctx, d.ID, "endpoint-old", "WebSocket", nil); err != nil {
+		t.Fatalf("link old endpoint: %v", err)
+	}
+
+	// Device reconnects under a NEW endpoint id -- same device_id row,
+	// retargeted in place.
+	if err := r.LinkUspAgent(ctx, d.ID, "endpoint-new", "MQTT", nil); err != nil {
+		t.Fatalf("link new endpoint: %v", err)
+	}
+
+	// The OLD endpoint's connection disconnects afterward. Must be a
+	// no-op: the row's endpoint_id is "endpoint-new" now, not
+	// "endpoint-old".
+	if err := r.MarkUspAgentDisconnected(ctx, d.ID, "endpoint-old"); err != nil {
+		t.Fatalf("mark disconnected on stale endpoint: %v", err)
+	}
+
+	agent, err := r.GetUspAgentByEndpointID(ctx, "endpoint-new")
+	if err != nil {
+		t.Fatalf("get after stale disconnect: %v", err)
+	}
+	if !agent.Connected {
+		t.Error("agent.Connected = false after a stale (superseded-endpoint) disconnect, want true: the new endpoint's session is still live")
+	}
+
+	// A genuine disconnect for the CURRENT endpoint id still works.
+	if err := r.MarkUspAgentDisconnected(ctx, d.ID, "endpoint-new"); err != nil {
+		t.Fatalf("mark disconnected on current endpoint: %v", err)
+	}
+	agent, err = r.GetUspAgentByEndpointID(ctx, "endpoint-new")
+	if err != nil {
+		t.Fatalf("get after genuine disconnect: %v", err)
+	}
+	if agent.Connected {
+		t.Error("agent.Connected = true after a genuine disconnect on the current endpoint, want false")
 	}
 }
 
@@ -104,7 +156,7 @@ func TestGetUspAgentByEndpointID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
-	if err := r.LinkUspAgent(ctx, d.ID, "os::endpoint", "MQTT"); err != nil {
+	if err := r.LinkUspAgent(ctx, d.ID, "os::endpoint", "MQTT", nil); err != nil {
 		t.Fatalf("link: %v", err)
 	}
 

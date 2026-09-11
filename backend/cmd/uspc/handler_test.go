@@ -212,8 +212,8 @@ func TestHandlerDisconnectMarksUspAgent(t *testing.T) {
 
 	h.OnDisconnect(c, nil)
 
-	if len(store.disconnectCalls) != 1 || store.disconnectCalls[0] != deviceID {
-		t.Fatalf("disconnectCalls = %v, want [%s]", store.disconnectCalls, deviceID)
+	if len(store.disconnectCalls) != 1 || store.disconnectCalls[0] != (disconnectCall{deviceID, string(agent)}) {
+		t.Fatalf("disconnectCalls = %v, want [{%s %s}]", store.disconnectCalls, deviceID, agent)
 	}
 }
 
@@ -275,7 +275,66 @@ func TestHandlerDisconnectSkipsStaleConnectionAfterTakeover(t *testing.T) {
 	// A genuine disconnect for b, the connection actually on record,
 	// still works correctly afterward.
 	h.OnDisconnect(b, nil)
-	if len(store.disconnectCalls) != 1 || store.disconnectCalls[0] != deviceID {
-		t.Fatalf("disconnectCalls = %v, want [%s] after b's genuine disconnect", store.disconnectCalls, deviceID)
+	if len(store.disconnectCalls) != 1 || store.disconnectCalls[0] != (disconnectCall{deviceID, string(agent)}) {
+		t.Fatalf("disconnectCalls = %v, want [{%s %s}] after b's genuine disconnect", store.disconnectCalls, deviceID, agent)
+	}
+}
+
+// TestHandlerDisconnectStaleEndpointAfterDifferentEndpointReconnect covers
+// final-review finding 3's exact scenario: a device reconnects under a
+// DIFFERENT endpoint id (not the registry-takeover case above, where both
+// connections share one endpoint id). registry.Add for the new endpoint
+// id returns nil (it's a different key from the old one, so the registry
+// itself never closes/supersedes the old connection), and the OLD
+// endpoint's connection genuinely disconnects afterward on its own --
+// registry.Remove for it returns true, by the registry's own accounting,
+// since nothing ever superseded it there. That must still not clear
+// `connected` on the device's single usp_agents row, because the row was
+// already retargeted to the NEW endpoint id by the reconnect's own
+// LinkUspAgent: only the endpoint-aware WHERE clause (not the registry
+// guard) protects the device in this shape.
+func TestHandlerDisconnectStaleEndpointAfterDifferentEndpointReconnect(t *testing.T) {
+	store := newFakeIdentityStore()
+	h := newTestHandler(store)
+
+	oldEndpoint := usp.EndpointID("os::012345-AAAA-old")
+	newEndpoint := usp.EndpointID("os::012345-AAAA-new")
+
+	a := &captureConn{id: oldEndpoint}
+	h.OnConnect(a)
+	msg := onBoardRequestMsg("sub-1", false, "0025C2", "Gateway", "SN12345")
+	h.OnRecord(mtp.Inbound{Conn: a, Record: recordWire(t, oldEndpoint, ctrl, msg)})
+	deviceID, ok := h.reconciledDeviceID(a)
+	if !ok {
+		t.Fatal("connection a not reconciled before reconnect")
+	}
+
+	// The same device reconnects under a DIFFERENT endpoint id. This is a
+	// distinct mtp.Conn/registry entry from a -- registry.Add(b) does not
+	// touch a's registry entry at all, since they key on different
+	// endpoint ids.
+	b := &captureConn{id: newEndpoint}
+	h.OnConnect(b)
+	msg2 := onBoardRequestMsg("sub-2", false, "0025C2", "Gateway", "SN12345")
+	h.OnRecord(mtp.Inbound{Conn: b, Record: recordWire(t, newEndpoint, ctrl, msg2)})
+	if _, ok := h.reconciledDeviceID(b); !ok {
+		t.Fatal("connection b not reconciled after its own OnBoardRequest")
+	}
+
+	// a's own connection now disconnects for real (e.g. the agent's old
+	// MTP session finally times out). registry.Remove(a) genuinely
+	// returns true here -- a was never superseded in the registry, since
+	// b lives under a different key.
+	h.OnDisconnect(a, nil)
+
+	agentRow, err := store.GetUspAgentByEndpointID(context.Background(), string(newEndpoint))
+	if err != nil {
+		t.Fatalf("get usp_agents row after a's disconnect: %v", err)
+	}
+	if agentRow.DeviceID != deviceID {
+		t.Fatalf("usp_agents row device id = %s, want %s", agentRow.DeviceID, deviceID)
+	}
+	if !agentRow.Connected {
+		t.Error("device marked disconnected via a's stale old-endpoint teardown, want still connected: b's session under the new endpoint id is still live")
 	}
 }

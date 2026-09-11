@@ -78,6 +78,23 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("connect to postgres: %w", err)
 	}
 
+	// A fresh process start means every previously-recorded USP
+	// connection is definitely gone (design spec §6.1's single-instance
+	// posture): nothing else clears usp_agents.connected on a crash or
+	// restart, a resolveAndMarkReconciled failure after LinkUspAgent
+	// already ran, or a takeover connection that never itself
+	// reconciles. Left uncleared, any of those permanently exempts a
+	// device from the liveness reaper's UNREACHABLE marking -- the exact
+	// regression this plan's Task 4 was built to fix (final-review
+	// finding 2). Must run before the transports start accepting
+	// connections, so a real reconnect's own LinkUspAgent can never race
+	// this reset and have its fresh connected=true clobbered back to
+	// false.
+	if err := resetUspAgentsConnected(ctx, db, logger); err != nil {
+		db.Close()
+		return err
+	}
+
 	metrics := observability.NewMetrics("uspc")
 	uspm := newUSPMetrics(metrics)
 
@@ -118,6 +135,27 @@ func run(logger *slog.Logger) error {
 		"ws_addr", ws.Addr(), "mqtt_addr", mq.Addr(), "http_addr", cfg.HTTPAddr, "tls", tlsConfig != nil)
 
 	return waitForShutdown(ctx, logger, server, serverErrCh, ws, mq, db)
+}
+
+// resetUspAgentsConnected clears connected=true on every usp_agents row.
+// Called once at startup, before the transports begin accepting
+// connections (see run's call site for the full rationale) -- a one-shot
+// correction for state that can only be stale at this point in the
+// process's life, not an ongoing repository method, so a plain
+// ExecContext here is enough; it doesn't need a *devices.Repository
+// method of its own.
+func resetUspAgentsConnected(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
+	result, err := db.ExecContext(ctx, `UPDATE usp_agents SET connected = false WHERE connected`)
+	if err != nil {
+		return fmt.Errorf("reset usp_agents.connected at startup: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		logger.Warn("uspc: reset usp_agents.connected at startup but could not determine how many rows were affected", "error", err)
+		return nil
+	}
+	logger.Info("uspc: reset stale usp_agents.connected rows at startup", "rows_reset", n)
+	return nil
 }
 
 // loadTLSConfig builds the shared *tls.Config both transports serve

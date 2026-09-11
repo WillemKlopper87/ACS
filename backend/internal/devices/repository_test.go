@@ -91,7 +91,7 @@ func TestRefreshLivenessSkipsConnectedUSPAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertFromOnBoard: %v", err)
 	}
-	if err := r.LinkUspAgent(ctx, d.ID, "endpoint-connected-01", "WebSocket"); err != nil {
+	if err := r.LinkUspAgent(ctx, d.ID, "endpoint-connected-01", "WebSocket", nil); err != nil {
 		t.Fatalf("LinkUspAgent: %v", err)
 	}
 	if _, err := r.db.ExecContext(ctx, `UPDATE devices SET online_status = 'ONLINE', last_inform_at = now() - interval '3 hours' WHERE id = $1`, d.ID); err != nil {
@@ -123,10 +123,10 @@ func TestRefreshLivenessMarksDisconnectedUSPAgentUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertFromOnBoard: %v", err)
 	}
-	if err := r.LinkUspAgent(ctx, d.ID, "endpoint-disconnected-01", "WebSocket"); err != nil {
+	if err := r.LinkUspAgent(ctx, d.ID, "endpoint-disconnected-01", "WebSocket", nil); err != nil {
 		t.Fatalf("LinkUspAgent: %v", err)
 	}
-	if err := r.MarkUspAgentDisconnected(ctx, d.ID); err != nil {
+	if err := r.MarkUspAgentDisconnected(ctx, d.ID, "endpoint-disconnected-01"); err != nil {
 		t.Fatalf("MarkUspAgentDisconnected: %v", err)
 	}
 	if _, err := r.db.ExecContext(ctx, `UPDATE devices SET online_status = 'ONLINE', last_inform_at = now() - interval '3 hours' WHERE id = $1`, d.ID); err != nil {

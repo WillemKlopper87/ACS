@@ -12,11 +12,16 @@ import (
 	"acs/internal/usp"
 )
 
-// onboardCall and linkCall record one call each to fakeIdentityStore's
-// UpsertFromOnBoard and LinkUspAgent, so tests can assert on exactly
-// what the reconciler passed through.
+// onboardCall, linkCall and disconnectCall record one call each to
+// fakeIdentityStore's UpsertFromOnBoard, LinkUspAgent and
+// MarkUspAgentDisconnected, so tests can assert on exactly what the
+// reconciler passed through.
 type onboardCall struct{ OUI, ProductClass, SerialNumber string }
-type linkCall struct{ DeviceID, EndpointID, MTPKind string }
+type linkCall struct {
+	DeviceID, EndpointID, MTPKind string
+	SupportedProtocolVersions     []string
+}
+type disconnectCall struct{ DeviceID, EndpointID string }
 
 // fakeIdentityStore is an in-memory identityStore recording every call
 // it receives, used by identity_test.go and handler_test.go to test the
@@ -38,7 +43,7 @@ type fakeIdentityStore struct {
 
 	upsertCalls     []onboardCall
 	linkCalls       []linkCall
-	disconnectCalls []string
+	disconnectCalls []disconnectCall
 	getCalls        []string
 
 	upsertErr     error
@@ -63,6 +68,12 @@ func (f *fakeIdentityStore) UpsertFromOnBoard(_ context.Context, oui, productCla
 	if f.upsertErr != nil {
 		return nil, f.upsertErr
 	}
+	// Mirrors devices.Repository.UpsertFromOnBoard's real guard (final-
+	// review finding 1): an empty OUI or SerialNumber is rejected before
+	// any device row is created or matched.
+	if oui == "" || serialNumber == "" {
+		return nil, devices.ErrEmptyIdentity
+	}
 	key := oui + "|" + productClass + "|" + serialNumber
 	if d, ok := f.devicesByKey[key]; ok {
 		return d, nil
@@ -78,34 +89,40 @@ func (f *fakeIdentityStore) UpsertFromOnBoard(_ context.Context, oui, productCla
 	return d, nil
 }
 
-func (f *fakeIdentityStore) LinkUspAgent(_ context.Context, deviceID, endpointID, mtpKind string) error {
+func (f *fakeIdentityStore) LinkUspAgent(_ context.Context, deviceID, endpointID, mtpKind string, supportedProtocolVersions []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.linkCalls = append(f.linkCalls, linkCall{deviceID, endpointID, mtpKind})
+	f.linkCalls = append(f.linkCalls, linkCall{deviceID, endpointID, mtpKind, supportedProtocolVersions})
 	if f.linkErr != nil {
 		return f.linkErr
 	}
 	f.agentsByEndpointID[endpointID] = &devices.UspAgent{
-		DeviceID:   deviceID,
-		EndpointID: endpointID,
-		MTPKind:    mtpKind,
-		Connected:  true,
+		DeviceID:                  deviceID,
+		EndpointID:                endpointID,
+		MTPKind:                   mtpKind,
+		Connected:                 true,
+		SupportedProtocolVersions: supportedProtocolVersions,
 	}
 	return nil
 }
 
-func (f *fakeIdentityStore) MarkUspAgentDisconnected(_ context.Context, deviceID string) error {
+// MarkUspAgentDisconnected mirrors devices.Repository's real
+// WHERE device_id = $1 AND endpoint_id = $2 guard (final-review finding
+// 3): a call for an endpoint id that no longer matches the device's
+// current agentsByEndpointID entry (superseded by a later LinkUspAgent
+// under a different endpoint id) is a no-op, not a disconnect.
+func (f *fakeIdentityStore) MarkUspAgentDisconnected(_ context.Context, deviceID, endpointID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.disconnectCalls = append(f.disconnectCalls, deviceID)
+	f.disconnectCalls = append(f.disconnectCalls, disconnectCall{deviceID, endpointID})
 	if f.disconnectErr != nil {
 		return f.disconnectErr
 	}
-	for _, agent := range f.agentsByEndpointID {
-		if agent.DeviceID == deviceID {
-			agent.Connected = false
-		}
+	agent, ok := f.agentsByEndpointID[endpointID]
+	if !ok || agent.DeviceID != deviceID {
+		return nil
 	}
+	agent.Connected = false
 	return nil
 }
 
@@ -184,10 +201,10 @@ func TestReconcilerDisconnect(t *testing.T) {
 	store := newFakeIdentityStore()
 	r := newReconciler(store, slog.Default())
 
-	r.disconnect(context.Background(), "device-1")
+	r.disconnect(context.Background(), "device-1", "endpoint-1")
 
-	if len(store.disconnectCalls) != 1 || store.disconnectCalls[0] != "device-1" {
-		t.Fatalf("disconnectCalls = %v, want [device-1]", store.disconnectCalls)
+	if len(store.disconnectCalls) != 1 || store.disconnectCalls[0] != (disconnectCall{"device-1", "endpoint-1"}) {
+		t.Fatalf("disconnectCalls = %v, want [{device-1 endpoint-1}]", store.disconnectCalls)
 	}
 }
 
@@ -199,9 +216,69 @@ func TestReconcilerDisconnectSwallowsError(t *testing.T) {
 	// Must not panic and must not surface the error -- disconnect has no
 	// return value by design (a disconnect-path failure must never block
 	// transport cleanup).
-	r.disconnect(context.Background(), "device-1")
+	r.disconnect(context.Background(), "device-1", "endpoint-1")
 
 	if len(store.disconnectCalls) != 1 {
 		t.Fatalf("disconnectCalls = %v, want exactly 1 attempt recorded", store.disconnectCalls)
+	}
+}
+
+// TestReconcilerOnBoardRejectsEmptyOUI and
+// TestReconcilerOnBoardRejectsEmptySerialNumber cover final-review finding
+// 1 at the reconciler layer: an OnBoardRequest with an empty OUI or
+// SerialNumber must not create/match a device row (via the store's own
+// guard) and, critically, must never reach LinkUspAgent -- an empty
+// identity must not steal a usp_agents endpoint binding from whichever
+// agent linked it last.
+func TestReconcilerOnBoardRejectsEmptyOUI(t *testing.T) {
+	store := newFakeIdentityStore()
+	r := newReconciler(store, slog.Default())
+	c := &captureConn{id: agent}
+	ob := &usp.OnBoardRequest{OUI: "", ProductClass: "Gateway", SerialNumber: "SN12345"}
+
+	err := r.onBoard(context.Background(), c, ob)
+	if !errors.Is(err, devices.ErrEmptyIdentity) {
+		t.Fatalf("onBoard() with empty OUI = %v, want devices.ErrEmptyIdentity", err)
+	}
+	if len(store.devicesByKey) != 0 {
+		t.Errorf("devicesByKey = %+v, want no device created for an empty-OUI OnBoardRequest", store.devicesByKey)
+	}
+	if len(store.linkCalls) != 0 {
+		t.Errorf("linkCalls = %+v, want none: LinkUspAgent must not be called for an empty-OUI OnBoardRequest", store.linkCalls)
+	}
+}
+
+func TestReconcilerOnBoardRejectsEmptySerialNumber(t *testing.T) {
+	store := newFakeIdentityStore()
+	r := newReconciler(store, slog.Default())
+	c := &captureConn{id: agent}
+	ob := &usp.OnBoardRequest{OUI: "0025C2", ProductClass: "Gateway", SerialNumber: ""}
+
+	err := r.onBoard(context.Background(), c, ob)
+	if !errors.Is(err, devices.ErrEmptyIdentity) {
+		t.Fatalf("onBoard() with empty SerialNumber = %v, want devices.ErrEmptyIdentity", err)
+	}
+	if len(store.devicesByKey) != 0 {
+		t.Errorf("devicesByKey = %+v, want no device created for an empty-SerialNumber OnBoardRequest", store.devicesByKey)
+	}
+	if len(store.linkCalls) != 0 {
+		t.Errorf("linkCalls = %+v, want none: LinkUspAgent must not be called for an empty-SerialNumber OnBoardRequest", store.linkCalls)
+	}
+}
+
+// TestReconcilerFromProbeFallbackRejectsEmptyIdentity covers the same
+// guard on the probe-fallback path (a GetResp with an empty resolved
+// value for one of the three identity parameters).
+func TestReconcilerFromProbeFallbackRejectsEmptyIdentity(t *testing.T) {
+	store := newFakeIdentityStore()
+	r := newReconciler(store, slog.Default())
+	c := &captureConn{id: agent}
+
+	err := r.fromProbeFallback(context.Background(), c, "0025C2", "Gateway", "")
+	if !errors.Is(err, devices.ErrEmptyIdentity) {
+		t.Fatalf("fromProbeFallback() with empty SerialNumber = %v, want devices.ErrEmptyIdentity", err)
+	}
+	if len(store.linkCalls) != 0 {
+		t.Errorf("linkCalls = %+v, want none: LinkUspAgent must not be called for an empty-SerialNumber probe fallback", store.linkCalls)
 	}
 }

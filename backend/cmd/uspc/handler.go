@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"acs/internal/devices"
 	"acs/internal/usp"
 	"acs/internal/usp/mtp"
 	"acs/internal/usp/uspproto"
@@ -184,7 +185,7 @@ func (h *handler) handleOnBoardRequest(c mtp.Conn, ob *usp.OnBoardRequest) {
 	err := h.reconciler.onBoard(onboardCtx, c, ob)
 	cancel()
 	if err != nil {
-		h.log.Warn("uspc: failed to reconcile onboard request", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
+		h.logReconcileFailure(c, "failed to reconcile onboard request", err)
 		return
 	}
 	h.resolveAndMarkReconciled(c)
@@ -228,10 +229,28 @@ func (h *handler) handleProbeFallback(c mtp.Conn, msg *uspproto.Msg) {
 	err := h.reconciler.fromProbeFallback(fallbackCtx, c, oui, productClass, serialNumber)
 	cancel()
 	if err != nil {
-		h.log.Warn("uspc: failed to reconcile via probe fallback", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
+		h.logReconcileFailure(c, "failed to reconcile via probe fallback", err)
 		return
 	}
 	h.resolveAndMarkReconciled(c)
+}
+
+// logReconcileFailure logs a failed identity reconciliation (from either
+// handleOnBoardRequest or handleProbeFallback). devices.ErrEndpointIDInUse
+// is logged at Error, not Warn, and with wording that says so explicitly:
+// it means this connection's endpoint id is already durably bound to a
+// different device in usp_agents, which is not a transient condition --
+// the agent will retry the same OnBoardRequest forever without an
+// operator resolving the collision (final-review finding 6). Every other
+// failure (a transient DB error, etc.) keeps the existing Warn treatment,
+// since a retry may well succeed on its own next time.
+func (h *handler) logReconcileFailure(c mtp.Conn, msg string, err error) {
+	if errors.Is(err, devices.ErrEndpointIDInUse) {
+		h.log.Error("uspc: "+msg+": endpoint id already linked to a different device -- requires operator intervention, agent will retry indefinitely",
+			"endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
+		return
+	}
+	h.log.Warn("uspc: "+msg, "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
 }
 
 // resolveAndMarkReconciled looks up the usp_agents row a just-succeeded
@@ -304,7 +323,7 @@ func (h *handler) OnDisconnect(c mtp.Conn, err error) {
 	if removed {
 		if deviceID, reconciled := h.reconciledDeviceID(c); reconciled {
 			disconnectCtx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
-			h.reconciler.disconnect(disconnectCtx, deviceID)
+			h.reconciler.disconnect(disconnectCtx, deviceID, string(c.Endpoint()))
 			cancel()
 		}
 	}

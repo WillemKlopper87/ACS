@@ -45,17 +45,38 @@ const uspAgentColumns = `device_id, endpoint_id, mtp_kind, connected, last_conne
 // A conflict on endpoint_id instead (a different device already claiming
 // this endpoint id) is the corruption case and surfaces as
 // ErrEndpointIDInUse rather than a raw pg error.
-func (r *Repository) LinkUspAgent(ctx context.Context, deviceID, endpointID, mtpKind string) error {
+//
+// supportedProtocolVersions is the agent's AgentSupportedProtocolVersions,
+// already split on its comma separator by the caller; nil/empty means the
+// caller has no version data for this link (e.g. the probe-fallback path,
+// whose GetResp carries no such field). In that case the existing value is
+// left untouched rather than being blanked out — the CASE in the ON
+// CONFLICT clause below only overwrites it when the new value is
+// non-empty, the same "don't silently reset a column this call has no
+// data for" discipline already applied to controller_role.
+func (r *Repository) LinkUspAgent(ctx context.Context, deviceID, endpointID, mtpKind string, supportedProtocolVersions []string) error {
+	// store.StringArray(nil).Value() encodes as SQL NULL, which the
+	// column's NOT NULL constraint rejects on a fresh INSERT (the ON
+	// CONFLICT UPDATE path never has this problem, since it never writes
+	// EXCLUDED's value directly -- see the CASE below). A nil slice here
+	// means "caller has no version data," not "clear the column," so
+	// normalize it to an empty (non-null) array either way.
+	if supportedProtocolVersions == nil {
+		supportedProtocolVersions = []string{}
+	}
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO usp_agents (device_id, endpoint_id, mtp_kind, connected, last_connected_at, last_seen_at)
-		VALUES ($1, $2, $3, true, now(), now())
+		INSERT INTO usp_agents (device_id, endpoint_id, mtp_kind, connected, last_connected_at, last_seen_at, supported_protocol_versions)
+		VALUES ($1, $2, $3, true, now(), now(), $4)
 		ON CONFLICT (device_id) DO UPDATE SET
 			endpoint_id = EXCLUDED.endpoint_id,
 			mtp_kind = EXCLUDED.mtp_kind,
 			connected = true,
 			last_connected_at = now(),
-			last_seen_at = now()
-	`, deviceID, endpointID, mtpKind)
+			last_seen_at = now(),
+			supported_protocol_versions = CASE WHEN cardinality(EXCLUDED.supported_protocol_versions) > 0
+				THEN EXCLUDED.supported_protocol_versions
+				ELSE usp_agents.supported_protocol_versions END
+	`, deviceID, endpointID, mtpKind, store.StringArray(supportedProtocolVersions))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "usp_agents_endpoint_id_key" {
@@ -66,13 +87,23 @@ func (r *Repository) LinkUspAgent(ctx context.Context, deviceID, endpointID, mtp
 	return nil
 }
 
-// MarkUspAgentDisconnected records that a device's live USP session ended.
-// A no-op (not an error) if no usp_agents row exists yet for that device —
-// there is nothing to mark disconnected.
-func (r *Repository) MarkUspAgentDisconnected(ctx context.Context, deviceID string) error {
+// MarkUspAgentDisconnected records that a device's live USP session on
+// endpointID ended. It is scoped to endpointID, not just deviceID: a
+// device can reconnect under a NEW endpoint id while the OLD endpoint id's
+// connection is still tearing down elsewhere (TestLinkUspAgentReconnect
+// covers the reconnect itself). If that stale old-endpoint disconnect
+// fires after the reconnect's LinkUspAgent has already retargeted the
+// single per-device row to the new endpoint id, this WHERE clause makes it
+// a no-op instead of clobbering the still-live session — endpoint_id in
+// the row no longer matches endpointID, so nothing is updated.
+//
+// A no-op (not an error) either way: there being no matching row (unknown
+// device, or a superseded endpoint id) is not itself a failure.
+func (r *Repository) MarkUspAgentDisconnected(ctx context.Context, deviceID, endpointID string) error {
 	_, err := r.db.ExecContext(ctx, `
-		UPDATE usp_agents SET connected = false, last_seen_at = now() WHERE device_id = $1
-	`, deviceID)
+		UPDATE usp_agents SET connected = false, last_seen_at = now()
+		WHERE device_id = $1 AND endpoint_id = $2
+	`, deviceID, endpointID)
 	if err != nil {
 		return fmt.Errorf("mark usp agent disconnected: %w", err)
 	}
