@@ -16,6 +16,10 @@ import (
 // decodable USP Msg.
 var ErrMalformedMessage = errors.New("malformed USP message")
 
+// ErrNotOnBoardRequest is returned when a Notify message is not an
+// OnBoardRequest notification.
+var ErrNotOnBoardRequest = errors.New("USP message is not an OnBoardRequest Notify")
+
 // NewMsgID returns a fresh message correlation id. USP requires msg_id
 // to be unique per outstanding request from a given endpoint; a UUID is
 // the cheapest way to guarantee that without shared state.
@@ -181,4 +185,76 @@ func DecodeMsg(payload []byte) (*uspproto.Msg, error) {
 		return nil, fmt.Errorf("%w: header or body absent", ErrMalformedMessage)
 	}
 	return &msg, nil
+}
+
+// OnBoardRequest represents a decoded OnBoardRequest Notify message,
+// carrying the device's identity and supported protocol versions for
+// initial reconciliation (design spec S5.3).
+type OnBoardRequest struct {
+	SubscriptionID                 string
+	SendResp                       bool
+	OUI                            string
+	ProductClass                   string
+	SerialNumber                   string
+	AgentSupportedProtocolVersions string
+}
+
+// DecodeOnBoardRequest unmarshals a Notify message into an OnBoardRequest,
+// returning ErrNotOnBoardRequest if the message is not a NOTIFY whose
+// Notification oneof is an OnBoardRequest. This is deliberately narrow --
+// only the one Notify variant this plan's reconciliation needs; the other
+// five variants (ValueChange, ObjCreation, ObjDeletion, OperComplete, Event)
+// are a later plan's concern.
+func DecodeOnBoardRequest(msg *uspproto.Msg) (*OnBoardRequest, error) {
+	if msg.GetHeader().GetMsgType() != uspproto.Header_NOTIFY {
+		return nil, ErrNotOnBoardRequest
+	}
+
+	notify := msg.GetBody().GetRequest().GetNotify()
+	if notify == nil {
+		return nil, ErrNotOnBoardRequest
+	}
+
+	onBoardReqWrapper, ok := notify.GetNotification().(*uspproto.Notify_OnBoardReq)
+	if !ok {
+		return nil, ErrNotOnBoardRequest
+	}
+
+	obr := onBoardReqWrapper.OnBoardReq
+	if obr == nil {
+		return nil, ErrNotOnBoardRequest
+	}
+
+	return &OnBoardRequest{
+		SubscriptionID:                 notify.GetSubscriptionId(),
+		SendResp:                       notify.GetSendResp(),
+		OUI:                            obr.GetOui(),
+		ProductClass:                   obr.GetProductClass(),
+		SerialNumber:                   obr.GetSerialNumber(),
+		AgentSupportedProtocolVersions: obr.GetAgentSupportedProtocolVersions(),
+	}, nil
+}
+
+// EncodeNotifyResp builds a NotifyResp message, the acknowledgment sent
+// by a controller when it receives an unsolicited Notify from an agent.
+// It mirrors encodeRequest's shape but builds a Body_Response instead.
+func EncodeNotifyResp(msgID, subscriptionID string) ([]byte, error) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{MsgId: msgID, MsgType: uspproto.Header_NOTIFY_RESP},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Response{
+				Response: &uspproto.Response{
+					RespType: &uspproto.Response_NotifyResp{
+						NotifyResp: &uspproto.NotifyResp{
+							SubscriptionId: subscriptionID,
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal USP %v: %w", uspproto.Header_NOTIFY_RESP, err)
+	}
+	return wire, nil
 }

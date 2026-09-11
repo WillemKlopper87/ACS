@@ -241,3 +241,162 @@ func TestEncodeSetAddDeterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeOnBoardRequest(t *testing.T) {
+	// Build a Notify with OnBoardRequest notification.
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-onboard-1",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-abc-123",
+							SendResp:       true,
+							Notification: &uspproto.Notify_OnBoardReq{
+								OnBoardReq: &uspproto.Notify_OnBoardRequest{
+									Oui:                            "0025C2",
+									ProductClass:                   "Gateway",
+									SerialNumber:                   "SN12345",
+									AgentSupportedProtocolVersions: "1.0,1.1,1.2,1.3",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	obr, err := DecodeOnBoardRequest(msg)
+	if err != nil {
+		t.Fatalf("DecodeOnBoardRequest: %v", err)
+	}
+
+	if obr.SubscriptionID != "sub-abc-123" {
+		t.Errorf("SubscriptionID = %q, want sub-abc-123", obr.SubscriptionID)
+	}
+	if !obr.SendResp {
+		t.Error("SendResp = false, want true")
+	}
+	if obr.OUI != "0025C2" {
+		t.Errorf("OUI = %q, want 0025C2", obr.OUI)
+	}
+	if obr.ProductClass != "Gateway" {
+		t.Errorf("ProductClass = %q, want Gateway", obr.ProductClass)
+	}
+	if obr.SerialNumber != "SN12345" {
+		t.Errorf("SerialNumber = %q, want SN12345", obr.SerialNumber)
+	}
+	if obr.AgentSupportedProtocolVersions != "1.0,1.1,1.2,1.3" {
+		t.Errorf("AgentSupportedProtocolVersions = %q, want 1.0,1.1,1.2,1.3", obr.AgentSupportedProtocolVersions)
+	}
+}
+
+func TestDecodeOnBoardRequestWrongVariant(t *testing.T) {
+	// Build a Notify with ValueChange (not OnBoardRequest).
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-valuechange-1",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-xyz-789",
+							SendResp:       false,
+							Notification: &uspproto.Notify_ValueChange_{
+								ValueChange: &uspproto.Notify_ValueChange{
+									ParamPath:  "Device.SomeParam",
+									ParamValue: "new-value",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	_, err = DecodeOnBoardRequest(msg)
+	if !errors.Is(err, ErrNotOnBoardRequest) {
+		t.Errorf("DecodeOnBoardRequest returned %v, want ErrNotOnBoardRequest", err)
+	}
+}
+
+func TestDecodeOnBoardRequestWrongMsgType(t *testing.T) {
+	// Build a GetResp (not a Notify).
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-getresp-1",
+			MsgType: uspproto.Header_GET_RESP,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Response{
+				Response: &uspproto.Response{
+					RespType: &uspproto.Response_GetResp{
+						GetResp: &uspproto.GetResp{},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	_, err = DecodeOnBoardRequest(msg)
+	if !errors.Is(err, ErrNotOnBoardRequest) {
+		t.Errorf("DecodeOnBoardRequest returned %v, want ErrNotOnBoardRequest", err)
+	}
+}
+
+func TestEncodeNotifyRespRoundTrip(t *testing.T) {
+	wire, err := EncodeNotifyResp("m-notify-resp-1", "sub-response-123")
+	if err != nil {
+		t.Fatalf("EncodeNotifyResp: %v", err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	if msg.GetHeader().GetMsgType() != uspproto.Header_NOTIFY_RESP {
+		t.Errorf("msg_type = %v, want NOTIFY_RESP", msg.GetHeader().GetMsgType())
+	}
+
+	notifyResp := msg.GetBody().GetResponse().GetNotifyResp()
+	if notifyResp == nil {
+		t.Fatal("NotifyResp is nil")
+	}
+	if notifyResp.GetSubscriptionId() != "sub-response-123" {
+		t.Errorf("subscription_id = %q, want sub-response-123", notifyResp.GetSubscriptionId())
+	}
+}
