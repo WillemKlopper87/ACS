@@ -287,9 +287,9 @@ func (d *dispatcher) handleResponse(from usp.EndpointID, msg *uspproto.Msg) (mat
 
 	if uspErr := usp.ErrorFromMsg(msg); uspErr != nil {
 		d.log.Warn("uspc: dispatcher: dispatched job's request was answered with an error", "job_id", entry.job.ID, "endpoint", from, "msg_id", msgID, "error", uspErr)
-		d.resolveFailure(ctx, entry.job, strconv.Itoa(int(uspErr.Code)), uspErr.Message)
+		d.resolveFailure(ctx, entry.job, from, strconv.Itoa(int(uspErr.Code)), uspErr.Message)
 	} else {
-		d.resolveSuccess(ctx, entry.job, responseSummary(msg))
+		d.resolveSuccess(ctx, entry.job, from, responseSummary(msg))
 	}
 	return true
 }
@@ -299,20 +299,23 @@ func (d *dispatcher) handleResponse(from usp.EndpointID, msg *uspproto.Msg) (mat
 // Minor 5) so a next queued job doesn't wait for the next periodic
 // sweep. Shared by handleResponse (a sync *Resp answering a dispatched
 // request) and handleOperationComplete (an async Notify), so a job
-// resolved either way goes through the exact same completion path.
-func (d *dispatcher) resolveSuccess(ctx context.Context, job *jobs.Job, detail dispatchResultDetail) {
+// resolved either way goes through the exact same completion path. from
+// is the endpoint that reported the completion, purely for logging --
+// handleOperationComplete has no live endpoint to hand it (only the
+// device id its own identity check already resolved), so it passes "".
+func (d *dispatcher) resolveSuccess(ctx context.Context, job *jobs.Job, from usp.EndpointID, detail dispatchResultDetail) {
 	if err := d.jobsRepo.MarkSuccessWithDetail(ctx, job.ID, detail); err != nil {
-		d.log.Warn("uspc: dispatcher: failed to mark job success", "job_id", job.ID, "device_id", job.DeviceID, "error", err)
+		d.log.Warn("uspc: dispatcher: failed to mark job success", "job_id", job.ID, "device_id", job.DeviceID, "endpoint", from, "error", err)
 	}
-	d.retryDispatch(job.DeviceID)
+	d.retryDispatch(job.DeviceID, from)
 }
 
 // resolveFailure is resolveSuccess's failure counterpart.
-func (d *dispatcher) resolveFailure(ctx context.Context, job *jobs.Job, faultCode, faultString string) {
+func (d *dispatcher) resolveFailure(ctx context.Context, job *jobs.Job, from usp.EndpointID, faultCode, faultString string) {
 	if err := d.jobsRepo.MarkFailed(ctx, job.ID, faultCode, faultString); err != nil {
-		d.log.Warn("uspc: dispatcher: failed to mark job failed", "job_id", job.ID, "device_id", job.DeviceID, "error", err)
+		d.log.Warn("uspc: dispatcher: failed to mark job failed", "job_id", job.ID, "device_id", job.DeviceID, "endpoint", from, "error", err)
 	}
-	d.retryDispatch(job.DeviceID)
+	d.retryDispatch(job.DeviceID, from)
 }
 
 // retryDispatch re-triggers tryDispatch for deviceID after a job
@@ -321,11 +324,11 @@ func (d *dispatcher) resolveFailure(ctx context.Context, job *jobs.Job, faultCod
 // resolveAndMarkReconciled's own doc comment names), so this gets its
 // own single bounded context rather than chaining unboundedly off
 // whatever budget the caller's own DB call left behind.
-func (d *dispatcher) retryDispatch(deviceID string) {
+func (d *dispatcher) retryDispatch(deviceID string, from usp.EndpointID) {
 	retryCtx, retryCancel := context.WithTimeout(context.Background(), dbCallTimeout)
 	defer retryCancel()
 	if err := d.tryDispatch(retryCtx, deviceID); err != nil {
-		d.log.Warn("uspc: dispatcher: failed to trigger dispatch for next queued job", "device_id", deviceID, "error", err)
+		d.log.Warn("uspc: dispatcher: failed to trigger dispatch for next queued job", "device_id", deviceID, "endpoint", from, "error", err)
 	}
 }
 
@@ -361,6 +364,15 @@ func operationCompleteResultDetail(oc *usp.OperationComplete) dispatchResultDeta
 // this signal is the one resolving it first, since the loop below drops
 // the pending entry unconditionally on a match).
 func (d *dispatcher) handleOperationComplete(ctx context.Context, connDeviceID string, oc *usp.OperationComplete) error {
+	if d.jobsRepo == nil {
+		// Mirrors tryDispatch's own nil-jobsRepo guard: a dispatcher built
+		// without a jobs repository (handler_test.go's newTestHandler, for
+		// its DB-free identity/reconciliation tests) never has a job to
+		// resolve. main.go always constructs a real *jobs.Repository, so
+		// this never triggers in production.
+		return nil
+	}
+
 	lookupCtx, cancel := context.WithTimeout(ctx, dbCallTimeout)
 	job, err := d.jobsRepo.ByCommandKey(lookupCtx, oc.CommandKey)
 	cancel()
@@ -384,16 +396,21 @@ func (d *dispatcher) handleOperationComplete(ctx context.Context, connDeviceID s
 	}
 
 	// A job that got both a sync OperateResp (SendResp true) and this
-	// async OperationComplete must only resolve once: drop the pending
-	// entry (keyed by msg_id, but the one we can identify here is by
-	// CommandKey) so a still-outstanding sync response for the same job
-	// becomes a harmless unknown-msg_id no-op in handleResponse, exactly
-	// like any other stale entry.
+	// async OperationComplete must only resolve once: d.pending is keyed
+	// by msg_id, but OperationComplete doesn't carry the original
+	// msg_id -- only CommandKey -- so find the pending entry the other
+	// way, by its job's CommandKey, and drop it. That makes a still-
+	// outstanding sync response for the same job a harmless unknown-
+	// msg_id no-op in handleResponse, exactly like any other stale entry.
+	// No break: a requeue-and-redispatch without an intervening
+	// disconnect could in principle leave two pending entries sharing one
+	// CommandKey (the old dispatch's forgotten pending survives only if
+	// forget was never called), so every match is removed, not just the
+	// first found.
 	d.mu.Lock()
 	for msgID, entry := range d.pending {
 		if entry.job.CommandKey == oc.CommandKey {
 			delete(d.pending, msgID)
-			break
 		}
 	}
 	d.mu.Unlock()
@@ -401,9 +418,9 @@ func (d *dispatcher) handleOperationComplete(ctx context.Context, connDeviceID s
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, dbCallTimeout)
 	defer resolveCancel()
 	if oc.Failed {
-		d.resolveFailure(resolveCtx, job, strconv.Itoa(int(oc.ErrCode)), oc.ErrMsg)
+		d.resolveFailure(resolveCtx, job, "", strconv.Itoa(int(oc.ErrCode)), oc.ErrMsg)
 	} else {
-		d.resolveSuccess(resolveCtx, job, operationCompleteResultDetail(oc))
+		d.resolveSuccess(resolveCtx, job, "", operationCompleteResultDetail(oc))
 	}
 	return nil
 }

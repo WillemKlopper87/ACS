@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"testing"
@@ -631,6 +632,18 @@ func TestHandleOperationCompleteUnknownCommandKey(t *testing.T) {
 	}
 }
 
+// TestHandleOperationCompleteAfterSyncResolutionIsNoop and
+// TestHandleOperationCompleteDeletesPendingBeforeSyncResponse both reuse
+// dispatchTestSetup, which dispatches a GET_PARAMETER job rather than an
+// Operate -- GET_PARAMETER can never actually produce a real
+// OperationComplete in production (only Operate commands can), but
+// that's irrelevant to what these two tests exercise: the pending-map
+// and job-status bookkeeping around resolving a job twice from two
+// different signal sources, which doesn't depend on which USP request
+// type was dispatched. dispatchTestSetup's msg_id/CommandKey plumbing is
+// exactly what both tests need and nothing about it is GET_PARAMETER-
+// specific.
+
 // TestHandleOperationCompleteAfterSyncResolutionIsNoop covers the
 // checklist's double-resolution row: a job already resolved via a sync
 // OperateResp (through handleResponse, exactly as Task 4 left it) must
@@ -676,6 +689,72 @@ func TestHandleOperationCompleteAfterSyncResolutionIsNoop(t *testing.T) {
 	}
 	if gotJob.FaultCode != nil {
 		t.Errorf("job fault_code = %v, want nil: the late OperationComplete's failure must not have applied", gotJob.FaultCode)
+	}
+}
+
+// TestHandleOperationCompleteDeletesPendingBeforeSyncResponse covers fix
+// round 1, Important 1: the plan-mandated pending-map deletion in
+// handleOperationComplete (dropping the dispatched request's own
+// d.pending entry, found by CommandKey) had no test actually exercising
+// its loop body -- every other test reaches RPC_SENT via a direct
+// jobsRepo.LeaseForTypes call rather than tryDispatch, so d.pending was
+// always empty and the loop never ran. This drives the real path:
+// tryDispatch populates d.pending, the async OperationComplete arrives
+// FIRST and must both resolve the job and delete that pending entry, and
+// the dispatched request's own late sync response must then find nothing
+// to match -- proving the async-first direction the deletion exists to
+// protect, the mirror image of
+// TestHandleOperationCompleteAfterSyncResolutionIsNoop's sync-first case.
+func TestHandleOperationCompleteDeletesPendingBeforeSyncResponse(t *testing.T) {
+	d, jobsRepo, jobID, msgID, _ := dispatchTestSetup(t)
+	job, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if len(d.pending) != 1 {
+		t.Fatalf("pending = %+v, want exactly 1 entry from dispatchTestSetup's own tryDispatch call", d.pending)
+	}
+
+	// The async OperationComplete arrives first (async wins) and must
+	// resolve the job.
+	oc := &usp.OperationComplete{CommandKey: job.CommandKey, OutputArgs: map[string]string{"Status": "Complete"}}
+	if err := d.handleOperationComplete(context.Background(), job.DeviceID, oc); err != nil {
+		t.Fatalf("handleOperationComplete() = %v, want nil", err)
+	}
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusSuccess {
+		t.Fatalf("job status = %s, want SUCCESS after the async OperationComplete", gotJob.Status)
+	}
+	if len(d.pending) != 0 {
+		t.Fatalf("pending = %+v, want none: handleOperationComplete must have deleted the dispatched request's own pending entry", d.pending)
+	}
+
+	// The dispatched request's own sync response now arrives late. With
+	// the pending entry already gone, it must not match anything --
+	// exactly like TestDispatcherForgetPreventsStaleResponseAfterDisconnect's
+	// same assertion for the disconnect-driven case.
+	if matched := d.handleResponse(agent, getResp(msgID, map[string]string{"SoftwareVersion": "11.0.7"})); matched {
+		t.Error("handleResponse matched a msg_id the OperationComplete's pending-delete already removed")
+	}
+
+	// The job's result must still reflect the OperationComplete, not
+	// whatever the late sync response would have written.
+	gotJob, err = jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusSuccess {
+		t.Errorf("job status = %s, want still SUCCESS: the late sync response must not have altered it", gotJob.Status)
+	}
+	var detail dispatchResultDetail
+	if err := json.Unmarshal(gotJob.ResultDetail, &detail); err != nil {
+		t.Fatalf("unmarshal result_detail: %v", err)
+	}
+	if detail.MsgType != uspproto.Header_NOTIFY.String() {
+		t.Errorf("result_detail msg_type = %q, want %q: the job's result must still be the OperationComplete's, not the late sync GetResp's", detail.MsgType, uspproto.Header_NOTIFY.String())
 	}
 }
 
