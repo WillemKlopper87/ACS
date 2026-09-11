@@ -302,8 +302,10 @@ jobs:
       - name: build uspc
         working-directory: backend
         run: go build -o /tmp/uspc ./cmd/uspc
-      - name: executable bit on assert-getresp.sh (committed as 100755)
-        run: test -x ci/usp/assert-getresp.sh
+      - name: executable bit on assert-getresp.sh / assert-job-dispatch.sh (committed as 100755)
+        run: |
+          test -x ci/usp/assert-getresp.sh
+          test -x ci/usp/assert-job-dispatch.sh
       - name: clone obuspa at the pinned commit
         run: |
           git init -q obuspa-src
@@ -358,6 +360,18 @@ jobs:
           logs_pid=$!
           rc=0
           ci/usp/assert-getresp.sh /tmp/uspc-ws.log "$AGENT_ENDPOINT_ID" WebSocket /tmp/obuspa-ws.log || rc=$?
+          # The probe GetResp above is also what triggers B-3a's
+          # probe-fallback identity reconciliation (handleProbeFallback
+          # -> fromProbeFallback -> UpsertFromOnBoard -> LinkUspAgent),
+          # so once it has succeeded, usp_agents.endpoint_id -> device_id
+          # is guaranteed to resolve. Reuse this same running uspc/obuspa
+          # pair (cheaper than starting a fresh one) to queue a real
+          # GET_PARAMETER job and prove it dispatches via LISTEN/NOTIFY
+          # and resolves with real data from the agent -- the concrete
+          # proof this whole plan exists to produce (spec §9).
+          if [ "$rc" -eq 0 ]; then
+            ci/usp/assert-job-dispatch.sh "$ACS_USP_POSTGRES_DSN" "$AGENT_ENDPOINT_ID" /tmp/uspc-ws.log || rc=$?
+          fi
           kill "$logs_pid" 2>/dev/null || true
           docker rm -f obuspa-ws >/dev/null 2>&1 || true
           kill "$uspc_pid" 2>/dev/null || true
