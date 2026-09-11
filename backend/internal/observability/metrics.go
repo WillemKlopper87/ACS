@@ -126,6 +126,14 @@ func NewMetrics(service string) *Metrics {
 	}
 }
 
+// Registry returns the underlying Prometheus registry, so a caller can
+// register metrics beyond the fixed set NewMetrics builds -- e.g.
+// cmd/uspc's USP-specific connections gauge and records counter, which
+// have no home in this shared package.
+func (m *Metrics) Registry() *prometheus.Registry {
+	return m.registry
+}
+
 // Handler serves this process's metrics in the Prometheus exposition
 // format. Deliberately unauthenticated wherever it's mounted (a scraper
 // has no operator JWT or CPE credential to present) — the same "public,

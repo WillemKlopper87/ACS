@@ -251,6 +251,19 @@ ACS_BSS_RATE_LIMIT_PER_SECOND, ACS_BSS_RATE_LIMIT_BURST,
 ACS_INTERNAL_API_URL (where cmd/api lives, default http://localhost:8080),
 ACS_INTERNAL_SERVICE_TOKEN (same value as cmd/api's, above)
 
+# cmd/uspc (TR-369/USP controller: WebSocket + MQTT MTPs)
+ACS_USP_CONTROLLER_ID (required, >=8 bytes, [A-Za-z0-9._-]+, not a
+  placeholder -- this controller's endpoint id is self:: plus this value,
+  stored verbatim in every connected agent's controller table),
+ACS_USP_WS_ADDR (default :9877), ACS_USP_WS_PATH (default /usp),
+ACS_USP_MQTT_ADDR (default :1883),
+ACS_USP_MQTT_CONTROLLER_TOPIC (default /usp/controller),
+ACS_USP_TLS_CERT, ACS_USP_TLS_KEY (both or neither -- when set, both MTPs
+  serve TLS), ACS_USP_ALLOW_PLAINTEXT (literal "true" opts into serving
+  with no TLS; default false, so a missing cert/key pair without this is
+  a fatal startup error), ACS_USP_HTTP_ADDR (default :8092 --
+  /healthz, /readyz, /metrics)
+
 # cmd/probe only
 ACS_RESULTS_FILE
 
