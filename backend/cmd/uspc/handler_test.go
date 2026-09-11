@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"acs/internal/jobs"
 	"acs/internal/observability"
 	"acs/internal/usp"
 	"acs/internal/usp/mtp"
@@ -65,6 +66,29 @@ func onBoardRequestMsg(subscriptionID string, sendResp bool, oui, productClass, 
 					Oui:          oui,
 					ProductClass: productClass,
 					SerialNumber: serialNumber,
+				}},
+			}},
+		}}},
+	}
+}
+
+// operationCompleteMsg builds a NOTIFY message carrying an OperComplete
+// notification, matching the shape internal/usp/message_test.go's
+// TestDecodeOperationComplete builds.
+func operationCompleteMsg(subscriptionID string, sendResp bool, commandKey string, outputArgs map[string]string) *uspproto.Msg {
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: usp.NewMsgID(), MsgType: uspproto.Header_NOTIFY},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Request{Request: &uspproto.Request{
+			ReqType: &uspproto.Request_Notify{Notify: &uspproto.Notify{
+				SubscriptionId: subscriptionID,
+				SendResp:       sendResp,
+				Notification: &uspproto.Notify_OperComplete{OperComplete: &uspproto.Notify_OperationComplete{
+					ObjPath:     "Device.",
+					CommandName: "Device.Reboot()",
+					CommandKey:  commandKey,
+					OperationResp: &uspproto.Notify_OperationComplete_ReqOutputArgs{
+						ReqOutputArgs: &uspproto.Notify_OperationComplete_OutputArgs{OutputArgs: outputArgs},
+					},
 				}},
 			}},
 		}}},
@@ -342,5 +366,114 @@ func TestHandlerDisconnectStaleEndpointAfterDifferentEndpointReconnect(t *testin
 	}
 	if !agentRow.Connected {
 		t.Error("device marked disconnected via a's stale old-endpoint teardown, want still connected: b's session under the new endpoint id is still live")
+	}
+}
+
+// TestHandlerOperationCompleteSendsResp covers the checklist's SendResp
+// row for the async completion path: an OperationComplete Notify with
+// SendResp true, from a connection already reconciled to the job's own
+// device, resolves the job AND sends back a NotifyResp -- exactly
+// mirroring handleOnBoardRequest's own SendResp handling. Needs a real
+// jobs.Repository (handleOperationComplete's ByCommandKey lookup), so
+// this builds its own handler rather than using newTestHandler's nil-
+// jobsRepo dispatcher.
+func TestHandlerOperationCompleteSendsResp(t *testing.T) {
+	jobsRepo, deviceID := newDispatcherTestDB(t)
+	ctx := context.Background()
+	job, err := jobsRepo.Create(ctx, deviceID, jobs.TypeReboot, jobs.RebootPayload{}, "test")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if _, err := jobsRepo.LeaseForTypes(ctx, deviceID, []string{jobs.TypeReboot}); err != nil {
+		t.Fatalf("lease job: %v", err)
+	}
+
+	store := newFakeIdentityStore()
+	registry := mtp.NewRegistry()
+	c := &captureConn{id: agent}
+	registerAgent(store, registry, deviceID, c)
+
+	h := &handler{
+		log:          slog.Default(),
+		registry:     registry,
+		probe:        newProbe(ctrl, slog.Default()),
+		controllerID: ctrl,
+		metrics:      newUSPMetrics(observability.NewMetrics("uspc-test")),
+		reconciler:   newReconciler(store, slog.Default()),
+		dispatcher:   newDispatcher(jobsRepo, store, registry, ctrl, slog.Default()),
+	}
+	// c is reconciled to deviceID as if an earlier OnBoardRequest had
+	// already run -- handleOperationComplete's identity check is what
+	// this test exercises, not reconciliation itself.
+	h.markReconciled(c, deviceID)
+
+	msg := operationCompleteMsg("sub-oc-1", true, job.CommandKey, map[string]string{"Status": "Complete"})
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg)})
+
+	if len(c.sent) != 1 {
+		t.Fatalf("c.sent has %d records, want exactly 1 (the NotifyResp)", len(c.sent))
+	}
+	rec, err := usp.DecodeRecord(c.sent[0], agent)
+	if err != nil {
+		t.Fatalf("decode NotifyResp record: %v", err)
+	}
+	if rec.From != ctrl {
+		t.Errorf("NotifyResp record From = %q, want %q", rec.From, ctrl)
+	}
+	respMsg, err := usp.DecodeMsg(rec.Payload)
+	if err != nil {
+		t.Fatalf("decode NotifyResp msg: %v", err)
+	}
+	if respMsg.GetHeader().GetMsgType() != uspproto.Header_NOTIFY_RESP {
+		t.Fatalf("msg type = %v, want NOTIFY_RESP", respMsg.GetHeader().GetMsgType())
+	}
+	if got := respMsg.GetBody().GetResponse().GetNotifyResp().GetSubscriptionId(); got != "sub-oc-1" {
+		t.Errorf("NotifyResp subscription_id = %q, want sub-oc-1", got)
+	}
+
+	gotJob, err := jobsRepo.ByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusSuccess {
+		t.Errorf("job status = %s, want SUCCESS: the OperationComplete must have resolved the job in addition to sending a NotifyResp", gotJob.Status)
+	}
+}
+
+// TestHandlerOperationCompleteNoRespWhenNotRequested mirrors
+// TestHandlerOnBoardRequestNoRespWhenNotRequested for the OperationComplete
+// path: SendResp false must not send anything back.
+func TestHandlerOperationCompleteNoRespWhenNotRequested(t *testing.T) {
+	jobsRepo, deviceID := newDispatcherTestDB(t)
+	ctx := context.Background()
+	job, err := jobsRepo.Create(ctx, deviceID, jobs.TypeReboot, jobs.RebootPayload{}, "test")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if _, err := jobsRepo.LeaseForTypes(ctx, deviceID, []string{jobs.TypeReboot}); err != nil {
+		t.Fatalf("lease job: %v", err)
+	}
+
+	store := newFakeIdentityStore()
+	registry := mtp.NewRegistry()
+	c := &captureConn{id: agent}
+	registerAgent(store, registry, deviceID, c)
+
+	h := &handler{
+		log:          slog.Default(),
+		registry:     registry,
+		probe:        newProbe(ctrl, slog.Default()),
+		controllerID: ctrl,
+		metrics:      newUSPMetrics(observability.NewMetrics("uspc-test")),
+		reconciler:   newReconciler(store, slog.Default()),
+		dispatcher:   newDispatcher(jobsRepo, store, registry, ctrl, slog.Default()),
+	}
+	h.markReconciled(c, deviceID)
+
+	msg := operationCompleteMsg("sub-oc-2", false, job.CommandKey, map[string]string{"Status": "Complete"})
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg)})
+
+	if len(c.sent) != 0 {
+		t.Fatalf("c.sent has %d records, want 0 when SendResp is false", len(c.sent))
 	}
 }

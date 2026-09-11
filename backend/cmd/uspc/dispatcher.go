@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -282,28 +283,129 @@ func (d *dispatcher) handleResponse(from usp.EndpointID, msg *uspproto.Msg) (mat
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+	defer cancel()
 
 	if uspErr := usp.ErrorFromMsg(msg); uspErr != nil {
 		d.log.Warn("uspc: dispatcher: dispatched job's request was answered with an error", "job_id", entry.job.ID, "endpoint", from, "msg_id", msgID, "error", uspErr)
-		if err := d.jobsRepo.MarkFailed(ctx, entry.job.ID, strconv.Itoa(int(uspErr.Code)), uspErr.Message); err != nil {
-			d.log.Warn("uspc: dispatcher: failed to mark job failed", "job_id", entry.job.ID, "endpoint", from, "error", err)
-		}
-	} else if err := d.jobsRepo.MarkSuccessWithDetail(ctx, entry.job.ID, responseSummary(msg)); err != nil {
-		d.log.Warn("uspc: dispatcher: failed to mark job success", "job_id", entry.job.ID, "endpoint", from, "error", err)
-	}
-	cancel()
-
-	// handleResponse runs inline on the transport's read-loop goroutine
-	// (same hazard as resolveAndMarkReconciled -- see its own doc
-	// comment), so this re-trigger gets its own single bounded context
-	// rather than chaining unboundedly off whatever budget the Mark* call
-	// above left behind.
-	retryCtx, retryCancel := context.WithTimeout(context.Background(), dbCallTimeout)
-	defer retryCancel()
-	if err := d.tryDispatch(retryCtx, entry.job.DeviceID); err != nil {
-		d.log.Warn("uspc: dispatcher: failed to trigger dispatch for next queued job", "device_id", entry.job.DeviceID, "endpoint", from, "error", err)
+		d.resolveFailure(ctx, entry.job, strconv.Itoa(int(uspErr.Code)), uspErr.Message)
+	} else {
+		d.resolveSuccess(ctx, entry.job, responseSummary(msg))
 	}
 	return true
+}
+
+// resolveSuccess marks job successfully complete with detail as its
+// result, then re-triggers tryDispatch for job's device (fix round 1,
+// Minor 5) so a next queued job doesn't wait for the next periodic
+// sweep. Shared by handleResponse (a sync *Resp answering a dispatched
+// request) and handleOperationComplete (an async Notify), so a job
+// resolved either way goes through the exact same completion path.
+func (d *dispatcher) resolveSuccess(ctx context.Context, job *jobs.Job, detail dispatchResultDetail) {
+	if err := d.jobsRepo.MarkSuccessWithDetail(ctx, job.ID, detail); err != nil {
+		d.log.Warn("uspc: dispatcher: failed to mark job success", "job_id", job.ID, "device_id", job.DeviceID, "error", err)
+	}
+	d.retryDispatch(job.DeviceID)
+}
+
+// resolveFailure is resolveSuccess's failure counterpart.
+func (d *dispatcher) resolveFailure(ctx context.Context, job *jobs.Job, faultCode, faultString string) {
+	if err := d.jobsRepo.MarkFailed(ctx, job.ID, faultCode, faultString); err != nil {
+		d.log.Warn("uspc: dispatcher: failed to mark job failed", "job_id", job.ID, "device_id", job.DeviceID, "error", err)
+	}
+	d.retryDispatch(job.DeviceID)
+}
+
+// retryDispatch re-triggers tryDispatch for deviceID after a job
+// resolves. handleResponse/handleOperationComplete both run inline on
+// the transport's own read-loop goroutine (same hazard
+// resolveAndMarkReconciled's own doc comment names), so this gets its
+// own single bounded context rather than chaining unboundedly off
+// whatever budget the caller's own DB call left behind.
+func (d *dispatcher) retryDispatch(deviceID string) {
+	retryCtx, retryCancel := context.WithTimeout(context.Background(), dbCallTimeout)
+	defer retryCancel()
+	if err := d.tryDispatch(retryCtx, deviceID); err != nil {
+		d.log.Warn("uspc: dispatcher: failed to trigger dispatch for next queued job", "device_id", deviceID, "error", err)
+	}
+}
+
+// operationCompleteResultDetail builds the result detail for a
+// successful OperationComplete, mirroring responseSummary's shape for a
+// sync GetResp -- the message type actually received (NOTIFY, since an
+// OperationComplete is a Notify, not a *Resp) plus whatever output
+// arguments the agent reported.
+func operationCompleteResultDetail(oc *usp.OperationComplete) dispatchResultDetail {
+	return dispatchResultDetail{MsgType: uspproto.Header_NOTIFY.String(), Params: oc.OutputArgs}
+}
+
+// handleOperationComplete resolves the job named by oc.CommandKey (the
+// async completion path, design S6.3 -- the same command_key
+// correlation CWMP's TransferComplete already uses, mirrored in
+// cmd/acs/session.go's handleTransferComplete). connDeviceID is the
+// device id the reporting connection itself reconciled to (handler's
+// own reconciledDeviceID, empty if unreconciled); USP has no
+// per-request credential the way CWMP's mTLS/basic-auth binding does, so
+// this identity check is the substitute -- a command_key resolution is
+// refused, not trusted, unless the reporting connection's own
+// reconciled device_id matches the job it claims to complete.
+//
+// An unknown command_key is a no-op, not an error: it may be a
+// retransmission for a job already resolved and no longer trackable, or
+// an agent-side artifact. A job not currently RPC_SENT is treated the
+// same way (duplicate/late signal, mirroring handleTransferComplete's
+// own status guard) -- in particular this is what makes a second signal
+// for the same job (a sync OperateResp having already resolved it, or
+// vice versa) a harmless no-op rather than a double resolution: whichever
+// signal arrives second finds the job already terminal (if the first
+// signal resolved it) or finds no pending entry left to worry about (if
+// this signal is the one resolving it first, since the loop below drops
+// the pending entry unconditionally on a match).
+func (d *dispatcher) handleOperationComplete(ctx context.Context, connDeviceID string, oc *usp.OperationComplete) error {
+	lookupCtx, cancel := context.WithTimeout(ctx, dbCallTimeout)
+	job, err := d.jobsRepo.ByCommandKey(lookupCtx, oc.CommandKey)
+	cancel()
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			d.log.Info("uspc: dispatcher: OperationComplete for unknown command_key, ignoring", "command_key", oc.CommandKey)
+			return nil
+		}
+		return fmt.Errorf("dispatcher: look up job by command_key %s: %w", oc.CommandKey, err)
+	}
+
+	if connDeviceID == "" || connDeviceID != job.DeviceID {
+		d.log.Warn("uspc: dispatcher: OperationComplete refused: reporting connection's device id does not match the job's device id",
+			"command_key", oc.CommandKey, "job_id", job.ID, "job_device_id", job.DeviceID, "conn_device_id", connDeviceID)
+		return nil
+	}
+
+	if job.Status != jobs.StatusRPCSent {
+		d.log.Info("uspc: dispatcher: duplicate or late OperationComplete ignored", "command_key", oc.CommandKey, "job_id", job.ID, "status", job.Status)
+		return nil
+	}
+
+	// A job that got both a sync OperateResp (SendResp true) and this
+	// async OperationComplete must only resolve once: drop the pending
+	// entry (keyed by msg_id, but the one we can identify here is by
+	// CommandKey) so a still-outstanding sync response for the same job
+	// becomes a harmless unknown-msg_id no-op in handleResponse, exactly
+	// like any other stale entry.
+	d.mu.Lock()
+	for msgID, entry := range d.pending {
+		if entry.job.CommandKey == oc.CommandKey {
+			delete(d.pending, msgID)
+			break
+		}
+	}
+	d.mu.Unlock()
+
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, dbCallTimeout)
+	defer resolveCancel()
+	if oc.Failed {
+		d.resolveFailure(resolveCtx, job, strconv.Itoa(int(oc.ErrCode)), oc.ErrMsg)
+	} else {
+		d.resolveSuccess(resolveCtx, job, operationCompleteResultDetail(oc))
+	}
+	return nil
 }
 
 // forget drops every pending dispatch sent on c (fix round 1, Important

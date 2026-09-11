@@ -377,6 +377,267 @@ func TestDecodeOnBoardRequestWrongMsgType(t *testing.T) {
 	}
 }
 
+func TestDecodeOperationComplete(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-opercomplete-1",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-oc-1",
+							SendResp:       true,
+							Notification: &uspproto.Notify_OperComplete{
+								OperComplete: &uspproto.Notify_OperationComplete{
+									ObjPath:     "Device.",
+									CommandName: "Device.Reboot()",
+									CommandKey:  "job-abc-123",
+									OperationResp: &uspproto.Notify_OperationComplete_ReqOutputArgs{
+										ReqOutputArgs: &uspproto.Notify_OperationComplete_OutputArgs{
+											OutputArgs: map[string]string{"Status": "Complete"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	oc, err := DecodeOperationComplete(msg)
+	if err != nil {
+		t.Fatalf("DecodeOperationComplete: %v", err)
+	}
+
+	if oc.SubscriptionID != "sub-oc-1" {
+		t.Errorf("SubscriptionID = %q, want sub-oc-1", oc.SubscriptionID)
+	}
+	if !oc.SendResp {
+		t.Error("SendResp = false, want true")
+	}
+	if oc.ObjPath != "Device." {
+		t.Errorf("ObjPath = %q, want Device.", oc.ObjPath)
+	}
+	if oc.CommandName != "Device.Reboot()" {
+		t.Errorf("CommandName = %q, want Device.Reboot()", oc.CommandName)
+	}
+	if oc.CommandKey != "job-abc-123" {
+		t.Errorf("CommandKey = %q, want job-abc-123", oc.CommandKey)
+	}
+	if oc.Failed {
+		t.Error("Failed = true, want false")
+	}
+	if len(oc.OutputArgs) != 1 || oc.OutputArgs["Status"] != "Complete" {
+		t.Errorf("OutputArgs = %+v, want {Status: Complete}", oc.OutputArgs)
+	}
+	if oc.ErrCode != 0 || oc.ErrMsg != "" {
+		t.Errorf("ErrCode/ErrMsg = %d/%q, want zero values for a successful operation", oc.ErrCode, oc.ErrMsg)
+	}
+}
+
+func TestDecodeOperationCompleteWithError(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-opercomplete-2",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-oc-2",
+							SendResp:       false,
+							Notification: &uspproto.Notify_OperComplete{
+								OperComplete: &uspproto.Notify_OperationComplete{
+									ObjPath:     "Device.",
+									CommandName: "Device.Reboot()",
+									CommandKey:  "job-def-456",
+									OperationResp: &uspproto.Notify_OperationComplete_CmdFailure{
+										CmdFailure: &uspproto.Notify_OperationComplete_CommandFailure{
+											ErrCode: 7012,
+											ErrMsg:  "command failed on device",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	oc, err := DecodeOperationComplete(msg)
+	if err != nil {
+		t.Fatalf("DecodeOperationComplete: %v", err)
+	}
+
+	if !oc.Failed {
+		t.Fatal("Failed = false, want true")
+	}
+	if oc.ErrCode != 7012 {
+		t.Errorf("ErrCode = %d, want 7012", oc.ErrCode)
+	}
+	if oc.ErrMsg != "command failed on device" {
+		t.Errorf("ErrMsg = %q, want %q", oc.ErrMsg, "command failed on device")
+	}
+	if oc.OutputArgs != nil {
+		t.Errorf("OutputArgs = %+v, want nil for a failed operation", oc.OutputArgs)
+	}
+	if oc.CommandKey != "job-def-456" {
+		t.Errorf("CommandKey = %q, want job-def-456", oc.CommandKey)
+	}
+}
+
+// TestDecodeOperationCompleteNilOperationResp covers the case protobuf
+// itself allows even though the spec doesn't intend it: an
+// OperationComplete whose OperationResp oneof is left entirely unset. It
+// must not panic, and must decode the same as a successful operation
+// with no output arguments -- Failed false, OutputArgs nil/empty.
+func TestDecodeOperationCompleteNilOperationResp(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-opercomplete-3",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-oc-3",
+							SendResp:       false,
+							Notification: &uspproto.Notify_OperComplete{
+								OperComplete: &uspproto.Notify_OperationComplete{
+									ObjPath:     "Device.",
+									CommandName: "Device.Reboot()",
+									CommandKey:  "job-ghi-789",
+									// OperationResp deliberately left unset.
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	oc, err := DecodeOperationComplete(msg)
+	if err != nil {
+		t.Fatalf("DecodeOperationComplete: %v (must not panic or error on an unset OperationResp oneof)", err)
+	}
+	if oc.Failed {
+		t.Error("Failed = true, want false for an unset OperationResp")
+	}
+	if oc.OutputArgs != nil {
+		t.Errorf("OutputArgs = %+v, want nil for an unset OperationResp", oc.OutputArgs)
+	}
+}
+
+func TestDecodeOperationCompleteWrongVariant(t *testing.T) {
+	// Build a Notify with OnBoardRequest (not OperComplete).
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-onboard-wrong-variant",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-abc-123",
+							SendResp:       true,
+							Notification: &uspproto.Notify_OnBoardReq{
+								OnBoardReq: &uspproto.Notify_OnBoardRequest{
+									Oui:          "0025C2",
+									ProductClass: "Gateway",
+									SerialNumber: "SN12345",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	_, err = DecodeOperationComplete(msg)
+	if !errors.Is(err, ErrNotOperationComplete) {
+		t.Errorf("DecodeOperationComplete returned %v, want ErrNotOperationComplete", err)
+	}
+}
+
+func TestDecodeOperationCompleteWrongMsgType(t *testing.T) {
+	// Build a GetResp (not a Notify).
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-getresp-2",
+			MsgType: uspproto.Header_GET_RESP,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Response{
+				Response: &uspproto.Response{
+					RespType: &uspproto.Response_GetResp{
+						GetResp: &uspproto.GetResp{},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	_, err = DecodeOperationComplete(msg)
+	if !errors.Is(err, ErrNotOperationComplete) {
+		t.Errorf("DecodeOperationComplete returned %v, want ErrNotOperationComplete", err)
+	}
+}
+
 func TestEncodeNotifyRespRoundTrip(t *testing.T) {
 	wire, err := EncodeNotifyResp("m-notify-resp-1", "sub-response-123")
 	if err != nil {

@@ -164,12 +164,19 @@ func (h *handler) OnRecord(in mtp.Inbound) {
 	}
 	h.metrics.records.WithLabelValues(kind, "in", "ok").Inc()
 
-	// An OnBoardRequest Notify and a probe GetResp are mutually exclusive
-	// message shapes for a given msg, so trying the former first and
-	// falling through to the probe on ErrNotOnBoardRequest never
-	// intercepts probe traffic.
+	// An OnBoardRequest Notify and an OperationComplete Notify are both
+	// Notify-shaped messages, structurally distinct from the probe's
+	// GetResp and a dispatched job's *Resp -- so both are tried first
+	// (only one wasted decode attempt for a non-Notify message, zero for
+	// a well-formed one), before falling through to the probe/dispatch
+	// checks that a Notify will never match anyway.
 	if ob, err := usp.DecodeOnBoardRequest(msg); err == nil {
 		h.handleOnBoardRequest(in.Conn, ob)
+		return
+	}
+
+	if oc, err := usp.DecodeOperationComplete(msg); err == nil {
+		h.handleOperationComplete(in.Conn, oc)
 		return
 	}
 
@@ -198,6 +205,47 @@ func (h *handler) handleOnBoardRequest(c mtp.Conn, ob *usp.OnBoardRequest) {
 		return
 	}
 	payload, err := usp.EncodeNotifyResp(usp.NewMsgID(), ob.SubscriptionID)
+	if err != nil {
+		h.log.Warn("uspc: failed to encode NotifyResp", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
+		return
+	}
+	record, err := usp.EncodeRecord(h.controllerID, c.Endpoint(), payload)
+	if err != nil {
+		h.log.Warn("uspc: failed to encode NotifyResp record", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
+		return
+	}
+	sendCtx, sendCancel := context.WithTimeout(context.Background(), sendTimeout)
+	defer sendCancel()
+	if err := c.Send(sendCtx, record); err != nil {
+		h.log.Warn("uspc: failed to send NotifyResp", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
+	}
+}
+
+// handleOperationComplete resolves the job an OperationComplete Notify
+// names via oc.CommandKey (async completion, design S6.3), bound to this
+// connection's own reconciled device id -- see
+// dispatcher.handleOperationComplete's own doc comment for the identity
+// check itself. c's reconciled device id is looked up here rather than
+// passed in by OnRecord because an unreconciled connection correctly
+// yields "" (reconciledDeviceID's own ok bool doesn't matter), which
+// dispatcher.handleOperationComplete's identity check already treats as
+// a refusal -- no special-casing needed at this call site. If the agent
+// requested one (oc.SendResp), sends back a NotifyResp, exactly mirroring
+// handleOnBoardRequest's own SendResp handling.
+func (h *handler) handleOperationComplete(c mtp.Conn, oc *usp.OperationComplete) {
+	connDeviceID, _ := h.reconciledDeviceID(c)
+
+	resolveCtx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+	err := h.dispatcher.handleOperationComplete(resolveCtx, connDeviceID, oc)
+	cancel()
+	if err != nil {
+		h.log.Warn("uspc: failed to handle OperationComplete", "endpoint", c.Endpoint(), "mtp", c.Kind(), "command_key", oc.CommandKey, "error", err)
+	}
+
+	if !oc.SendResp {
+		return
+	}
+	payload, err := usp.EncodeNotifyResp(usp.NewMsgID(), oc.SubscriptionID)
 	if err != nil {
 		h.log.Warn("uspc: failed to encode NotifyResp", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
 		return

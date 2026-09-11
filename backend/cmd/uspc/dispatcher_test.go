@@ -484,6 +484,201 @@ func TestHandleResponseUnknownMsgID(t *testing.T) {
 	}
 }
 
+// TestHandleOperationCompleteResolves covers the checklist's identity-
+// match row: an OperationComplete whose CommandKey names a real RPC_SENT
+// job, reported over a connection reconciled to that same job's device,
+// resolves the job -- success with OutputArgs in the result detail, via
+// the exact same resolve-once path handleResponse uses.
+func TestHandleOperationCompleteResolves(t *testing.T) {
+	jobsRepo, deviceID := newDispatcherTestDB(t)
+	ctx := context.Background()
+	job, err := jobsRepo.Create(ctx, deviceID, jobs.TypeReboot, jobs.RebootPayload{}, "test")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	// handleOperationComplete only resolves a job it finds RPC_SENT
+	// (mirrors cmd/acs's own handleTransferComplete status guard) --
+	// LeaseForTypes is what actually sets that status in production, so
+	// drive it the same way here rather than asserting on a QUEUED job.
+	if _, err := jobsRepo.LeaseForTypes(ctx, deviceID, []string{jobs.TypeReboot}); err != nil {
+		t.Fatalf("lease job: %v", err)
+	}
+
+	store := newFakeIdentityStore()
+	registry := mtp.NewRegistry()
+	d := newDispatcher(jobsRepo, store, registry, ctrl, slog.Default())
+
+	oc := &usp.OperationComplete{
+		CommandKey: job.CommandKey,
+		OutputArgs: map[string]string{"Status": "Complete"},
+	}
+	if err := d.handleOperationComplete(ctx, deviceID, oc); err != nil {
+		t.Fatalf("handleOperationComplete() = %v, want nil", err)
+	}
+
+	gotJob, err := jobsRepo.ByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusSuccess {
+		t.Errorf("job status = %s, want SUCCESS", gotJob.Status)
+	}
+	if len(gotJob.ResultDetail) == 0 {
+		t.Error("job result_detail is empty, want a JSON summary of the OperationComplete")
+	}
+}
+
+// TestHandleOperationCompleteResolvesFailure covers the CmdFailure
+// variant: Failed true resolves the job as FAILED with the agent's
+// ErrCode/ErrMsg, not SUCCESS.
+func TestHandleOperationCompleteResolvesFailure(t *testing.T) {
+	jobsRepo, deviceID := newDispatcherTestDB(t)
+	ctx := context.Background()
+	job, err := jobsRepo.Create(ctx, deviceID, jobs.TypeReboot, jobs.RebootPayload{}, "test")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if _, err := jobsRepo.LeaseForTypes(ctx, deviceID, []string{jobs.TypeReboot}); err != nil {
+		t.Fatalf("lease job: %v", err)
+	}
+
+	store := newFakeIdentityStore()
+	registry := mtp.NewRegistry()
+	d := newDispatcher(jobsRepo, store, registry, ctrl, slog.Default())
+
+	oc := &usp.OperationComplete{
+		CommandKey: job.CommandKey,
+		Failed:     true,
+		ErrCode:    7012,
+		ErrMsg:     "command failed on device",
+	}
+	if err := d.handleOperationComplete(ctx, deviceID, oc); err != nil {
+		t.Fatalf("handleOperationComplete() = %v, want nil", err)
+	}
+
+	gotJob, err := jobsRepo.ByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusFailed {
+		t.Errorf("job status = %s, want FAILED", gotJob.Status)
+	}
+	if gotJob.FaultCode == nil || *gotJob.FaultCode != "7012" {
+		t.Errorf("job fault_code = %v, want 7012", gotJob.FaultCode)
+	}
+	if gotJob.FaultString == nil || *gotJob.FaultString != "command failed on device" {
+		t.Errorf("job fault_string = %v, want %q", gotJob.FaultString, "command failed on device")
+	}
+}
+
+// TestHandleOperationCompleteRefusesIdentityMismatch covers the
+// identity-binding decision itself: a reporting connection whose own
+// reconciled device id does not match the job's device id must not
+// resolve it -- neither for a genuine mismatch (a different device's
+// connection) nor for an unreconciled connection (connDeviceID == "",
+// the case reconciledDeviceID yields for an unreconciled conn).
+func TestHandleOperationCompleteRefusesIdentityMismatch(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		connDeviceID string
+	}{
+		{"mismatched device", "some-other-device-id"},
+		{"unreconciled connection", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			jobsRepo, deviceID := newDispatcherTestDB(t)
+			ctx := context.Background()
+			job, err := jobsRepo.Create(ctx, deviceID, jobs.TypeReboot, jobs.RebootPayload{}, "test")
+			if err != nil {
+				t.Fatalf("create job: %v", err)
+			}
+			if _, err := jobsRepo.LeaseForTypes(ctx, deviceID, []string{jobs.TypeReboot}); err != nil {
+				t.Fatalf("lease job: %v", err)
+			}
+
+			store := newFakeIdentityStore()
+			registry := mtp.NewRegistry()
+			d := newDispatcher(jobsRepo, store, registry, ctrl, slog.Default())
+
+			oc := &usp.OperationComplete{CommandKey: job.CommandKey, OutputArgs: map[string]string{"Status": "Complete"}}
+			if err := d.handleOperationComplete(ctx, tc.connDeviceID, oc); err != nil {
+				t.Fatalf("handleOperationComplete() = %v, want nil (a refusal is not an error)", err)
+			}
+
+			gotJob, err := jobsRepo.ByID(ctx, job.ID)
+			if err != nil {
+				t.Fatalf("ByID: %v", err)
+			}
+			if gotJob.Status != jobs.StatusRPCSent {
+				t.Errorf("job status = %s, want RPC_SENT (untouched -- an identity mismatch must not resolve it)", gotJob.Status)
+			}
+		})
+	}
+}
+
+// TestHandleOperationCompleteUnknownCommandKey covers the checklist's
+// not-found row: a command_key that names no job at all must be a no-op,
+// not an error or a crash.
+func TestHandleOperationCompleteUnknownCommandKey(t *testing.T) {
+	jobsRepo, deviceID := newDispatcherTestDB(t)
+	store := newFakeIdentityStore()
+	registry := mtp.NewRegistry()
+	d := newDispatcher(jobsRepo, store, registry, ctrl, slog.Default())
+
+	oc := &usp.OperationComplete{CommandKey: "no-such-command-key"}
+	if err := d.handleOperationComplete(context.Background(), deviceID, oc); err != nil {
+		t.Fatalf("handleOperationComplete() = %v, want nil for an unknown command_key", err)
+	}
+}
+
+// TestHandleOperationCompleteAfterSyncResolutionIsNoop covers the
+// checklist's double-resolution row: a job already resolved via a sync
+// OperateResp (through handleResponse, exactly as Task 4 left it) must
+// not be re-resolved by a later OperationComplete carrying the same
+// command_key -- the second signal finds the job no longer RPC_SENT and
+// leaves it alone.
+func TestHandleOperationCompleteAfterSyncResolutionIsNoop(t *testing.T) {
+	d, jobsRepo, jobID, msgID, _ := dispatchTestSetup(t)
+	job, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	deviceID := job.DeviceID
+	commandKey := job.CommandKey
+
+	// Resolve synchronously first, exactly as TestHandleResponseResolvesSuccess does.
+	resp := getResp(msgID, map[string]string{"SoftwareVersion": "11.0.7"})
+	if matched := d.handleResponse(agent, resp); !matched {
+		t.Fatal("handleResponse() = false, want true for the dispatched job's own msg_id")
+	}
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusSuccess {
+		t.Fatalf("job status = %s, want SUCCESS after the sync resolution", gotJob.Status)
+	}
+
+	// A later OperationComplete for the very same job (same command_key)
+	// must not re-resolve it -- in particular it must not flip a SUCCESS
+	// job to FAILED, or overwrite its result_detail.
+	oc := &usp.OperationComplete{CommandKey: commandKey, Failed: true, ErrCode: 9999, ErrMsg: "should never apply"}
+	if err := d.handleOperationComplete(context.Background(), deviceID, oc); err != nil {
+		t.Fatalf("handleOperationComplete() = %v, want nil", err)
+	}
+
+	gotJob, err = jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusSuccess {
+		t.Errorf("job status = %s, want still SUCCESS: a late OperationComplete must not re-resolve an already-resolved job", gotJob.Status)
+	}
+	if gotJob.FaultCode != nil {
+		t.Errorf("job fault_code = %v, want nil: the late OperationComplete's failure must not have applied", gotJob.FaultCode)
+	}
+}
+
 // TestReconcileTriggersDispatch covers Correction 4's hook:
 // resolveAndMarkReconciled, on a successful reconciliation, must call
 // dispatcher.tryDispatch for the newly-known device -- the "job queued

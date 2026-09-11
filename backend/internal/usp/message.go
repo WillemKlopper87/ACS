@@ -20,6 +20,10 @@ var ErrMalformedMessage = errors.New("malformed USP message")
 // OnBoardRequest notification.
 var ErrNotOnBoardRequest = errors.New("USP message is not an OnBoardRequest Notify")
 
+// ErrNotOperationComplete is returned when a Notify message is not an
+// OperationComplete notification.
+var ErrNotOperationComplete = errors.New("USP message is not an OperationComplete Notify")
+
 // NewMsgID returns a fresh message correlation id. USP requires msg_id
 // to be unique per outstanding request from a given endpoint; a UUID is
 // the cheapest way to guarantee that without shared state.
@@ -233,6 +237,76 @@ func DecodeOnBoardRequest(msg *uspproto.Msg) (*OnBoardRequest, error) {
 		SerialNumber:                   obr.GetSerialNumber(),
 		AgentSupportedProtocolVersions: obr.GetAgentSupportedProtocolVersions(),
 	}, nil
+}
+
+// OperationComplete represents a decoded OperationComplete Notify
+// message -- the async completion signal for an Operate command that
+// wasn't (or in addition to being) answered synchronously via
+// SendResp/OperateResp, correlated back to the job that requested it by
+// CommandKey (the same field CWMP's TransferComplete already correlates
+// on, design S6.3). OutputArgs is nil when the operation itself failed
+// on the agent (Failed true); ErrCode/ErrMsg are only meaningful when
+// Failed is true.
+type OperationComplete struct {
+	SubscriptionID string
+	SendResp       bool
+	ObjPath        string
+	CommandName    string
+	CommandKey     string
+	OutputArgs     map[string]string
+	Failed         bool
+	ErrCode        uint32
+	ErrMsg         string
+}
+
+// DecodeOperationComplete unmarshals a Notify message into an
+// OperationComplete, returning ErrNotOperationComplete if the message is
+// not a NOTIFY whose Notification oneof is an OperComplete. Mirrors
+// DecodeOnBoardRequest's exact shape -- see its own doc comment for why
+// this stays narrow to the one Notify variant a caller asked for.
+//
+// oc.GetOperationResp() is itself a oneof and protobuf allows it to be
+// unset (nil) even though the spec doesn't intend that in practice; that
+// case is treated the same as a successful operation with no output
+// arguments (Failed false, OutputArgs nil) rather than panicking.
+func DecodeOperationComplete(msg *uspproto.Msg) (*OperationComplete, error) {
+	if msg.GetHeader().GetMsgType() != uspproto.Header_NOTIFY {
+		return nil, ErrNotOperationComplete
+	}
+
+	notify := msg.GetBody().GetRequest().GetNotify()
+	if notify == nil {
+		return nil, ErrNotOperationComplete
+	}
+
+	operCompleteWrapper, ok := notify.GetNotification().(*uspproto.Notify_OperComplete)
+	if !ok {
+		return nil, ErrNotOperationComplete
+	}
+
+	oc := operCompleteWrapper.OperComplete
+	if oc == nil {
+		return nil, ErrNotOperationComplete
+	}
+
+	result := &OperationComplete{
+		SubscriptionID: notify.GetSubscriptionId(),
+		SendResp:       notify.GetSendResp(),
+		ObjPath:        oc.GetObjPath(),
+		CommandName:    oc.GetCommandName(),
+		CommandKey:     oc.GetCommandKey(),
+	}
+
+	switch resp := oc.GetOperationResp().(type) {
+	case *uspproto.Notify_OperationComplete_ReqOutputArgs:
+		result.OutputArgs = resp.ReqOutputArgs.GetOutputArgs()
+	case *uspproto.Notify_OperationComplete_CmdFailure:
+		result.Failed = true
+		result.ErrCode = resp.CmdFailure.GetErrCode()
+		result.ErrMsg = resp.CmdFailure.GetErrMsg()
+	}
+
+	return result, nil
 }
 
 // EncodeNotifyResp builds a NotifyResp message, the acknowledgment sent
