@@ -36,8 +36,8 @@ func (r *Repository) UpsertFromInform(ctx context.Context, id cwmp.DeviceID, eve
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO devices (id, oui_serial, manufacturer, oui, product_class, serial_number,
 		                      online_status, last_inform_at, last_inform_event_codes,
-		                      first_seen_at, last_updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'ONLINE', now(), $7, now(), now())
+		                      first_seen_at, last_updated_at, management_protocols)
+		VALUES ($1, $2, $3, $4, $5, $6, 'ONLINE', now(), $7, now(), now(), ARRAY['CWMP'])
 		ON CONFLICT (oui_serial) DO UPDATE SET
 			-- audit C-1: manufacturer is not part of the oui_serial natural
 			-- key, so on a genuine match it should already agree with what
@@ -52,7 +52,8 @@ func (r *Repository) UpsertFromInform(ctx context.Context, id cwmp.DeviceID, eve
 			online_status = 'ONLINE',
 			last_inform_at = now(),
 			last_inform_event_codes = EXCLUDED.last_inform_event_codes,
-			last_updated_at = now()
+			last_updated_at = now(),
+			management_protocols = CASE WHEN 'CWMP' = ANY(devices.management_protocols) THEN devices.management_protocols ELSE array_append(devices.management_protocols, 'CWMP') END
 		RETURNING `+deviceColumns, uuid.New().String(), id.NaturalKey(), id.Manufacturer, id.OUI,
 		id.ProductClass, id.SerialNumber, store.StringArray(eventCodes))
 
