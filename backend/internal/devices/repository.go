@@ -100,6 +100,12 @@ func (r *Repository) GetByOUIserial(ctx context.Context, ouiSerial string) (*Dev
 // RefreshLiveness re-classifies stale devices by the last Inform time. A fresh
 // device stays ONLINE, a quiet-but-healthy device drops to OFFLINE, and a long-
 // stale device is marked UNREACHABLE.
+//
+// A device with a connected usp_agents row is excluded from this Inform-based
+// inference entirely: MTP connection state is authoritative and immediate for
+// USP (spec §5.4), so a device that never Informs in the first place must not
+// be judged by an Inform-based staleness check. Once its USP agent
+// disconnects (or never had one), it falls back to exactly the logic above.
 func (r *Repository) RefreshLiveness(ctx context.Context, onlineThreshold, unreachableThreshold time.Duration) (offlineCount, unreachableCount int, err error) {
 	if onlineThreshold <= 0 {
 		onlineThreshold = 5 * time.Minute
@@ -117,7 +123,10 @@ func (r *Repository) RefreshLiveness(ctx context.Context, onlineThreshold, unrea
 			ELSE 'UNREACHABLE'
 		END,
 		last_updated_at = now()
-		WHERE last_inform_at IS NULL OR last_inform_at <= now() - $1::interval OR last_inform_at <= now() - $2::interval
+		WHERE (last_inform_at IS NULL OR last_inform_at <= now() - $1::interval OR last_inform_at <= now() - $2::interval)
+		AND (management_protocols IS NULL OR NOT ('USP' = ANY(management_protocols)) OR NOT EXISTS (
+			SELECT 1 FROM usp_agents ua WHERE ua.device_id = devices.id AND ua.connected
+		))
 	`, formatInterval(onlineThreshold), formatInterval(unreachableThreshold))
 	if err != nil {
 		return 0, 0, fmt.Errorf("refresh liveness: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"acs/internal/cwmp"
 	"acs/internal/store"
@@ -75,6 +76,74 @@ func managementProtocols(t *testing.T, ctx context.Context, r *Repository, devic
 		t.Fatalf("read management_protocols: %v", err)
 	}
 	return []string(protocols)
+}
+
+// TestRefreshLivenessSkipsConnectedUSPAgent covers the reaper's new
+// exclusion: MTP connection state is authoritative and immediate for USP
+// (spec §5.4), so a device with a connected usp_agents row must never be
+// moved to UNREACHABLE (or OFFLINE) by the Inform-based inference, no
+// matter how stale last_inform_at is — a USP agent that never Informs in
+// the first place is not "stale", it's simply not measured that way.
+func TestRefreshLivenessSkipsConnectedUSPAgent(t *testing.T) {
+	ctx, r := newDevicesTestRepo(t)
+
+	d, err := r.UpsertFromOnBoard(ctx, "001349", "NR7101", "USP-CONNECTED-01")
+	if err != nil {
+		t.Fatalf("UpsertFromOnBoard: %v", err)
+	}
+	if err := r.LinkUspAgent(ctx, d.ID, "endpoint-connected-01", "WebSocket"); err != nil {
+		t.Fatalf("LinkUspAgent: %v", err)
+	}
+	if _, err := r.db.ExecContext(ctx, `UPDATE devices SET online_status = 'ONLINE', last_inform_at = now() - interval '3 hours' WHERE id = $1`, d.ID); err != nil {
+		t.Fatalf("set stale last_inform_at: %v", err)
+	}
+
+	if _, _, err := r.RefreshLiveness(ctx, 5*time.Minute, 90*time.Minute); err != nil {
+		t.Fatalf("RefreshLiveness: %v", err)
+	}
+
+	got, err := r.Get(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.OnlineStatus != "ONLINE" {
+		t.Errorf("online_status = %q, want ONLINE (connected USP agent must be exempt from Inform-based liveness)", got.OnlineStatus)
+	}
+}
+
+// TestRefreshLivenessMarksDisconnectedUSPAgentUnreachable covers the other
+// side of the contract: once a USP agent's MTP connection drops
+// (usp_agents.connected = false), its liveness is genuinely unknown the
+// same way a CWMP device's is, so today's last_inform_at-based logic
+// applies exactly as before.
+func TestRefreshLivenessMarksDisconnectedUSPAgentUnreachable(t *testing.T) {
+	ctx, r := newDevicesTestRepo(t)
+
+	d, err := r.UpsertFromOnBoard(ctx, "001349", "NR7101", "USP-DISCONNECTED-01")
+	if err != nil {
+		t.Fatalf("UpsertFromOnBoard: %v", err)
+	}
+	if err := r.LinkUspAgent(ctx, d.ID, "endpoint-disconnected-01", "WebSocket"); err != nil {
+		t.Fatalf("LinkUspAgent: %v", err)
+	}
+	if err := r.MarkUspAgentDisconnected(ctx, d.ID); err != nil {
+		t.Fatalf("MarkUspAgentDisconnected: %v", err)
+	}
+	if _, err := r.db.ExecContext(ctx, `UPDATE devices SET online_status = 'ONLINE', last_inform_at = now() - interval '3 hours' WHERE id = $1`, d.ID); err != nil {
+		t.Fatalf("set stale last_inform_at: %v", err)
+	}
+
+	if _, _, err := r.RefreshLiveness(ctx, 5*time.Minute, 90*time.Minute); err != nil {
+		t.Fatalf("RefreshLiveness: %v", err)
+	}
+
+	got, err := r.Get(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.OnlineStatus != "UNREACHABLE" {
+		t.Errorf("online_status = %q, want UNREACHABLE (disconnected USP agent falls back to last_inform_at-based logic)", got.OnlineStatus)
+	}
 }
 
 func containsAll(haystack []string, needles ...string) bool {
