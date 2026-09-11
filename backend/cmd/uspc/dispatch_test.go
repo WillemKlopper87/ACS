@@ -137,6 +137,10 @@ func TestBuildUSPRequestAddObject(t *testing.T) {
 	for _, s := range createObjs[0].GetParamSettings() {
 		params[s.GetParam()] = s.GetValue()
 	}
+	want := map[string]string{"SSID": "guest", "Enable": "true"}
+	if len(params) != len(want) {
+		t.Fatalf("param_settings = %+v, want %+v", params, want)
+	}
 	if params["SSID"] != "guest" || params["Enable"] != "true" {
 		t.Errorf("param_settings = %+v", params)
 	}
@@ -215,7 +219,12 @@ func TestBuildUSPRequestReboot(t *testing.T) {
 	if !op.GetSendResp() {
 		t.Error("send_resp = false, want true")
 	}
-	if got := op.GetInputArgs()["Cause"]; got != "RemoteReboot" {
+	args := op.GetInputArgs()
+	want := map[string]string{"Cause": "RemoteReboot"}
+	if len(args) != len(want) {
+		t.Fatalf("input_args = %+v, want %+v", args, want)
+	}
+	if got := args["Cause"]; got != "RemoteReboot" {
 		t.Errorf("Cause = %q, want RemoteReboot", got)
 	}
 }
@@ -237,7 +246,12 @@ func TestBuildUSPRequestFactoryReset(t *testing.T) {
 	if op.GetCommand() != "Device.FactoryReset()" {
 		t.Errorf("command = %q, want Device.FactoryReset()", op.GetCommand())
 	}
-	if got := op.GetInputArgs()["Cause"]; got != "RemoteFactoryReset" {
+	args := op.GetInputArgs()
+	want := map[string]string{"Cause": "RemoteFactoryReset"}
+	if len(args) != len(want) {
+		t.Fatalf("input_args = %+v, want %+v", args, want)
+	}
+	if got := args["Cause"]; got != "RemoteFactoryReset" {
 		t.Errorf("Cause = %q, want RemoteFactoryReset", got)
 	}
 }
@@ -273,6 +287,13 @@ func TestBuildUSPRequestDiagnosticsPing(t *testing.T) {
 		"Timeout":             "5000",
 		"DataBlockSize":       "64",
 		"DSCP":                "0",
+	}
+	// Pins the exact argument set -- not just that the expected keys are
+	// present -- so a future regression that re-adds Interface or Prefix
+	// (both deliberately excluded per the verified TR-181 ground truth)
+	// fails this test instead of passing silently.
+	if len(args) != len(want) {
+		t.Fatalf("input_args = %+v, want %+v", args, want)
 	}
 	for k, v := range want {
 		if args[k] != v {
@@ -314,6 +335,11 @@ func TestBuildUSPRequestDiagnosticsTraceroute(t *testing.T) {
 		"DataBlockSize":   "38",
 		"DSCP":            "0",
 		"MaxHopCount":     "30",
+	}
+	// See the parallel comment in TestBuildUSPRequestDiagnosticsPing: pins
+	// the exact set so a re-added Interface or Prefix fails the test.
+	if len(args) != len(want) {
+		t.Fatalf("input_args = %+v, want %+v", args, want)
 	}
 	for k, v := range want {
 		if args[k] != v {
