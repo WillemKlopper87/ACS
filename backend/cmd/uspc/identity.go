@@ -21,6 +21,10 @@ type identityStore interface {
 	LinkUspAgent(ctx context.Context, deviceID, endpointID, mtpKind string, supportedProtocolVersions []string) error
 	MarkUspAgentDisconnected(ctx context.Context, deviceID, endpointID string) error
 	GetUspAgentByEndpointID(ctx context.Context, endpointID string) (*devices.UspAgent, error)
+	// GetUspAgentByDeviceID is the reverse lookup dispatcher.tryDispatch
+	// needs (device_id -> endpoint_id -> live mtp.Conn): a job is queued
+	// against a device_id, but the registry is keyed by endpoint id.
+	GetUspAgentByDeviceID(ctx context.Context, deviceID string) (*devices.UspAgent, error)
 }
 
 // splitProtocolVersions parses AgentSupportedProtocolVersions, a

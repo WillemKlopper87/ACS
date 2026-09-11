@@ -46,10 +46,11 @@ type fakeIdentityStore struct {
 	disconnectCalls []disconnectCall
 	getCalls        []string
 
-	upsertErr     error
-	linkErr       error
-	disconnectErr error
-	getErr        error
+	upsertErr        error
+	linkErr          error
+	disconnectErr    error
+	getErr           error
+	getByDeviceIDErr error
 }
 
 var _ identityStore = (*fakeIdentityStore)(nil)
@@ -138,6 +139,25 @@ func (f *fakeIdentityStore) GetUspAgentByEndpointID(_ context.Context, endpointI
 		return nil, devices.ErrUspAgentNotFound
 	}
 	return agent, nil
+}
+
+// GetUspAgentByDeviceID is the reverse lookup dispatcher_test.go's tests
+// need: a linear scan of agentsByEndpointID by DeviceID, since this fake
+// (unlike the real usp_agents table) has no separate device-id index --
+// LinkUspAgent is the only writer, keyed by endpoint id, so this stays
+// the single source of truth for both lookup directions.
+func (f *fakeIdentityStore) GetUspAgentByDeviceID(_ context.Context, deviceID string) (*devices.UspAgent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getByDeviceIDErr != nil {
+		return nil, f.getByDeviceIDErr
+	}
+	for _, agent := range f.agentsByEndpointID {
+		if agent.DeviceID == deviceID {
+			return agent, nil
+		}
+	}
+	return nil, devices.ErrUspAgentNotFound
 }
 
 func TestReconcilerOnBoard(t *testing.T) {

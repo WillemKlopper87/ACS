@@ -47,6 +47,7 @@ type handler struct {
 	controllerID usp.EndpointID
 	metrics      *uspMetrics
 	reconciler   *reconciler
+	dispatcher   *dispatcher
 
 	// identMu guards identities. This is handler's own lock, deliberately
 	// separate from mtp.Registry's internal one -- that lock guards
@@ -174,7 +175,10 @@ func (h *handler) OnRecord(in mtp.Inbound) {
 
 	if matched := h.probe.handle(rec.From, msg); matched {
 		h.handleProbeFallback(in.Conn, msg)
+		return
 	}
+
+	h.dispatcher.handleResponse(rec.From, msg)
 }
 
 // handleOnBoardRequest reconciles identity from an OnBoardRequest Notify
@@ -260,6 +264,17 @@ func (h *handler) logReconcileFailure(c mtp.Conn, msg string, err error) {
 // task-5 brief's Produces contract). Bounds its own DB call with
 // dbCallTimeout, independent of whatever context (if any) the caller was
 // working under.
+//
+// On success it also triggers dispatcher.tryDispatch for the
+// newly-known device id -- the "job queued before device connected"
+// trigger path (design S6.1). That call is given a fresh
+// context.Background(), not ctx: ctx is bound by this function's own
+// dbCallTimeout and is about to be canceled by the defer above, but
+// tryDispatch does its own work (a lease, possibly a send) that can
+// legitimately outlast this function's own budget -- it bounds each of
+// its own calls itself. A dispatch-trigger failure is logged at Warn,
+// not treated as a reconciliation failure: the reconciliation itself
+// already succeeded.
 func (h *handler) resolveAndMarkReconciled(c mtp.Conn) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
 	defer cancel()
@@ -269,6 +284,10 @@ func (h *handler) resolveAndMarkReconciled(c mtp.Conn) {
 		return
 	}
 	h.markReconciled(c, agentRow.DeviceID)
+
+	if err := h.dispatcher.tryDispatch(context.Background(), agentRow.DeviceID); err != nil {
+		h.log.Warn("uspc: reconciled connection but failed to trigger dispatch for its device", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", agentRow.DeviceID, "error", err)
+	}
 }
 
 // deviceInfoFromGetResp walks a GetResp's resolved parameters looking

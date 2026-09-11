@@ -3,14 +3,13 @@
 // and MQTT MTP bindings (internal/usp/mtp), decodes inbound Records into
 // Msgs (internal/usp), probes every newly connected agent with a
 // Get(["Device.DeviceInfo."]) -- interop evidence, not real dispatch --
-// and reconciles agent identity (OnBoardRequest, or the probe's own
-// GetResp as a last resort) to a devices row via internal/devices and
-// internal/store.
-//
-// It is otherwise wiring only. Job dispatch is a later plan; this
-// service still deliberately never imports internal/jobs
-// (boundary_test.go enforces this) -- cmd/uspc is where the USP protocol
-// core meets transport and identity, not where it meets job dispatch.
+// reconciles agent identity (OnBoardRequest, or the probe's own GetResp
+// as a last resort) to a devices row via internal/devices and
+// internal/store, and dispatches internal/jobs' queued work over USP
+// (dispatch.go/dispatcher.go, usp-job-dispatch plan): a Postgres NOTIFY
+// for an already-connected device, a fresh identity reconcile for a
+// device that queued a job before it connected, and a periodic sweep as
+// the safety net all converge on dispatcher.tryDispatch.
 //
 // Agent allowlisting does not exist yet: any agent that completes the
 // WebSocket subprotocol/query-parameter handshake or publishes to the
@@ -33,6 +32,7 @@ import (
 	"time"
 
 	"acs/internal/devices"
+	"acs/internal/jobs"
 	"acs/internal/observability"
 	"acs/internal/store"
 	"acs/internal/usp/mtp"
@@ -111,30 +111,69 @@ func run(logger *slog.Logger) error {
 	p := newProbe(cfg.ControllerID, logger)
 	p.setMetrics(uspm)
 	repo := devices.NewRepository(db)
+	registry := mtp.NewRegistry()
+	jobsRepo := jobs.NewRepository(db)
+	disp := newDispatcher(jobsRepo, repo, registry, cfg.ControllerID, logger)
 	h := &handler{
 		log:          logger,
-		registry:     mtp.NewRegistry(),
+		registry:     registry,
 		probe:        p,
 		controllerID: cfg.ControllerID,
 		metrics:      uspm,
 		reconciler:   newReconciler(repo, logger),
+		dispatcher:   disp,
 	}
 
 	ws, mq, err := newTransports(cfg, tlsConfig, logger)
 	if err != nil {
-		shutdown(logger, server, nil, nil, db)
+		shutdown(logger, server, nil, nil, nil, db)
 		return err
 	}
 
 	if err := startTransports(ctx, ws, mq, h); err != nil {
-		shutdown(logger, server, ws, mq, db)
+		shutdown(logger, server, ws, mq, nil, db)
 		return err
 	}
+
+	// jobs.Listen and the two goroutines below are the push (NOTIFY) and
+	// safety-net (periodic sweep) dispatch triggers (design S6.1); the
+	// third trigger, a fresh identity reconcile, runs inline from
+	// handler.resolveAndMarkReconciled and needs no wiring here. Both
+	// goroutines are stopped by ctx alone -- listener's own listenCtx is
+	// derived from ctx (jobs.Listen), so canceling ctx ends its
+	// Notifications() channel and the drain loop below exits with it; the
+	// sweep goroutine selects on ctx.Done() directly. listener itself is
+	// still closed explicitly in shutdown (see its call sites below),
+	// matching this function's existing explicit-stop pattern for ws/mq
+	// rather than relying on ctx cancellation alone to release its
+	// dedicated *sql.DB connection promptly.
+	listener, err := jobs.Listen(ctx, db, jobs.NotifyChannel, logger)
+	if err != nil {
+		shutdown(logger, server, ws, mq, nil, db)
+		return fmt.Errorf("start job queue listener: %w", err)
+	}
+	go drainDispatchNotifications(ctx, listener, disp, logger)
+	go disp.periodicSweep(ctx, registry, dispatchSweepInterval)
+
 	ready.Store(true)
 	logger.Info("uspc listening", "controller_id", cfg.ControllerID,
 		"ws_addr", ws.Addr(), "mqtt_addr", mq.Addr(), "http_addr", cfg.HTTPAddr, "tls", tlsConfig != nil)
 
-	return waitForShutdown(ctx, logger, server, serverErrCh, ws, mq, db)
+	return waitForShutdown(ctx, logger, server, serverErrCh, ws, mq, listener, db)
+}
+
+// drainDispatchNotifications forwards every device id delivered on
+// listener's Notifications() channel into disp.tryDispatch -- the NOTIFY
+// trigger path for a device that is already connected when its job is
+// queued (design S6.1). The loop ends when Notifications() closes, which
+// happens once listener's own background goroutine exits (ctx canceled,
+// or listener.Close called) -- no separate stop signal is needed here.
+func drainDispatchNotifications(ctx context.Context, listener *jobs.QueueListener, disp *dispatcher, logger *slog.Logger) {
+	for deviceID := range listener.Notifications() {
+		if err := disp.tryDispatch(ctx, deviceID); err != nil {
+			logger.Warn("uspc: dispatcher: failed to dispatch after job-queued notification", "device_id", deviceID, "error", err)
+		}
+	}
 }
 
 // resetUspAgentsConnected clears connected=true on every usp_agents row.
@@ -238,28 +277,30 @@ func startHTTPServer(addr string, metrics *observability.Metrics, ready *atomic.
 
 // waitForShutdown blocks until ctx is canceled or the HTTP server itself
 // fails, then drains everything.
-func waitForShutdown(ctx context.Context, logger *slog.Logger, server *http.Server, serverErrCh <-chan error, ws *mtp.WebSocket, mq *mtp.MQTT, db *sql.DB) error {
+func waitForShutdown(ctx context.Context, logger *slog.Logger, server *http.Server, serverErrCh <-chan error, ws *mtp.WebSocket, mq *mtp.MQTT, listener *jobs.QueueListener, db *sql.DB) error {
 	select {
 	case err := <-serverErrCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			shutdown(logger, server, ws, mq, db)
+			shutdown(logger, server, ws, mq, listener, db)
 			return fmt.Errorf("http server error: %w", err)
 		}
 	case <-ctx.Done():
 		logger.Info("shutting down")
 	}
-	shutdown(logger, server, ws, mq, db)
+	shutdown(logger, server, ws, mq, listener, db)
 	return nil
 }
 
-// shutdown drains server and, when non-nil, both transports, then closes
-// db, logging (rather than failing the caller) on any error. ws and mq
-// are nil when called from an early-return path where the HTTP server
-// was already started but the transports never got as far as existing.
-// db is closed last, after both transports and the HTTP server have
-// stopped, so in-flight identity reconciliation work is not cut off
-// mid-shutdown.
-func shutdown(logger *slog.Logger, server *http.Server, ws *mtp.WebSocket, mq *mtp.MQTT, db *sql.DB) {
+// shutdown drains server and, when non-nil, both transports and the job
+// queue listener, then closes db, logging (rather than failing the
+// caller) on any error. ws, mq and listener are nil when called from an
+// early-return path where the HTTP server was already started but the
+// piece in question never got as far as existing. db is closed last,
+// after the transports, the job queue listener, and the HTTP server have
+// all stopped, so in-flight identity reconciliation and dispatch work is
+// not cut off mid-shutdown, and listener's dedicated connection is
+// released back to db's pool before db itself closes.
+func shutdown(logger *slog.Logger, server *http.Server, ws *mtp.WebSocket, mq *mtp.MQTT, listener *jobs.QueueListener, db *sql.DB) {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
@@ -273,6 +314,11 @@ func shutdown(logger *slog.Logger, server *http.Server, ws *mtp.WebSocket, mq *m
 	if mq != nil {
 		if err := mq.Stop(shutdownCtx); err != nil {
 			logger.Warn("MQTT shutdown did not complete cleanly", "err", err)
+		}
+	}
+	if listener != nil {
+		if err := listener.Close(); err != nil {
+			logger.Warn("job queue listener shutdown did not complete cleanly", "err", err)
 		}
 	}
 	if db != nil {

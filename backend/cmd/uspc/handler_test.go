@@ -16,16 +16,22 @@ import (
 
 // newTestHandler builds a handler wired to store (typically a
 // fakeIdentityStore), with a fresh registry/probe/metrics of its own so
-// tests don't share state.
+// tests don't share state. Its dispatcher is built with a nil
+// *jobs.Repository -- tryDispatch treats that as "no dispatcher wired"
+// and no-ops (see its own doc comment), which keeps these
+// identity/reconciliation tests DB-free while still exercising
+// resolveAndMarkReconciled's real dispatch-trigger call.
 func newTestHandler(store identityStore) *handler {
 	um := newUSPMetrics(observability.NewMetrics("uspc-test"))
+	registry := mtp.NewRegistry()
 	return &handler{
 		log:          slog.Default(),
-		registry:     mtp.NewRegistry(),
+		registry:     registry,
 		probe:        newProbe(ctrl, slog.Default()),
 		controllerID: ctrl,
 		metrics:      um,
 		reconciler:   newReconciler(store, slog.Default()),
+		dispatcher:   newDispatcher(nil, store, registry, ctrl, slog.Default()),
 	}
 }
 
