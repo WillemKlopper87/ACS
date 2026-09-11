@@ -23,6 +23,10 @@ func TestControllerIDFailsClosed(t *testing.T) {
 			_, err := loadConfig(mapGetenv(map[string]string{
 				"ACS_USP_CONTROLLER_ID":   id,
 				"ACS_USP_ALLOW_PLAINTEXT": "true",
+				// Every other required value is set (including the DSN)
+				// so this case fails on the controller id rule alone, not
+				// incidentally on something else also being unset.
+				"ACS_USP_POSTGRES_DSN": "postgres://localhost/acs_test",
 			}), slog.Default())
 			if err == nil {
 				t.Fatalf("loadConfig() with ACS_USP_CONTROLLER_ID=%q = nil error, want error", id)
@@ -35,6 +39,7 @@ func TestTLSPairRequired(t *testing.T) {
 	_, err := loadConfig(mapGetenv(map[string]string{
 		"ACS_USP_CONTROLLER_ID": "ci-controller",
 		"ACS_USP_TLS_CERT":      "/tmp/cert.pem",
+		"ACS_USP_POSTGRES_DSN":  "postgres://localhost/acs_test",
 		// ACS_USP_TLS_KEY deliberately unset
 	}), slog.Default())
 	if err == nil {
@@ -44,6 +49,7 @@ func TestTLSPairRequired(t *testing.T) {
 	_, err = loadConfig(mapGetenv(map[string]string{
 		"ACS_USP_CONTROLLER_ID": "ci-controller",
 		"ACS_USP_TLS_KEY":       "/tmp/key.pem",
+		"ACS_USP_POSTGRES_DSN":  "postgres://localhost/acs_test",
 		// ACS_USP_TLS_CERT deliberately unset
 	}), slog.Default())
 	if err == nil {
@@ -54,6 +60,7 @@ func TestTLSPairRequired(t *testing.T) {
 func TestPlaintextRequiresOptIn(t *testing.T) {
 	_, err := loadConfig(mapGetenv(map[string]string{
 		"ACS_USP_CONTROLLER_ID": "ci-controller",
+		"ACS_USP_POSTGRES_DSN":  "postgres://localhost/acs_test",
 	}), slog.Default())
 	if err == nil {
 		t.Fatal("loadConfig() with no TLS and no plaintext opt-in = nil error, want error")

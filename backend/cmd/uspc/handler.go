@@ -5,11 +5,21 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 
 	"acs/internal/usp"
 	"acs/internal/usp/mtp"
 	"acs/internal/usp/uspproto"
 )
+
+// dbCallTimeout bounds every identity-reconciliation call this handler
+// makes into internal/devices (via reconciler/identityStore). OnRecord
+// and OnDisconnect run inline on a transport's own read/lifecycle
+// goroutine (wsConn.readLoop; the MQTT broker's per-client goroutine), so
+// a wedged Postgres must not be allowed to stall that connection's own
+// reads -- the same hazard probe.go's sendTimeout already documents and
+// guards against for the Send path.
+const dbCallTimeout = 5 * time.Second
 
 // connIdentity is the per-connection state handler tracks for identity
 // reconciliation: whether this connection has been reconciled to a
@@ -170,12 +180,14 @@ func (h *handler) OnRecord(in mtp.Inbound) {
 // (the primary reconciliation path, design spec S5.3) and, if the agent
 // requested one (ob.SendResp), sends back a NotifyResp.
 func (h *handler) handleOnBoardRequest(c mtp.Conn, ob *usp.OnBoardRequest) {
-	ctx := context.Background()
-	if err := h.reconciler.onBoard(ctx, c, ob); err != nil {
+	onboardCtx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+	err := h.reconciler.onBoard(onboardCtx, c, ob)
+	cancel()
+	if err != nil {
 		h.log.Warn("uspc: failed to reconcile onboard request", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
 		return
 	}
-	h.resolveAndMarkReconciled(ctx, c)
+	h.resolveAndMarkReconciled(c)
 
 	if !ob.SendResp {
 		return
@@ -190,8 +202,8 @@ func (h *handler) handleOnBoardRequest(c mtp.Conn, ob *usp.OnBoardRequest) {
 		h.log.Warn("uspc: failed to encode NotifyResp record", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
 		return
 	}
-	sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
-	defer cancel()
+	sendCtx, sendCancel := context.WithTimeout(context.Background(), sendTimeout)
+	defer sendCancel()
 	if err := c.Send(sendCtx, record); err != nil {
 		h.log.Warn("uspc: failed to send NotifyResp", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
 	}
@@ -212,20 +224,26 @@ func (h *handler) handleProbeFallback(c mtp.Conn, msg *uspproto.Msg) {
 	if !ok {
 		return
 	}
-	ctx := context.Background()
-	if err := h.reconciler.fromProbeFallback(ctx, c, oui, productClass, serialNumber); err != nil {
+	fallbackCtx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+	err := h.reconciler.fromProbeFallback(fallbackCtx, c, oui, productClass, serialNumber)
+	cancel()
+	if err != nil {
 		h.log.Warn("uspc: failed to reconcile via probe fallback", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
 		return
 	}
-	h.resolveAndMarkReconciled(ctx, c)
+	h.resolveAndMarkReconciled(c)
 }
 
 // resolveAndMarkReconciled looks up the usp_agents row a just-succeeded
 // reconciliation created (or refreshed) for c, so handler can remember
 // its device id for OnDisconnect -- reconciler.onBoard/fromProbeFallback
 // report only success/failure, not the resolved device, by design (see
-// task-5 brief's Produces contract).
-func (h *handler) resolveAndMarkReconciled(ctx context.Context, c mtp.Conn) {
+// task-5 brief's Produces contract). Bounds its own DB call with
+// dbCallTimeout, independent of whatever context (if any) the caller was
+// working under.
+func (h *handler) resolveAndMarkReconciled(c mtp.Conn) {
+	ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+	defer cancel()
 	agentRow, err := h.reconciler.store.GetUspAgentByEndpointID(ctx, string(c.Endpoint()))
 	if err != nil {
 		h.log.Warn("uspc: reconciled connection but failed to resolve its device id", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
@@ -266,13 +284,29 @@ func deviceInfoFromGetResp(msg *uspproto.Msg) (oui, productClass, serialNumber s
 
 // OnDisconnect removes c from the registry and drops any of its
 // outstanding probes, so neither leaks past the connection's life.
+//
+// registry.Remove reports false when c had already been superseded by a
+// newer connection for the same endpoint id (a reconnect takeover): the
+// registry itself guards against a slow/stale disconnect evicting the
+// replacement (see Registry.Remove's doc comment), and identity
+// reconciliation must honour the same guard -- otherwise a takeover's
+// old connection's own (delayed) OnDisconnect would call
+// reconciler.disconnect for a device id the new connection just
+// re-linked, permanently marking a still-connected agent as
+// disconnected. c's own per-connection identity state is still dropped
+// either way, since it belongs to c specifically, not to whichever conn
+// currently holds the endpoint id.
 func (h *handler) OnDisconnect(c mtp.Conn, err error) {
-	h.registry.Remove(c)
+	removed := h.registry.Remove(c)
 	h.probe.forget(c)
 	h.metrics.connections.WithLabelValues(string(c.Kind())).Dec()
 
-	if deviceID, reconciled := h.reconciledDeviceID(c); reconciled {
-		h.reconciler.disconnect(context.Background(), deviceID)
+	if removed {
+		if deviceID, reconciled := h.reconciledDeviceID(c); reconciled {
+			disconnectCtx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+			h.reconciler.disconnect(disconnectCtx, deviceID)
+			cancel()
+		}
 	}
 	h.forgetIdentity(c)
 

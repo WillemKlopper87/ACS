@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -226,5 +227,55 @@ func TestHandlerDisconnectSkipsUnreconciledConnection(t *testing.T) {
 
 	if len(store.disconnectCalls) != 0 {
 		t.Fatalf("disconnectCalls = %v, want none for an unreconciled connection", store.disconnectCalls)
+	}
+}
+
+// TestHandlerDisconnectSkipsStaleConnectionAfterTakeover proves the
+// registry-removal guard in OnDisconnect: when an agent reconnects (a new
+// Conn for the same endpoint id replaces the old one via OnConnect's own
+// registry.Add), the *old* Conn's own OnDisconnect can still fire
+// afterward -- e.g. its transport's read goroutine noticing the socket
+// closed only after the new connection has already taken over. That
+// stale disconnect must not call MarkUspAgentDisconnected for a device
+// the new connection just (re-)linked as connected; only a disconnect
+// for the Conn actually still on record in the registry may do that.
+func TestHandlerDisconnectSkipsStaleConnectionAfterTakeover(t *testing.T) {
+	store := newFakeIdentityStore()
+	h := newTestHandler(store)
+
+	a := &captureConn{id: agent}
+	h.OnConnect(a)
+	msg := onBoardRequestMsg("sub-1", false, "0025C2", "Gateway", "SN12345")
+	h.OnRecord(mtp.Inbound{Conn: a, Record: recordWire(t, agent, ctrl, msg)})
+
+	deviceID, ok := h.reconciledDeviceID(a)
+	if !ok {
+		t.Fatal("connection a not reconciled before takeover")
+	}
+
+	// b reconnects as the same agent (same endpoint id). OnConnect's own
+	// registry.Add replaces a with b as the live connection for "agent".
+	b := &captureConn{id: agent}
+	h.OnConnect(b)
+	msg2 := onBoardRequestMsg("sub-2", false, "0025C2", "Gateway", "SN12345")
+	h.OnRecord(mtp.Inbound{Conn: b, Record: recordWire(t, agent, ctrl, msg2)})
+	if _, ok := h.reconciledDeviceID(b); !ok {
+		t.Fatal("connection b not reconciled after its own OnBoardRequest")
+	}
+
+	// a's own (stale, delayed) disconnect callback arrives after b has
+	// already taken over. It must be a no-op for identity: it must not
+	// mark the device disconnected, since b is the one actually live now.
+	h.OnDisconnect(a, errors.New("stale: replaced by new connection"))
+
+	if len(store.disconnectCalls) != 0 {
+		t.Fatalf("disconnectCalls = %v, want none: a's disconnect is stale (b already replaced it in the registry)", store.disconnectCalls)
+	}
+
+	// A genuine disconnect for b, the connection actually on record,
+	// still works correctly afterward.
+	h.OnDisconnect(b, nil)
+	if len(store.disconnectCalls) != 1 || store.disconnectCalls[0] != deviceID {
+		t.Fatalf("disconnectCalls = %v, want [%s] after b's genuine disconnect", store.disconnectCalls, deviceID)
 	}
 }
