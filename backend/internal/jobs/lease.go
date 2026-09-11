@@ -86,6 +86,33 @@ func (r *Repository) LeaseForTypes(ctx context.Context, deviceID string, types [
 	return job, nil
 }
 
+// HasOutstandingRPC reports whether deviceID already has a job in
+// RPC_SENT status -- the single-flight guard cmd/uspc's tryDispatch uses
+// (final review, Important Finding 2) to match CWMP's own
+// one-RPC-in-flight-per-session model: CWMP gets this for free from
+// session synchronicity (Lease is only ever called once per open
+// session), but USP dispatch has no equivalent structural constraint --
+// a NOTIFY, a reconnect and a periodic sweep can all fire for the same
+// device in a short window, and without this check each would happily
+// lease and dispatch a different job to the same still-busy device. A
+// plain existence query rather than a new predicate on LeaseForTypes
+// itself: LeaseForTypes/MarkSuccessWithDetail/MarkFailed are shared with
+// CWMP's own dispatch path, and this check is USP-specific (design
+// spec's ordering guarantee doesn't apply to CWMP, which already can't
+// violate it structurally) -- a separate read-only method keeps that
+// blast radius to cmd/uspc's own call site instead of touching shared
+// SQL every other caller depends on.
+func (r *Repository) HasOutstandingRPC(ctx context.Context, deviceID string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM jobs WHERE device_id = $1 AND status = 'RPC_SENT')
+	`, deviceID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check outstanding rpc for device: %w", err)
+	}
+	return exists, nil
+}
+
 // LeaseNextByType atomically finds the oldest QUEUED job of the given
 // type across *all* devices and marks it IN_PROGRESS. This is the
 // cross-device counterpart to Lease, for job types that aren't triggered

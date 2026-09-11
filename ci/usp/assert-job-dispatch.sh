@@ -45,7 +45,22 @@ fail() {
 }
 
 echo "looking up device_id for endpoint $agent via usp_agents (B-3a identity reconciliation)"
-device_id=$(psql "$dsn" -tAc "SELECT device_id FROM usp_agents WHERE endpoint_id = '$agent';")
+# Retried, not a single lookup: handleProbeFallback's "usp probe: parameter"
+# log line -- what assert-getresp.sh (this script's caller) actually
+# matches on to declare success -- is written BEFORE the usp_agents row
+# write it triggers has necessarily committed. A single immediate lookup
+# here could race that write and fail loudly on pure timing on the very
+# first real run (final review, Important Finding 3). 5 attempts, 1s
+# apart, comfortably covers that window without masking a genuine
+# reconciliation failure (which still fails loudly below).
+device_id=""
+for _ in $(seq 1 5); do
+  device_id=$(psql "$dsn" -tAc "SELECT device_id FROM usp_agents WHERE endpoint_id = '$agent';")
+  if [ -n "$device_id" ]; then
+    break
+  fi
+  sleep 1
+done
 if [ -z "$device_id" ]; then
   fail "no usp_agents row for endpoint_id=$agent -- identity reconciliation did not link this agent to a device"
 fi

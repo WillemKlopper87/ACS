@@ -165,9 +165,14 @@ jobs:
         # as a side effect (harmless) but TestIntegration_CPELoad stays
         # skipped since ACS_TEST_LOAD_DEVICES is unset. Also covers
         # internal/devices' usp_agents-backed repository tests (identity
-        # reconciliation) -- a DB-backed test in a package not on this list
-        # never runs in CI. -p 1: every one resets the same database.
-        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./cmd/acs/
+        # reconciliation) and cmd/uspc's own dispatcher/response-handling
+        # suite (job dispatch over USP, gated the same way on
+        # ACS_TEST_POSTGRES_DSN) -- a DB-backed test in a package not on
+        # this list never runs in CI (final review, Critical Finding 2:
+        # cmd/uspc was missing here entirely, so its 26+ DB-backed tests
+        # silently skipped in every CI run). -p 1: every one resets the
+        # same database.
+        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./cmd/acs/ ./cmd/uspc/
       - name: placeholder secrets are refused (fail-closed)
         run: |
           set +e

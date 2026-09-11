@@ -1,8 +1,12 @@
 // dispatch.go maps internal/jobs' queued job types onto USP (TR-369)
-// request messages (design S6.2). Ten of internal/jobs' fifteen types
-// have a USP equivalent; the other five (CONNECTION_REQUEST,
-// SCHEDULE_INFORM, SET_PARAMETER_ATTRIBUTES, GET_PARAMETER_ATTRIBUTES,
-// UPLOAD) are CWMP-only concepts with no USP counterpart and are never
+// request messages (design S6.2). Nine of internal/jobs' fifteen types
+// have a real USP equivalent buildUSPRequest can actually render; the
+// other six are FIRMWARE_DOWNLOAD (has a case below, but always returns
+// ErrUnsupportedOverUSP -- see that case's own doc comment for why, and
+// dispatcher.go's uspDispatchableTypes for why it's deliberately excluded
+// from what gets leased at all) plus five CWMP-only concepts with no USP
+// counterpart at all (CONNECTION_REQUEST, SCHEDULE_INFORM,
+// SET_PARAMETER_ATTRIBUTES, GET_PARAMETER_ATTRIBUTES, UPLOAD), never
 // leased over this transport.
 //
 // This file only builds request bytes; it does not touch

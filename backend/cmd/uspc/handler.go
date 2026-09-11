@@ -185,7 +185,9 @@ func (h *handler) OnRecord(in mtp.Inbound) {
 		return
 	}
 
-	h.dispatcher.handleResponse(rec.From, msg)
+	if h.dispatcher != nil {
+		h.dispatcher.handleResponse(rec.From, msg)
+	}
 }
 
 // handleOnBoardRequest reconciles identity from an OnBoardRequest Notify
@@ -235,11 +237,13 @@ func (h *handler) handleOnBoardRequest(c mtp.Conn, ob *usp.OnBoardRequest) {
 func (h *handler) handleOperationComplete(c mtp.Conn, oc *usp.OperationComplete) {
 	connDeviceID, _ := h.reconciledDeviceID(c)
 
-	resolveCtx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
-	err := h.dispatcher.handleOperationComplete(resolveCtx, connDeviceID, oc)
-	cancel()
-	if err != nil {
-		h.log.Warn("uspc: failed to handle OperationComplete", "endpoint", c.Endpoint(), "mtp", c.Kind(), "command_key", oc.CommandKey, "error", err)
+	if h.dispatcher != nil {
+		resolveCtx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+		err := h.dispatcher.handleOperationComplete(resolveCtx, connDeviceID, oc)
+		cancel()
+		if err != nil {
+			h.log.Warn("uspc: failed to handle OperationComplete", "endpoint", c.Endpoint(), "mtp", c.Kind(), "command_key", oc.CommandKey, "error", err)
+		}
 	}
 
 	if !oc.SendResp {
@@ -391,7 +395,9 @@ func deviceInfoFromGetResp(msg *uspproto.Msg) (oui, productClass, serialNumber s
 func (h *handler) OnDisconnect(c mtp.Conn, err error) {
 	removed := h.registry.Remove(c)
 	h.probe.forget(c)
-	h.dispatcher.forget(c)
+	if h.dispatcher != nil {
+		h.dispatcher.forget(c)
+	}
 	h.metrics.connections.WithLabelValues(string(c.Kind())).Dec()
 
 	if removed {

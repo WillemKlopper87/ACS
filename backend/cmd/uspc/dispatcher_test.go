@@ -176,17 +176,16 @@ func TestTryDispatchSendsAndTracks(t *testing.T) {
 	}
 }
 
-// TestTryDispatchRequeuesUnsupportedType covers a leased job whose type
-// buildUSPRequest cannot render over USP (FIRMWARE_DOWNLOAD -- see
-// dispatch.go's own doc comment on why it's still in
-// uspDispatchableTypes despite always returning ErrUnsupportedOverUSP
-// today). uspDispatchableTypes no longer includes FIRMWARE_DOWNLOAD (fix
-// round 1, Important 2: leasing for a type that can never build a USP
-// request lets it sit at the front of a device's queue and starve every
-// other dispatchable job behind it, on every trigger, forever -- see that
-// var's own doc comment). This confirms the exclusion actually holds: a
-// FIRMWARE_DOWNLOAD job is never leased, so it can never even reach
-// buildUSPRequest in the first place.
+// TestTryDispatchNeverLeasesFirmwareDownload covers uspDispatchableTypes'
+// deliberate exclusion of FIRMWARE_DOWNLOAD (fix round 1, Important 2):
+// buildUSPRequest can never render it over USP today (see its own case's
+// doc comment in dispatch.go), so leasing for it would only ever repeat
+// a lease-then-requeue cycle forever, starving every genuinely
+// dispatchable job queued behind it -- see uspDispatchableTypes' own doc
+// comment for the full rationale. This confirms the exclusion actually
+// holds: a FIRMWARE_DOWNLOAD job is never leased, so it can never even
+// reach buildUSPRequest in the first place, and is left untouched
+// (QUEUED, zero attempts) rather than cycling.
 func TestTryDispatchNeverLeasesFirmwareDownload(t *testing.T) {
 	jobsRepo, deviceID := newDispatcherTestDB(t)
 	ctx := context.Background()
@@ -1035,5 +1034,513 @@ func TestReconcileTriggersDispatch(t *testing.T) {
 	}
 	if gotDeviceID, ok := h.reconciledDeviceID(c); !ok || gotDeviceID != deviceID {
 		t.Errorf("reconciledDeviceID(c) = (%q, %v), want (%q, true)", gotDeviceID, ok, deviceID)
+	}
+}
+
+// ---------------------------------------------------------------------
+// Response-classification tests (final review, Critical Finding 1):
+// responseSummary used to only ever inspect GetResp, so every other
+// *Resp -- AddResp, DeleteResp, OperateResp, GetSupportedDMResp -- was
+// treated as an unconditional SUCCESS regardless of a device-reported
+// per-item failure nested inside it. Each test below proves the specific
+// regression its own doc comment names would NOT have been caught by the
+// pre-fix code (classifyResponse/classifyGetResp/classifyAddResp/
+// classifyDeleteResp/classifyOperateResp did not exist before this fix
+// wave; responseSummary would have built a Params map, if any, and
+// handleResponse would have unconditionally called resolveSuccess).
+// ---------------------------------------------------------------------
+
+// dispatchTestSetupJob is dispatchTestSetup generalized over job type and
+// payload -- the new tests below need to dispatch ADD_OBJECT/
+// DELETE_OBJECT/REBOOT/GET_PARAMETER jobs, not just dispatchTestSetup's
+// own hardcoded GET_PARAMETER.
+func dispatchTestSetupJob(t *testing.T, jobType string, payload any) (d *dispatcher, jobsRepo *jobs.Repository, jobID string, commandKey string, msgID string, c *captureConn) {
+	t.Helper()
+	jobsRepo, deviceID := newDispatcherTestDB(t)
+	ctx := context.Background()
+	job, err := jobsRepo.Create(ctx, deviceID, jobType, payload, "test")
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	store := newFakeIdentityStore()
+	registry := mtp.NewRegistry()
+	c = &captureConn{id: agent}
+	registerAgent(store, registry, deviceID, c)
+	d = newDispatcher(jobsRepo, store, registry, ctrl, slog.Default())
+
+	if err := d.tryDispatch(ctx, deviceID); err != nil {
+		t.Fatalf("tryDispatch() = %v, want nil", err)
+	}
+	if len(c.sent) != 1 {
+		t.Fatalf("c.sent = %d records, want exactly 1", len(c.sent))
+	}
+	rec, err := usp.DecodeRecord(c.sent[0], agent)
+	if err != nil {
+		t.Fatalf("decode dispatched record: %v", err)
+	}
+	sentMsg, err := usp.DecodeMsg(rec.Payload)
+	if err != nil {
+		t.Fatalf("decode dispatched msg: %v", err)
+	}
+	return d, jobsRepo, job.ID, job.CommandKey, sentMsg.GetHeader().GetMsgId(), c
+}
+
+// addRespFailureMsg builds an AddResp carrying a single OperFailure --
+// the shape a real agent sends for a per-object Add failure with no
+// top-level Error body at all (allowPartial=true, dispatch.go's
+// EncodeAdd call).
+func addRespFailureMsg(msgID, requestedPath string, errCode uint32, errMsg string) *uspproto.Msg {
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: msgID, MsgType: uspproto.Header_ADD_RESP},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Response{Response: &uspproto.Response{
+			RespType: &uspproto.Response_AddResp{AddResp: &uspproto.AddResp{
+				CreatedObjResults: []*uspproto.AddResp_CreatedObjectResult{{
+					RequestedPath: requestedPath,
+					OperStatus: &uspproto.AddResp_CreatedObjectResult_OperationStatus{
+						OperStatus: &uspproto.AddResp_CreatedObjectResult_OperationStatus_OperFailure{
+							OperFailure: &uspproto.AddResp_CreatedObjectResult_OperationStatus_OperationFailure{ErrCode: errCode, ErrMsg: errMsg},
+						},
+					},
+				}},
+			}},
+		}}},
+	}
+}
+
+// addRespSuccessMsg builds an AddResp carrying a single OperSuccess.
+func addRespSuccessMsg(msgID, requestedPath, instantiatedPath string) *uspproto.Msg {
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: msgID, MsgType: uspproto.Header_ADD_RESP},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Response{Response: &uspproto.Response{
+			RespType: &uspproto.Response_AddResp{AddResp: &uspproto.AddResp{
+				CreatedObjResults: []*uspproto.AddResp_CreatedObjectResult{{
+					RequestedPath: requestedPath,
+					OperStatus: &uspproto.AddResp_CreatedObjectResult_OperationStatus{
+						OperStatus: &uspproto.AddResp_CreatedObjectResult_OperationStatus_OperSuccess{
+							OperSuccess: &uspproto.AddResp_CreatedObjectResult_OperationStatus_OperationSuccess{InstantiatedPath: instantiatedPath},
+						},
+					},
+				}},
+			}},
+		}}},
+	}
+}
+
+// deleteRespFailureMsg is addRespFailureMsg's Delete counterpart.
+func deleteRespFailureMsg(msgID, requestedPath string, errCode uint32, errMsg string) *uspproto.Msg {
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: msgID, MsgType: uspproto.Header_DELETE_RESP},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Response{Response: &uspproto.Response{
+			RespType: &uspproto.Response_DeleteResp{DeleteResp: &uspproto.DeleteResp{
+				DeletedObjResults: []*uspproto.DeleteResp_DeletedObjectResult{{
+					RequestedPath: requestedPath,
+					OperStatus: &uspproto.DeleteResp_DeletedObjectResult_OperationStatus{
+						OperStatus: &uspproto.DeleteResp_DeletedObjectResult_OperationStatus_OperFailure{
+							OperFailure: &uspproto.DeleteResp_DeletedObjectResult_OperationStatus_OperationFailure{ErrCode: errCode, ErrMsg: errMsg},
+						},
+					},
+				}},
+			}},
+		}}},
+	}
+}
+
+// operateRespCmdFailureMsg builds an OperateResp whose single operation
+// result is a CmdFailure -- a SYNCHRONOUS command failure (sendResp=true,
+// dispatch.go's own EncodeOperate calls), which never arrives as a
+// top-level Error body.
+func operateRespCmdFailureMsg(msgID, command string, errCode uint32, errMsg string) *uspproto.Msg {
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: msgID, MsgType: uspproto.Header_OPERATE_RESP},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Response{Response: &uspproto.Response{
+			RespType: &uspproto.Response_OperateResp{OperateResp: &uspproto.OperateResp{
+				OperationResults: []*uspproto.OperateResp_OperationResult{{
+					ExecutedCommand: command,
+					OperationResp: &uspproto.OperateResp_OperationResult_CmdFailure{
+						CmdFailure: &uspproto.OperateResp_OperationResult_CommandFailure{ErrCode: errCode, ErrMsg: errMsg},
+					},
+				}},
+			}},
+		}}},
+	}
+}
+
+// operateRespAcceptedMsg builds an OperateResp whose single operation
+// result is only req_obj_path -- an ASYNC command's mere acceptance, not
+// its terminal outcome (the two diagnostics job types: the real
+// result/failure arrives later via Notify.OperationComplete).
+func operateRespAcceptedMsg(msgID, command, reqObjPath string) *uspproto.Msg {
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: msgID, MsgType: uspproto.Header_OPERATE_RESP},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Response{Response: &uspproto.Response{
+			RespType: &uspproto.Response_OperateResp{OperateResp: &uspproto.OperateResp{
+				OperationResults: []*uspproto.OperateResp_OperationResult{{
+					ExecutedCommand: command,
+					OperationResp:   &uspproto.OperateResp_OperationResult_ReqObjPath{ReqObjPath: reqObjPath},
+				}},
+			}},
+		}}},
+	}
+}
+
+// getRespPathErrorMsg builds a GetResp whose single requested-path result
+// carries a non-zero err_code -- a per-path failure nested inside an
+// otherwise well-formed GetResp, not a top-level Error body.
+func getRespPathErrorMsg(msgID, requestedPath string, errCode uint32, errMsg string) *uspproto.Msg {
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: msgID, MsgType: uspproto.Header_GET_RESP},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Response{Response: &uspproto.Response{
+			RespType: &uspproto.Response_GetResp{GetResp: &uspproto.GetResp{
+				ReqPathResults: []*uspproto.GetResp_RequestedPathResult{{
+					RequestedPath: requestedPath,
+					ErrCode:       errCode,
+					ErrMsg:        errMsg,
+				}},
+			}},
+		}}},
+	}
+}
+
+// TestAddObjectOperFailureFailsJob covers Critical Finding 1's ADD_OBJECT
+// case: an AddResp with a per-object OperFailure and no top-level Error
+// body must fail the job, not resolve it SUCCESS. Against the pre-fix
+// code (responseSummary only ever inspected GetResp; everything else was
+// an unconditional resolveSuccess), this response would have resolved
+// the job SUCCESS with an empty result_detail -- this test would have
+// FAILED against that code.
+func TestAddObjectOperFailureFailsJob(t *testing.T) {
+	d, jobsRepo, jobID, _, msgID, _ := dispatchTestSetupJob(t, jobs.TypeAddObject,
+		jobs.AddObjectPayload{ObjectPath: "Device.WiFi.SSID."})
+
+	if matched := d.handleResponse(agent, addRespFailureMsg(msgID, "Device.WiFi.SSID.", 7010, "unsupported parameter in initial values")); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusFailed {
+		t.Errorf("job status = %s, want FAILED", gotJob.Status)
+	}
+	if gotJob.FaultCode == nil || *gotJob.FaultCode != "7010" {
+		t.Errorf("job fault_code = %v, want 7010", gotJob.FaultCode)
+	}
+	if gotJob.FaultString == nil || *gotJob.FaultString != "unsupported parameter in initial values" {
+		t.Errorf("job fault_string = %v, want %q", gotJob.FaultString, "unsupported parameter in initial values")
+	}
+}
+
+// TestAddObjectSuccessCapturesInstantiatedPath covers the happy path
+// alongside TestAddObjectOperFailureFailsJob: an OperSuccess must resolve
+// the job SUCCESS with the device-assigned InstantiatedPath captured in
+// result_detail.
+func TestAddObjectSuccessCapturesInstantiatedPath(t *testing.T) {
+	d, jobsRepo, jobID, _, msgID, _ := dispatchTestSetupJob(t, jobs.TypeAddObject,
+		jobs.AddObjectPayload{ObjectPath: "Device.WiFi.SSID."})
+
+	if matched := d.handleResponse(agent, addRespSuccessMsg(msgID, "Device.WiFi.SSID.", "Device.WiFi.SSID.5.")); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusSuccess {
+		t.Errorf("job status = %s, want SUCCESS", gotJob.Status)
+	}
+	var detail dispatchResultDetail
+	if err := json.Unmarshal(gotJob.ResultDetail, &detail); err != nil {
+		t.Fatalf("unmarshal result_detail: %v", err)
+	}
+	if got := detail.Params["Device.WiFi.SSID."]; got != "Device.WiFi.SSID.5." {
+		t.Errorf("result_detail params[Device.WiFi.SSID.] = %q, want %q", got, "Device.WiFi.SSID.5.")
+	}
+}
+
+// TestDeleteObjectOperFailureFailsJob is TestAddObjectOperFailureFailsJob's
+// DELETE_OBJECT counterpart -- same pre-fix regression, same proof.
+func TestDeleteObjectOperFailureFailsJob(t *testing.T) {
+	d, jobsRepo, jobID, _, msgID, _ := dispatchTestSetupJob(t, jobs.TypeDeleteObject,
+		jobs.DeleteObjectPayload{ObjectPath: "Device.WiFi.SSID.3."})
+
+	if matched := d.handleResponse(agent, deleteRespFailureMsg(msgID, "Device.WiFi.SSID.3.", 7024, "delete failed on device")); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusFailed {
+		t.Errorf("job status = %s, want FAILED", gotJob.Status)
+	}
+	if gotJob.FaultCode == nil || *gotJob.FaultCode != "7024" {
+		t.Errorf("job fault_code = %v, want 7024", gotJob.FaultCode)
+	}
+	if gotJob.FaultString == nil || *gotJob.FaultString != "delete failed on device" {
+		t.Errorf("job fault_string = %v, want %q", gotJob.FaultString, "delete failed on device")
+	}
+}
+
+// TestSyncOperateCmdFailureFailsJob is the regression test called out by
+// name in the brief: a synchronous Operate command failure (OperateResp
+// carrying CmdFailure, sendResp=true) was previously silently resolved
+// SUCCESS -- responseSummary never inspected OperateResp at all, so
+// handleResponse's else branch (resolveSuccess) ran unconditionally for
+// any non-Error-body response. This would have FAILED against the
+// pre-fix code.
+func TestSyncOperateCmdFailureFailsJob(t *testing.T) {
+	d, jobsRepo, jobID, _, msgID, _ := dispatchTestSetupJob(t, jobs.TypeReboot, jobs.RebootPayload{})
+
+	if matched := d.handleResponse(agent, operateRespCmdFailureMsg(msgID, "Device.Reboot()", 7022, "reboot command failed on device")); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusFailed {
+		t.Errorf("job status = %s, want FAILED", gotJob.Status)
+	}
+	if gotJob.FaultCode == nil || *gotJob.FaultCode != "7022" {
+		t.Errorf("job fault_code = %v, want 7022", gotJob.FaultCode)
+	}
+	if gotJob.FaultString == nil || *gotJob.FaultString != "reboot command failed on device" {
+		t.Errorf("job fault_string = %v, want %q", gotJob.FaultString, "reboot command failed on device")
+	}
+}
+
+// TestGetRespPathErrorFailsJob covers Critical Finding 1's GET_PARAMETER
+// case: a GetResp whose requested-path result carries a non-zero
+// err_code must fail the job. Against the pre-fix responseSummary (which
+// only ever walked ResolvedPathResults, never looked at ErrCode at all),
+// this would have resolved the job SUCCESS with an empty (or partial)
+// Params map -- this test would have FAILED against that code.
+func TestGetRespPathErrorFailsJob(t *testing.T) {
+	d, jobsRepo, jobID, msgID, _ := dispatchTestSetup(t)
+
+	if matched := d.handleResponse(agent, getRespPathErrorMsg(msgID, "Device.NoSuchPath.", 7016, "object does not exist")); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusFailed {
+		t.Errorf("job status = %s, want FAILED", gotJob.Status)
+	}
+	if gotJob.FaultCode == nil || *gotJob.FaultCode != "7016" {
+		t.Errorf("job fault_code = %v, want 7016", gotJob.FaultCode)
+	}
+	if gotJob.FaultString == nil || *gotJob.FaultString != "object does not exist" {
+		t.Errorf("job fault_string = %v, want %q", gotJob.FaultString, "object does not exist")
+	}
+}
+
+// TestAsyncOperateAcceptanceStaysPendingThenResolvesViaOperationComplete
+// is Critical Finding 1's central fix, proven end to end: an OperateResp
+// carrying only req_obj_path (an async command's mere acceptance) must
+// NOT resolve the job and must NOT delete the pending entry -- the job
+// stays RPC_SENT, and the eventual Notify.OperationComplete for the same
+// CommandKey is what actually resolves it. Against the pre-fix code, the
+// acceptance alone would have resolved the job SUCCESS immediately (via
+// resolveSuccess, since it wasn't a Body_Error), and the real
+// OperationComplete that followed would then have been silently
+// discarded by handleOperationComplete's own "job.Status !=
+// StatusRPCSent" guard (already correct, but defending a job that had
+// already been wrongly resolved) -- this test would have FAILED against
+// that code (job status would already be SUCCESS before
+// handleOperationComplete ever got a chance to run, and result_detail
+// would carry the wrong (empty) summary).
+func TestAsyncOperateAcceptanceStaysPendingThenResolvesViaOperationComplete(t *testing.T) {
+	d, jobsRepo, jobID, commandKey, msgID, _ := dispatchTestSetupJob(t, jobs.TypeDiagnosticsPing,
+		jobs.DiagnosticsPingPayload{Host: "example.test", NumberOfRepetitions: 3, Timeout: 5000, DataBlockSize: 64, DSCP: 0})
+
+	if len(d.pending) != 1 {
+		t.Fatalf("pending = %d entries, want exactly 1 before the acceptance arrives", len(d.pending))
+	}
+
+	if matched := d.handleResponse(agent, operateRespAcceptedMsg(msgID, "Device.IP.Diagnostics.IPPing()", "Device.IP.Diagnostics.IPPing()")); !matched {
+		t.Fatal("handleResponse() = false, want true: the acceptance still answers this dispatcher's own msg_id, it just isn't terminal")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusRPCSent {
+		t.Errorf("job status after acceptance = %s, want still RPC_SENT (the acceptance is not a terminal outcome)", gotJob.Status)
+	}
+	if len(d.pending) != 1 {
+		t.Errorf("pending = %d entries after acceptance, want still 1: the acceptance must not delete the pending entry", len(d.pending))
+	}
+
+	// The real result arrives later, correlated by CommandKey, not msg_id.
+	oc := &usp.OperationComplete{CommandKey: commandKey, OutputArgs: map[string]string{"SuccessCount": "3"}}
+	if err := d.handleOperationComplete(context.Background(), gotJob.DeviceID, oc); err != nil {
+		t.Fatalf("handleOperationComplete() = %v, want nil", err)
+	}
+
+	gotJob, err = jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusSuccess {
+		t.Errorf("job status after OperationComplete = %s, want SUCCESS", gotJob.Status)
+	}
+	if len(d.pending) != 0 {
+		t.Errorf("pending = %d entries after OperationComplete, want none", len(d.pending))
+	}
+	var detail dispatchResultDetail
+	if err := json.Unmarshal(gotJob.ResultDetail, &detail); err != nil {
+		t.Fatalf("unmarshal result_detail: %v", err)
+	}
+	if detail.Params["SuccessCount"] != "3" {
+		t.Errorf("result_detail params[SuccessCount] = %q, want %q", detail.Params["SuccessCount"], "3")
+	}
+
+	// The stale acceptance's own msg_id must now match nothing (the
+	// pending entry was deleted by handleOperationComplete's own
+	// CommandKey-keyed cleanup, mirroring
+	// TestHandleOperationCompleteDeletesPendingBeforeSyncResponse's same
+	// assertion for the sync-GetResp case).
+	if matched := d.handleResponse(agent, operateRespAcceptedMsg(msgID, "Device.IP.Diagnostics.IPPing()", "Device.IP.Diagnostics.IPPing()")); matched {
+		t.Error("handleResponse matched a msg_id the OperationComplete's pending-delete already removed")
+	}
+}
+
+// TestGetSupportedDMCapturesSummary covers Critical Finding 1's fifth
+// item: GetSupportedDMResp's actual result must land in result_detail,
+// not nothing. Against the pre-fix responseSummary (which never
+// inspected GetSupportedDMResp at all), result_detail would have had no
+// Params -- this test would have FAILED against that code.
+func TestGetSupportedDMCapturesSummary(t *testing.T) {
+	d, jobsRepo, jobID, _, msgID, _ := dispatchTestSetupJob(t, jobs.TypeParameterDiscovery,
+		jobs.ParameterDiscoveryPayload{Root: "Device."})
+
+	dmResp := &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: msgID, MsgType: uspproto.Header_GET_SUPPORTED_DM_RESP},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Response{Response: &uspproto.Response{
+			RespType: &uspproto.Response_GetSupportedDmResp{GetSupportedDmResp: &uspproto.GetSupportedDMResp{
+				ReqObjResults: []*uspproto.GetSupportedDMResp_RequestedObjectResult{{
+					ReqObjPath: "Device.",
+					SupportedObjs: []*uspproto.GetSupportedDMResp_SupportedObjectResult{
+						{SupportedObjPath: "Device.WiFi."},
+						{SupportedObjPath: "Device.DeviceInfo."},
+					},
+				}},
+			}},
+		}}},
+	}
+
+	if matched := d.handleResponse(agent, dmResp); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusSuccess {
+		t.Errorf("job status = %s, want SUCCESS", gotJob.Status)
+	}
+	var detail dispatchResultDetail
+	if err := json.Unmarshal(gotJob.ResultDetail, &detail); err != nil {
+		t.Fatalf("unmarshal result_detail: %v", err)
+	}
+	if len(detail.Params) == 0 {
+		t.Error("result_detail params is empty, want a summary of the discovered objects")
+	}
+	if got := detail.Params["Device."]; got != "2 supported objects discovered" {
+		t.Errorf("result_detail params[Device.] = %q, want %q", got, "2 supported objects discovered")
+	}
+}
+
+// ---------------------------------------------------------------------
+// Single-flight dispatch tests (final review, Important Finding 2).
+// ---------------------------------------------------------------------
+
+// TestTryDispatchSingleFlightPerDevice proves tryDispatch refuses to
+// lease a second job for a device that already has one RPC_SENT, and
+// that once the first resolves, the next trigger (here, handleResponse's
+// own re-trigger -- fix round 1, Minor 5) picks up the second job.
+func TestTryDispatchSingleFlightPerDevice(t *testing.T) {
+	jobsRepo, deviceID := newDispatcherTestDB(t)
+	ctx := context.Background()
+	job1, err := jobsRepo.Create(ctx, deviceID, jobs.TypeGetParameter,
+		jobs.GetParameterPayload{Paths: []string{"Device.DeviceInfo."}}, "test")
+	if err != nil {
+		t.Fatalf("create job1: %v", err)
+	}
+	job2, err := jobsRepo.Create(ctx, deviceID, jobs.TypeGetParameter,
+		jobs.GetParameterPayload{Paths: []string{"Device.WiFi."}}, "test")
+	if err != nil {
+		t.Fatalf("create job2: %v", err)
+	}
+
+	store := newFakeIdentityStore()
+	registry := mtp.NewRegistry()
+	c := &captureConn{id: agent}
+	registerAgent(store, registry, deviceID, c)
+	d := newDispatcher(jobsRepo, store, registry, ctrl, slog.Default())
+
+	if err := d.tryDispatch(ctx, deviceID); err != nil {
+		t.Fatalf("tryDispatch() #1 = %v, want nil", err)
+	}
+	if len(c.sent) != 1 {
+		t.Fatalf("c.sent = %d records after first dispatch, want 1", len(c.sent))
+	}
+	got1, err := jobsRepo.ByID(ctx, job1.ID)
+	if err != nil {
+		t.Fatalf("ByID job1: %v", err)
+	}
+	if got1.Status != jobs.StatusRPCSent {
+		t.Fatalf("job1 status = %s, want RPC_SENT", got1.Status)
+	}
+
+	// A second trigger (NOTIFY, reconnect, or sweep -- tryDispatch can't
+	// tell which) while job1 is still RPC_SENT must NOT lease job2.
+	if err := d.tryDispatch(ctx, deviceID); err != nil {
+		t.Fatalf("tryDispatch() #2 = %v, want nil", err)
+	}
+	if len(c.sent) != 1 {
+		t.Errorf("c.sent = %d records after second tryDispatch, want still 1: job2 must not be dispatched while job1 is RPC_SENT", len(c.sent))
+	}
+	got2, err := jobsRepo.ByID(ctx, job2.ID)
+	if err != nil {
+		t.Fatalf("ByID job2: %v", err)
+	}
+	if got2.Status != jobs.StatusQueued {
+		t.Errorf("job2 status = %s, want still QUEUED (never leased while job1 is in flight)", got2.Status)
+	}
+
+	// Resolving job1 frees the device; the existing re-trigger mechanism
+	// (resolveSuccess -> retryDispatch -> tryDispatch) must then pick up
+	// job2 without waiting for the next periodic sweep.
+	rec, err := usp.DecodeRecord(c.sent[0], agent)
+	if err != nil {
+		t.Fatalf("decode dispatched record: %v", err)
+	}
+	sentMsg, err := usp.DecodeMsg(rec.Payload)
+	if err != nil {
+		t.Fatalf("decode dispatched msg: %v", err)
+	}
+	if matched := d.handleResponse(agent, getResp(sentMsg.GetHeader().GetMsgId(), nil)); !matched {
+		t.Fatal("handleResponse did not match job1's msg_id")
+	}
+	if len(c.sent) != 2 {
+		t.Fatalf("c.sent = %d records after job1 resolves, want 2: job2 must now be dispatched", len(c.sent))
+	}
+	got2, err = jobsRepo.ByID(ctx, job2.ID)
+	if err != nil {
+		t.Fatalf("ByID job2: %v", err)
+	}
+	if got2.Status != jobs.StatusRPCSent {
+		t.Errorf("job2 status = %s, want RPC_SENT (dispatched once job1 freed the device)", got2.Status)
 	}
 }
