@@ -21,10 +21,15 @@ import (
 // under with the embedded broker.
 const mqttListenerID = "usp"
 
-// mqttSubscriptionID is the inline-client subscription id Start
-// registers cfg.ControllerTopic + "/#" under. There is only ever one
-// such subscription per MQTT transport, so a fixed id is sufficient.
-const mqttSubscriptionID = 1
+// mqttSubscriptionID and mqttWildcardSubscriptionID are the
+// inline-client subscription ids Start registers cfg.ControllerTopic
+// and cfg.ControllerTopic + "/#" under, respectively. Fixed ids are
+// sufficient since there is only ever one such pair of subscriptions
+// per MQTT transport.
+const (
+	mqttSubscriptionID         = 1
+	mqttWildcardSubscriptionID = 2
+)
 
 // MQTTConfig configures an MQTT Transport: an embedded mochi-mqtt
 // broker rather than a connection to an external one, so serving USP
@@ -34,10 +39,17 @@ type MQTTConfig struct {
 	// or "127.0.0.1:0".
 	Addr string
 	// ControllerTopic is the topic this controller is reachable on.
-	// Start subscribes to ControllerTopic + "/#": the wildcard is
-	// required so an MQTT 3.1.1 agent's ".../reply-to=<escaped topic>"
-	// suffix is still received under this subscription.
+	// Start subscribes to both ControllerTopic itself (an MQTT 5 agent
+	// publishes there directly) and ControllerTopic + "/#" (an MQTT
+	// 3.1.1 agent's ".../reply-to=<escaped topic>" suffix needs the
+	// wildcard).
 	ControllerTopic string
+	// ControllerEndpointID is this controller's own USP endpoint id --
+	// the "to_id" a well-formed inbound Record must carry. It is passed
+	// to usp.DecodeRecord so the transport can read the record's
+	// from_id; NewMQTT requires it to be set, since without it every
+	// inbound record would fail that address check and be dropped.
+	ControllerEndpointID usp.EndpointID
 	// TLS, when non-nil, serves MQTT over TLS. When nil, the listener
 	// is plaintext, which requires AllowPlaintext.
 	TLS *tls.Config
@@ -59,6 +71,11 @@ type MQTT struct {
 	stopErr  error
 
 	mu      sync.Mutex
+	started bool
+	// done is closed by Stop, so Start's ctx-watcher goroutine wakes up
+	// and returns even when the caller never cancels ctx -- e.g. a
+	// caller that calls Stop directly, as TestMQTTStartStop does.
+	done    chan struct{}
 	handler Handler
 	// conns tracks the one logical Conn per broker client id: a Conn
 	// exists from the first record received from that client and ends
@@ -80,6 +97,9 @@ var (
 func NewMQTT(cfg MQTTConfig, log *slog.Logger) (*MQTT, error) {
 	if cfg.TLS == nil && !cfg.AllowPlaintext {
 		return nil, errors.New("mtp: MQTT requires TLS unless AllowPlaintext is set")
+	}
+	if cfg.ControllerEndpointID == "" {
+		return nil, errors.New("mtp: MQTT requires ControllerEndpointID")
 	}
 	if log == nil {
 		log = slog.Default()
@@ -114,24 +134,51 @@ func NewMQTT(cfg MQTTConfig, log *slog.Logger) (*MQTT, error) {
 func (m *MQTT) Kind() Kind { return KindMQTT }
 
 // Start begins serving the embedded broker and subscribes the inline
-// client to cfg.ControllerTopic + "/#", then runs until ctx is
-// canceled or Stop is called.
+// client to cfg.ControllerTopic and cfg.ControllerTopic + "/#", then
+// runs until ctx is canceled or Stop is called. Calling Start more
+// than once returns an error rather than re-Serve-ing and
+// double-subscribing.
 func (m *MQTT) Start(ctx context.Context, h Handler) error {
 	m.mu.Lock()
+	if m.started {
+		m.mu.Unlock()
+		return errors.New("mtp: MQTT already started")
+	}
+	m.started = true
 	m.handler = h
+	done := make(chan struct{})
+	m.done = done
 	m.mu.Unlock()
 
 	if err := m.server.Serve(); err != nil {
 		return fmt.Errorf("mtp: MQTT serve: %w", err)
 	}
 
-	filter := m.cfg.ControllerTopic + "/#"
-	if err := m.server.Subscribe(filter, mqttSubscriptionID, m.onPublish); err != nil {
+	// Two subscriptions, not one: mochi-mqtt's inline-subscription
+	// matching does not treat "<topic>/#" as covering the bare <topic>
+	// itself (confirmed against v2.7.9 -- a publish to exactly
+	// cfg.ControllerTopic with no further path segment is not
+	// delivered to a "<topic>/#" inline subscription, only a genuinely
+	// nested one is). An MQTT 5 agent publishes straight to
+	// cfg.ControllerTopic (it has no need for a reply-to topic suffix,
+	// carrying the Response Topic property instead), so without the
+	// exact-topic subscription every v5 agent's record would silently
+	// never reach onPublish.
+	if err := m.server.Subscribe(m.cfg.ControllerTopic, mqttSubscriptionID, m.onPublish); err != nil {
 		return fmt.Errorf("mtp: MQTT subscribe: %w", err)
 	}
+	if err := m.server.Subscribe(m.cfg.ControllerTopic+"/#", mqttWildcardSubscriptionID, m.onPublish); err != nil {
+		return fmt.Errorf("mtp: MQTT subscribe wildcard: %w", err)
+	}
 
+	// done is closed by Stop so this goroutine still returns when Stop
+	// is called directly, without ctx ever being canceled -- otherwise
+	// it would block on <-ctx.Done() forever and leak.
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-done:
+		}
 		_ = m.Stop(context.Background())
 	}()
 
@@ -144,6 +191,12 @@ func (m *MQTT) Start(ctx context.Context, h Handler) error {
 // does the work.
 func (m *MQTT) Stop(_ context.Context) error {
 	m.stopOnce.Do(func() {
+		m.mu.Lock()
+		done := m.done
+		m.mu.Unlock()
+		if done != nil {
+			close(done)
+		}
 		m.stopErr = m.server.Close()
 	})
 	return m.stopErr
@@ -169,7 +222,18 @@ func (m *MQTT) inlineClient() (*mqttserver.Client, error) {
 // onPublish is the inline subscription handler for cfg.ControllerTopic
 // + "/#": it fires for every PUBLISH an agent sends toward this
 // controller.
-func (m *MQTT) onPublish(cl *mqttserver.Client, _ packets.Subscription, pk packets.Packet) {
+//
+// The cl the broker passes to an inline subscription handler is always
+// the broker's own inline client, never the client that actually
+// published -- mochi-mqtt's publishToSubscribers calls every inline
+// handler as `handler(s.inlineClient, sub, pk)` regardless of who
+// published. The real publisher's identity and protocol version travel
+// on the packet itself instead: pk.Origin (set from the publishing
+// client's id in processPublish) and pk.ProtocolVersion (inherited
+// from the publishing client when the packet was first read). Using cl
+// here instead of pk.Origin/pk.ProtocolVersion would key every Conn
+// under the inline client's id and always see protocol version 4.
+func (m *MQTT) onPublish(_ *mqttserver.Client, _ packets.Subscription, pk packets.Packet) {
 	m.mu.Lock()
 	h := m.handler
 	m.mu.Unlock()
@@ -178,11 +242,11 @@ func (m *MQTT) onPublish(cl *mqttserver.Client, _ packets.Subscription, pk packe
 	}
 
 	// Derive the agent's reply topic: the MQTT 5 Response Topic
-	// property for a v5 client, or the "/reply-to=" topic suffix for
+	// property for a v5 publish, or the "/reply-to=" topic suffix for
 	// v3.1.1. A record with no reply path cannot be answered, so it is
 	// dropped rather than handed to h with nowhere to send a response.
 	var replyTopic string
-	if cl.Properties.ProtocolVersion == 5 {
+	if pk.ProtocolVersion == 5 {
 		replyTopic = pk.Properties.ResponseTopic
 	} else {
 		var ok bool
@@ -192,24 +256,29 @@ func (m *MQTT) onPublish(cl *mqttserver.Client, _ packets.Subscription, pk packe
 		}
 	}
 	if replyTopic == "" {
-		m.log.Warn("mtp: MQTT publish has no reply-to, dropping", "topic", pk.TopicName, "client", cl.ID)
+		m.log.Warn("mtp: MQTT publish has no reply-to, dropping", "topic", pk.TopicName, "client", pk.Origin)
 		return
 	}
 
 	// The transport decodes only far enough to read From, the id
 	// needed to key the Conn registry -- interpreting the message
 	// payload itself is cmd/uspc's job, not this transport's.
-	decoded, err := usp.DecodeRecord(pk.Payload, "")
+	decoded, err := usp.DecodeRecord(pk.Payload, m.cfg.ControllerEndpointID)
 	if err != nil && !errors.Is(err, usp.ErrNoPayload) {
-		m.log.Warn("mtp: MQTT publish carries an undecodable record, dropping", "topic", pk.TopicName, "client", cl.ID, "error", err)
+		m.log.Warn("mtp: MQTT publish carries an undecodable record, dropping", "topic", pk.TopicName, "client", pk.Origin, "error", err)
 		return
 	}
-	if decoded == nil {
-		m.log.Warn("mtp: MQTT publish decoded to nothing, dropping", "topic", pk.TopicName, "client", cl.ID)
+	// Every path above either returned or guarantees decoded != nil:
+	// DecodeRecord always populates it before returning when the error
+	// is nil or ErrNoPayload, and any other error already returned above.
+
+	originClient, ok := m.server.Clients.Get(pk.Origin)
+	if !ok {
+		m.log.Warn("mtp: MQTT publish from an unknown client, dropping", "topic", pk.TopicName, "client", pk.Origin)
 		return
 	}
 
-	conn := m.connFor(cl, decoded.From, replyTopic, h)
+	conn := m.connFor(originClient, decoded.From, pk.ProtocolVersion, replyTopic, h)
 
 	h.OnRecord(Inbound{
 		Conn:       conn,
@@ -220,7 +289,7 @@ func (m *MQTT) onPublish(cl *mqttserver.Client, _ packets.Subscription, pk packe
 
 // connFor returns the logical Conn for cl, creating it and firing
 // OnConnect the first time cl is seen.
-func (m *MQTT) connFor(cl *mqttserver.Client, endpoint usp.EndpointID, replyTopic string, h Handler) *mqttConn {
+func (m *MQTT) connFor(cl *mqttserver.Client, endpoint usp.EndpointID, protocolVersion byte, replyTopic string, h Handler) *mqttConn {
 	m.mu.Lock()
 	conn, exists := m.conns[cl.ID]
 	if !exists {
@@ -234,7 +303,7 @@ func (m *MQTT) connFor(cl *mqttserver.Client, endpoint usp.EndpointID, replyTopi
 	}
 	m.mu.Unlock()
 
-	conn.setReplyState(cl.Properties.ProtocolVersion, replyTopic)
+	conn.setReplyState(protocolVersion, replyTopic)
 
 	if !exists {
 		h.OnConnect(conn)
@@ -244,11 +313,21 @@ func (m *MQTT) connFor(cl *mqttserver.Client, endpoint usp.EndpointID, replyTopi
 
 // handleDisconnect fires OnDisconnect for the Conn associated with cl,
 // if any, and stops tracking it.
+//
+// cl.ID alone is not enough to identify which Conn this disconnect
+// belongs to: if an agent reconnects quickly enough, a new *Client for
+// the same broker client id can already be tracked under m.conns[cl.ID]
+// by the time this fires for the old, now-stale *Client. Comparing the
+// tracked Conn's client pointer against cl guards that reconnect
+// takeover race -- a stale disconnect must not evict (or report as
+// disconnected) the connection that has already replaced it.
 func (m *MQTT) handleDisconnect(cl *mqttserver.Client, err error) {
 	m.mu.Lock()
 	conn, ok := m.conns[cl.ID]
-	if ok {
+	if ok && conn.client == cl {
 		delete(m.conns, cl.ID)
+	} else {
+		ok = false
 	}
 	h := m.handler
 	m.mu.Unlock()
