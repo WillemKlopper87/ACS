@@ -6,13 +6,14 @@ import (
 	"testing"
 )
 
-// forbiddenPrefixes are the package trees cmd/uspc may not reach: this
-// plan wires transport to protocol only, never to the domain layer
-// (design §4.1) -- cmd/uspc talks USP, not devices/jobs/store directly.
+// forbiddenPrefixes are the package trees cmd/uspc may not reach.
+// internal/devices and internal/store are now permitted: Task 5 gave
+// cmd/uspc an identity reconciler (identity.go) that upserts devices and
+// links usp_agents rows, so this service legitimately talks to the
+// domain layer for identity now. internal/jobs stays forbidden until a
+// later plan dispatches jobs from here.
 var forbiddenPrefixes = []string{
-	"acs/internal/devices",
 	"acs/internal/jobs",
-	"acs/internal/store",
 }
 
 // forbiddenImport reports whether an import path is inside a forbidden
@@ -31,8 +32,9 @@ func forbiddenImport(imported string) bool {
 
 // TestUSPCImportsNoDomainPackages enforces that cmd/uspc, which wires
 // the USP protocol core (internal/usp, internal/usp/mtp) into a runnable
-// service, never imports the domain packages this plan explicitly keeps
-// out of scope.
+// service and reconciles agent identity (internal/devices,
+// internal/store), never imports internal/jobs -- job dispatch from
+// cmd/uspc is a later plan's concern.
 func TestUSPCImportsNoDomainPackages(t *testing.T) {
 	pkg, err := build.Import("acs/cmd/uspc", "", 0)
 	if err != nil {
@@ -45,7 +47,7 @@ func TestUSPCImportsNoDomainPackages(t *testing.T) {
 
 	for _, imported := range all {
 		if forbiddenImport(imported) {
-			t.Errorf("acs/cmd/uspc imports %s, which this plan forbids: cmd/uspc wires protocol to transport, not to the domain layer", imported)
+			t.Errorf("acs/cmd/uspc imports %s, which this plan forbids: cmd/uspc does not dispatch jobs", imported)
 		}
 	}
 }

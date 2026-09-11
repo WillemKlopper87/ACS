@@ -56,6 +56,12 @@ type serviceConfig struct {
 	AllowPlaintext bool
 
 	HTTPAddr string
+
+	// PostgresDSN is this controller's connection string for the
+	// identity reconciler (internal/devices, via internal/store.Open).
+	// Required, fail-closed -- there is no sensible default for a DSN,
+	// mirroring cmd/bssadapter's ACS_POSTGRES_DSN handling (its main.go).
+	PostgresDSN string
 }
 
 // loadConfig reads and validates cmd/uspc's configuration via getenv,
@@ -82,6 +88,11 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 		problems = append(problems, "no TLS certificate is configured (ACS_USP_TLS_CERT/ACS_USP_TLS_KEY) and ACS_USP_ALLOW_PLAINTEXT is not \"true\" -- refusing to serve USP in plaintext")
 	}
 
+	postgresDSN := getenv("ACS_USP_POSTGRES_DSN")
+	if postgresDSN == "" {
+		problems = append(problems, "ACS_USP_POSTGRES_DSN is required")
+	}
+
 	if len(problems) > 0 {
 		return serviceConfig{}, fmt.Errorf("uspc: invalid configuration:\n  - %s", strings.Join(problems, "\n  - "))
 	}
@@ -104,6 +115,8 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 		AllowPlaintext: allowPlaintext,
 
 		HTTPAddr: envOrDefault(getenv, log, "ACS_USP_HTTP_ADDR", ":8092"),
+
+		PostgresDSN: postgresDSN,
 	}, nil
 }
 

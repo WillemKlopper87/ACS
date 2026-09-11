@@ -62,11 +62,35 @@ func TestPlaintextRequiresOptIn(t *testing.T) {
 	cfg, err := loadConfig(mapGetenv(map[string]string{
 		"ACS_USP_CONTROLLER_ID":   "ci-controller",
 		"ACS_USP_ALLOW_PLAINTEXT": "true",
+		"ACS_USP_POSTGRES_DSN":    "postgres://localhost/acs_test",
 	}), slog.Default())
 	if err != nil {
 		t.Fatalf("loadConfig() with ACS_USP_ALLOW_PLAINTEXT=true = %v, want nil error", err)
 	}
 	if !cfg.AllowPlaintext {
 		t.Error("cfg.AllowPlaintext = false, want true")
+	}
+}
+
+func TestPostgresDSNRequired(t *testing.T) {
+	_, err := loadConfig(mapGetenv(map[string]string{
+		"ACS_USP_CONTROLLER_ID":   "ci-controller",
+		"ACS_USP_ALLOW_PLAINTEXT": "true",
+		// ACS_USP_POSTGRES_DSN deliberately unset
+	}), slog.Default())
+	if err == nil {
+		t.Fatal("loadConfig() with no ACS_USP_POSTGRES_DSN = nil error, want error")
+	}
+
+	cfg, err := loadConfig(mapGetenv(map[string]string{
+		"ACS_USP_CONTROLLER_ID":   "ci-controller",
+		"ACS_USP_ALLOW_PLAINTEXT": "true",
+		"ACS_USP_POSTGRES_DSN":    "postgres://localhost/acs_test",
+	}), slog.Default())
+	if err != nil {
+		t.Fatalf("loadConfig() with ACS_USP_POSTGRES_DSN set = %v, want nil error", err)
+	}
+	if cfg.PostgresDSN != "postgres://localhost/acs_test" {
+		t.Errorf("cfg.PostgresDSN = %q, want the configured DSN", cfg.PostgresDSN)
 	}
 }

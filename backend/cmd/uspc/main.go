@@ -1,14 +1,16 @@
 // Command uspc is the USP (TR-369) controller service (design §4.1,
 // build plan's USP transport plan Task 5): it terminates the WebSocket
 // and MQTT MTP bindings (internal/usp/mtp), decodes inbound Records into
-// Msgs (internal/usp), and probes every newly connected agent with a
-// Get(["Device.DeviceInfo."]) -- interop evidence, not real dispatch.
+// Msgs (internal/usp), probes every newly connected agent with a
+// Get(["Device.DeviceInfo."]) -- interop evidence, not real dispatch --
+// and reconciles agent identity (OnBoardRequest, or the probe's own
+// GetResp as a last resort) to a devices row via internal/devices and
+// internal/store.
 //
-// It is wiring only. Real device-model reconciliation, job dispatch, and
-// persistence are a later plan (B-3); this service deliberately imports
-// nothing from internal/devices, internal/jobs, or internal/store
+// It is otherwise wiring only. Job dispatch is a later plan; this
+// service still deliberately never imports internal/jobs
 // (boundary_test.go enforces this) -- cmd/uspc is where the USP protocol
-// core meets transport, not where it meets the domain.
+// core meets transport and identity, not where it meets job dispatch.
 //
 // Agent allowlisting does not exist yet: any agent that completes the
 // WebSocket subprotocol/query-parameter handshake or publishes to the
@@ -19,6 +21,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -29,7 +32,9 @@ import (
 	"syscall"
 	"time"
 
+	"acs/internal/devices"
 	"acs/internal/observability"
+	"acs/internal/store"
 	"acs/internal/usp/mtp"
 )
 
@@ -65,11 +70,20 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// store.Open verifies connectivity itself (a ping, right after
+	// opening) so a bad DSN fails fast here rather than silently on this
+	// service's first query.
+	db, err := store.Open(ctx, cfg.PostgresDSN)
+	if err != nil {
+		return fmt.Errorf("connect to postgres: %w", err)
+	}
+
 	metrics := observability.NewMetrics("uspc")
 	uspm := newUSPMetrics(metrics)
 
 	tlsConfig, err := loadTLSConfig(cfg.TLSCert, cfg.TLSKey)
 	if err != nil {
+		db.Close()
 		return fmt.Errorf("load TLS configuration: %w", err)
 	}
 
@@ -79,29 +93,31 @@ func run(logger *slog.Logger) error {
 
 	p := newProbe(cfg.ControllerID, logger)
 	p.setMetrics(uspm)
+	repo := devices.NewRepository(db)
 	h := &handler{
 		log:          logger,
 		registry:     mtp.NewRegistry(),
 		probe:        p,
 		controllerID: cfg.ControllerID,
 		metrics:      uspm,
+		reconciler:   newReconciler(repo, logger),
 	}
 
 	ws, mq, err := newTransports(cfg, tlsConfig, logger)
 	if err != nil {
-		shutdown(logger, server, nil, nil)
+		shutdown(logger, server, nil, nil, db)
 		return err
 	}
 
 	if err := startTransports(ctx, ws, mq, h); err != nil {
-		shutdown(logger, server, ws, mq)
+		shutdown(logger, server, ws, mq, db)
 		return err
 	}
 	ready.Store(true)
 	logger.Info("uspc listening", "controller_id", cfg.ControllerID,
 		"ws_addr", ws.Addr(), "mqtt_addr", mq.Addr(), "http_addr", cfg.HTTPAddr, "tls", tlsConfig != nil)
 
-	return waitForShutdown(ctx, logger, server, serverErrCh, ws, mq)
+	return waitForShutdown(ctx, logger, server, serverErrCh, ws, mq, db)
 }
 
 // loadTLSConfig builds the shared *tls.Config both transports serve
@@ -184,25 +200,28 @@ func startHTTPServer(addr string, metrics *observability.Metrics, ready *atomic.
 
 // waitForShutdown blocks until ctx is canceled or the HTTP server itself
 // fails, then drains everything.
-func waitForShutdown(ctx context.Context, logger *slog.Logger, server *http.Server, serverErrCh <-chan error, ws *mtp.WebSocket, mq *mtp.MQTT) error {
+func waitForShutdown(ctx context.Context, logger *slog.Logger, server *http.Server, serverErrCh <-chan error, ws *mtp.WebSocket, mq *mtp.MQTT, db *sql.DB) error {
 	select {
 	case err := <-serverErrCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			shutdown(logger, server, ws, mq)
+			shutdown(logger, server, ws, mq, db)
 			return fmt.Errorf("http server error: %w", err)
 		}
 	case <-ctx.Done():
 		logger.Info("shutting down")
 	}
-	shutdown(logger, server, ws, mq)
+	shutdown(logger, server, ws, mq, db)
 	return nil
 }
 
-// shutdown drains server and, when non-nil, both transports, logging
-// (rather than failing the caller) on any error. ws and mq are nil when
-// called from an early-return path where the HTTP server was already
-// started but the transports never got as far as existing.
-func shutdown(logger *slog.Logger, server *http.Server, ws *mtp.WebSocket, mq *mtp.MQTT) {
+// shutdown drains server and, when non-nil, both transports, then closes
+// db, logging (rather than failing the caller) on any error. ws and mq
+// are nil when called from an early-return path where the HTTP server
+// was already started but the transports never got as far as existing.
+// db is closed last, after both transports and the HTTP server have
+// stopped, so in-flight identity reconciliation work is not cut off
+// mid-shutdown.
+func shutdown(logger *slog.Logger, server *http.Server, ws *mtp.WebSocket, mq *mtp.MQTT, db *sql.DB) {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
@@ -218,12 +237,20 @@ func shutdown(logger *slog.Logger, server *http.Server, ws *mtp.WebSocket, mq *m
 			logger.Warn("MQTT shutdown did not complete cleanly", "err", err)
 		}
 	}
+	if db != nil {
+		if err := db.Close(); err != nil {
+			logger.Warn("postgres shutdown did not complete cleanly", "err", err)
+		}
+	}
 }
 
 // readinessHandler reports 200 once ready is true -- both transports
-// have started -- and 503 before that. There is no database in this
-// plan, so unlike internal/observability.ReadinessHandler this never
-// depends on *sql.DB.
+// have started -- and 503 before that. It does not itself depend on
+// *sql.DB the way internal/observability.ReadinessHandler does:
+// connectivity to Postgres is established once at startup (run calls
+// store.Open, which pings) and failure there refuses to start the
+// process at all, rather than being polled here on every readiness
+// check.
 func readinessHandler(ready *atomic.Bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
