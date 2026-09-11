@@ -41,9 +41,11 @@ const (
 // republishes each notification's payload (a device id) on
 // Notifications(). It holds one dedicated *sql.Conn for its entire
 // life -- see internal/store/postgres.go's Migrate for the one-shot
-// version of the same "acquire a dedicated connection, unwrap to the
-// native driver conn" pattern; this is the long-lived version of the
-// same idea.
+// version of the same "acquire a dedicated connection via db.Conn,
+// hold it, eventually Close it" pattern. Migrate stops there (it never
+// unwraps to the native driver conn); the unwrap-to-*pgx.Conn step below
+// is specific to this listener, since Migrate has no need to reach
+// WaitForNotification.
 type QueueListener struct {
 	db      *sql.DB
 	channel string
@@ -92,10 +94,17 @@ func (l *QueueListener) Notifications() <-chan string {
 }
 
 // Close stops l's background goroutine and releases its dedicated
-// connection back to the pool. It blocks until the goroutine has
-// actually exited, so a caller observing Close's return (or
-// Notifications() closing, which happens first) knows the goroutine is
-// gone -- no leak, no lingering connection.
+// connection back to the pool. Canceling the listener's context alone
+// does not end the connection's LISTEN subscription -- pgconn's
+// deadline-based cancel watcher does not close the underlying connection
+// for a timeout-classified error, so the connection comes back healthy
+// and still subscribed; run's shutdown path issues a best-effort
+// UNLISTEN (see releaseConn) before returning the connection to the pool
+// so a future borrower of that pooled connection doesn't silently
+// accumulate undrained notifications. Close blocks until the goroutine
+// has actually exited, so a caller observing Close's return (or
+// Notifications() closing, which happens first) knows the goroutine --
+// and its connection release -- are done.
 func (l *QueueListener) Close() error {
 	l.cancel()
 	<-l.done
@@ -135,17 +144,26 @@ func acquireListenConn(ctx context.Context, db *sql.DB, channel string) (*sql.Co
 
 // run is the listener's background goroutine. It blocks on
 // WaitForNotification and republishes each payload; on any error
-// (connection dropped, network blip) it closes the broken connection,
-// backs off, reacquires a fresh connection re-issuing LISTEN, and
-// resumes. Only ctx cancellation (via Close) stops it for good.
+// (connection dropped, network blip, or ctx canceled via Close) it
+// releases the current connection (see releaseConn) and, unless that
+// error was a shutdown, backs off, reacquires a fresh connection
+// re-issuing LISTEN, and resumes. Only ctx cancellation (via Close)
+// stops it for good.
 func (l *QueueListener) run(ctx context.Context, conn *sql.Conn, native *pgx.Conn) {
 	defer close(l.done)
 	defer close(l.notifications)
 
 	for {
 		notification, err := native.WaitForNotification(ctx)
+		// WaitForNotification can return a non-nil notification alongside a
+		// non-nil error (a notification already buffered when the call
+		// errors) -- delivering it before handling the error means a
+		// buffered-then-error notification is never silently discarded.
+		if notification != nil {
+			l.deliver(notification.Payload)
+		}
 		if err != nil {
-			conn.Close()
+			l.releaseConn(conn)
 			if ctx.Err() != nil {
 				return
 			}
@@ -159,9 +177,34 @@ func (l *QueueListener) run(ctx context.Context, conn *sql.Conn, native *pgx.Con
 			}
 			continue
 		}
-
-		l.deliver(notification.Payload)
 	}
+}
+
+// releaseConn returns conn to db's pool, first issuing a best-effort
+// UNLISTEN. This matters specifically on the shutdown path: canceling
+// the listener's context interrupts WaitForNotification through
+// pgconn's deadline-based cancel watcher, which for a timeout-classified
+// error does NOT close the underlying connection (peekMessage skips
+// asyncClose, and HandleUnwatchAfterCancel clears the deadline) -- so
+// the pgx connection comes back healthy and still subscribed to
+// l.channel. Without the UNLISTEN, conn.Close() below would hand that
+// still-listening session back to *sql.DB's pool -- stdlib.Conn's
+// ResetSession never issues UNLISTEN itself -- and every subsequent job
+// insert would deliver a NotificationResponse onto that pooled
+// connection's internal notification buffer, which nothing drains,
+// growing unbounded until ConnMaxLifetime eventually retires the
+// connection. UNLISTEN is best-effort and given its own short-lived
+// context (ctx may already be canceled): on a genuine connection failure
+// (the other way this is reached) it simply fails fast and is logged,
+// and conn.Close() discards the connection either way.
+func (l *QueueListener) releaseConn(conn *sql.Conn) {
+	unlistenCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := conn.ExecContext(unlistenCtx, "UNLISTEN "+l.channel); err != nil {
+		l.log.Warn("jobs: UNLISTEN before releasing listen connection failed (best effort, proceeding)",
+			"channel", l.channel, "error", err)
+	}
+	conn.Close()
 }
 
 // reconnect retries acquireListenConn with a doubling, capped backoff
