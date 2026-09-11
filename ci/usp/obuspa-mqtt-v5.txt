@@ -1,0 +1,63 @@
+# obuspa factory-reset config: MQTT, protocol version 5.0, unencrypted.
+#
+# Derived from ci/configs/MQTT.txt in github.com/BroadbandForum/obuspa at
+# commit 2d885f12d7fd345435b5db651b3111cb6d3a879e (tag v11.0.0-master).
+# Overridden from the upstream file:
+#   - Device.MQTT.Client.1.BrokerAddress/BrokerPort: cmd/uspc's embedded
+#     MQTT broker (ACS_USP_MQTT_ADDR), reached via --network host instead
+#     of the upstream placeholder "controller.cdroutertest.com".
+#   - Device.LocalAgent.EndpointID / Controller.1.EndpointID: same fixed
+#     test agent id and "self::"+$ACS_USP_CONTROLLER_ID controller id as
+#     the WebSocket config -- cmd/uspc refuses records whose From does
+#     not match its own configured controller id.
+#   - Device.LocalAgent.Controller.1.MTP.1.MQTT.Topic: matches
+#     ACS_USP_MQTT_CONTROLLER_TOPIC ("/usp/controller") instead of the
+#     upstream placeholder "/controller-path".
+#   - Device.LocalAgent.MTP.1.MQTT.ResponseTopicConfigured: the agent's
+#     own reply-to identity, changed only to be distinct from the
+#     MQTT 3.1.1 run's config; its exact value doesn't need to match
+#     anything controller-side for MQTT 5 (it travels as the MQTT 5
+#     Response Topic property on each publish).
+#   - Username/Password are left as the upstream file's values: cmd/uspc's
+#     embedded broker's auth.AllowHook accepts any credentials, so this
+#     does not need to match anything on the controller side.
+#
+# Everything else is copied verbatim from the upstream file.
+
+Device.MQTT.Client.1.BrokerAddress "127.0.0.1"
+Device.MQTT.Client.1.ProtocolVersion "5.0"
+Device.MQTT.Client.1.BrokerPort "1883"
+Device.MQTT.Client.1.TransportProtocol "TCP/IP"
+Device.MQTT.Client.1.Username "qacafe"
+Device.MQTT.Client.1.Password "qacafe123"
+Device.MQTT.Client.1.Alias "cpe-1"
+Device.MQTT.Client.1.Enable true
+Device.MQTT.Client.1.ClientID ""
+Device.MQTT.Client.1.KeepAliveTime "60"
+Device.MQTT.Client.1.ConnectRetryTime "5"
+Device.MQTT.Client.1.ConnectRetryIntervalMultiplier   "2000"
+Device.MQTT.Client.1.ConnectRetryMaxInterval "60"
+
+Device.LocalAgent.MTP.1.MQTT.ResponseTopicConfigured "/usp/agent-mqtt5"
+Device.LocalAgent.MTP.1.Alias "cpe-1"
+Device.LocalAgent.MTP.1.Enable true
+Device.LocalAgent.MTP.1.Protocol "MQTT"
+Device.LocalAgent.MTP.1.MQTT.Reference "Device.MQTT.Client.1"
+
+Device.LocalAgent.EndpointID "os::012345-CIAGENT"
+
+Device.LocalAgent.Controller.1.MTP.1.Alias "cpe-1"
+Device.LocalAgent.Controller.1.MTP.1.Enable true
+Device.LocalAgent.Controller.1.MTP.1.Protocol "MQTT"
+Device.LocalAgent.Controller.1.MTP.1.MQTT.Reference "Device.MQTT.Client.1"
+Device.LocalAgent.Controller.1.MTP.1.MQTT.Topic "/usp/controller"
+
+Device.LocalAgent.Controller.1.EndpointID "self::ci-obuspa-interop"
+Device.LocalAgent.Controller.1.Alias "cpe-1"
+Device.LocalAgent.Controller.1.Enable true
+Device.LocalAgent.Controller.1.PeriodicNotifInterval "86400"
+Device.LocalAgent.Controller.1.PeriodicNotifTime "0001-01-01T00:00:00Z"
+Device.LocalAgent.Controller.1.ControllerCode ""
+Device.LocalAgent.Controller.1.AssignedRole "Device.LocalAgent.ControllerTrust.Role.1"
+
+Internal.Reboot.Cause "LocalFactoryReset"

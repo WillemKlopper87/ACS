@@ -1,6 +1,6 @@
 # Required delivery gate (audit P1.6). Every job must pass before merge;
 # configure branch protection on main to require: go, frontend,
-# migrations, containers, scan, security.
+# migrations, containers, scan, security, usp-interop.
 name: ci
 
 on:
@@ -247,6 +247,118 @@ jobs:
           # Every entry in here carries an expired_at, so an exception
           # cannot quietly outlive its justification — see the file.
           trivyignores: .trivyignore.yaml
+
+  usp-interop:
+    name: usp-interop (obuspa reference agent, WebSocket + MQTT 5 + MQTT 3.1.1)
+    # Spec §9: protocol code that has never met a real agent is an
+    # intention, not a capability. This job runs the Broadband Forum
+    # reference USP agent (obuspa) against cmd/uspc over both MTPs and
+    # asserts the controller logged a GetResp for Device.DeviceInfo.
+    # from it -- needs: [go] so it never runs against a build that
+    # already fails.
+    needs: [go]
+    runs-on: ubuntu-latest
+    env:
+      # cmd/uspc's own env (backend/cmd/uspc/config.go, main.go).
+      # ACS_USP_CONTROLLER_ID must be >=8 bytes, match
+      # ^[A-Za-z0-9._-]+$, and not read as a placeholder -- it becomes
+      # this controller's self::<id> endpoint id, which every obuspa
+      # factory-reset file in ci/usp/ must name exactly as its
+      # Controller.1.EndpointID, or obuspa refuses the record.
+      ACS_USP_CONTROLLER_ID: ci-obuspa-interop
+      ACS_USP_WS_ADDR: ":9877"
+      ACS_USP_WS_PATH: "/usp"
+      ACS_USP_MQTT_ADDR: ":1883"
+      ACS_USP_MQTT_CONTROLLER_TOPIC: "/usp/controller"
+      ACS_USP_ALLOW_PLAINTEXT: "true"
+      ACS_USP_HTTP_ADDR: ":8092"
+      # Pinned commit, not a floating branch (obuspa has no "v11.0.7"
+      # release -- that tag does not exist). This is
+      # github.com/BroadbandForum/obuspa's tag v11.0.0-master, the
+      # latest master-branch release tag as of 2026-09-11, verified
+      # live against the upstream repository before pinning.
+      OBUSPA_COMMIT: 2d885f12d7fd345435b5db651b3111cb6d3a879e
+      AGENT_ENDPOINT_ID: os::012345-CIAGENT
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: build uspc
+        working-directory: backend
+        run: go build -o /tmp/uspc ./cmd/uspc
+      - name: executable bit on assert-getresp.sh (committed as 100755)
+        run: test -x ci/usp/assert-getresp.sh
+      - name: clone obuspa at the pinned commit
+        run: |
+          git init -q obuspa-src
+          cd obuspa-src
+          git remote add origin https://github.com/BroadbandForum/obuspa.git
+          git fetch --depth 1 origin "$OBUSPA_COMMIT"
+          git checkout -q FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          [ "$actual" = "$OBUSPA_COMMIT" ] || { echo "checked out $actual, expected $OBUSPA_COMMIT"; exit 1; }
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: build obuspa's ci/Dockerfile, unmodified (CoAP compiled in but never configured -- harmless here)
+        run: docker build -f obuspa-src/ci/Dockerfile -t obuspa:ci obuspa-src
+
+      - name: "usp-interop: websocket"
+        run: |
+          rm -f /tmp/uspc-ws.log /tmp/obuspa-ws.log
+          /tmp/uspc > /tmp/uspc-ws.log 2>&1 &
+          uspc_pid=$!
+          sleep 2
+          docker run -d --name obuspa-ws --network host \
+            -v "$PWD/ci/usp:/ci/usp:ro" \
+            obuspa:ci -p -v4 -r /ci/usp/obuspa-websocket.txt -t /etc/obuspa/certs -f /tmp/usp-ws.db
+          docker logs -f obuspa-ws > /tmp/obuspa-ws.log 2>&1 &
+          logs_pid=$!
+          rc=0
+          ci/usp/assert-getresp.sh /tmp/uspc-ws.log "$AGENT_ENDPOINT_ID" WebSocket /tmp/obuspa-ws.log || rc=$?
+          kill "$logs_pid" 2>/dev/null || true
+          docker rm -f obuspa-ws >/dev/null 2>&1 || true
+          kill "$uspc_pid" 2>/dev/null || true
+          wait "$uspc_pid" 2>/dev/null || true
+          exit "$rc"
+
+      - name: "usp-interop: mqtt-v5"
+        run: |
+          rm -f /tmp/uspc-mqtt5.log /tmp/obuspa-mqtt5.log
+          /tmp/uspc > /tmp/uspc-mqtt5.log 2>&1 &
+          uspc_pid=$!
+          sleep 2
+          docker run -d --name obuspa-mqtt5 --network host \
+            -v "$PWD/ci/usp:/ci/usp:ro" \
+            obuspa:ci -p -v4 -r /ci/usp/obuspa-mqtt-v5.txt -t /etc/obuspa/certs -f /tmp/usp-mqtt5.db
+          docker logs -f obuspa-mqtt5 > /tmp/obuspa-mqtt5.log 2>&1 &
+          logs_pid=$!
+          rc=0
+          ci/usp/assert-getresp.sh /tmp/uspc-mqtt5.log "$AGENT_ENDPOINT_ID" MQTT /tmp/obuspa-mqtt5.log || rc=$?
+          kill "$logs_pid" 2>/dev/null || true
+          docker rm -f obuspa-mqtt5 >/dev/null 2>&1 || true
+          kill "$uspc_pid" 2>/dev/null || true
+          wait "$uspc_pid" 2>/dev/null || true
+          exit "$rc"
+
+      - name: "usp-interop: mqtt-v311"
+        run: |
+          rm -f /tmp/uspc-mqtt311.log /tmp/obuspa-mqtt311.log
+          /tmp/uspc > /tmp/uspc-mqtt311.log 2>&1 &
+          uspc_pid=$!
+          sleep 2
+          docker run -d --name obuspa-mqtt311 --network host \
+            -v "$PWD/ci/usp:/ci/usp:ro" \
+            obuspa:ci -p -v4 -r /ci/usp/obuspa-mqtt-v311.txt -t /etc/obuspa/certs -f /tmp/usp-mqtt311.db
+          docker logs -f obuspa-mqtt311 > /tmp/obuspa-mqtt311.log 2>&1 &
+          logs_pid=$!
+          rc=0
+          ci/usp/assert-getresp.sh /tmp/uspc-mqtt311.log "$AGENT_ENDPOINT_ID" MQTT /tmp/obuspa-mqtt311.log || rc=$?
+          kill "$logs_pid" 2>/dev/null || true
+          docker rm -f obuspa-mqtt311 >/dev/null 2>&1 || true
+          kill "$uspc_pid" 2>/dev/null || true
+          wait "$uspc_pid" 2>/dev/null || true
+          exit "$rc"
 
   security:
     name: secrets scan

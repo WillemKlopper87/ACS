@@ -64,6 +64,7 @@ Compatibility must not become a reason to disable authentication globally. Prefe
 | XMPP connection requests | — | — | not implemented |
 | Full TR-098 write catalog | partial root compatibility | partial | not qualified |
 | Malformed XML / oversized or invalidly compressed body handling | `cmd/acs/session.go` | unit | n/a |
+| USP (TR-369) Get/GetResp over WebSocket + MQTT 5 + MQTT 3.1.1 | `cmd/uspc`, `internal/usp`, `internal/usp/mtp` | unit (transport, codec, boundary) | obuspa v11.0.0-master, WebSocket + MQTT 5 + MQTT 3.1.1, Get/GetResp — validated in CI (`usp-interop` job) |
 
 ## Real-device qualification matrix
 
