@@ -163,9 +163,11 @@ jobs:
         # TestRepository_RefreshLivenessTransitions, so ./cmd/acs/ is
         # covered here too — this reruns cmd/acs's TestIntegration_* tests
         # as a side effect (harmless) but TestIntegration_CPELoad stays
-        # skipped since ACS_TEST_LOAD_DEVICES is unset. -p 1: every one
-        # resets the same database.
-        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./cmd/acs/
+        # skipped since ACS_TEST_LOAD_DEVICES is unset. Also covers
+        # internal/devices' usp_agents-backed repository tests (identity
+        # reconciliation) -- a DB-backed test in a package not on this list
+        # never runs in CI. -p 1: every one resets the same database.
+        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./cmd/acs/
       - name: placeholder secrets are refused (fail-closed)
         run: |
           set +e
@@ -259,6 +261,14 @@ jobs:
     needs: [go]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env: { POSTGRES_USER: acs, POSTGRES_PASSWORD: acs, POSTGRES_DB: acs }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U acs -d acs"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       # cmd/uspc's own env (backend/cmd/uspc/config.go, main.go).
       # ACS_USP_CONTROLLER_ID must be >=8 bytes, match
@@ -273,6 +283,9 @@ jobs:
       ACS_USP_MQTT_CONTROLLER_TOPIC: "/usp/controller"
       ACS_USP_ALLOW_PLAINTEXT: "true"
       ACS_USP_HTTP_ADDR: ":8092"
+      # cmd/uspc now opens a database at startup (identity reconciliation,
+      # Task 5) -- same DSN shape as the migrations job's own service.
+      ACS_USP_POSTGRES_DSN: postgres://acs:acs@localhost:5432/acs?sslmode=disable
       # Pinned commit, not a floating branch (obuspa has no "v11.0.7"
       # release -- that tag does not exist). This is
       # github.com/BroadbandForum/obuspa's tag v11.0.0-master, the
@@ -303,6 +316,16 @@ jobs:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: build obuspa's ci/Dockerfile, unmodified (CoAP compiled in but never configured -- harmless here)
         run: docker build -f obuspa-src/ci/Dockerfile -t obuspa:ci obuspa-src
+      - name: migrate the database (once -- all three steps below share this job's one postgres service and never reset its schema)
+        working-directory: backend
+        env:
+          # cmd/migrate reads ACS_POSTGRES_DSN (its own var, matching the
+          # migrations job), distinct from cmd/uspc's ACS_USP_POSTGRES_DSN
+          # above -- same database, same DSN value, different var name.
+          ACS_POSTGRES_DSN: postgres://acs:acs@localhost:5432/acs?sslmode=disable
+        run: |
+          go build -o /tmp/migrate ./cmd/migrate
+          /tmp/migrate
 
       - name: "usp-interop: websocket"
         run: |
