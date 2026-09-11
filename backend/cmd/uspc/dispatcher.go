@@ -286,12 +286,71 @@ func (d *dispatcher) handleResponse(from usp.EndpointID, msg *uspproto.Msg) (mat
 	defer cancel()
 
 	if uspErr := usp.ErrorFromMsg(msg); uspErr != nil {
-		d.log.Warn("uspc: dispatcher: dispatched job's request was answered with an error", "job_id", entry.job.ID, "endpoint", from, "msg_id", msgID, "error", uspErr)
-		d.resolveFailure(ctx, entry.job, from, strconv.Itoa(int(uspErr.Code)), uspErr.Message)
+		d.classifyAndFail(ctx, entry.job, from, uspErr, "msg_id", msgID)
 	} else {
 		d.resolveSuccess(ctx, entry.job, from, responseSummary(msg))
 	}
 	return true
+}
+
+// classifyAndFail is handleResponse and handleOperationComplete's shared
+// error-mapping entry point (design §6.4): both a sync Error body and an
+// async Notify.OperationComplete CmdFailure carry a USP 7xxx code, so both
+// route through the exact same errors.Is-based switch rather than
+// duplicating it. extraLogAttrs lets a caller add context this function
+// doesn't otherwise have (handleResponse's own msg_id; handleOperationComplete
+// has none to add).
+//
+// Four codes get typed handling per design §6.4:
+//
+//   - ErrNotWriteable (7013): the Huawei-class trap that resolves, sends
+//     and silently fails on CWMP. USP makes it a typed error; this keeps
+//     it typed all the way into the job's FaultString instead of letting
+//     it collapse back into an opaque code+message pair, so an operator
+//     can actually tell what happened without cross-referencing the USP
+//     error table.
+//   - ErrObjectDoesNotExist (7016): design §6.4 says "fail; trigger
+//     re-discovery," but this plan deliberately does NOT auto-queue a
+//     TypeParameterDiscovery job from inside error handling. Every
+//     failed Add/Delete/Set against a persistently stale data model
+//     would otherwise requeue another discovery RPC round trip -- a
+//     retry storm risk with no backoff of its own (unlike
+//     internal/jobs' own retry machinery -- MaxAttempts,
+//     RecoverExpiredLeases' nonRepeatableTypes handling -- which governs
+//     retrying the SAME job, not spawning a new one). Re-discovery-on-
+//     demand is a reasonable operator/console feature for a later plan;
+//     for now this just logs distinctly so an operator (or that future
+//     automation) can act on it.
+//   - ErrPermissionDenied (7006): flagged as a controller-trust
+//     misconfiguration, not a device fault, and logged at Warn since it
+//     signals an operational problem with the deployment rather than a
+//     routine per-job failure.
+//   - ErrCommandFailure (7022) is deliberately NOT special-cased:
+//     ErrorFromMsg already carries the agent's err_msg verbatim in
+//     uspErr.Message, which is exactly what the default case already
+//     records, so a dedicated branch here would just be the default
+//     case again under a different name.
+//
+// Every other/unmapped code falls through to the default case, unchanged
+// from Task 4/5's baseline: MarkFailed with code and message recorded
+// verbatim.
+func (d *dispatcher) classifyAndFail(ctx context.Context, job *jobs.Job, from usp.EndpointID, uspErr *usp.USPError, extraLogAttrs ...any) {
+	logAttrs := append([]any{"job_id", job.ID, "endpoint", from, "error", uspErr}, extraLogAttrs...)
+
+	switch {
+	case errors.Is(uspErr, usp.ErrNotWriteable):
+		d.log.Warn("uspc: dispatcher: job failed: attempt to update a non-writeable parameter -- typed and surfaced rather than a silent Huawei-class no-op", logAttrs...)
+		d.resolveFailure(ctx, job, from, strconv.Itoa(int(uspErr.Code)), "parameter is not writeable: "+uspErr.Message)
+	case errors.Is(uspErr, usp.ErrObjectDoesNotExist):
+		d.log.Warn("uspc: dispatcher: job failed: target object does not exist on the device -- data model may be stale, consider re-running parameter discovery", append(logAttrs, "device_id", job.DeviceID)...)
+		d.resolveFailure(ctx, job, from, strconv.Itoa(int(uspErr.Code)), uspErr.Message)
+	case errors.Is(uspErr, usp.ErrPermissionDenied):
+		d.log.Warn("uspc: dispatcher: job failed: permission denied -- likely a controller-trust misconfiguration, not a device fault", logAttrs...)
+		d.resolveFailure(ctx, job, from, strconv.Itoa(int(uspErr.Code)), "controller-trust misconfiguration (permission denied): "+uspErr.Message)
+	default:
+		d.log.Warn("uspc: dispatcher: dispatched job's request was answered with an error", logAttrs...)
+		d.resolveFailure(ctx, job, from, strconv.Itoa(int(uspErr.Code)), uspErr.Message)
+	}
 }
 
 // resolveSuccess marks job successfully complete with detail as its
@@ -418,7 +477,12 @@ func (d *dispatcher) handleOperationComplete(ctx context.Context, connDeviceID s
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, dbCallTimeout)
 	defer resolveCancel()
 	if oc.Failed {
-		d.resolveFailure(resolveCtx, job, "", strconv.Itoa(int(oc.ErrCode)), oc.ErrMsg)
+		// oc.ErrCode/ErrMsg come from the same USP 7xxx error-code table
+		// as an Error body's err_code/err_msg (design §3.3) -- a
+		// CmdFailure is just async instead of sync -- so route through
+		// the exact same classifyAndFail switch handleResponse uses
+		// rather than duplicating it here.
+		d.classifyAndFail(resolveCtx, job, "", &usp.USPError{Code: usp.ErrorCode(oc.ErrCode), Message: oc.ErrMsg})
 	} else {
 		d.resolveSuccess(resolveCtx, job, "", operationCompleteResultDetail(oc))
 	}

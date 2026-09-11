@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"acs/internal/devices"
@@ -271,9 +273,15 @@ func TestTryDispatchRequeuesUnsupportedType(t *testing.T) {
 
 // dispatchTestSetup builds a dispatcher with one leased-and-sent job
 // outstanding, returning the pieces TestHandleResponse* need to build and
-// deliver a matching response.
-func dispatchTestSetup(t *testing.T) (d *dispatcher, jobsRepo *jobs.Repository, jobID string, msgID string, c *captureConn) {
+// deliver a matching response. An optional logger may be passed (used by
+// the error-mapping tests that assert on log content); it defaults to
+// slog.Default() when omitted.
+func dispatchTestSetup(t *testing.T, log ...*slog.Logger) (d *dispatcher, jobsRepo *jobs.Repository, jobID string, msgID string, c *captureConn) {
 	t.Helper()
+	l := slog.Default()
+	if len(log) > 0 {
+		l = log[0]
+	}
 	jobsRepo, deviceID := newDispatcherTestDB(t)
 	ctx := context.Background()
 	job, err := jobsRepo.Create(ctx, deviceID, jobs.TypeGetParameter,
@@ -286,7 +294,7 @@ func dispatchTestSetup(t *testing.T) (d *dispatcher, jobsRepo *jobs.Repository, 
 	registry := mtp.NewRegistry()
 	c = &captureConn{id: agent}
 	registerAgent(store, registry, deviceID, c)
-	d = newDispatcher(jobsRepo, store, registry, ctrl, slog.Default())
+	d = newDispatcher(jobsRepo, store, registry, ctrl, l)
 
 	if err := d.tryDispatch(ctx, deviceID); err != nil {
 		t.Fatalf("tryDispatch() = %v, want nil", err)
@@ -354,6 +362,180 @@ func TestHandleResponseResolvesFailure(t *testing.T) {
 	}
 	if gotJob.FaultString == nil || *gotJob.FaultString != "invalid path" {
 		t.Errorf("job fault_string = %v, want %q", gotJob.FaultString, "invalid path")
+	}
+}
+
+// uspErrorMsg builds an ERROR-typed uspproto.Msg answering msgID, mirroring
+// the literal shape TestHandleResponseResolvesFailure already used inline --
+// factored out here since the error-mapping tests below all need the same
+// shape with different codes/messages.
+func uspErrorMsg(msgID string, code uint32, msg string) *uspproto.Msg {
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: msgID, MsgType: uspproto.Header_ERROR},
+		Body:   &uspproto.Body{MsgBody: &uspproto.Body_Error{Error: &uspproto.Error{ErrCode: code, ErrMsg: msg}}},
+	}
+}
+
+// TestErrorMappingNotWriteable covers design §6.4's first special case
+// (USP 7013): the Huawei-class trap that resolves, sends and silently
+// fails on CWMP must instead fail typed and diagnosable -- the job's
+// FaultString gets a class-identifying prefix, not just the agent's raw
+// message.
+func TestErrorMappingNotWriteable(t *testing.T) {
+	d, jobsRepo, jobID, msgID, _ := dispatchTestSetup(t)
+
+	if matched := d.handleResponse(agent, uspErrorMsg(msgID, 7013, "Device.WiFi.SSID is read-only")); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusFailed {
+		t.Errorf("job status = %s, want FAILED", gotJob.Status)
+	}
+	if gotJob.FaultCode == nil || *gotJob.FaultCode != "7013" {
+		t.Errorf("job fault_code = %v, want 7013", gotJob.FaultCode)
+	}
+	wantFaultString := "parameter is not writeable: Device.WiFi.SSID is read-only"
+	if gotJob.FaultString == nil || *gotJob.FaultString != wantFaultString {
+		t.Errorf("job fault_string = %v, want %q", gotJob.FaultString, wantFaultString)
+	}
+}
+
+// TestErrorMappingObjectDoesNotExist covers design §6.4's second special
+// case (USP 7016). The brief's binding decision: log distinctly so an
+// operator/future automation can act on it, but do NOT auto-queue a
+// rediscovery job -- auto-queuing from inside error handling risks a
+// retry storm against a persistently stale data model. This test asserts
+// both halves: a distinct log line, and that no second job was created
+// for the device.
+func TestErrorMappingObjectDoesNotExist(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	d, jobsRepo, jobID, msgID, _ := dispatchTestSetup(t, log)
+
+	if matched := d.handleResponse(agent, uspErrorMsg(msgID, 7016, "Device.WiFi.AccessPoint.5. does not exist")); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusFailed {
+		t.Errorf("job status = %s, want FAILED", gotJob.Status)
+	}
+	if gotJob.FaultCode == nil || *gotJob.FaultCode != "7016" {
+		t.Errorf("job fault_code = %v, want 7016", gotJob.FaultCode)
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "does not exist") {
+		t.Errorf("logged output should distinctly call out the object-does-not-exist case, got: %s", logged)
+	}
+	if !strings.Contains(strings.ToLower(logged), "discovery") && !strings.Contains(strings.ToLower(logged), "stale") {
+		t.Errorf("logged output should be actionable for an operator/future rediscovery automation (mention discovery/stale data model), got: %s", logged)
+	}
+
+	gotJobs, err := jobsRepo.List(context.Background(), gotJob.DeviceID, nil, false)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(gotJobs) != 1 {
+		t.Errorf("jobs for device = %d, want exactly 1 (the original job only -- no auto-queued rediscovery job)", len(gotJobs))
+	}
+}
+
+// TestErrorMappingPermissionDenied covers design §6.4's third special case
+// (USP 7006): flagged as a controller-trust misconfiguration, not a
+// device fault, and logged at Warn since it signals an operational
+// problem with the deployment.
+func TestErrorMappingPermissionDenied(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	d, jobsRepo, jobID, msgID, _ := dispatchTestSetup(t, log)
+
+	if matched := d.handleResponse(agent, uspErrorMsg(msgID, 7006, "controller endpoint not in ACL")); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusFailed {
+		t.Errorf("job status = %s, want FAILED", gotJob.Status)
+	}
+	if gotJob.FaultCode == nil || *gotJob.FaultCode != "7006" {
+		t.Errorf("job fault_code = %v, want 7006", gotJob.FaultCode)
+	}
+	if gotJob.FaultString == nil || !strings.Contains(*gotJob.FaultString, "controller-trust misconfiguration") {
+		t.Errorf("job fault_string = %v, want it to flag a controller-trust misconfiguration, not a plain device fault", gotJob.FaultString)
+	}
+	if gotJob.FaultString == nil || !strings.Contains(*gotJob.FaultString, "controller endpoint not in ACL") {
+		t.Errorf("job fault_string = %v, want it to still carry the agent's own message", gotJob.FaultString)
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "level=WARN") {
+		t.Errorf("logged output should be at Warn level, got: %s", logged)
+	}
+}
+
+// TestErrorMappingCommandFailure covers design §6.4's fourth special case
+// (USP 7022). Per the brief, ErrCommandFailure's own uspErr.Message
+// already carries the agent's err_msg verbatim via ErrorFromMsg, so this
+// is deliberately NOT special-cased in the switch -- it falls through to
+// the same default handling as any unmapped code. This test proves that
+// identical behavior rather than asserting on a distinct branch that
+// doesn't exist.
+func TestErrorMappingCommandFailure(t *testing.T) {
+	d, jobsRepo, jobID, msgID, _ := dispatchTestSetup(t)
+
+	if matched := d.handleResponse(agent, uspErrorMsg(msgID, 7022, "reboot command failed on device")); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusFailed {
+		t.Errorf("job status = %s, want FAILED", gotJob.Status)
+	}
+	if gotJob.FaultCode == nil || *gotJob.FaultCode != "7022" {
+		t.Errorf("job fault_code = %v, want 7022", gotJob.FaultCode)
+	}
+	if gotJob.FaultString == nil || *gotJob.FaultString != "reboot command failed on device" {
+		t.Errorf("job fault_string = %v, want the agent's err_msg verbatim, unprefixed: %q", gotJob.FaultString, "reboot command failed on device")
+	}
+}
+
+// TestErrorMappingUnmappedCode covers the checklist's final row: a code
+// with no sentinel (design §6.4's "every other/unmapped code") must fall
+// through to the generic path unchanged -- code and message recorded
+// verbatim, exactly like Task 4/5's baseline behavior.
+func TestErrorMappingUnmappedCode(t *testing.T) {
+	d, jobsRepo, jobID, msgID, _ := dispatchTestSetup(t)
+
+	if matched := d.handleResponse(agent, uspErrorMsg(msgID, 7003, "something went wrong internally")); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+
+	gotJob, err := jobsRepo.ByID(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if gotJob.Status != jobs.StatusFailed {
+		t.Errorf("job status = %s, want FAILED", gotJob.Status)
+	}
+	if gotJob.FaultCode == nil || *gotJob.FaultCode != "7003" {
+		t.Errorf("job fault_code = %v, want 7003", gotJob.FaultCode)
+	}
+	if gotJob.FaultString == nil || *gotJob.FaultString != "something went wrong internally" {
+		t.Errorf("job fault_string = %v, want verbatim %q", gotJob.FaultString, "something went wrong internally")
 	}
 }
 
