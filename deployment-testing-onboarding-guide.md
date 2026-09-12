@@ -252,8 +252,18 @@ ACS_INTERNAL_API_URL (where cmd/api lives, default http://localhost:8080),
 ACS_INTERNAL_SERVICE_TOKEN (same value as cmd/api's, above)
 
 # cmd/uspc (TR-369/USP controller: WebSocket + MQTT MTPs)
-# NOTE: cmd/uspc has no agent allowlist yet -- any agent that completes
-# the handshake is accepted. Do not expose it to an untrusted network.
+# Two independent allowlist gates:
+#   - Network-level: ACS_USP_ALLOWED_CIDRS (comma-separated CIDRs,
+#     e.g. "10.0.0.0/8,192.168.1.0/24"). Empty/unset is permissive --
+#     set this for a production deployment.
+#   - Identity-level: unconditional, no config flag. An agent's
+#     OUI+SerialNumber must already correspond to a devices row before
+#     its first USP contact -- pre-register it via the bulk-import API
+#     (same PreRegister path CWMP fleet onboarding already uses), or
+#     let it connect via CWMP first if it's a dual-stack device. An
+#     unrecognized identity is refused and the connection closed.
+ACS_USP_ALLOWED_CIDRS (optional, comma-separated CIDR list, empty is
+  permissive -- see above),
 ACS_USP_CONTROLLER_ID (required, >=8 bytes, [A-Za-z0-9._-]+, not a
   placeholder -- this controller's endpoint id is self:: plus this value,
   stored verbatim in every connected agent's controller table),

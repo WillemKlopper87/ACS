@@ -13,7 +13,7 @@ and an operator console.
 | CWMP gateway | `backend/cmd/acs` | Terminates CPE sessions on `:7547` (Digest or mTLS), dispatches leased jobs, runs the stale-lease reaper, STUN on `:3478/udp`. |
 | Operator API | `backend/cmd/api` | REST API on `:8080` (JWT auth, RBAC, tenancy scoping), connection-request and schedule workers, retention pruning, firmware/upload file serving. |
 | BSS adapter | `backend/cmd/bssadapter` | `/bss/v1` on `:8090` for CRM/BSS systems (OAuth2 client credentials or shared token), webhooks. |
-| USP controller | `backend/cmd/uspc` | TR-369/USP controller: WebSocket (`:9877`) and MQTT (`:1883`) MTPs, `/healthz`/`/readyz`/`/metrics` on `:8092`. Wiring only — probes each connecting agent, does not yet dispatch real jobs. Has no agent allowlist yet — do not expose it to an untrusted network. |
+| USP controller | `backend/cmd/uspc` | TR-369/USP controller: WebSocket (`:9877`) and MQTT (`:1883`) MTPs, `/healthz`/`/readyz`/`/metrics` on `:8092`. Dispatches queued jobs, reconciles subscriptions, and gates connections with a network CIDR allowlist (`ACS_USP_ALLOWED_CIDRS`) plus an identity allowlist (the agent must already be a known `devices` row — see below). |
 | Migrate tool | `backend/cmd/migrate` | Applies embedded migrations standalone (CI, pre-deploy). |
 | Console | `frontend/` | React 19 + Vite operator UI, served by nginx in containers. |
 | Persistence | PostgreSQL 18 | Forward-only embedded migrations, advisory-locked and checksum-verified at startup. Firmware and CPE uploads on local disk. |
@@ -65,6 +65,10 @@ reverse proxy in front of the API and console.
 
 Recommended hardening variables: `ACS_DEVICE_NET_ALLOWED_CIDRS` (SSRF
 allowlist for the web-GUI proxy and console bridge),
+`ACS_USP_ALLOWED_CIDRS` (network-level allowlist for the USP
+controller's WebSocket/MQTT listeners; identity-level allowlisting is
+unconditional — pre-register a device via the bulk-import API before
+its first USP contact),
 `ACS_API_CORS_ORIGIN` (defaults to `ACS_FRONTEND_BASE_URL`),
 `ACS_UPLOAD_MAX_BYTES`, `ACS_DB_MAX_OPEN_CONNS`, `ACS_RETENTION_*_DAYS`,
 `ACS_TLS_CERT`/`ACS_TLS_KEY`. The full variable reference is in
