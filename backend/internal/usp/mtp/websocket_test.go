@@ -78,6 +78,35 @@ func startWS(t *testing.T, h Handler) (*WebSocket, string) {
 	return ws, "ws://" + ws.Addr() + "/usp"
 }
 
+// startedWS starts ws (already constructed by the caller, e.g. with a
+// non-default config like AllowedCIDRs) and returns it with its ws://
+// URL, exactly like startWS but for a caller that needs to control
+// construction. h is a minimal handler; use startedWSWithHandler when the
+// test needs to observe connects.
+func startedWS(t *testing.T, ws *WebSocket) (*WebSocket, string) {
+	t.Helper()
+	return startedWSWithHandler(t, ws, newRecordingHandler())
+}
+
+func startedWSWithHandler(t *testing.T, ws *WebSocket, h Handler) (*WebSocket, string) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); _ = ws.Stop(context.Background()) })
+	if err := ws.Start(ctx, h); err != nil {
+		t.Fatal(err)
+	}
+	return ws, "ws://" + ws.Addr() + "/usp"
+}
+
+// dialRaw attempts a WebSocket dial and returns the error instead of
+// failing the test -- for a test that expects the dial to fail (a
+// disallowed remote address).
+func dialRaw(url string) (*websocket.Conn, *http.Response, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return websocket.Dial(ctx, url, &websocket.DialOptions{Subprotocols: []string{"v1.usp"}})
+}
+
 func dial(t *testing.T, url string, subprotocols ...string) *websocket.Conn {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

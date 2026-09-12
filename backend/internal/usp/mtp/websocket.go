@@ -46,6 +46,11 @@ type WebSocketConfig struct {
 	// MaxRecordBytes caps the size of a single incoming message.
 	// Defaults to 5 MB, matching the reference agent's frame cap.
 	MaxRecordBytes int64
+	// AllowedCIDRs, when non-empty, restricts accepted connections to
+	// remote addresses inside one of these networks -- empty is
+	// permissive (design S2.1). Checked at the raw TCP accept, before
+	// any TLS or WebSocket handshake.
+	AllowedCIDRs []*net.IPNet
 }
 
 // WebSocket is a Transport that serves the USP WebSocket MTP binding.
@@ -108,6 +113,7 @@ func (w *WebSocket) Start(ctx context.Context, h Handler) error {
 	if err != nil {
 		return fmt.Errorf("mtp: WebSocket listen: %w", err)
 	}
+	ln = wrapWithAllowlist(ln, w.cfg.AllowedCIDRs, w.log)
 	if w.cfg.TLS != nil {
 		ln = tls.NewListener(ln, w.cfg.TLS)
 	}

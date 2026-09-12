@@ -333,3 +333,49 @@ func TestMQTTSendHonoursContextTimeout(t *testing.T) {
 		t.Errorf("Send took %v to return after its context expired; want it to return promptly", elapsed)
 	}
 }
+
+func TestAllowlistHookRejectsDisallowedRemote(t *testing.T) {
+	m, err := NewMQTT(MQTTConfig{
+		Addr: "127.0.0.1:0", ControllerTopic: "/usp/controller",
+		ControllerEndpointID: testControllerEID, AllowPlaintext: true,
+		AllowedCIDRs: []*net.IPNet{mustParseCIDR(t, "10.0.0.0/8")},
+	}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := &allowlistHook{cidrs: []*net.IPNet{mustParseCIDR(t, "10.0.0.0/8")}, log: slog.Default()}
+	cl := newMQTTAgentClient(t, m, "outside-allowlist", 5)
+	cl.Net.Remote = "203.0.113.5:12345" // outside 10.0.0.0/8
+	if hook.OnConnectAuthenticate(cl, packets.Packet{}) {
+		t.Error("OnConnectAuthenticate for a disallowed remote = true, want false")
+	}
+}
+
+func TestAllowlistHookAllowsPermittedRemote(t *testing.T) {
+	m, err := NewMQTT(MQTTConfig{
+		Addr: "127.0.0.1:0", ControllerTopic: "/usp/controller",
+		ControllerEndpointID: testControllerEID, AllowPlaintext: true,
+	}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := &allowlistHook{cidrs: []*net.IPNet{mustParseCIDR(t, "10.0.0.0/8")}, log: slog.Default()}
+	cl := newMQTTAgentClient(t, m, "inside-allowlist", 5)
+	cl.Net.Remote = "10.1.2.3:12345"
+	if !hook.OnConnectAuthenticate(cl, packets.Packet{}) {
+		t.Error("OnConnectAuthenticate for an allowed remote = false, want true")
+	}
+}
+
+func TestAllowlistHookPermissiveWhenEmpty(t *testing.T) {
+	hook := &allowlistHook{log: slog.Default()} // no cidrs
+	m, err := NewMQTT(MQTTConfig{Addr: "127.0.0.1:0", ControllerTopic: "/usp/controller", ControllerEndpointID: testControllerEID, AllowPlaintext: true}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl := newMQTTAgentClient(t, m, "any-remote", 5)
+	cl.Net.Remote = "203.0.113.5:12345"
+	if !hook.OnConnectAuthenticate(cl, packets.Packet{}) {
+		t.Error("OnConnectAuthenticate with an empty allowlist = false, want true (permissive)")
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 	"time"
 
@@ -56,6 +57,11 @@ type MQTTConfig struct {
 	// AllowPlaintext opts into serving without TLS. NewMQTT returns an
 	// error if TLS is nil and this is false.
 	AllowPlaintext bool
+	// AllowedCIDRs, when non-empty, restricts accepted CONNECTs to remote
+	// addresses inside one of these networks -- empty is permissive
+	// (design S2.1). Enforced by allowlistHook.OnConnectAuthenticate,
+	// before any CONNACK is sent.
+	AllowedCIDRs []*net.IPNet
 }
 
 // MQTT is a Transport that serves the USP MQTT MTP binding on an
@@ -119,6 +125,12 @@ func NewMQTT(cfg MQTTConfig, log *slog.Logger) (*MQTT, error) {
 
 	if err := server.AddHook(&mqttDisconnectHook{m: m}, nil); err != nil {
 		return nil, fmt.Errorf("mtp: MQTT add disconnect hook: %w", err)
+	}
+
+	if len(cfg.AllowedCIDRs) > 0 {
+		if err := server.AddHook(&allowlistHook{cidrs: cfg.AllowedCIDRs, log: log}, nil); err != nil {
+			return nil, fmt.Errorf("mtp: MQTT add allowlist hook: %w", err)
+		}
 	}
 
 	ln := listeners.NewTCP(listeners.Config{ID: mqttListenerID, Address: cfg.Addr, TLSConfig: cfg.TLS})
@@ -356,6 +368,40 @@ func (h *mqttDisconnectHook) Provides(b byte) bool {
 
 func (h *mqttDisconnectHook) OnDisconnect(cl *mqttserver.Client, err error, _ bool) {
 	h.m.handleDisconnect(cl, err)
+}
+
+// allowlistHook rejects a CONNECT from a remote address outside cidrs,
+// the network-level half of the USP agent allowlist (design S2.1). It is
+// registered alongside auth.AllowHook, not instead of it: AllowHook still
+// grants topic pub/sub access (unrelated, out of this plan's scope, S7 of
+// the design doc); this hook only gates whether a CONNECT is accepted at
+// all. OnConnectAuthenticate returning false makes mochi-mqtt refuse the
+// CONNECT and close the connection before any CONNACK is sent -- no USP
+// record is ever exchanged with a rejected client.
+type allowlistHook struct {
+	mqttserver.HookBase
+	cidrs []*net.IPNet
+	log   *slog.Logger
+}
+
+func (h *allowlistHook) ID() string { return "usp-allowlist" }
+
+func (h *allowlistHook) Provides(b byte) bool {
+	return b == mqttserver.OnConnectAuthenticate
+}
+
+func (h *allowlistHook) OnConnectAuthenticate(cl *mqttserver.Client, _ packets.Packet) bool {
+	host, _, err := net.SplitHostPort(cl.Net.Remote)
+	if err != nil {
+		h.log.Warn("mtp: rejecting MQTT client with unparseable remote address", "remote", cl.Net.Remote, "error", err)
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ipAllowed(h.cidrs, ip) {
+		h.log.Warn("mtp: rejecting MQTT client from a disallowed network", "remote", cl.Net.Remote)
+		return false
+	}
+	return true
 }
 
 // mqttConn implements Conn over one logical MQTT session: the client
