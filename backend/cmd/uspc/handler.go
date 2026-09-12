@@ -351,7 +351,7 @@ func (h *handler) checkSubscriptionID(c mtp.Conn, deviceID, subscriptionID strin
 	// (inFlight), so this peek is a logging nicety on top of that
 	// authoritative guard, not a substitute for it (task-6 fix round 1,
 	// Important 1).
-	if h.subscriptions.reconcileInFlight(deviceID) {
+	if h.subscriptions.reconcileInFlight(deviceID, c) {
 		h.log.Info("uspc: Notify carries an unknown subscription_id, but a subscription reconciliation is already in flight for this device, not triggering another",
 			"endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "subscription_id", subscriptionID)
 		return

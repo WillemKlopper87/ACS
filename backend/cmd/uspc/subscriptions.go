@@ -136,21 +136,35 @@ type subscriptionReconciler struct {
 
 	mu      sync.Mutex
 	pending map[string]pendingSubscribe
-	// inFlight is the set of device ids with an outstanding read (a Get
-	// sent, its GetResp not yet answered) -- fix round 1, Important 1.
-	// handler.checkSubscriptionID calls reconcile once per Notify whose
-	// subscription_id doesn't match a known usp_subscriptions row, and an
-	// agent that streams such Notifies (or that simply never answers the
-	// read) would otherwise grow s.pending and re-send the read Get
-	// without bound, throttling that connection's own read loop with a
-	// ByDevice query plus a Get send per Notify. reconcile checks/sets
-	// this before doing any of that work and no-ops if an entry is
-	// already present, so repeated triggers for the same device collapse
-	// into the one pass already in flight. Cleared once that pass's own
-	// read response is processed (handleResponse, for every outcome --
+	// inFlight maps a device id with an outstanding read (a Get sent, its
+	// GetResp not yet answered) to the conn that read was sent on -- fix
+	// round 1, Important 1. handler.checkSubscriptionID calls reconcile
+	// once per Notify whose subscription_id doesn't match a known
+	// usp_subscriptions row, and an agent that streams such Notifies (or
+	// that simply never answers the read) would otherwise grow s.pending
+	// and re-send the read Get without bound, throttling that
+	// connection's own read loop with a ByDevice query plus a Get send
+	// per Notify. reconcile checks/sets this before doing any of that
+	// work and no-ops if the SAME conn already has a pass in flight for
+	// that device, so repeated triggers on one connection collapse into
+	// the one pass already running. Cleared once that pass's own read
+	// response is processed (handleResponse, for every outcome --
 	// success, an error response, or a malformed one) or, if the
 	// connection dies before any response arrives, by forget.
-	inFlight map[string]bool
+	//
+	// Keyed by conn, not just a bare set (fix round 2): a device id alone
+	// can't distinguish "this same connection's pass is still running"
+	// from "a DIFFERENT, now-dead connection's pass never got cleaned up"
+	// -- the exact reconnect-before-disconnect takeover race forget's own
+	// doc comment already documents as real here (mirroring
+	// mtp.Registry.Add/dispatcher's own takeover handling). Without the
+	// conn identity, a new connection for a device whose old connection
+	// died mid-reconcile without ever calling forget would see
+	// "in flight" forever and never get its own reconcile pass triggered.
+	// reconcile treats a different conn's in-flight entry as stale and
+	// supersedes it (see reconcile's own doc comment) rather than
+	// blocking on it.
+	inFlight map[string]mtp.Conn
 }
 
 // newSubscriptionReconciler returns a subscriptionReconciler ready for
@@ -165,50 +179,73 @@ func newSubscriptionReconciler(repo *subscriptions.Repository, controllerID usp.
 		controllerID: controllerID,
 		log:          log,
 		pending:      make(map[string]pendingSubscribe),
-		inFlight:     make(map[string]bool),
+		inFlight:     make(map[string]mtp.Conn),
 	}
 }
 
-// reconcileInFlight reports whether deviceID already has an outstanding
-// read (see inFlight's own doc comment) -- handler.checkSubscriptionID
-// uses this to decide whether its own "triggering subscription
-// reconciliation" log line would be accurate before calling reconcile,
-// so a stream of unknown-subscription-id Notifies for one device logs
-// once, not once per Notify.
-func (s *subscriptionReconciler) reconcileInFlight(deviceID string) bool {
+// reconcileInFlight reports whether conn already has an outstanding read
+// in flight for deviceID (see inFlight's own doc comment) --
+// handler.checkSubscriptionID uses this to decide whether its own
+// "triggering subscription reconciliation" log line would be accurate
+// before calling reconcile, so a stream of unknown-subscription-id
+// Notifies on one connection for one device logs once, not once per
+// Notify. Deliberately conn-scoped, not "does deviceID have any entry at
+// all" (fix round 2): a stale entry left by a different, now-dead conn
+// is exactly what reconcile itself is about to supersede, not something
+// this peek should report as "already handled".
+func (s *subscriptionReconciler) reconcileInFlight(deviceID string, conn mtp.Conn) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.inFlight[deviceID]
+	return s.inFlight[deviceID] == conn
 }
 
-// reconcile is the on-connect entry point: it loads deviceID's desired
-// subscriptions from usp_subscriptions and sends a single Get to read
-// conn's actual Device.LocalAgent.Subscription. instances. The diff
+// reconcile loads deviceID's desired subscriptions from usp_subscriptions
+// and sends a single Get to read conn's actual
+// Device.LocalAgent.Subscription. instances -- the on-connect trigger
+// (resolveAndMarkReconciled) and the unknown-subscription-id trigger
+// (handler.checkSubscriptionID) both call this the same way. The diff
 // itself (subscriptions.Reconcile) and the resulting Add/Delete sends
 // happen later, in handleResponse, once the GetResp actually arrives --
-// this call only kicks that off. One reconcile pass per connect is the
-// whole contract: sends here are not retried or chained beyond this
-// single round trip.
+// this call only kicks that off.
 //
-// If deviceID already has a read outstanding (inFlight), this is a
-// silent no-op (nil error): the caller asked for a reconcile pass and
-// one is already running, which satisfies the request without a second
-// Get/pending entry -- see inFlight's own doc comment (fix round 1,
-// Important 1).
+// deviceID's inFlight entry (see its own doc comment) debounces repeated
+// calls: if conn already has a read outstanding for deviceID, this is a
+// silent no-op (nil error) -- one pass already running satisfies the
+// request without a second Get/pending entry (fix round 1, Important 1).
+// If a DIFFERENT conn's entry is outstanding instead, that conn is
+// treated as stale/superseded (fix round 2): its own outstanding
+// pendingKindRead entry for deviceID is dropped from s.pending (it
+// belongs to a connection on its way out, and would otherwise leak until
+// some future forget/response that may never come -- see this file's own
+// reconnect-before-disconnect takeover discussion on forget), and a
+// fresh pass proceeds for conn. Without this, a connection that dies
+// mid-reconcile without ever calling forget (the same takeover race
+// mtp.Registry.Add/dispatcher/probe already guard against elsewhere)
+// would permanently block subscription reconciliation for any later
+// connection for that same device.
 func (s *subscriptionReconciler) reconcile(ctx context.Context, deviceID string, conn mtp.Conn) error {
 	s.mu.Lock()
-	if s.inFlight[deviceID] {
-		s.mu.Unlock()
-		return nil
+	if existing, ok := s.inFlight[deviceID]; ok {
+		if existing == conn {
+			s.mu.Unlock()
+			return nil
+		}
+		// Takeover: existing is a different (presumably dead) conn.
+		// Drop its stale outstanding read so it can't act on a late
+		// GetResp naming a conn/desired-set pair this fresh pass is about
+		// to replace, then fall through to start conn's own pass below.
+		for id, entry := range s.pending {
+			if entry.kind == pendingKindRead && entry.deviceID == deviceID && entry.conn == existing {
+				delete(s.pending, id)
+			}
+		}
 	}
-	s.inFlight[deviceID] = true
+	s.inFlight[deviceID] = conn
 	s.mu.Unlock()
 
 	subs, err := s.repo.ByDevice(ctx, deviceID)
 	if err != nil {
-		s.mu.Lock()
-		delete(s.inFlight, deviceID)
-		s.mu.Unlock()
+		s.clearInFlightIfOwnedBy(deviceID, conn)
 		return fmt.Errorf("subscriptionReconciler: list desired subscriptions for device %s: %w", deviceID, err)
 	}
 
@@ -223,16 +260,12 @@ func (s *subscriptionReconciler) reconcile(ctx context.Context, deviceID string,
 	msgID := usp.NewMsgID()
 	payload, err := usp.EncodeGet(msgID, []string{subscriptionRootPath}, 1)
 	if err != nil {
-		s.mu.Lock()
-		delete(s.inFlight, deviceID)
-		s.mu.Unlock()
+		s.clearInFlightIfOwnedBy(deviceID, conn)
 		return fmt.Errorf("subscriptionReconciler: encode Get: %w", err)
 	}
 	record, err := usp.EncodeRecord(s.controllerID, conn.Endpoint(), payload)
 	if err != nil {
-		s.mu.Lock()
-		delete(s.inFlight, deviceID)
-		s.mu.Unlock()
+		s.clearInFlightIfOwnedBy(deviceID, conn)
 		return fmt.Errorf("subscriptionReconciler: encode record: %w", err)
 	}
 
@@ -245,11 +278,28 @@ func (s *subscriptionReconciler) reconcile(ctx context.Context, deviceID string,
 	if err := conn.Send(sendCtx, record); err != nil {
 		s.mu.Lock()
 		delete(s.pending, msgID)
-		delete(s.inFlight, deviceID)
 		s.mu.Unlock()
+		s.clearInFlightIfOwnedBy(deviceID, conn)
 		return fmt.Errorf("subscriptionReconciler: send Get: %w", err)
 	}
 	return nil
+}
+
+// clearInFlightIfOwnedBy clears deviceID's inFlight entry only if it is
+// still owned by conn -- used on every one of reconcile's own failure
+// paths. The owner check (rather than an unconditional delete) matters
+// because a concurrent reconcile call for the same deviceID from a
+// DIFFERENT conn could have already superseded this entry (fix round
+// 2's takeover handling) between this call's own inFlight assignment and
+// the point where it hit an error; an unconditional delete here would
+// incorrectly clear that newer conn's own in-flight marker out from
+// under it.
+func (s *subscriptionReconciler) clearInFlightIfOwnedBy(deviceID string, conn mtp.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inFlight[deviceID] == conn {
+		delete(s.inFlight, deviceID)
+	}
 }
 
 // handleResponse reports whether msg answers one of this reconciler's
@@ -269,12 +319,17 @@ func (s *subscriptionReconciler) handleResponse(from usp.EndpointID, msg *usppro
 	entry, ok := s.pending[msgID]
 	if ok {
 		delete(s.pending, msgID)
-		if entry.kind == pendingKindRead {
+		if entry.kind == pendingKindRead && s.inFlight[entry.deviceID] == entry.conn {
 			// This device's read has now been answered (whatever the
 			// outcome), so it no longer counts as in flight -- clears the
 			// debounce reconcile's own inFlight guard set, letting a
 			// future reconcile call for this device actually send a new
-			// Get rather than silently no-op forever.
+			// Get rather than silently no-op forever. The owner check is
+			// defensive: by construction (reconcile's own takeover
+			// handling always removes a superseded conn's pending entry
+			// first) entry's conn is always inFlight's current owner by
+			// the time this runs, but checking rather than assuming keeps
+			// that invariant local to this line instead of implicit.
 			delete(s.inFlight, entry.deviceID)
 		}
 	}
@@ -494,7 +549,7 @@ func (s *subscriptionReconciler) forget(c mtp.Conn) {
 	for id, entry := range s.pending {
 		if entry.conn == c {
 			delete(s.pending, id)
-			if entry.kind == pendingKindRead {
+			if entry.kind == pendingKindRead && s.inFlight[entry.deviceID] == c {
 				delete(s.inFlight, entry.deviceID)
 			}
 		}

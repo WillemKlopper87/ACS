@@ -14,6 +14,7 @@ import (
 	"acs/internal/store"
 	"acs/internal/subscriptions"
 	"acs/internal/usp"
+	"acs/internal/usp/mtp"
 	"acs/internal/usp/uspproto"
 )
 
@@ -455,5 +456,65 @@ func TestSubscriptionHandleResponseUnknownMsgID(t *testing.T) {
 	}
 	if matched := s.handleResponse(agent, &uspproto.Msg{Header: &uspproto.Header{MsgId: "x"}}); matched {
 		t.Error("handleResponse matched an unrecognised msg_id")
+	}
+}
+
+// TestReconcileSupersedesStaleInFlightOnDifferentConn covers fix round
+// 2: inFlight is conn-aware (device_id -> the conn whose read pass is in
+// flight), not a bare set. Scenario: connA's read goes out (inFlight[D]
+// = connA) but connA dies silently -- no forget(connA) call, simulating
+// the reconnect-before-disconnect takeover race forget's own doc comment
+// already documents as real here (the same race mtp.Registry.Add/
+// dispatcher/probe all guard against). A new connB then calls reconcile
+// for the same device. Before this fix, inFlight[D] == true regardless
+// of which conn set it, so connB's own reconcile call would have
+// silently no-op'd and that session would get zero subscription
+// reconciliation until some later trigger happened to fire one. The fix
+// must instead treat connA's entry as stale and supersede it: drop
+// connA's own outstanding pending read for D and proceed with a fresh
+// pass on connB.
+func TestReconcileSupersedesStaleInFlightOnDifferentConn(t *testing.T) {
+	ctx, repo, deviceID := newSubscriptionReconcilerTestRepo(t)
+	s := newSubscriptionReconciler(repo, ctrl, slog.Default())
+
+	connA := &captureConn{id: agent}
+	if err := s.reconcile(ctx, deviceID, connA); err != nil {
+		t.Fatalf("reconcile(connA) = %v, want nil", err)
+	}
+	if len(connA.sent) != 1 {
+		t.Fatalf("connA.sent = %d records, want 1 (the read Get)", len(connA.sent))
+	}
+
+	s.mu.Lock()
+	inFlightConn := s.inFlight[deviceID]
+	pendingLen := len(s.pending)
+	s.mu.Unlock()
+	if inFlightConn != mtp.Conn(connA) {
+		t.Fatalf("inFlight[deviceID] = %v, want connA", inFlightConn)
+	}
+	if pendingLen != 1 {
+		t.Fatalf("pending has %d entries, want 1 (connA's own read)", pendingLen)
+	}
+
+	// connA never disconnects (no forget call) -- it's just gone from the
+	// reconciler's point of view, exactly as it would be if its read loop
+	// hadn't yet noticed the drop.
+	connB := &captureConn{id: usp.EndpointID("os::012345-AAAA-new")}
+	if err := s.reconcile(ctx, deviceID, connB); err != nil {
+		t.Fatalf("reconcile(connB) = %v, want nil", err)
+	}
+	if len(connB.sent) != 1 {
+		t.Fatalf("connB.sent = %d records, want 1: a takeover must still send a fresh read Get on the new conn, not silently no-op because a different (dead) conn's entry was already in flight", len(connB.sent))
+	}
+
+	s.mu.Lock()
+	inFlightConn = s.inFlight[deviceID]
+	pendingLen = len(s.pending)
+	s.mu.Unlock()
+	if inFlightConn != mtp.Conn(connB) {
+		t.Fatalf("inFlight[deviceID] = %v, want connB after the takeover", inFlightConn)
+	}
+	if pendingLen != 1 {
+		t.Fatalf("pending has %d entries, want exactly 1: connA's stale read entry must have been dropped by the takeover, leaving only connB's fresh one", pendingLen)
 	}
 }
