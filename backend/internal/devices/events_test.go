@@ -9,10 +9,7 @@ import (
 func TestRecordEventAndEvents(t *testing.T) {
 	ctx, r := newDevicesTestRepo(t)
 
-	d, err := r.UpsertFromOnBoard(ctx, "001349", "NR7101", "EVENTS-01")
-	if err != nil {
-		t.Fatalf("UpsertFromOnBoard: %v", err)
-	}
+	d := seedUSPDevice(t, ctx, r, "001349", "NR7101", "EVENTS-01")
 
 	if err := r.RecordEvent(ctx, d.ID, "msg-1", "Device.WiFi.SSID.2.", "ObjectCreation", map[string]string{"UniqueKeys": "SSID.2"}); err != nil {
 		t.Fatalf("RecordEvent msg-1: %v", err)
@@ -70,10 +67,7 @@ func TestRecordEventAndEvents(t *testing.T) {
 func TestRecordEventDedup(t *testing.T) {
 	ctx, r := newDevicesTestRepo(t)
 
-	d, err := r.UpsertFromOnBoard(ctx, "001349", "NR7101", "EVENTS-DEDUP-01")
-	if err != nil {
-		t.Fatalf("UpsertFromOnBoard: %v", err)
-	}
+	d := seedUSPDevice(t, ctx, r, "001349", "NR7101", "EVENTS-DEDUP-01")
 
 	if err := r.RecordEvent(ctx, d.ID, "msg-dup", "Device.WiFi.", "ObjectCreation", map[string]string{"UniqueKeys": "first"}); err != nil {
 		t.Fatalf("first RecordEvent: %v", err)

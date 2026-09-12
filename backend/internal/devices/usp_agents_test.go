@@ -7,10 +7,7 @@ import (
 
 func TestLinkUspAgentReconnect(t *testing.T) {
 	ctx, r := newDevicesTestRepo(t)
-	d, err := r.UpsertFromOnBoard(ctx, "001122", "Router", "ABC123")
-	if err != nil {
-		t.Fatalf("seed device: %v", err)
-	}
+	d := seedUSPDevice(t, ctx, r, "001122", "Router", "ABC123")
 
 	if err := r.LinkUspAgent(ctx, d.ID, "os::001122-ABC123", "WebSocket", nil); err != nil {
 		t.Fatalf("first link: %v", err)
@@ -45,19 +42,13 @@ func TestLinkUspAgentReconnect(t *testing.T) {
 
 func TestLinkUspAgentEndpointCollision(t *testing.T) {
 	ctx, r := newDevicesTestRepo(t)
-	dA, err := r.UpsertFromOnBoard(ctx, "001122", "Router", "ABC123")
-	if err != nil {
-		t.Fatalf("seed device A: %v", err)
-	}
-	dB, err := r.UpsertFromOnBoard(ctx, "001122", "Router", "XYZ789")
-	if err != nil {
-		t.Fatalf("seed device B: %v", err)
-	}
+	dA := seedUSPDevice(t, ctx, r, "001122", "Router", "ABC123")
+	dB := seedUSPDevice(t, ctx, r, "001122", "Router", "XYZ789")
 
 	if err := r.LinkUspAgent(ctx, dA.ID, "shared-endpoint", "WebSocket", nil); err != nil {
 		t.Fatalf("link A: %v", err)
 	}
-	err = r.LinkUspAgent(ctx, dB.ID, "shared-endpoint", "WebSocket", nil)
+	err := r.LinkUspAgent(ctx, dB.ID, "shared-endpoint", "WebSocket", nil)
 	if !errors.Is(err, ErrEndpointIDInUse) {
 		t.Errorf("link B with A's endpoint id returned %v, want ErrEndpointIDInUse", err)
 	}
@@ -71,10 +62,7 @@ func TestLinkUspAgentEndpointCollision(t *testing.T) {
 
 func TestMarkUspAgentDisconnected(t *testing.T) {
 	ctx, r := newDevicesTestRepo(t)
-	d, err := r.UpsertFromOnBoard(ctx, "001122", "Router", "ABC123")
-	if err != nil {
-		t.Fatalf("seed device: %v", err)
-	}
+	d := seedUSPDevice(t, ctx, r, "001122", "Router", "ABC123")
 	if err := r.LinkUspAgent(ctx, d.ID, "os::endpoint", "WebSocket", nil); err != nil {
 		t.Fatalf("link: %v", err)
 	}
@@ -108,10 +96,7 @@ func TestMarkUspAgentDisconnectedUnknownDevice(t *testing.T) {
 // endpoint id, not the old one, so `connected` must stay true.
 func TestMarkUspAgentDisconnectedStaleEndpointIsNoOp(t *testing.T) {
 	ctx, r := newDevicesTestRepo(t)
-	d, err := r.UpsertFromOnBoard(ctx, "001122", "Router", "ABC123")
-	if err != nil {
-		t.Fatalf("seed device: %v", err)
-	}
+	d := seedUSPDevice(t, ctx, r, "001122", "Router", "ABC123")
 	if err := r.LinkUspAgent(ctx, d.ID, "endpoint-old", "WebSocket", nil); err != nil {
 		t.Fatalf("link old endpoint: %v", err)
 	}
@@ -152,10 +137,7 @@ func TestMarkUspAgentDisconnectedStaleEndpointIsNoOp(t *testing.T) {
 
 func TestGetUspAgentByEndpointID(t *testing.T) {
 	ctx, r := newDevicesTestRepo(t)
-	d, err := r.UpsertFromOnBoard(ctx, "001122", "Router", "ABC123")
-	if err != nil {
-		t.Fatalf("seed device: %v", err)
-	}
+	d := seedUSPDevice(t, ctx, r, "001122", "Router", "ABC123")
 	if err := r.LinkUspAgent(ctx, d.ID, "os::endpoint", "MQTT", nil); err != nil {
 		t.Fatalf("link: %v", err)
 	}
@@ -182,10 +164,7 @@ func TestGetUspAgentByEndpointIDNotFound(t *testing.T) {
 // live mtp.Conn, and this is the first hop.
 func TestGetUspAgentByDeviceID(t *testing.T) {
 	ctx, r := newDevicesTestRepo(t)
-	d, err := r.UpsertFromOnBoard(ctx, "001122", "Router", "ABC123")
-	if err != nil {
-		t.Fatalf("seed device: %v", err)
-	}
+	d := seedUSPDevice(t, ctx, r, "001122", "Router", "ABC123")
 	if err := r.LinkUspAgent(ctx, d.ID, "os::endpoint", "MQTT", nil); err != nil {
 		t.Fatalf("link: %v", err)
 	}
@@ -201,11 +180,8 @@ func TestGetUspAgentByDeviceID(t *testing.T) {
 
 func TestGetUspAgentByDeviceIDNotFound(t *testing.T) {
 	ctx, r := newDevicesTestRepo(t)
-	d, err := r.UpsertFromOnBoard(ctx, "001122", "Router", "ABC123")
-	if err != nil {
-		t.Fatalf("seed device: %v", err)
-	}
-	_, err = r.GetUspAgentByDeviceID(ctx, d.ID)
+	d := seedUSPDevice(t, ctx, r, "001122", "Router", "ABC123")
+	_, err := r.GetUspAgentByDeviceID(ctx, d.ID)
 	if !errors.Is(err, ErrUspAgentNotFound) {
 		t.Errorf("got %v, want ErrUspAgentNotFound", err)
 	}

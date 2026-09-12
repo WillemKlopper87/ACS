@@ -87,10 +87,7 @@ func managementProtocols(t *testing.T, ctx context.Context, r *Repository, devic
 func TestRefreshLivenessSkipsConnectedUSPAgent(t *testing.T) {
 	ctx, r := newDevicesTestRepo(t)
 
-	d, err := r.UpsertFromOnBoard(ctx, "001349", "NR7101", "USP-CONNECTED-01")
-	if err != nil {
-		t.Fatalf("UpsertFromOnBoard: %v", err)
-	}
+	d := seedUSPDevice(t, ctx, r, "001349", "NR7101", "USP-CONNECTED-01")
 	if err := r.LinkUspAgent(ctx, d.ID, "endpoint-connected-01", "WebSocket", nil); err != nil {
 		t.Fatalf("LinkUspAgent: %v", err)
 	}
@@ -119,10 +116,7 @@ func TestRefreshLivenessSkipsConnectedUSPAgent(t *testing.T) {
 func TestRefreshLivenessMarksDisconnectedUSPAgentUnreachable(t *testing.T) {
 	ctx, r := newDevicesTestRepo(t)
 
-	d, err := r.UpsertFromOnBoard(ctx, "001349", "NR7101", "USP-DISCONNECTED-01")
-	if err != nil {
-		t.Fatalf("UpsertFromOnBoard: %v", err)
-	}
+	d := seedUSPDevice(t, ctx, r, "001349", "NR7101", "USP-DISCONNECTED-01")
 	if err := r.LinkUspAgent(ctx, d.ID, "endpoint-disconnected-01", "WebSocket", nil); err != nil {
 		t.Fatalf("LinkUspAgent: %v", err)
 	}
@@ -144,6 +138,24 @@ func TestRefreshLivenessMarksDisconnectedUSPAgentUnreachable(t *testing.T) {
 	if got.OnlineStatus != "UNREACHABLE" {
 		t.Errorf("online_status = %q, want UNREACHABLE (disconnected USP agent falls back to last_inform_at-based logic)", got.OnlineStatus)
 	}
+}
+
+// seedUSPDevice stands in for the old UpsertFromOnBoard's insert-or-update
+// behaviour for tests elsewhere in this package that just need a known USP
+// device to exist and don't otherwise care how it became known: it
+// pre-registers the identity (making it "known"), then reconciles it via
+// USP, exactly as ReconcileFromOnBoard now requires.
+func seedUSPDevice(t *testing.T, ctx context.Context, r *Repository, oui, productClass, serialNumber string) *Device {
+	t.Helper()
+	ouiSerial := cwmp.DeviceID{OUI: oui, ProductClass: productClass, SerialNumber: serialNumber}.NaturalKey()
+	if _, err := r.PreRegister(ctx, ouiSerial, "", oui, productClass, serialNumber, nil, nil); err != nil {
+		t.Fatalf("seed device (PreRegister): %v", err)
+	}
+	d, err := r.ReconcileFromOnBoard(ctx, oui, productClass, serialNumber)
+	if err != nil {
+		t.Fatalf("seed device (ReconcileFromOnBoard): %v", err)
+	}
+	return d
 }
 
 func containsAll(haystack []string, needles ...string) bool {
