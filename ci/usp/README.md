@@ -51,6 +51,12 @@ above it.
   Topic property). There is no stock MQTT 3.1.1 config upstream; this is
   `obuspa-mqtt-v5.txt`'s shape with `Device.MQTT.Client.1.ProtocolVersion`
   changed to `"3.1.1"`.
+- `assert-allowlist.sh` -- proves the USP agent allowlist's identity-level
+  gate (design docs/superpowers/specs/2026-09-12-usp-agent-allowlist-design.md
+  S2.2) against a real obuspa instance: before its identity is
+  pre-registered, `cmd/uspc` must refuse to reconcile it and must not
+  silently create a `devices` row for it anyway. Usage: `assert-allowlist.sh
+  <uspc_log_file> <postgres_dsn> <endpoint_id> <oui_serial>`.
 
 Each config file's own header comment records exactly which upstream file
 and commit it was derived from and which fields were overridden and why.
@@ -83,10 +89,20 @@ and commit it was derived from and which fields were overridden and why.
 
 ## Running locally
 
-Requires a running Docker daemon.
+Requires a running Docker daemon and, since Task 5 (USP agent allowlist),
+a running/migrated Postgres reachable at `ACS_USP_POSTGRES_DSN`:
+`cmd/uspc` now opens a database connection at startup for identity
+reconciliation, and the identity gate refuses any agent whose
+OUI+ProductClass+SerialNumber has no `devices` row -- obuspa's own
+identity is only known once extracted (its `SerialNumber` is
+generated/persisted at first boot, not predictable ahead of time), so a
+first connection attempt is expected to be refused until it is
+pre-registered and the container restarted. See the `usp-interop` job's
+"usp-interop: websocket" step in `.github/workflows/ci.yml` for the full
+extract-prove-register-restart sequence this snippet abbreviates.
 
 ```sh
-cd backend && go build -o /tmp/uspc ./cmd/uspc && cd ..
+cd backend && go build -o /tmp/uspc ./cmd/uspc && go build -o /tmp/migrate ./cmd/migrate && cd ..
 
 git init -q /tmp/obuspa-src
 ( cd /tmp/obuspa-src \
@@ -98,13 +114,33 @@ docker build -f /tmp/obuspa-src/ci/Dockerfile -t obuspa:ci /tmp/obuspa-src
 export ACS_USP_CONTROLLER_ID=ci-obuspa-interop ACS_USP_WS_ADDR=:9877 \
   ACS_USP_WS_PATH=/usp ACS_USP_MQTT_ADDR=:1883 \
   ACS_USP_MQTT_CONTROLLER_TOPIC=/usp/controller ACS_USP_ALLOW_PLAINTEXT=true \
-  ACS_USP_HTTP_ADDR=:8092
+  ACS_USP_HTTP_ADDR=:8092 \
+  ACS_USP_POSTGRES_DSN=postgres://acs:acs@localhost:5432/acs?sslmode=disable \
+  ACS_POSTGRES_DSN=postgres://acs:acs@localhost:5432/acs?sslmode=disable
+
+/tmp/migrate
 
 /tmp/uspc > /tmp/uspc-ws.log 2>&1 &
 docker run -d --name obuspa-ws --network host \
   -v "$PWD/ci/usp:/ci/usp:ro" \
   obuspa:ci -p -v4 -r /ci/usp/obuspa-websocket.txt -t /etc/obuspa/certs -f /tmp/usp-ws.db
 docker logs -f obuspa-ws > /tmp/obuspa-ws.log 2>&1 &
+
+# obuspa-ws's first connection is refused (identity gate, Task 5) --
+# extract its real identity, prove the refusal, then pre-register it.
+oui=$(docker exec obuspa-ws obuspa -c get "Device.DeviceInfo.ManufacturerOUI" | sed -n 's/.*=> //p' | tr -d '[:space:]')
+product_class=$(docker exec obuspa-ws obuspa -c get "Device.DeviceInfo.ProductClass" | sed -n 's/.*=> //p' | sed -e 's/^ *//' -e 's/ *$//')
+serial_number=$(docker exec obuspa-ws obuspa -c get "Device.DeviceInfo.SerialNumber" | sed -n 's/.*=> //p' | tr -d '[:space:]')
+oui_serial="$oui+$product_class+$serial_number"  # only safe when none of the three contain \ or + -- see ci.yml's esc_natural_key for the general case
+
+ci/usp/assert-allowlist.sh /tmp/uspc-ws.log "$ACS_USP_POSTGRES_DSN" os::012345-CIAGENT "$oui_serial"
+
+psql "$ACS_USP_POSTGRES_DSN" -c "
+  INSERT INTO devices (id, oui_serial, manufacturer, oui, product_class, serial_number, online_status, first_seen_at, last_updated_at, customer_id, tags)
+  VALUES (gen_random_uuid(), '$oui_serial', 'obuspa-ci', '$oui', '$product_class', '$serial_number', 'OFFLINE', now(), now(), NULL, '{}')
+  ON CONFLICT (oui_serial) DO NOTHING;
+"
+docker restart obuspa-ws
 
 ci/usp/assert-getresp.sh /tmp/uspc-ws.log os::012345-CIAGENT WebSocket /tmp/obuspa-ws.log
 
