@@ -254,11 +254,20 @@ func (s *subscriptionReconciler) handleReadResponse(entry pendingSubscribe, msg 
 		return
 	}
 
-	actual := actualSubscriptionItems(getResp)
+	actual, resolvedPaths := actualSubscriptionItems(getResp)
 	toAdd, toRemove := subscriptions.Reconcile(entry.desired, actual)
 
 	for _, item := range toRemove {
-		s.sendDelete(entry.conn, entry.deviceID, item.Key)
+		objPath, ok := resolvedPaths[item.Key]
+		if !ok {
+			// Defensive only: every toRemove item came from actual, and
+			// actualSubscriptionItems populates resolvedPaths with exactly
+			// actual's own Keys, so this should be unreachable.
+			s.log.Warn("uspc: subscription reconciler: no resolved path recorded for a toRemove item, skipping its Delete",
+				"device_id", entry.deviceID, "subscription_id", item.Key)
+			continue
+		}
+		s.sendDelete(entry.conn, entry.deviceID, item.Key, objPath)
 	}
 	for _, item := range toAdd {
 		s.sendAdd(entry.conn, entry.deviceID, item)
@@ -274,8 +283,18 @@ func (s *subscriptionReconciler) handleReadResponse(entry pendingSubscribe, msg 
 // from that instance's NotifType/ReferenceList, exactly like the desired
 // side. An instance with no ID parameter is skipped rather than producing
 // a Key="" item that could collide across unrelated devices/instances.
-func actualSubscriptionItems(getResp *uspproto.GetResp) []subscriptions.Item {
-	var actual []subscriptions.Item
+//
+// resolvedPaths maps each returned item's Key back to the actual resolved
+// object path the device reported it under (e.g.
+// "Device.LocalAgent.Subscription.1."), which is NOT derivable from Key
+// alone: Device.LocalAgent.Subscription.{i}. is addressed by the device's
+// own instance number, completely unrelated to the ID parameter's UUID
+// value. A Delete must target that real resolved path -- reconstructing
+// "Device.LocalAgent.Subscription."+Key+"." instead (fix round 1,
+// Important 2) builds a path no conforming agent actually has, since Key
+// is a parameter value, not an instance number, and the agent rejects it.
+func actualSubscriptionItems(getResp *uspproto.GetResp) (items []subscriptions.Item, resolvedPaths map[string]string) {
+	resolvedPaths = make(map[string]string)
 	for _, reqResult := range getResp.GetReqPathResults() {
 		for _, resolved := range reqResult.GetResolvedPathResults() {
 			params := resolved.GetResultParams()
@@ -283,23 +302,27 @@ func actualSubscriptionItems(getResp *uspproto.GetResp) []subscriptions.Item {
 			if id == "" {
 				continue
 			}
-			actual = append(actual, subscriptions.Item{
+			items = append(items, subscriptions.Item{
 				Key:         id,
 				Fingerprint: subscriptionFingerprint(params["NotifType"], splitReferenceList(params["ReferenceList"])),
 			})
+			resolvedPaths[id] = resolved.GetResolvedPath()
 		}
 	}
-	return actual
+	return items, resolvedPaths
 }
 
 // sendDelete encodes and sends a Delete removing one stale subscription
-// instance by its wire ID (a toRemove item's Key), registering its own
-// pending entry so the DeleteResp can be logged.
-func (s *subscriptionReconciler) sendDelete(conn mtp.Conn, deviceID, key string) {
+// instance at its real resolved object path (objPath, from
+// actualSubscriptionItems' own resolvedPaths -- see that function's doc
+// comment for why this can't be reconstructed from key alone), registering
+// its own pending entry so the DeleteResp can be logged. key is carried
+// through only for logging.
+func (s *subscriptionReconciler) sendDelete(conn mtp.Conn, deviceID, key, objPath string) {
 	msgID := usp.NewMsgID()
-	payload, err := usp.EncodeDelete(msgID, true, []string{subscriptionRootPath + key + "."})
+	payload, err := usp.EncodeDelete(msgID, true, []string{objPath})
 	if err != nil {
-		s.log.Warn("uspc: subscription reconciler: failed to encode Delete", "device_id", deviceID, "subscription_id", key, "error", err)
+		s.log.Warn("uspc: subscription reconciler: failed to encode Delete", "device_id", deviceID, "subscription_id", key, "obj_path", objPath, "error", err)
 		return
 	}
 	s.send(conn, deviceID, key, pendingKindDelete, msgID, payload)
@@ -378,6 +401,30 @@ func (s *subscriptionReconciler) logAddResult(entry pendingSubscribe, msg *usppr
 		if succ := status.GetOperSuccess(); succ != nil {
 			s.log.Info("uspc: subscription reconciler: Add succeeded",
 				"device_id", entry.deviceID, "subscription_id", entry.key, "instantiated_path", succ.GetInstantiatedPath())
+		}
+	}
+}
+
+// forget drops every pending request sent on c (fix round 1, Important
+// 1). Called from Handler.OnDisconnect (Task 6 wires the call site; this
+// method itself is unused, and compiles clean unused, until then) --
+// mirrors dispatcher.forget's/probe.forget's exact shape and rationale.
+// Without this, an agent that disconnects mid-reconcile leaks its
+// pendingSubscribe entries forever, and a late response arriving after
+// disconnect could act on a stale conn.
+//
+// Keyed on the disconnecting Conn itself, not its endpoint id, for the
+// same takeover-race reason dispatcher.forget/probe.forget document: a
+// reconnect can register a new Conn for the same endpoint id before the
+// old Conn's disconnect callback lands, and keying on endpoint id alone
+// would let a stale disconnect delete the new connection's just-sent
+// entries out from under it.
+func (s *subscriptionReconciler) forget(c mtp.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, entry := range s.pending {
+		if entry.conn == c {
+			delete(s.pending, id)
 		}
 	}
 }

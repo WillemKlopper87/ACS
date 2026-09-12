@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -126,8 +127,11 @@ func TestReconcileNothingToConverge(t *testing.T) {
 	if len(c.sent) != 1 {
 		t.Errorf("c.sent = %d records, want still 1: nothing to converge should send nothing beyond the read", len(c.sent))
 	}
-	if len(s.pending) != 0 {
-		t.Errorf("pending = %+v, want none", s.pending)
+	s.mu.Lock()
+	pendingLen := len(s.pending)
+	s.mu.Unlock()
+	if pendingLen != 0 {
+		t.Errorf("pending has %d entries, want none", pendingLen)
 	}
 }
 
@@ -208,9 +212,10 @@ func TestReconcileSendsAddForMissingDesired(t *testing.T) {
 
 	s.mu.Lock()
 	addEntry, ok := s.pending[msg.GetHeader().GetMsgId()]
+	pendingLen := len(s.pending)
 	s.mu.Unlock()
 	if !ok {
-		t.Fatalf("pending = %+v, want an entry for the Add's own msg_id (awaiting its AddResp)", s.pending)
+		t.Fatalf("pending has %d entries, want one for the Add's own msg_id (awaiting its AddResp)", pendingLen)
 	}
 	if addEntry.kind != pendingKindAdd || addEntry.key != sub.ID {
 		t.Errorf("pending entry = %+v, want kind=pendingKindAdd key=%q", addEntry, sub.ID)
@@ -257,16 +262,22 @@ func TestReconcileSendsDeleteForUndesiredActual(t *testing.T) {
 	if !del.GetAllowPartial() {
 		t.Error("Delete allow_partial = false, want true")
 	}
-	wantPath := subscriptionRootPath + actualID + "."
+	// The Delete must target the device's real resolved instance path
+	// (subscriptionGetResp numbered this actual instance ".1."), NOT a
+	// path reconstructed from the ID parameter's UUID value -- fix round
+	// 1, Important 2: Device.LocalAgent.Subscription.{i}. is addressed by
+	// instance number, unrelated to the ID parameter.
+	wantPath := "Device.LocalAgent.Subscription.1."
 	if paths := del.GetObjPaths(); len(paths) != 1 || paths[0] != wantPath {
-		t.Errorf("Delete obj_paths = %v, want [%s]", paths, wantPath)
+		t.Errorf("Delete obj_paths = %v, want [%s] (the real resolved instance path, not one rebuilt from the ID parameter)", paths, wantPath)
 	}
 
 	s.mu.Lock()
 	delEntry, ok := s.pending[msg.GetHeader().GetMsgId()]
+	pendingLen := len(s.pending)
 	s.mu.Unlock()
 	if !ok {
-		t.Fatalf("pending = %+v, want an entry for the Delete's own msg_id (awaiting its DeleteResp)", s.pending)
+		t.Fatalf("pending has %d entries, want one for the Delete's own msg_id (awaiting its DeleteResp)", pendingLen)
 	}
 	if delEntry.kind != pendingKindDelete || delEntry.key != actualID {
 		t.Errorf("pending entry = %+v, want kind=pendingKindDelete key=%q", delEntry, actualID)
@@ -326,9 +337,12 @@ func TestReconcileRecreatesOnFingerprintMismatch(t *testing.T) {
 	if del == nil {
 		t.Fatal("second sent message must be the Delete: delete must be ordered before add on a fingerprint mismatch")
 	}
-	wantPath := subscriptionRootPath + sub.ID + "."
+	// Real resolved instance path (subscriptionGetResp numbered this
+	// actual instance ".1."), not one reconstructed from sub.ID -- see
+	// TestReconcileSendsDeleteForUndesiredActual's same assertion.
+	wantPath := "Device.LocalAgent.Subscription.1."
 	if paths := del.GetObjPaths(); len(paths) != 1 || paths[0] != wantPath {
-		t.Errorf("Delete obj_paths = %v, want [%s]", paths, wantPath)
+		t.Errorf("Delete obj_paths = %v, want [%s] (the real resolved instance path, not one rebuilt from sub.ID)", paths, wantPath)
 	}
 
 	addRec, err := usp.DecodeRecord(c.sent[2], agent)
@@ -355,6 +369,72 @@ func TestReconcileRecreatesOnFingerprintMismatch(t *testing.T) {
 	}
 	if params["NotifType"] != sub.NotifType {
 		t.Errorf("Add NotifType = %q, want the desired (new) value %q, not the stale device value", params["NotifType"], sub.NotifType)
+	}
+}
+
+// TestSubscriptionFingerprintRoundTrip covers splitFingerprint/
+// subscriptionFingerprint as exact inverses (fix round 1, Minor 3),
+// independent of any DB-gated test: splitFingerprint(subscriptionFingerprint(notifType,
+// refs)) must always recover the original notifType/refs, since sendAdd
+// relies on exactly this round trip to recover a toAdd item's
+// NotifType/ReferenceList (a subscriptions.Item carries nothing else).
+func TestSubscriptionFingerprintRoundTrip(t *testing.T) {
+	cases := []struct {
+		name      string
+		notifType string
+		refs      []string
+	}{
+		{"empty refs", "ValueChange", nil},
+		{"single ref", "ValueChange", []string{"Device.WiFi.SSID.1.SSID"}},
+		{"multi ref", "ObjectCreation", []string{"Device.WiFi.AccessPoint.", "Device.WiFi.SSID.1.SSID"}},
+		{"empty notifType", "", []string{"Device.WiFi.SSID.1.SSID"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fp := subscriptionFingerprint(tc.notifType, tc.refs)
+			gotNotifType, gotRefs := splitFingerprint(fp)
+			if gotNotifType != tc.notifType {
+				t.Errorf("splitFingerprint(%q) notifType = %q, want %q", fp, gotNotifType, tc.notifType)
+			}
+			if !reflect.DeepEqual(gotRefs, tc.refs) {
+				t.Errorf("splitFingerprint(%q) refs = %v, want %v", fp, gotRefs, tc.refs)
+			}
+		})
+	}
+}
+
+// TestSubscriptionForgetRemovesPendingForConn covers fix round 1,
+// Important 1: forget must drop every pending entry sent on c and leave
+// every other conn's entries alone, mirroring
+// TestDispatcherForgetRemovesPendingForConn. Needs no live DB (forget
+// never touches s.repo), so this reuses the nil-DB Repository trick
+// TestSubscriptionHandleResponseUnknownMsgID already established.
+func TestSubscriptionForgetRemovesPendingForConn(t *testing.T) {
+	s := newSubscriptionReconciler(subscriptions.NewRepository(nil), ctrl, slog.Default())
+	c1 := &captureConn{id: agent}
+	c2 := &captureConn{id: usp.EndpointID("os::other-agent")}
+
+	s.mu.Lock()
+	s.pending["msg-read"] = pendingSubscribe{conn: c1, deviceID: "device-1", kind: pendingKindRead}
+	s.pending["msg-add"] = pendingSubscribe{conn: c1, deviceID: "device-1", kind: pendingKindAdd, key: "sub-1"}
+	s.pending["msg-other"] = pendingSubscribe{conn: c2, deviceID: "device-2", kind: pendingKindDelete, key: "sub-2"}
+	s.mu.Unlock()
+
+	s.forget(c1)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.pending["msg-read"]; ok {
+		t.Error("forget(c1) left msg-read's entry (sent on c1) in pending")
+	}
+	if _, ok := s.pending["msg-add"]; ok {
+		t.Error("forget(c1) left msg-add's entry (sent on c1) in pending")
+	}
+	if _, ok := s.pending["msg-other"]; !ok {
+		t.Error("forget(c1) removed msg-other's entry (sent on c2), want it left alone")
+	}
+	if len(s.pending) != 1 {
+		t.Errorf("pending = %+v, want exactly the one entry sent on c2", s.pending)
 	}
 }
 
