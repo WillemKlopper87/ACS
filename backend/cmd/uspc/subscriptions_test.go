@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -210,6 +211,12 @@ func TestReconcileSendsAddForMissingDesired(t *testing.T) {
 	if params["ReferenceList"] != wantRefs {
 		t.Errorf("Add ReferenceList = %q, want %q", params["ReferenceList"], wantRefs)
 	}
+	// Final-review finding 3: Persistent must actually be sent on Add, not
+	// just stored on usp_subscriptions and never used.
+	wantPersistent := strconv.FormatBool(sub.Persistent)
+	if params["Persistent"] != wantPersistent {
+		t.Errorf("Add Persistent = %q, want %q", params["Persistent"], wantPersistent)
+	}
 
 	s.mu.Lock()
 	addEntry, ok := s.pending[msg.GetHeader().GetMsgId()]
@@ -373,34 +380,208 @@ func TestReconcileRecreatesOnFingerprintMismatch(t *testing.T) {
 	}
 }
 
+// TestReconcileAbandonsOnPerPathError is the regression test for
+// final-review finding 2: a GetResp whose requested-path result carries a
+// non-zero ErrCode (e.g. a device refusing the Get on
+// Device.LocalAgent.Subscription. per-path, USP error 7006 permission
+// denied) must not be read as "the device has zero actual subscriptions"
+// -- usp.ErrorFromMsg only catches a top-level Body_Error, not this
+// per-path case, so before this fix a refused Get would make every
+// desired subscription look missing and get re-Added on every connect,
+// silently, with nothing ever deleted. handleReadResponse must instead
+// abandon the whole reconcile pass on any per-path error: no Add, no
+// Delete sent, and inFlight/pending state must still be correctly
+// cleared (no debounce-state leak).
+func TestReconcileAbandonsOnPerPathError(t *testing.T) {
+	ctx, repo, deviceID := newSubscriptionReconcilerTestRepo(t)
+	sub := subscriptions.Subscription{
+		ID:            uuid.New().String(),
+		DeviceID:      deviceID,
+		NotifType:     "ValueChange",
+		ReferenceList: []string{"Device.WiFi.SSID.1.SSID"},
+		Persistent:    true,
+		CreatedBy:     "test",
+		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+	}
+	if err := repo.Create(ctx, sub); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	s := newSubscriptionReconciler(repo, ctrl, slog.Default())
+	c := &captureConn{id: agent}
+	if err := s.reconcile(ctx, deviceID, c); err != nil {
+		t.Fatalf("reconcile() = %v, want nil", err)
+	}
+	msgID := subscriptionReadMsgID(t, c.sent[0])
+
+	resp := &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: msgID, MsgType: uspproto.Header_GET_RESP},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Response{Response: &uspproto.Response{
+			RespType: &uspproto.Response_GetResp{GetResp: &uspproto.GetResp{
+				ReqPathResults: []*uspproto.GetResp_RequestedPathResult{{
+					RequestedPath: subscriptionRootPath,
+					ErrCode:       7006,
+					ErrMsg:        "Permission denied",
+					// Deliberately zero ResolvedPathResults -- exactly the
+					// "structurally well-formed GetResp with err_code set
+					// and zero resolved_path_results" shape the finding
+					// describes, which a naive reader confuses with "the
+					// device genuinely has no subscriptions".
+				}},
+			}},
+		}}},
+	}
+
+	if matched := s.handleResponse(agent, resp); !matched {
+		t.Fatal("handleResponse() = false, want true for the reconciler's own read msg_id")
+	}
+	if len(c.sent) != 1 {
+		t.Fatalf("c.sent = %d records, want still 1 (the read only): a per-path error must abandon the reconcile pass and send no Add/Delete", len(c.sent))
+	}
+
+	s.mu.Lock()
+	pendingLen := len(s.pending)
+	inFlightConn, inFlightOK := s.inFlight[deviceID]
+	s.mu.Unlock()
+	if pendingLen != 0 {
+		t.Errorf("pending has %d entries, want none", pendingLen)
+	}
+	if inFlightOK {
+		t.Errorf("inFlight[deviceID] = %v, want cleared after the (abandoned) read was answered -- must not leak debounce state", inFlightConn)
+	}
+}
+
+// TestReconcileSkipsNonUUIDActualInstances is the regression test for
+// final-review finding 4: actualSubscriptionItems must only ingest a
+// Device.LocalAgent.Subscription. instance whose ID parameter is a UUID
+// (this controller's own creation convention, written verbatim by
+// sendAdd) -- an instance with a non-UUID ID is assumed to belong to
+// another controller (TR-369 permits several on one agent) or to be a
+// factory default, and must never be deleted even when it's absent from
+// desired state.
+func TestReconcileSkipsNonUUIDActualInstances(t *testing.T) {
+	ctx, repo, deviceID := newSubscriptionReconcilerTestRepo(t)
+	s := newSubscriptionReconciler(repo, ctrl, slog.Default())
+	c := &captureConn{id: agent}
+	if err := s.reconcile(ctx, deviceID, c); err != nil {
+		t.Fatalf("reconcile() = %v, want nil", err)
+	}
+	msgID := subscriptionReadMsgID(t, c.sent[0])
+
+	ourID := uuid.New().String()
+	resp := subscriptionGetResp(msgID,
+		map[string]string{
+			"ID":            ourID,
+			"NotifType":     "ObjectCreation",
+			"ReferenceList": "Device.WiFi.AccessPoint.",
+		},
+		map[string]string{
+			"ID":            "factory-default-1",
+			"NotifType":     "Boot",
+			"ReferenceList": "",
+		},
+	)
+	if matched := s.handleResponse(agent, resp); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+
+	// Neither instance is desired, but only the UUID-shaped one (ourID) is
+	// ours to reconcile: exactly one Delete, targeting ourID's own
+	// resolved path (instance ".1.", the first map passed to
+	// subscriptionGetResp) -- never one for "factory-default-1".
+	if len(c.sent) != 2 {
+		t.Fatalf("c.sent = %d records, want 2 (read + one Delete, for the UUID instance only -- the non-UUID instance must never be touched)", len(c.sent))
+	}
+	rec, err := usp.DecodeRecord(c.sent[1], agent)
+	if err != nil {
+		t.Fatalf("decode Delete record: %v", err)
+	}
+	msg, err := usp.DecodeMsg(rec.Payload)
+	if err != nil {
+		t.Fatalf("decode Delete msg: %v", err)
+	}
+	del := msg.GetBody().GetRequest().GetDelete()
+	if del == nil {
+		t.Fatal("second sent message is not a Delete")
+	}
+	wantPath := "Device.LocalAgent.Subscription.1."
+	if paths := del.GetObjPaths(); len(paths) != 1 || paths[0] != wantPath {
+		t.Errorf("Delete obj_paths = %v, want [%s] (the UUID instance's own resolved path)", paths, wantPath)
+	}
+
+	s.mu.Lock()
+	var deletedKeys []string
+	for _, e := range s.pending {
+		if e.kind == pendingKindDelete {
+			deletedKeys = append(deletedKeys, e.key)
+		}
+	}
+	s.mu.Unlock()
+	if len(deletedKeys) != 1 || deletedKeys[0] != ourID {
+		t.Errorf("pending Delete keys = %v, want exactly [%s] (never \"factory-default-1\")", deletedKeys, ourID)
+	}
+}
+
 // TestSubscriptionFingerprintRoundTrip covers splitFingerprint/
 // subscriptionFingerprint as exact inverses (fix round 1, Minor 3),
 // independent of any DB-gated test: splitFingerprint(subscriptionFingerprint(notifType,
-// refs)) must always recover the original notifType/refs, since sendAdd
-// relies on exactly this round trip to recover a toAdd item's
-// NotifType/ReferenceList (a subscriptions.Item carries nothing else).
+// persistent, refs)) must always recover the original
+// notifType/persistent/refs, since sendAdd relies on exactly this round
+// trip to recover a toAdd item's NotifType/Persistent/ReferenceList (a
+// subscriptions.Item carries nothing else). Extended by final-review
+// finding 3 to also cover Persistent, which is now part of the encoding.
 func TestSubscriptionFingerprintRoundTrip(t *testing.T) {
 	cases := []struct {
-		name      string
-		notifType string
-		refs      []string
+		name       string
+		notifType  string
+		persistent bool
+		refs       []string
 	}{
-		{"empty refs", "ValueChange", nil},
-		{"single ref", "ValueChange", []string{"Device.WiFi.SSID.1.SSID"}},
-		{"multi ref", "ObjectCreation", []string{"Device.WiFi.AccessPoint.", "Device.WiFi.SSID.1.SSID"}},
-		{"empty notifType", "", []string{"Device.WiFi.SSID.1.SSID"}},
+		{"empty refs", "ValueChange", false, nil},
+		{"single ref", "ValueChange", false, []string{"Device.WiFi.SSID.1.SSID"}},
+		{"multi ref", "ObjectCreation", true, []string{"Device.WiFi.AccessPoint.", "Device.WiFi.SSID.1.SSID"}},
+		{"empty notifType", "", true, []string{"Device.WiFi.SSID.1.SSID"}},
+		{"persistent true", "ValueChange", true, []string{"Device.WiFi.SSID.1.SSID"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fp := subscriptionFingerprint(tc.notifType, tc.refs)
-			gotNotifType, gotRefs := splitFingerprint(fp)
+			fp := subscriptionFingerprint(tc.notifType, tc.persistent, tc.refs)
+			gotNotifType, gotPersistent, gotRefs := splitFingerprint(fp)
 			if gotNotifType != tc.notifType {
 				t.Errorf("splitFingerprint(%q) notifType = %q, want %q", fp, gotNotifType, tc.notifType)
+			}
+			if gotPersistent != tc.persistent {
+				t.Errorf("splitFingerprint(%q) persistent = %v, want %v", fp, gotPersistent, tc.persistent)
 			}
 			if !reflect.DeepEqual(gotRefs, tc.refs) {
 				t.Errorf("splitFingerprint(%q) refs = %v, want %v", fp, gotRefs, tc.refs)
 			}
 		})
+	}
+}
+
+// TestSubscriptionFingerprintDetectsPersistentOnlyDrift is the
+// regression test for final-review finding 3: two subscriptions
+// identical in every way except Persistent must fingerprint differently,
+// so subscriptions.Reconcile actually detects the drift (as toAdd/
+// toRemove, i.e. delete-then-recreate) instead of treating them as
+// already converged.
+func TestSubscriptionFingerprintDetectsPersistentOnlyDrift(t *testing.T) {
+	refs := []string{"Device.WiFi.SSID.1.SSID"}
+	fpFalse := subscriptionFingerprint("ValueChange", false, refs)
+	fpTrue := subscriptionFingerprint("ValueChange", true, refs)
+	if fpFalse == fpTrue {
+		t.Fatalf("subscriptionFingerprint produced identical fingerprints (%q) for Persistent=false and Persistent=true, want different fingerprints so drift is detected", fpFalse)
+	}
+
+	desired := []subscriptions.Item{{Key: "sub-1", Fingerprint: fpTrue}}
+	actual := []subscriptions.Item{{Key: "sub-1", Fingerprint: fpFalse}}
+	toAdd, toRemove := subscriptions.Reconcile(desired, actual)
+	if len(toAdd) != 1 || toAdd[0].Fingerprint != fpTrue {
+		t.Errorf("toAdd = %+v, want the desired (Persistent=true) item", toAdd)
+	}
+	if len(toRemove) != 1 || toRemove[0].Fingerprint != fpFalse {
+		t.Errorf("toRemove = %+v, want the stale actual (Persistent=false) item", toRemove)
 	}
 }
 

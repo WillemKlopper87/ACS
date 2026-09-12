@@ -413,25 +413,39 @@ func (h *handler) handleObjectCreation(c mtp.Conn, oc *usp.ObjectCreation, msgID
 	}
 	h.checkSubscriptionID(c, deviceID, oc.SubscriptionID)
 
-	if h.paramsRepo != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
-		err := h.paramsRepo.InvalidateSubtree(ctx, deviceID, oc.ObjPath)
-		cancel()
-		if err != nil {
-			h.log.Warn("uspc: failed to invalidate parameter cache subtree after ObjectCreation", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath, "error", err)
-		}
+	// An empty ObjPath is meaningless for both the cache invalidation and
+	// the event record below -- it names no subtree to invalidate and no
+	// object the event happened to. Reachable without a hostile agent:
+	// DecodeObjectCreation treats a nil inner payload as the zero value
+	// (this file's doc comment on that decode path), and protobuf allows
+	// an unset obj_path on a present payload. Critically, InvalidateSubtree
+	// itself now rejects an empty objPath rather than matching every
+	// cached key (final-review finding 1) -- skip the call outright here
+	// so that rejection surfaces as a quiet, expected skip, not a logged
+	// error on every such Notify.
+	if oc.ObjPath == "" {
+		h.log.Warn("uspc: ObjectCreation Notify carries an empty obj_path, skipping cache invalidation and event recording", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "subscription_id", oc.SubscriptionID)
 	} else {
-		h.log.Warn("uspc: paramsRepo not wired, dropping ObjectCreation's cache invalidation", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath)
-	}
-	if h.devicesRepo != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
-		err := h.devicesRepo.RecordEvent(ctx, deviceID, msgID, oc.ObjPath, "ObjectCreation", oc.UniqueKeys)
-		cancel()
-		if err != nil {
-			h.log.Warn("uspc: failed to record ObjectCreation event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath, "error", err)
+		if h.paramsRepo != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+			err := h.paramsRepo.InvalidateSubtree(ctx, deviceID, oc.ObjPath)
+			cancel()
+			if err != nil {
+				h.log.Warn("uspc: failed to invalidate parameter cache subtree after ObjectCreation", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath, "error", err)
+			}
+		} else {
+			h.log.Warn("uspc: paramsRepo not wired, dropping ObjectCreation's cache invalidation", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath)
 		}
-	} else {
-		h.log.Warn("uspc: devicesRepo not wired, dropping ObjectCreation event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath)
+		if h.devicesRepo != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+			err := h.devicesRepo.RecordEvent(ctx, deviceID, msgID, oc.ObjPath, "ObjectCreation", oc.UniqueKeys)
+			cancel()
+			if err != nil {
+				h.log.Warn("uspc: failed to record ObjectCreation event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath, "error", err)
+			}
+		} else {
+			h.log.Warn("uspc: devicesRepo not wired, dropping ObjectCreation event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath)
+		}
 	}
 
 	if !oc.SendResp {
@@ -452,25 +466,33 @@ func (h *handler) handleObjectDeletion(c mtp.Conn, od *usp.ObjectDeletion, msgID
 	}
 	h.checkSubscriptionID(c, deviceID, od.SubscriptionID)
 
-	if h.paramsRepo != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
-		err := h.paramsRepo.InvalidateSubtree(ctx, deviceID, od.ObjPath)
-		cancel()
-		if err != nil {
-			h.log.Warn("uspc: failed to invalidate parameter cache subtree after ObjectDeletion", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath, "error", err)
-		}
+	// See handleObjectCreation's own comment on this same check: an empty
+	// ObjPath is meaningless for both the cache invalidation and the
+	// event record, and InvalidateSubtree now rejects it rather than
+	// matching every cached key (final-review finding 1).
+	if od.ObjPath == "" {
+		h.log.Warn("uspc: ObjectDeletion Notify carries an empty obj_path, skipping cache invalidation and event recording", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "subscription_id", od.SubscriptionID)
 	} else {
-		h.log.Warn("uspc: paramsRepo not wired, dropping ObjectDeletion's cache invalidation", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath)
-	}
-	if h.devicesRepo != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
-		err := h.devicesRepo.RecordEvent(ctx, deviceID, msgID, od.ObjPath, "ObjectDeletion", nil)
-		cancel()
-		if err != nil {
-			h.log.Warn("uspc: failed to record ObjectDeletion event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath, "error", err)
+		if h.paramsRepo != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+			err := h.paramsRepo.InvalidateSubtree(ctx, deviceID, od.ObjPath)
+			cancel()
+			if err != nil {
+				h.log.Warn("uspc: failed to invalidate parameter cache subtree after ObjectDeletion", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath, "error", err)
+			}
+		} else {
+			h.log.Warn("uspc: paramsRepo not wired, dropping ObjectDeletion's cache invalidation", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath)
 		}
-	} else {
-		h.log.Warn("uspc: devicesRepo not wired, dropping ObjectDeletion event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath)
+		if h.devicesRepo != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+			err := h.devicesRepo.RecordEvent(ctx, deviceID, msgID, od.ObjPath, "ObjectDeletion", nil)
+			cancel()
+			if err != nil {
+				h.log.Warn("uspc: failed to record ObjectDeletion event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath, "error", err)
+			}
+		} else {
+			h.log.Warn("uspc: devicesRepo not wired, dropping ObjectDeletion event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath)
+		}
 	}
 
 	if !od.SendResp {

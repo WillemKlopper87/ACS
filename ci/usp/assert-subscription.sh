@@ -149,6 +149,37 @@ fi
 echo "OK: obuspa's own -c CLI (independent of cmd/uspc) confirms the instance exists on the real agent"
 echo "$cli_out" | grep -E '\.(ID|NotifType|ReferenceList) => '
 
+# Everything above only ever exercised actualSubscriptionItems' decode of a
+# GetResp with ZERO existing instances (the device started empty). Force a
+# second genuine reconnect now that one real instance exists, so this
+# second reconcile pass decodes a real NON-EMPTY GetResp against a real
+# agent -- proving the instance is recognized as already-converged (not
+# deleted-then-recreated, not duplicated), not just asserted by hand-built
+# Go test fixtures (final-review finding 5).
+echo "forcing a second reconnect (docker restart $container) to exercise the decode path against a real non-empty GetResp"
+docker restart "$container" >/dev/null
+
+echo "waiting for the second reconcile pass to settle, then asserting exactly ONE Device.LocalAgent.Subscription. instance survives (not zero: not deleted-then-recreated; not two: not duplicated)"
+settled=0
+for _ in $(seq 1 60); do
+  cli_out2=$(docker exec "$container" obuspa -c get "Device.LocalAgent.Subscription." 2>&1 || true)
+  total=$(echo "$cli_out2" | grep -c '\.ID => ' || true)
+  if [ "$total" -eq 1 ] && echo "$cli_out2" | grep -q ".ID => $sub_id"; then
+    settled=1
+    break
+  fi
+  sleep 1
+done
+if [ "$settled" -ne 1 ]; then
+  fail "after a second reconnect, obuspa's -c CLI does not show exactly one Device.LocalAgent.Subscription. instance for id=$sub_id -- last output:
+$cli_out2"
+fi
+echo "OK: exactly one instance survives the second reconcile pass"
+if grep 'msg="uspc: subscription reconciler: Add failed"' "$uspc_log" 2>/dev/null | grep -q "subscription_id=$sub_id"; then
+  fail "cmd/uspc logged an Add failure for subscription_id=$sub_id after the second reconnect"
+fi
+echo "OK: no Add failure logged for subscription_id=$sub_id after the second reconnect"
+
 echo "forcing a ValueChange via obuspa's own -c set CLI (a CI-only trick, not a new production trigger -- see this script's header comment): $watched_param -> $new_value"
 set_out=$(docker exec "$container" obuspa -c set "$watched_param" "$new_value" 2>&1 || true)
 echo "$set_out"

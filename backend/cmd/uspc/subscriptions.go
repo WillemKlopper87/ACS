@@ -20,8 +20,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/google/uuid"
 
 	"acs/internal/subscriptions"
 	"acs/internal/usp"
@@ -41,8 +44,11 @@ const subscriptionRootPath = "Device.LocalAgent.Subscription."
 // referenceListSeparator is the wire encoding of
 // Device.LocalAgent.Subscription.{i}.ReferenceList: a comma-joined list
 // of paths, matching internal/subscriptions.Item's own Fingerprint
-// convention (task-3 brief: "NotifType + "|" + strings.Join(ReferenceList,
-// ",")"). joinReferenceList/splitReferenceList are this file's only place
+// convention (task-3 brief's original "NotifType + "|" +
+// strings.Join(ReferenceList, ",")", extended by final-review finding 3
+// to also encode Persistent -- see subscriptionFingerprint's own doc
+// comment for the current exact shape). joinReferenceList/
+// splitReferenceList are this file's only place the ReferenceList half of
 // that convention is encoded/decoded, and are exact inverses of each
 // other (task-5 brief's binding requirement), so a desired row's
 // Fingerprint and an actual instance's Fingerprint are built the same way
@@ -69,25 +75,39 @@ func splitReferenceList(s string) []string {
 
 // subscriptionFingerprint builds the Fingerprint subscriptions.Reconcile
 // compares. Both the desired side (a usp_subscriptions row's own
-// NotifType/ReferenceList) and the actual side (an agent's GetResp
-// parameters, decoded via splitReferenceList) call this the same way, so
-// a converged subscription always fingerprints identically no matter
-// which side built it.
-func subscriptionFingerprint(notifType string, refs []string) string {
-	return notifType + "|" + joinReferenceList(refs)
+// NotifType/Persistent/ReferenceList) and the actual side (an agent's
+// GetResp parameters, decoded via splitReferenceList) call this the same
+// way, so a converged subscription always fingerprints identically no
+// matter which side built it.
+//
+// Persistent is included (final-review finding 3): it is a real column on
+// usp_subscriptions and a real wire parameter this controller both sends
+// on Add and can read back from a device's GetResp, so a subscription
+// that differs only in Persistent must fingerprint differently -- a
+// desired/actual pair agreeing on NotifType/ReferenceList but disagreeing
+// on Persistent is real drift, and Reconcile can only see that if
+// Persistent is part of what it compares.
+func subscriptionFingerprint(notifType string, persistent bool, refs []string) string {
+	return notifType + "|" + strconv.FormatBool(persistent) + "|" + joinReferenceList(refs)
 }
 
 // splitFingerprint parses a subscriptionFingerprint back into the
-// NotifType/ReferenceList it was built from -- the exact inverse of
-// subscriptionFingerprint. sendAdd uses this rather than a second lookup
-// back into usp_subscriptions: a subscriptions.Item, by design
-// (subscriptions.Reconcile's own contract, task-3 brief), carries nothing
-// but Key and Fingerprint, so the Fingerprint itself is the only place
-// the Add's NotifType/ReferenceList params can come from once toAdd has
-// been computed.
-func splitFingerprint(fp string) (notifType string, refs []string) {
-	notifType, refList, _ := strings.Cut(fp, "|")
-	return notifType, splitReferenceList(refList)
+// NotifType/Persistent/ReferenceList it was built from -- the exact
+// inverse of subscriptionFingerprint. sendAdd uses this rather than a
+// second lookup back into usp_subscriptions: a subscriptions.Item, by
+// design (subscriptions.Reconcile's own contract, task-3 brief), carries
+// nothing but Key and Fingerprint, so the Fingerprint itself is the only
+// place the Add's NotifType/Persistent/ReferenceList params can come from
+// once toAdd has been computed. An unparseable persistent segment (should
+// be unreachable -- every fingerprint in this file is built by
+// subscriptionFingerprint itself, which always writes strconv.FormatBool's
+// output) decodes as false rather than panicking, matching
+// strconv.ParseBool's own zero-value-on-error convention.
+func splitFingerprint(fp string) (notifType string, persistent bool, refs []string) {
+	notifType, rest, _ := strings.Cut(fp, "|")
+	persistentStr, refList, _ := strings.Cut(rest, "|")
+	persistent, _ = strconv.ParseBool(persistentStr)
+	return notifType, persistent, splitReferenceList(refList)
 }
 
 // pendingKind distinguishes what a subscriptionReconciler's outstanding
@@ -253,7 +273,7 @@ func (s *subscriptionReconciler) reconcile(ctx context.Context, deviceID string,
 	for _, sub := range subs {
 		desired = append(desired, subscriptions.Item{
 			Key:         sub.ID,
-			Fingerprint: subscriptionFingerprint(sub.NotifType, sub.ReferenceList),
+			Fingerprint: subscriptionFingerprint(sub.NotifType, sub.Persistent, sub.ReferenceList),
 		})
 	}
 
@@ -361,12 +381,37 @@ func (s *subscriptionReconciler) handleResponse(from usp.EndpointID, msg *usppro
 // before Add for every toAdd -- delete-before-add, since ReferenceList is
 // immutable on the wire and a changed subscription is always recreated
 // under the same ID, never Set (see this file's own package doc comment).
+//
+// Before any of that, every one of the GetResp's own per-requested-path
+// results is checked for a non-zero ErrCode (final-review finding 2):
+// usp.ErrorFromMsg (handleResponse's own earlier check) only catches a
+// top-level Body_Error, not a device refusing this specific path (e.g.
+// USP error 7006 permission denied, or 7016/7026) while still returning
+// a structurally well-formed GetResp with err_code set and zero
+// resolved_path_results. Reading that as "the device has zero actual
+// subscriptions" would make every desired subscription look missing and
+// re-Add it on every single connect, silently, forever -- so any per-path
+// error abandons this reconcile pass entirely: no Add, no Delete, just a
+// Warn. Mirrors dispatcher.go's classifyGetResp, which already does this
+// same per-path check for the job-dispatch path. inFlight/pending state
+// for this device is already cleared by handleResponse before this is
+// called (on lookup, unconditionally on outcome), so abandoning here
+// leaks nothing -- a future trigger (the next connect, or the next
+// unknown-subscription_id Notify) gets a fresh pass.
 func (s *subscriptionReconciler) handleReadResponse(entry pendingSubscribe, msg *uspproto.Msg) {
 	getResp := msg.GetBody().GetResponse().GetGetResp()
 	if getResp == nil {
 		s.log.Warn("uspc: subscription reconciler: response to subscription read was not a GetResp",
 			"device_id", entry.deviceID, "msg_type", msg.GetHeader().GetMsgType())
 		return
+	}
+
+	for _, reqResult := range getResp.GetReqPathResults() {
+		if reqResult.GetErrCode() != 0 {
+			s.log.Warn("uspc: subscription reconciler: device refused the subscription read, abandoning this reconcile pass",
+				"device_id", entry.deviceID, "requested_path", reqResult.GetRequestedPath(), "err_code", reqResult.GetErrCode(), "err_msg", reqResult.GetErrMsg())
+			return
+		}
 	}
 
 	actual, resolvedPaths := actualSubscriptionItems(getResp)
@@ -391,13 +436,28 @@ func (s *subscriptionReconciler) handleReadResponse(entry pendingSubscribe, msg 
 
 // actualSubscriptionItems walks a GetResp answering
 // subscriptionRootPath's Get into one subscriptions.Item per resolved
-// instance -- Key is the instance's own ID parameter (the UUID a desired
-// row's Create wrote onto the device, not the resolved path's own
-// instance number, which is device-assigned and has no relationship to
-// usp_subscriptions.id), Fingerprint built by subscriptionFingerprint
-// from that instance's NotifType/ReferenceList, exactly like the desired
-// side. An instance with no ID parameter is skipped rather than producing
-// a Key="" item that could collide across unrelated devices/instances.
+// instance this controller owns -- Key is the instance's own ID
+// parameter (the UUID a desired row's Create wrote onto the device, not
+// the resolved path's own instance number, which is device-assigned and
+// has no relationship to usp_subscriptions.id), Fingerprint built by
+// subscriptionFingerprint from that instance's own
+// NotifType/Persistent/ReferenceList, exactly like the desired side.
+//
+// Ownership rule (final-review finding 4): this controller only
+// reconciles Device.LocalAgent.Subscription. instances whose ID
+// parameter is a UUID matching its own creation convention -- sendAdd
+// always writes a usp_subscriptions.id (migration 0055's own UUID
+// convention) verbatim into ID. TR-369 explicitly permits multiple
+// controllers on one agent, and subscriptions.Reconcile treats any actual
+// key absent from desired as toRemove; ingesting an instance this
+// controller didn't create (another controller's own subscription, or a
+// factory-preprovisioned one) would make the reconciler issue a Delete
+// for it. So an instance whose ID does not parse as a UUID (uuid.Parse) --
+// including an empty ID -- is assumed to belong to another controller or
+// the factory default, and is skipped entirely: never added to actual,
+// never deleted, never logged as an orphan (a missing/malformed ID on one
+// of OUR OWN subscriptions is a separate, already-ledgered concern this
+// is not).
 //
 // resolvedPaths maps each returned item's Key back to the actual resolved
 // object path the device reported it under (e.g.
@@ -414,12 +474,16 @@ func actualSubscriptionItems(getResp *uspproto.GetResp) (items []subscriptions.I
 		for _, resolved := range reqResult.GetResolvedPathResults() {
 			params := resolved.GetResultParams()
 			id := params["ID"]
-			if id == "" {
+			if _, err := uuid.Parse(id); err != nil {
+				// Not ours -- empty, or shaped by some other controller or
+				// the factory default. Skip silently; see this function's
+				// own doc comment for why.
 				continue
 			}
+			persistent, _ := strconv.ParseBool(params["Persistent"])
 			items = append(items, subscriptions.Item{
 				Key:         id,
-				Fingerprint: subscriptionFingerprint(params["NotifType"], splitReferenceList(params["ReferenceList"])),
+				Fingerprint: subscriptionFingerprint(params["NotifType"], persistent, splitReferenceList(params["ReferenceList"])),
 			})
 			resolvedPaths[id] = resolved.GetResolvedPath()
 		}
@@ -445,18 +509,25 @@ func (s *subscriptionReconciler) sendDelete(conn mtp.Conn, deviceID, key, objPat
 
 // sendAdd encodes and sends an Add creating one missing/stale
 // subscription instance under its desired wire ID (a toAdd item's Key),
-// recovering the NotifType/ReferenceList that item's Fingerprint was
-// built from (splitFingerprint) since a subscriptions.Item itself carries
-// nothing else. Registers its own pending entry so the AddResp can be
-// logged.
+// recovering the NotifType/Persistent/ReferenceList that item's
+// Fingerprint was built from (splitFingerprint) since a
+// subscriptions.Item itself carries nothing else. Registers its own
+// pending entry so the AddResp can be logged.
+//
+// Persistent is sent as a wire param (final-review finding 3), formatted
+// the same way Enable's boolean is: the literal strconv.FormatBool
+// string. Before this fix, Persistent was stored on usp_subscriptions and
+// used nowhere else, so a subscription's persistence was never actually
+// applied to the device.
 func (s *subscriptionReconciler) sendAdd(conn mtp.Conn, deviceID string, item subscriptions.Item) {
-	notifType, refs := splitFingerprint(item.Fingerprint)
+	notifType, persistent, refs := splitFingerprint(item.Fingerprint)
 	msgID := usp.NewMsgID()
 	payload, err := usp.EncodeAdd(msgID, true, subscriptionRootPath, map[string]string{
 		"ID":            item.Key,
 		"Enable":        "true",
 		"NotifType":     notifType,
 		"ReferenceList": joinReferenceList(refs),
+		"Persistent":    strconv.FormatBool(persistent),
 	})
 	if err != nil {
 		s.log.Warn("uspc: subscription reconciler: failed to encode Add", "device_id", deviceID, "subscription_id", item.Key, "error", err)

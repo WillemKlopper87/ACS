@@ -121,7 +121,24 @@ func (r *Repository) Upsert(ctx context.Context, deviceID string, values map[str
 // `||` can only add or overwrite keys, never remove them. So the whole
 // map is read into Go under the same FOR UPDATE row lock Upsert takes,
 // filtered there, and written back as a full replace.
+//
+// An empty objPath is rejected outright rather than silently no-op'd or
+// (worse) matched against every cached key: strings.HasPrefix(x, "")
+// is true for every x, so an empty objPath would wipe a device's entire
+// parameter cache (final-review finding 1). A non-empty objPath that
+// doesn't already end in "." is normalized by appending one, so a caller
+// passing e.g. "Device.WiFi.SSID.1" can't over-invalidate a sibling
+// instance like "Device.WiFi.SSID.10.*" via a bare textual prefix match
+// -- the trailing-dot contract every other caller in this codebase
+// otherwise only follows by convention.
 func (r *Repository) InvalidateSubtree(ctx context.Context, deviceID, objPath string) error {
+	if objPath == "" {
+		return fmt.Errorf("invalidate parameter cache subtree: empty objPath would invalidate the whole cache")
+	}
+	if !strings.HasSuffix(objPath, ".") {
+		objPath += "."
+	}
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin parameter cache invalidate tx: %w", err)
