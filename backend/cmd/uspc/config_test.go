@@ -79,6 +79,50 @@ func TestPlaintextRequiresOptIn(t *testing.T) {
 	}
 }
 
+// validUspcConfigEnv returns a fresh map with every required
+// loadConfig value set to something valid, so each AllowedCIDRs test
+// below fails (or not) on the CIDR rule alone, not incidentally on
+// something else also being unset -- same rationale as
+// TestControllerIDFailsClosed's comment.
+func validUspcConfigEnv() map[string]string {
+	return map[string]string{
+		"ACS_USP_CONTROLLER_ID":   "ci-controller",
+		"ACS_USP_ALLOW_PLAINTEXT": "true",
+		"ACS_USP_POSTGRES_DSN":    "postgres://localhost/acs_test",
+	}
+}
+
+func TestLoadConfigParsesAllowedCIDRs(t *testing.T) {
+	env := validUspcConfigEnv()
+	env["ACS_USP_ALLOWED_CIDRS"] = "10.0.0.0/8,192.168.1.0/24"
+	cfg, err := loadConfig(mapGetenv(env), slog.Default())
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if len(cfg.AllowedCIDRs) != 2 {
+		t.Fatalf("AllowedCIDRs = %v, want 2 entries", cfg.AllowedCIDRs)
+	}
+}
+
+func TestLoadConfigAllowedCIDRsEmptyIsPermissive(t *testing.T) {
+	env := validUspcConfigEnv() // no ACS_USP_ALLOWED_CIDRS set
+	cfg, err := loadConfig(mapGetenv(env), slog.Default())
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if len(cfg.AllowedCIDRs) != 0 {
+		t.Errorf("AllowedCIDRs = %v, want empty when unset", cfg.AllowedCIDRs)
+	}
+}
+
+func TestLoadConfigRejectsInvalidCIDR(t *testing.T) {
+	env := validUspcConfigEnv()
+	env["ACS_USP_ALLOWED_CIDRS"] = "not-a-cidr"
+	if _, err := loadConfig(mapGetenv(env), slog.Default()); err == nil {
+		t.Error("loadConfig with an invalid CIDR succeeded, want an error")
+	}
+}
+
 func TestPostgresDSNRequired(t *testing.T) {
 	_, err := loadConfig(mapGetenv(map[string]string{
 		"ACS_USP_CONTROLLER_ID":   "ci-controller",

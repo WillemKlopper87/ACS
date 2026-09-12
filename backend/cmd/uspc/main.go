@@ -247,6 +247,7 @@ func newTransports(cfg serviceConfig, tlsConfig *tls.Config, logger *slog.Logger
 		Path:           cfg.WSPath,
 		TLS:            tlsConfig,
 		AllowPlaintext: cfg.AllowPlaintext,
+		AllowedCIDRs:   cfg.AllowedCIDRs,
 	}, logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("construct WebSocket transport: %w", err)
@@ -258,6 +259,7 @@ func newTransports(cfg serviceConfig, tlsConfig *tls.Config, logger *slog.Logger
 		ControllerEndpointID: cfg.ControllerID,
 		TLS:                  tlsConfig,
 		AllowPlaintext:       cfg.AllowPlaintext,
+		AllowedCIDRs:         cfg.AllowedCIDRs,
 	}, logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("construct MQTT transport: %w", err)

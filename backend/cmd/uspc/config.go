@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"regexp"
 	"strings"
 
+	"acs/internal/netguard"
 	"acs/internal/usp"
 )
 
@@ -62,6 +64,12 @@ type serviceConfig struct {
 	// Required, fail-closed -- there is no sensible default for a DSN,
 	// mirroring cmd/bssadapter's ACS_POSTGRES_DSN handling (its main.go).
 	PostgresDSN string
+
+	// AllowedCIDRs is the network-level half of the USP agent allowlist
+	// (design docs/superpowers/specs/2026-09-12-usp-agent-allowlist-design.md
+	// S2.1) -- empty is permissive, matching netguard's own
+	// default-permissive-until-configured convention.
+	AllowedCIDRs []*net.IPNet
 }
 
 // loadConfig reads and validates cmd/uspc's configuration via getenv,
@@ -93,6 +101,11 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 		problems = append(problems, "ACS_USP_POSTGRES_DSN is required")
 	}
 
+	allowedCIDRs, err := netguard.ParseCIDRList(getenv("ACS_USP_ALLOWED_CIDRS"))
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("ACS_USP_ALLOWED_CIDRS: %v", err))
+	}
+
 	if len(problems) > 0 {
 		return serviceConfig{}, fmt.Errorf("uspc: invalid configuration:\n  - %s", strings.Join(problems, "\n  - "))
 	}
@@ -117,6 +130,8 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 		HTTPAddr: envOrDefault(getenv, log, "ACS_USP_HTTP_ADDR", ":8092"),
 
 		PostgresDSN: postgresDSN,
+
+		AllowedCIDRs: allowedCIDRs,
 	}, nil
 }
 
