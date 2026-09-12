@@ -310,10 +310,11 @@ jobs:
       - name: build uspc
         working-directory: backend
         run: go build -o /tmp/uspc ./cmd/uspc
-      - name: executable bit on assert-getresp.sh / assert-job-dispatch.sh (committed as 100755)
+      - name: executable bit on assert-getresp.sh / assert-job-dispatch.sh / assert-subscription.sh (committed as 100755)
         run: |
           test -x ci/usp/assert-getresp.sh
           test -x ci/usp/assert-job-dispatch.sh
+          test -x ci/usp/assert-subscription.sh
       - name: clone obuspa at the pinned commit
         run: |
           git init -q obuspa-src
@@ -379,6 +380,17 @@ jobs:
           # proof this whole plan exists to produce (spec §9).
           if [ "$rc" -eq 0 ]; then
             ci/usp/assert-job-dispatch.sh "$ACS_USP_POSTGRES_DSN" "$AGENT_ENDPOINT_ID" /tmp/uspc-ws.log || rc=$?
+          fi
+          # B-3c (last unproven piece of the USP subscription/Notify work):
+          # insert a desired usp_subscriptions row for this same device, force
+          # a genuine reconnect (docker restart, same container/uspc process
+          # pair -- cheaper than a fresh one, and this is also the "across an
+          # agent restart" coverage design spec S9 asks for), and prove it
+          # converges onto the real agent plus that a resulting ValueChange
+          # Notify gets routed and cached. See assert-subscription.sh's own
+          # header comment for exactly what's proven vs. assumed.
+          if [ "$rc" -eq 0 ]; then
+            ci/usp/assert-subscription.sh "$ACS_USP_POSTGRES_DSN" "$AGENT_ENDPOINT_ID" /tmp/uspc-ws.log obuspa-ws || rc=$?
           fi
           kill "$logs_pid" 2>/dev/null || true
           docker rm -f obuspa-ws >/dev/null 2>&1 || true
