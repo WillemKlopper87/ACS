@@ -414,7 +414,7 @@ func (s *subscriptionReconciler) handleReadResponse(entry pendingSubscribe, msg 
 		}
 	}
 
-	actual, resolvedPaths := actualSubscriptionItems(getResp)
+	actual, resolvedPaths := actualSubscriptionItems(getResp, s.log, entry.deviceID)
 	toAdd, toRemove := subscriptions.Reconcile(entry.desired, actual)
 
 	for _, item := range toRemove {
@@ -468,7 +468,7 @@ func (s *subscriptionReconciler) handleReadResponse(entry pendingSubscribe, msg 
 // "Device.LocalAgent.Subscription."+Key+"." instead (fix round 1,
 // Important 2) builds a path no conforming agent actually has, since Key
 // is a parameter value, not an instance number, and the agent rejects it.
-func actualSubscriptionItems(getResp *uspproto.GetResp) (items []subscriptions.Item, resolvedPaths map[string]string) {
+func actualSubscriptionItems(getResp *uspproto.GetResp, log *slog.Logger, deviceID string) (items []subscriptions.Item, resolvedPaths map[string]string) {
 	resolvedPaths = make(map[string]string)
 	for _, reqResult := range getResp.GetReqPathResults() {
 		for _, resolved := range reqResult.GetResolvedPathResults() {
@@ -476,8 +476,17 @@ func actualSubscriptionItems(getResp *uspproto.GetResp) (items []subscriptions.I
 			id := params["ID"]
 			if _, err := uuid.Parse(id); err != nil {
 				// Not ours -- empty, or shaped by some other controller or
-				// the factory default. Skip silently; see this function's
-				// own doc comment for why.
+				// the factory default. Skip without touching it (see this
+				// function's own doc comment for why), but still log at
+				// Debug (fix round 2 piggyback): correct behavior is silent
+				// as far as reconcile's own Add/Delete decisions go, but
+				// without this a non-UUID ID on one of OUR OWN subscriptions
+				// -- which should be unreachable, since sendAdd always
+				// writes a usp_subscriptions.id verbatim -- would silently
+				// re-Add it forever on every connect with no log line ever
+				// explaining why.
+				log.Debug("uspc: subscription reconciler: skipping non-UUID subscription instance, not owned by this controller",
+					"device_id", deviceID, "id", id, "resolved_path", resolved.GetResolvedPath())
 				continue
 			}
 			persistent, _ := strconv.ParseBool(params["Persistent"])

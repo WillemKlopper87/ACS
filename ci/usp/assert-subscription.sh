@@ -63,6 +63,20 @@ fail() {
   exit 1
 }
 
+# add_succeeded_count prints how many times cmd/uspc's own log
+# (logAddResult's success path, subscriptions.go) has logged "Add
+# succeeded" for $sub_id so far. Used around the second restart (below) to
+# prove the second reconcile pass recognized the surviving instance as
+# already-converged and issued no Add at all, not just that whatever Add
+# it may have issued happened to succeed -- same "|| true" idiom the rest
+# of this script uses to keep a no-match grep from tripping set -e.
+add_succeeded_count() {
+  local n
+  n=$(grep 'msg="uspc: subscription reconciler: Add succeeded"' "$uspc_log" 2>/dev/null \
+    | grep -c "subscription_id=$sub_id" || true)
+  echo "${n:-0}"
+}
+
 echo "looking up device_id for endpoint $agent via usp_agents (B-3a identity reconciliation)"
 # Same 5-retry pattern as assert-job-dispatch.sh, for the same reason: this
 # script's caller only guarantees assert-getresp.sh's probe evidence has
@@ -95,9 +109,23 @@ echo "inserting usp_subscriptions row for device $device_id: ValueChange on $wat
 # Same gen_random_uuid()-then-RETURNING-then-head-n1 pattern as
 # assert-job-dispatch.sh's job insert (that script's own comment: some psql
 # builds print a second "INSERT 0 1" command-tag line even in -t mode).
+#
+# persistent = true, deliberately (final-review finding 5, round 2): TR-369/
+# TR-181 require a Persistent=false subscription to be dropped by the agent
+# across a restart/reboot, so a false row here would make the second
+# docker restart below drop the instance -- the second reconcile pass would
+# then see a genuinely-empty GetResp and do an ordinary fresh Add, which
+# produces the exact same observable end state ("exactly one instance, no
+# Add failed line") as the thing this script is actually supposed to prove
+# (an instance that survived and was recognized as already-converged).
+# persistent = true makes the instance survive the restart, so the second
+# pass genuinely decodes a non-empty GetResp, and also exercises the
+# Persistent wire round-trip (sendAdd sends it, actualSubscriptionItems
+# reads it back, subscriptionFingerprint requires it to match) -- a value
+# that would coincidentally still "work" if that round-trip were broken.
 sub_id=$(psql "$dsn" -tAc "
   INSERT INTO usp_subscriptions (id, device_id, notif_type, reference_list, persistent, created_by)
-  VALUES (gen_random_uuid(), '$device_id', 'ValueChange', ARRAY['$watched_param']::text[], false, 'ci-usp-interop')
+  VALUES (gen_random_uuid(), '$device_id', 'ValueChange', ARRAY['$watched_param']::text[], true, 'ci-usp-interop')
   RETURNING id;
 ")
 sub_id=$(echo "$sub_id" | head -n1 | tr -d '[:space:]')
@@ -156,6 +184,15 @@ echo "$cli_out" | grep -E '\.(ID|NotifType|ReferenceList) => '
 # agent -- proving the instance is recognized as already-converged (not
 # deleted-then-recreated, not duplicated), not just asserted by hand-built
 # Go test fixtures (final-review finding 5).
+#
+# "Exactly one instance, no Add failed line" alone can't distinguish that
+# from an ordinary empty-GetResp-then-fresh-Add pass landing on the same
+# observable end state, so also snapshot cmd/uspc's own Add-succeeded
+# count for $sub_id now, before the restart, to compare against the same
+# count once the second pass has settled (below).
+add_count_before=$(add_succeeded_count)
+echo "OK: baseline Add-succeeded count for subscription_id=$sub_id = $add_count_before"
+
 echo "forcing a second reconnect (docker restart $container) to exercise the decode path against a real non-empty GetResp"
 docker restart "$container" >/dev/null
 
@@ -175,6 +212,14 @@ if [ "$settled" -ne 1 ]; then
 $cli_out2"
 fi
 echo "OK: exactly one instance survives the second reconcile pass"
+
+echo "asserting the Add-succeeded count for subscription_id=$sub_id is unchanged since before the second restart -- proof the second reconcile pass diffed the surviving instance as already-converged and issued no Add at all, not just that some Add it issued happened to succeed"
+add_count_after=$(add_succeeded_count)
+if [ "$add_count_after" != "$add_count_before" ]; then
+  fail "cmd/uspc logged a new 'Add succeeded' for subscription_id=$sub_id after the second reconnect (before=$add_count_before after=$add_count_after) -- the instance was recreated, not recognized as already-converged; check the Persistent wire round-trip (sendAdd/actualSubscriptionItems/subscriptionFingerprint in subscriptions.go)"
+fi
+echo "OK: Add-succeeded count for subscription_id=$sub_id unchanged ($add_count_before) across the second restart"
+
 if grep 'msg="uspc: subscription reconciler: Add failed"' "$uspc_log" 2>/dev/null | grep -q "subscription_id=$sub_id"; then
   fail "cmd/uspc logged an Add failure for subscription_id=$sub_id after the second reconnect"
 fi
