@@ -661,3 +661,1263 @@ func TestEncodeNotifyRespRoundTrip(t *testing.T) {
 		t.Errorf("subscription_id = %q, want sub-response-123", notifyResp.GetSubscriptionId())
 	}
 }
+
+func TestDecodeValueChange(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-valuechange-1",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-vc-1",
+							SendResp:       true,
+							Notification: &uspproto.Notify_ValueChange_{
+								ValueChange: &uspproto.Notify_ValueChange{
+									ParamPath:  "Device.SomeParam",
+									ParamValue: "new-value",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	vc, err := DecodeValueChange(msg)
+	if err != nil {
+		t.Fatalf("DecodeValueChange: %v", err)
+	}
+
+	if vc.SubscriptionID != "sub-vc-1" {
+		t.Errorf("SubscriptionID = %q, want sub-vc-1", vc.SubscriptionID)
+	}
+	if !vc.SendResp {
+		t.Error("SendResp = false, want true")
+	}
+	if vc.ParamPath != "Device.SomeParam" {
+		t.Errorf("ParamPath = %q, want Device.SomeParam", vc.ParamPath)
+	}
+	if vc.ParamValue != "new-value" {
+		t.Errorf("ParamValue = %q, want new-value", vc.ParamValue)
+	}
+}
+
+func TestDecodeValueChangeWrongVariant(t *testing.T) {
+	t.Run("OnBoardRequest", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-vc-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-vc-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_OnBoardReq{
+									OnBoardReq: &uspproto.Notify_OnBoardRequest{
+										Oui: "0025C2",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeValueChange(msg)
+		if !errors.Is(err, ErrNotValueChange) {
+			t.Errorf("DecodeValueChange returned %v, want ErrNotValueChange", err)
+		}
+	})
+
+	t.Run("OperComplete", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-vc-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-vc-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_OperComplete{
+									OperComplete: &uspproto.Notify_OperationComplete{
+										ObjPath: "Device.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeValueChange(msg)
+		if !errors.Is(err, ErrNotValueChange) {
+			t.Errorf("DecodeValueChange returned %v, want ErrNotValueChange", err)
+		}
+	})
+
+	t.Run("ObjectCreation", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-vc-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-vc-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_ObjCreation{
+									ObjCreation: &uspproto.Notify_ObjectCreation{
+										ObjPath: "Device.WiFi.SSID.1.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeValueChange(msg)
+		if !errors.Is(err, ErrNotValueChange) {
+			t.Errorf("DecodeValueChange returned %v, want ErrNotValueChange", err)
+		}
+	})
+
+	t.Run("ObjectDeletion", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-vc-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-vc-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_ObjDeletion{
+									ObjDeletion: &uspproto.Notify_ObjectDeletion{
+										ObjPath: "Device.WiFi.SSID.1.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeValueChange(msg)
+		if !errors.Is(err, ErrNotValueChange) {
+			t.Errorf("DecodeValueChange returned %v, want ErrNotValueChange", err)
+		}
+	})
+
+	t.Run("Event", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-vc-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-vc-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_Event_{
+									Event: &uspproto.Notify_Event{
+										ObjPath: "Device.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeValueChange(msg)
+		if !errors.Is(err, ErrNotValueChange) {
+			t.Errorf("DecodeValueChange returned %v, want ErrNotValueChange", err)
+		}
+	})
+}
+
+func TestDecodeValueChangeWrongMsgType(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-vc-getresp",
+			MsgType: uspproto.Header_GET_RESP,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Response{
+				Response: &uspproto.Response{
+					RespType: &uspproto.Response_GetResp{
+						GetResp: &uspproto.GetResp{},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	_, err = DecodeValueChange(msg)
+	if !errors.Is(err, ErrNotValueChange) {
+		t.Errorf("DecodeValueChange returned %v, want ErrNotValueChange", err)
+	}
+}
+
+func TestDecodeValueChangeNilPayload(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-vc-nil",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-vc-nil",
+							SendResp:       false,
+							Notification: &uspproto.Notify_ValueChange_{
+								ValueChange: nil,
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	vc, err := DecodeValueChange(msg)
+	if err != nil {
+		t.Fatalf("DecodeValueChange: %v (must not panic or error on nil payload)", err)
+	}
+	if vc.ParamPath != "" {
+		t.Errorf("ParamPath = %q, want empty string for nil payload", vc.ParamPath)
+	}
+	if vc.ParamValue != "" {
+		t.Errorf("ParamValue = %q, want empty string for nil payload", vc.ParamValue)
+	}
+}
+
+func TestDecodeObjectCreation(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-objcreation-1",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-oc-1",
+							SendResp:       false,
+							Notification: &uspproto.Notify_ObjCreation{
+								ObjCreation: &uspproto.Notify_ObjectCreation{
+									ObjPath: "Device.WiFi.SSID.1.",
+									UniqueKeys: map[string]string{
+										"Alias": "MySSID",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	oc, err := DecodeObjectCreation(msg)
+	if err != nil {
+		t.Fatalf("DecodeObjectCreation: %v", err)
+	}
+
+	if oc.SubscriptionID != "sub-oc-1" {
+		t.Errorf("SubscriptionID = %q, want sub-oc-1", oc.SubscriptionID)
+	}
+	if oc.SendResp {
+		t.Error("SendResp = true, want false")
+	}
+	if oc.ObjPath != "Device.WiFi.SSID.1." {
+		t.Errorf("ObjPath = %q, want Device.WiFi.SSID.1.", oc.ObjPath)
+	}
+	if len(oc.UniqueKeys) != 1 || oc.UniqueKeys["Alias"] != "MySSID" {
+		t.Errorf("UniqueKeys = %+v, want {Alias: MySSID}", oc.UniqueKeys)
+	}
+}
+
+func TestDecodeObjectCreationWrongVariant(t *testing.T) {
+	t.Run("OnBoardRequest", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-oc-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-oc-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_OnBoardReq{
+									OnBoardReq: &uspproto.Notify_OnBoardRequest{
+										Oui: "0025C2",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeObjectCreation(msg)
+		if !errors.Is(err, ErrNotObjectCreation) {
+			t.Errorf("DecodeObjectCreation returned %v, want ErrNotObjectCreation", err)
+		}
+	})
+
+	t.Run("OperComplete", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-oc-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-oc-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_OperComplete{
+									OperComplete: &uspproto.Notify_OperationComplete{
+										ObjPath: "Device.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeObjectCreation(msg)
+		if !errors.Is(err, ErrNotObjectCreation) {
+			t.Errorf("DecodeObjectCreation returned %v, want ErrNotObjectCreation", err)
+		}
+	})
+
+	t.Run("ValueChange", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-oc-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-oc-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_ValueChange_{
+									ValueChange: &uspproto.Notify_ValueChange{
+										ParamPath: "Device.Param",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeObjectCreation(msg)
+		if !errors.Is(err, ErrNotObjectCreation) {
+			t.Errorf("DecodeObjectCreation returned %v, want ErrNotObjectCreation", err)
+		}
+	})
+
+	t.Run("ObjectDeletion", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-oc-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-oc-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_ObjDeletion{
+									ObjDeletion: &uspproto.Notify_ObjectDeletion{
+										ObjPath: "Device.WiFi.SSID.1.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeObjectCreation(msg)
+		if !errors.Is(err, ErrNotObjectCreation) {
+			t.Errorf("DecodeObjectCreation returned %v, want ErrNotObjectCreation", err)
+		}
+	})
+
+	t.Run("Event", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-oc-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-oc-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_Event_{
+									Event: &uspproto.Notify_Event{
+										ObjPath: "Device.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeObjectCreation(msg)
+		if !errors.Is(err, ErrNotObjectCreation) {
+			t.Errorf("DecodeObjectCreation returned %v, want ErrNotObjectCreation", err)
+		}
+	})
+}
+
+func TestDecodeObjectCreationWrongMsgType(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-oc-getresp",
+			MsgType: uspproto.Header_GET_RESP,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Response{
+				Response: &uspproto.Response{
+					RespType: &uspproto.Response_GetResp{
+						GetResp: &uspproto.GetResp{},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	_, err = DecodeObjectCreation(msg)
+	if !errors.Is(err, ErrNotObjectCreation) {
+		t.Errorf("DecodeObjectCreation returned %v, want ErrNotObjectCreation", err)
+	}
+}
+
+func TestDecodeObjectCreationNilPayload(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-oc-nil",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-oc-nil",
+							SendResp:       false,
+							Notification: &uspproto.Notify_ObjCreation{
+								ObjCreation: nil,
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	oc, err := DecodeObjectCreation(msg)
+	if err != nil {
+		t.Fatalf("DecodeObjectCreation: %v (must not panic or error on nil payload)", err)
+	}
+	if oc.ObjPath != "" {
+		t.Errorf("ObjPath = %q, want empty string for nil payload", oc.ObjPath)
+	}
+	if oc.UniqueKeys != nil {
+		t.Errorf("UniqueKeys = %+v, want nil for nil payload", oc.UniqueKeys)
+	}
+}
+
+func TestDecodeObjectDeletion(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-objdeletion-1",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-od-1",
+							SendResp:       true,
+							Notification: &uspproto.Notify_ObjDeletion{
+								ObjDeletion: &uspproto.Notify_ObjectDeletion{
+									ObjPath: "Device.WiFi.SSID.1.",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	od, err := DecodeObjectDeletion(msg)
+	if err != nil {
+		t.Fatalf("DecodeObjectDeletion: %v", err)
+	}
+
+	if od.SubscriptionID != "sub-od-1" {
+		t.Errorf("SubscriptionID = %q, want sub-od-1", od.SubscriptionID)
+	}
+	if !od.SendResp {
+		t.Error("SendResp = false, want true")
+	}
+	if od.ObjPath != "Device.WiFi.SSID.1." {
+		t.Errorf("ObjPath = %q, want Device.WiFi.SSID.1.", od.ObjPath)
+	}
+}
+
+func TestDecodeObjectDeletionWrongVariant(t *testing.T) {
+	t.Run("OnBoardRequest", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-od-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-od-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_OnBoardReq{
+									OnBoardReq: &uspproto.Notify_OnBoardRequest{
+										Oui: "0025C2",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeObjectDeletion(msg)
+		if !errors.Is(err, ErrNotObjectDeletion) {
+			t.Errorf("DecodeObjectDeletion returned %v, want ErrNotObjectDeletion", err)
+		}
+	})
+
+	t.Run("OperComplete", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-od-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-od-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_OperComplete{
+									OperComplete: &uspproto.Notify_OperationComplete{
+										ObjPath: "Device.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeObjectDeletion(msg)
+		if !errors.Is(err, ErrNotObjectDeletion) {
+			t.Errorf("DecodeObjectDeletion returned %v, want ErrNotObjectDeletion", err)
+		}
+	})
+
+	t.Run("ValueChange", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-od-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-od-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_ValueChange_{
+									ValueChange: &uspproto.Notify_ValueChange{
+										ParamPath: "Device.Param",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeObjectDeletion(msg)
+		if !errors.Is(err, ErrNotObjectDeletion) {
+			t.Errorf("DecodeObjectDeletion returned %v, want ErrNotObjectDeletion", err)
+		}
+	})
+
+	t.Run("ObjectCreation", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-od-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-od-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_ObjCreation{
+									ObjCreation: &uspproto.Notify_ObjectCreation{
+										ObjPath: "Device.WiFi.SSID.1.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeObjectDeletion(msg)
+		if !errors.Is(err, ErrNotObjectDeletion) {
+			t.Errorf("DecodeObjectDeletion returned %v, want ErrNotObjectDeletion", err)
+		}
+	})
+
+	t.Run("Event", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-od-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-od-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_Event_{
+									Event: &uspproto.Notify_Event{
+										ObjPath: "Device.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeObjectDeletion(msg)
+		if !errors.Is(err, ErrNotObjectDeletion) {
+			t.Errorf("DecodeObjectDeletion returned %v, want ErrNotObjectDeletion", err)
+		}
+	})
+}
+
+func TestDecodeObjectDeletionWrongMsgType(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-od-getresp",
+			MsgType: uspproto.Header_GET_RESP,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Response{
+				Response: &uspproto.Response{
+					RespType: &uspproto.Response_GetResp{
+						GetResp: &uspproto.GetResp{},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	_, err = DecodeObjectDeletion(msg)
+	if !errors.Is(err, ErrNotObjectDeletion) {
+		t.Errorf("DecodeObjectDeletion returned %v, want ErrNotObjectDeletion", err)
+	}
+}
+
+func TestDecodeObjectDeletionNilPayload(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-od-nil",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-od-nil",
+							SendResp:       false,
+							Notification: &uspproto.Notify_ObjDeletion{
+								ObjDeletion: nil,
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	od, err := DecodeObjectDeletion(msg)
+	if err != nil {
+		t.Fatalf("DecodeObjectDeletion: %v (must not panic or error on nil payload)", err)
+	}
+	if od.ObjPath != "" {
+		t.Errorf("ObjPath = %q, want empty string for nil payload", od.ObjPath)
+	}
+}
+
+func TestDecodeEvent(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-event-1",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-ev-1",
+							SendResp:       false,
+							Notification: &uspproto.Notify_Event_{
+								Event: &uspproto.Notify_Event{
+									ObjPath:   "Device.",
+									EventName: "Boot!",
+									Params: map[string]string{
+										"FirmwareVersion": "1.2.3",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	ev, err := DecodeEvent(msg)
+	if err != nil {
+		t.Fatalf("DecodeEvent: %v", err)
+	}
+
+	if ev.SubscriptionID != "sub-ev-1" {
+		t.Errorf("SubscriptionID = %q, want sub-ev-1", ev.SubscriptionID)
+	}
+	if ev.SendResp {
+		t.Error("SendResp = true, want false")
+	}
+	if ev.ObjPath != "Device." {
+		t.Errorf("ObjPath = %q, want Device.", ev.ObjPath)
+	}
+	if ev.EventName != "Boot!" {
+		t.Errorf("EventName = %q, want Boot!", ev.EventName)
+	}
+	if len(ev.Params) != 1 || ev.Params["FirmwareVersion"] != "1.2.3" {
+		t.Errorf("Params = %+v, want {FirmwareVersion: 1.2.3}", ev.Params)
+	}
+}
+
+func TestDecodeEventWrongVariant(t *testing.T) {
+	t.Run("OnBoardRequest", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-ev-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-ev-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_OnBoardReq{
+									OnBoardReq: &uspproto.Notify_OnBoardRequest{
+										Oui: "0025C2",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeEvent(msg)
+		if !errors.Is(err, ErrNotEvent) {
+			t.Errorf("DecodeEvent returned %v, want ErrNotEvent", err)
+		}
+	})
+
+	t.Run("OperComplete", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-ev-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-ev-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_OperComplete{
+									OperComplete: &uspproto.Notify_OperationComplete{
+										ObjPath: "Device.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeEvent(msg)
+		if !errors.Is(err, ErrNotEvent) {
+			t.Errorf("DecodeEvent returned %v, want ErrNotEvent", err)
+		}
+	})
+
+	t.Run("ValueChange", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-ev-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-ev-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_ValueChange_{
+									ValueChange: &uspproto.Notify_ValueChange{
+										ParamPath: "Device.Param",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeEvent(msg)
+		if !errors.Is(err, ErrNotEvent) {
+			t.Errorf("DecodeEvent returned %v, want ErrNotEvent", err)
+		}
+	})
+
+	t.Run("ObjectCreation", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-ev-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-ev-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_ObjCreation{
+									ObjCreation: &uspproto.Notify_ObjectCreation{
+										ObjPath: "Device.WiFi.SSID.1.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeEvent(msg)
+		if !errors.Is(err, ErrNotEvent) {
+			t.Errorf("DecodeEvent returned %v, want ErrNotEvent", err)
+		}
+	})
+
+	t.Run("ObjectDeletion", func(t *testing.T) {
+		wire, err := proto.Marshal(&uspproto.Msg{
+			Header: &uspproto.Header{
+				MsgId:   "m-ev-wrong-variant",
+				MsgType: uspproto.Header_NOTIFY,
+			},
+			Body: &uspproto.Body{
+				MsgBody: &uspproto.Body_Request{
+					Request: &uspproto.Request{
+						ReqType: &uspproto.Request_Notify{
+							Notify: &uspproto.Notify{
+								SubscriptionId: "sub-ev-wrong",
+								SendResp:       false,
+								Notification: &uspproto.Notify_ObjDeletion{
+									ObjDeletion: &uspproto.Notify_ObjectDeletion{
+										ObjPath: "Device.WiFi.SSID.1.",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg, err := DecodeMsg(wire)
+		if err != nil {
+			t.Fatalf("DecodeMsg: %v", err)
+		}
+		_, err = DecodeEvent(msg)
+		if !errors.Is(err, ErrNotEvent) {
+			t.Errorf("DecodeEvent returned %v, want ErrNotEvent", err)
+		}
+	})
+}
+
+func TestDecodeEventWrongMsgType(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-ev-getresp",
+			MsgType: uspproto.Header_GET_RESP,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Response{
+				Response: &uspproto.Response{
+					RespType: &uspproto.Response_GetResp{
+						GetResp: &uspproto.GetResp{},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	_, err = DecodeEvent(msg)
+	if !errors.Is(err, ErrNotEvent) {
+		t.Errorf("DecodeEvent returned %v, want ErrNotEvent", err)
+	}
+}
+
+func TestDecodeEventNilPayload(t *testing.T) {
+	wire, err := proto.Marshal(&uspproto.Msg{
+		Header: &uspproto.Header{
+			MsgId:   "m-ev-nil",
+			MsgType: uspproto.Header_NOTIFY,
+		},
+		Body: &uspproto.Body{
+			MsgBody: &uspproto.Body_Request{
+				Request: &uspproto.Request{
+					ReqType: &uspproto.Request_Notify{
+						Notify: &uspproto.Notify{
+							SubscriptionId: "sub-ev-nil",
+							SendResp:       false,
+							Notification: &uspproto.Notify_Event_{
+								Event: nil,
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+
+	ev, err := DecodeEvent(msg)
+	if err != nil {
+		t.Fatalf("DecodeEvent: %v (must not panic or error on nil payload)", err)
+	}
+	if ev.ObjPath != "" {
+		t.Errorf("ObjPath = %q, want empty string for nil payload", ev.ObjPath)
+	}
+	if ev.EventName != "" {
+		t.Errorf("EventName = %q, want empty string for nil payload", ev.EventName)
+	}
+	if ev.Params != nil {
+		t.Errorf("Params = %+v, want nil for nil payload", ev.Params)
+	}
+}

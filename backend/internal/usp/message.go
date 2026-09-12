@@ -24,6 +24,22 @@ var ErrNotOnBoardRequest = errors.New("USP message is not an OnBoardRequest Noti
 // OperationComplete notification.
 var ErrNotOperationComplete = errors.New("USP message is not an OperationComplete Notify")
 
+// ErrNotValueChange is returned when a Notify message is not a ValueChange
+// notification.
+var ErrNotValueChange = errors.New("USP message is not a ValueChange Notify")
+
+// ErrNotObjectCreation is returned when a Notify message is not an
+// ObjectCreation notification.
+var ErrNotObjectCreation = errors.New("USP message is not an ObjectCreation Notify")
+
+// ErrNotObjectDeletion is returned when a Notify message is not an
+// ObjectDeletion notification.
+var ErrNotObjectDeletion = errors.New("USP message is not an ObjectDeletion Notify")
+
+// ErrNotEvent is returned when a Notify message is not an Event
+// notification.
+var ErrNotEvent = errors.New("USP message is not an Event Notify")
+
 // NewMsgID returns a fresh message correlation id. USP requires msg_id
 // to be unique per outstanding request from a given endpoint; a UUID is
 // the cheapest way to guarantee that without shared state.
@@ -259,6 +275,42 @@ type OperationComplete struct {
 	ErrMsg         string
 }
 
+// ValueChange represents a decoded ValueChange Notify message, carrying
+// notification of a parameter value change on the agent.
+type ValueChange struct {
+	SubscriptionID string
+	SendResp       bool
+	ParamPath      string
+	ParamValue     string
+}
+
+// ObjectCreation represents a decoded ObjectCreation Notify message,
+// carrying notification of a multi-instance object instance creation.
+type ObjectCreation struct {
+	SubscriptionID string
+	SendResp       bool
+	ObjPath        string
+	UniqueKeys     map[string]string
+}
+
+// ObjectDeletion represents a decoded ObjectDeletion Notify message,
+// carrying notification of a multi-instance object instance deletion.
+type ObjectDeletion struct {
+	SubscriptionID string
+	SendResp       bool
+	ObjPath        string
+}
+
+// Event represents a decoded Event Notify message, carrying notification
+// of an event fired on the agent.
+type Event struct {
+	SubscriptionID string
+	SendResp       bool
+	ObjPath        string
+	EventName      string
+	Params         map[string]string
+}
+
 // DecodeOperationComplete unmarshals a Notify message into an
 // OperationComplete, returning ErrNotOperationComplete if the message is
 // not a NOTIFY whose Notification oneof is an OperComplete. Mirrors
@@ -304,6 +356,150 @@ func DecodeOperationComplete(msg *uspproto.Msg) (*OperationComplete, error) {
 		result.Failed = true
 		result.ErrCode = resp.CmdFailure.GetErrCode()
 		result.ErrMsg = resp.CmdFailure.GetErrMsg()
+	}
+
+	return result, nil
+}
+
+// DecodeValueChange unmarshals a Notify message into a ValueChange,
+// returning ErrNotValueChange if the message is not a NOTIFY whose
+// Notification oneof is a ValueChange. Mirrors DecodeOnBoardRequest's
+// exact shape -- see its own doc comment for why this stays narrow to
+// the one Notify variant a caller asked for.
+//
+// If the inner ValueChange payload is nil, it is treated as the zero
+// value for that variant's fields rather than panicking or erroring.
+func DecodeValueChange(msg *uspproto.Msg) (*ValueChange, error) {
+	if msg.GetHeader().GetMsgType() != uspproto.Header_NOTIFY {
+		return nil, ErrNotValueChange
+	}
+
+	notify := msg.GetBody().GetRequest().GetNotify()
+	if notify == nil {
+		return nil, ErrNotValueChange
+	}
+
+	vcWrapper, ok := notify.GetNotification().(*uspproto.Notify_ValueChange_)
+	if !ok {
+		return nil, ErrNotValueChange
+	}
+
+	result := &ValueChange{
+		SubscriptionID: notify.GetSubscriptionId(),
+		SendResp:       notify.GetSendResp(),
+	}
+
+	if vc := vcWrapper.ValueChange; vc != nil {
+		result.ParamPath = vc.GetParamPath()
+		result.ParamValue = vc.GetParamValue()
+	}
+
+	return result, nil
+}
+
+// DecodeObjectCreation unmarshals a Notify message into an ObjectCreation,
+// returning ErrNotObjectCreation if the message is not a NOTIFY whose
+// Notification oneof is an ObjectCreation. Mirrors DecodeOnBoardRequest's
+// exact shape -- see its own doc comment for why this stays narrow to
+// the one Notify variant a caller asked for.
+//
+// If the inner ObjectCreation payload is nil, it is treated as the zero
+// value for that variant's fields rather than panicking or erroring.
+func DecodeObjectCreation(msg *uspproto.Msg) (*ObjectCreation, error) {
+	if msg.GetHeader().GetMsgType() != uspproto.Header_NOTIFY {
+		return nil, ErrNotObjectCreation
+	}
+
+	notify := msg.GetBody().GetRequest().GetNotify()
+	if notify == nil {
+		return nil, ErrNotObjectCreation
+	}
+
+	ocWrapper, ok := notify.GetNotification().(*uspproto.Notify_ObjCreation)
+	if !ok {
+		return nil, ErrNotObjectCreation
+	}
+
+	result := &ObjectCreation{
+		SubscriptionID: notify.GetSubscriptionId(),
+		SendResp:       notify.GetSendResp(),
+	}
+
+	if oc := ocWrapper.ObjCreation; oc != nil {
+		result.ObjPath = oc.GetObjPath()
+		result.UniqueKeys = oc.GetUniqueKeys()
+	}
+
+	return result, nil
+}
+
+// DecodeObjectDeletion unmarshals a Notify message into an ObjectDeletion,
+// returning ErrNotObjectDeletion if the message is not a NOTIFY whose
+// Notification oneof is an ObjectDeletion. Mirrors DecodeOnBoardRequest's
+// exact shape -- see its own doc comment for why this stays narrow to
+// the one Notify variant a caller asked for.
+//
+// If the inner ObjectDeletion payload is nil, it is treated as the zero
+// value for that variant's fields rather than panicking or erroring.
+func DecodeObjectDeletion(msg *uspproto.Msg) (*ObjectDeletion, error) {
+	if msg.GetHeader().GetMsgType() != uspproto.Header_NOTIFY {
+		return nil, ErrNotObjectDeletion
+	}
+
+	notify := msg.GetBody().GetRequest().GetNotify()
+	if notify == nil {
+		return nil, ErrNotObjectDeletion
+	}
+
+	odWrapper, ok := notify.GetNotification().(*uspproto.Notify_ObjDeletion)
+	if !ok {
+		return nil, ErrNotObjectDeletion
+	}
+
+	result := &ObjectDeletion{
+		SubscriptionID: notify.GetSubscriptionId(),
+		SendResp:       notify.GetSendResp(),
+	}
+
+	if od := odWrapper.ObjDeletion; od != nil {
+		result.ObjPath = od.GetObjPath()
+	}
+
+	return result, nil
+}
+
+// DecodeEvent unmarshals a Notify message into an Event, returning
+// ErrNotEvent if the message is not a NOTIFY whose Notification oneof
+// is an Event. Mirrors DecodeOnBoardRequest's exact shape -- see its own
+// doc comment for why this stays narrow to the one Notify variant a
+// caller asked for.
+//
+// If the inner Event payload is nil, it is treated as the zero value
+// for that variant's fields rather than panicking or erroring.
+func DecodeEvent(msg *uspproto.Msg) (*Event, error) {
+	if msg.GetHeader().GetMsgType() != uspproto.Header_NOTIFY {
+		return nil, ErrNotEvent
+	}
+
+	notify := msg.GetBody().GetRequest().GetNotify()
+	if notify == nil {
+		return nil, ErrNotEvent
+	}
+
+	evWrapper, ok := notify.GetNotification().(*uspproto.Notify_Event_)
+	if !ok {
+		return nil, ErrNotEvent
+	}
+
+	result := &Event{
+		SubscriptionID: notify.GetSubscriptionId(),
+		SendResp:       notify.GetSendResp(),
+	}
+
+	if ev := evWrapper.Event; ev != nil {
+		result.ObjPath = ev.GetObjPath()
+		result.EventName = ev.GetEventName()
+		result.Params = ev.GetParams()
 	}
 
 	return result, nil
