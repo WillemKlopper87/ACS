@@ -4,14 +4,21 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"testing"
+	"time"
 
+	"acs/internal/devices"
 	"acs/internal/jobs"
 	"acs/internal/observability"
+	"acs/internal/parameters"
+	"acs/internal/store"
+	"acs/internal/subscriptions"
 	"acs/internal/usp"
 	"acs/internal/usp/mtp"
 	"acs/internal/usp/uspproto"
 
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -93,6 +100,131 @@ func operationCompleteMsg(subscriptionID string, sendResp bool, commandKey strin
 			}},
 		}}},
 	}
+}
+
+// valueChangeMsg, objectCreationMsg, objectDeletionMsg and eventMsg build
+// NOTIFY messages carrying each of the four remaining Notify variants,
+// matching the shapes internal/usp/message_test.go's own
+// TestDecodeValueChange/TestDecodeObjectCreation/TestDecodeObjectDeletion/
+// TestDecodeEvent build -- same convention as onBoardRequestMsg/
+// operationCompleteMsg above.
+func valueChangeMsg(subscriptionID string, sendResp bool, paramPath, paramValue string) *uspproto.Msg {
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: usp.NewMsgID(), MsgType: uspproto.Header_NOTIFY},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Request{Request: &uspproto.Request{
+			ReqType: &uspproto.Request_Notify{Notify: &uspproto.Notify{
+				SubscriptionId: subscriptionID,
+				SendResp:       sendResp,
+				Notification: &uspproto.Notify_ValueChange_{ValueChange: &uspproto.Notify_ValueChange{
+					ParamPath:  paramPath,
+					ParamValue: paramValue,
+				}},
+			}},
+		}}},
+	}
+}
+
+func objectCreationMsg(subscriptionID string, sendResp bool, objPath string, uniqueKeys map[string]string) *uspproto.Msg {
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: usp.NewMsgID(), MsgType: uspproto.Header_NOTIFY},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Request{Request: &uspproto.Request{
+			ReqType: &uspproto.Request_Notify{Notify: &uspproto.Notify{
+				SubscriptionId: subscriptionID,
+				SendResp:       sendResp,
+				Notification: &uspproto.Notify_ObjCreation{ObjCreation: &uspproto.Notify_ObjectCreation{
+					ObjPath:    objPath,
+					UniqueKeys: uniqueKeys,
+				}},
+			}},
+		}}},
+	}
+}
+
+func objectDeletionMsg(subscriptionID string, sendResp bool, objPath string) *uspproto.Msg {
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: usp.NewMsgID(), MsgType: uspproto.Header_NOTIFY},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Request{Request: &uspproto.Request{
+			ReqType: &uspproto.Request_Notify{Notify: &uspproto.Notify{
+				SubscriptionId: subscriptionID,
+				SendResp:       sendResp,
+				Notification: &uspproto.Notify_ObjDeletion{ObjDeletion: &uspproto.Notify_ObjectDeletion{
+					ObjPath: objPath,
+				}},
+			}},
+		}}},
+	}
+}
+
+func eventMsg(subscriptionID string, sendResp bool, objPath, eventName string, params map[string]string) *uspproto.Msg {
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: usp.NewMsgID(), MsgType: uspproto.Header_NOTIFY},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Request{Request: &uspproto.Request{
+			ReqType: &uspproto.Request_Notify{Notify: &uspproto.Notify{
+				SubscriptionId: subscriptionID,
+				SendResp:       sendResp,
+				Notification: &uspproto.Notify_Event_{Event: &uspproto.Notify_Event{
+					ObjPath:   objPath,
+					EventName: eventName,
+					Params:    params,
+				}},
+			}},
+		}}},
+	}
+}
+
+// newNotifyTestHandler builds a real-DB-backed handler (gated on
+// ACS_TEST_POSTGRES_DSN, matching every other DB-backed suite in this
+// package -- see dispatcher_test.go's newDispatcherTestDB) for the
+// ValueChange/ObjectCreation/ObjectDeletion/Event tests below. Those four
+// handlers write through paramsRepo/devicesRepo, both concrete
+// repositories with no interface seam to fake (same justification
+// newDispatcherTestDB gives for jobsRepo), so exercising them for real
+// needs a real database. reconciler/dispatcher are wired against the same
+// real *devices.Repository main.go itself uses for both roles (it already
+// satisfies identityStore), rather than a fakeIdentityStore, since this
+// helper's callers need a real devices row anyway (its device_id is a
+// genuine foreign key target for parameters/device_events/
+// usp_subscriptions). Returns the handler and that one pre-registered
+// device's id.
+func newNotifyTestHandler(t *testing.T) (*handler, string) {
+	t.Helper()
+	dsn := os.Getenv("ACS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("ACS_TEST_POSTGRES_DSN not set — skipping DB-backed integration test")
+	}
+	ctx := context.Background()
+	db, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.ExecContext(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx, db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	devRepo := devices.NewRepository(db)
+	dev, err := devRepo.PreRegister(ctx, "NOTIFY-TEST-01", "TestVendor", "001349", "NR7101", "SER1", nil, nil)
+	if err != nil {
+		t.Fatalf("pre-register device: %v", err)
+	}
+
+	registry := mtp.NewRegistry()
+	h := &handler{
+		log:           slog.Default(),
+		registry:      registry,
+		probe:         newProbe(ctrl, slog.Default()),
+		controllerID:  ctrl,
+		metrics:       newUSPMetrics(observability.NewMetrics("uspc-test")),
+		reconciler:    newReconciler(devRepo, slog.Default()),
+		dispatcher:    newDispatcher(nil, devRepo, registry, ctrl, slog.Default()),
+		subscriptions: newSubscriptionReconciler(subscriptions.NewRepository(db), ctrl, slog.Default()),
+		paramsRepo:    parameters.NewRepository(db),
+		devicesRepo:   devRepo,
+	}
+	return h, dev.ID
 }
 
 // deviceInfoParams is the ResultParams map a GetResp needs to carry (under
@@ -476,4 +608,334 @@ func TestHandlerOperationCompleteNoRespWhenNotRequested(t *testing.T) {
 	if len(c.sent) != 0 {
 		t.Fatalf("c.sent has %d records, want 0 when SendResp is false", len(c.sent))
 	}
+}
+
+// TestHandlerValueChangeUpdatesCache covers the checklist's ValueChange
+// row: a ValueChange Notify from a reconciled connection must land in
+// the device's parameter cache under parameters.SourceUSPNotify.
+func TestHandlerValueChangeUpdatesCache(t *testing.T) {
+	h, deviceID := newNotifyTestHandler(t)
+	c := &captureConn{id: agent}
+	h.markReconciled(c, deviceID)
+
+	msg := valueChangeMsg("sub-vc-1", false, "Device.WiFi.SSID.1.SSID", "MyNetwork")
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg)})
+
+	cache, err := h.paramsRepo.Get(context.Background(), deviceID)
+	if err != nil {
+		t.Fatalf("Get parameter cache: %v", err)
+	}
+	cv, ok := cache["Device.WiFi.SSID.1.SSID"]
+	if !ok {
+		t.Fatalf("parameter cache = %+v, want an entry for Device.WiFi.SSID.1.SSID", cache)
+	}
+	if cv.Value != "MyNetwork" {
+		t.Errorf("cached value = %q, want MyNetwork", cv.Value)
+	}
+	if cv.Source != parameters.SourceUSPNotify {
+		t.Errorf("cached source = %q, want %q", cv.Source, parameters.SourceUSPNotify)
+	}
+}
+
+// TestHandlerObjectCreationInvalidatesAndRecords covers the checklist's
+// ObjectCreation row: the affected subtree's cache entries must be
+// invalidated and an event recorded carrying the Notify's UniqueKeys.
+func TestHandlerObjectCreationInvalidatesAndRecords(t *testing.T) {
+	h, deviceID := newNotifyTestHandler(t)
+	c := &captureConn{id: agent}
+	h.markReconciled(c, deviceID)
+
+	ctx := context.Background()
+	// Seed a cached value under the subtree the ObjectCreation reports,
+	// so this test can prove it was actually invalidated -- not merely
+	// that InvalidateSubtree didn't error.
+	if err := h.paramsRepo.Upsert(ctx, deviceID, map[string]parameters.CachedValue{
+		"Device.WiFi.SSID.1.SSID": {Value: "stale", Source: parameters.SourceGetValues, UpdatedAt: time.Now()},
+	}); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	msg := objectCreationMsg("sub-oc-1", false, "Device.WiFi.SSID.1.", map[string]string{"Alias": "cpe-ssid-1"})
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg)})
+
+	cache, err := h.paramsRepo.Get(ctx, deviceID)
+	if err != nil {
+		t.Fatalf("Get parameter cache: %v", err)
+	}
+	if _, ok := cache["Device.WiFi.SSID.1.SSID"]; ok {
+		t.Errorf("parameter cache = %+v, want Device.WiFi.SSID.1.SSID invalidated", cache)
+	}
+
+	events, err := h.devicesRepo.Events(ctx, deviceID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("device events = %+v, want exactly 1", events)
+	}
+	ev := events[0]
+	if ev.ObjPath != "Device.WiFi.SSID.1." || ev.EventName != "ObjectCreation" {
+		t.Errorf("event = %+v, want obj_path=Device.WiFi.SSID.1. event_name=ObjectCreation", ev)
+	}
+	if ev.Params["Alias"] != "cpe-ssid-1" {
+		t.Errorf("event params = %+v, want Alias=cpe-ssid-1 (the Notify's UniqueKeys)", ev.Params)
+	}
+}
+
+// TestHandlerObjectDeletionInvalidatesAndRecords is
+// TestHandlerObjectCreationInvalidatesAndRecords' ObjectDeletion
+// counterpart: same subtree invalidation and event recording, but with
+// no UniqueKeys (an ObjectDeletion Notify carries none).
+func TestHandlerObjectDeletionInvalidatesAndRecords(t *testing.T) {
+	h, deviceID := newNotifyTestHandler(t)
+	c := &captureConn{id: agent}
+	h.markReconciled(c, deviceID)
+
+	ctx := context.Background()
+	if err := h.paramsRepo.Upsert(ctx, deviceID, map[string]parameters.CachedValue{
+		"Device.WiFi.SSID.1.SSID": {Value: "stale", Source: parameters.SourceGetValues, UpdatedAt: time.Now()},
+	}); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	msg := objectDeletionMsg("sub-od-1", false, "Device.WiFi.SSID.1.")
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg)})
+
+	cache, err := h.paramsRepo.Get(ctx, deviceID)
+	if err != nil {
+		t.Fatalf("Get parameter cache: %v", err)
+	}
+	if _, ok := cache["Device.WiFi.SSID.1.SSID"]; ok {
+		t.Errorf("parameter cache = %+v, want Device.WiFi.SSID.1.SSID invalidated", cache)
+	}
+
+	events, err := h.devicesRepo.Events(ctx, deviceID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("device events = %+v, want exactly 1", events)
+	}
+	ev := events[0]
+	if ev.ObjPath != "Device.WiFi.SSID.1." || ev.EventName != "ObjectDeletion" {
+		t.Errorf("event = %+v, want obj_path=Device.WiFi.SSID.1. event_name=ObjectDeletion", ev)
+	}
+	if len(ev.Params) != 0 {
+		t.Errorf("event params = %+v, want empty for an ObjectDeletion", ev.Params)
+	}
+}
+
+// TestHandlerEventRecordsEvent covers the checklist's Event row: an
+// arbitrary Event Notify must be recorded with its own name and params,
+// with no parameter-cache involvement.
+func TestHandlerEventRecordsEvent(t *testing.T) {
+	h, deviceID := newNotifyTestHandler(t)
+	c := &captureConn{id: agent}
+	h.markReconciled(c, deviceID)
+
+	msg := eventMsg("sub-ev-1", false, "Device.", "Boot!", map[string]string{"Cause": "LocalReboot"})
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg)})
+
+	events, err := h.devicesRepo.Events(context.Background(), deviceID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("device events = %+v, want exactly 1", events)
+	}
+	ev := events[0]
+	if ev.ObjPath != "Device." || ev.EventName != "Boot!" {
+		t.Errorf("event = %+v, want obj_path=Device. event_name=Boot!", ev)
+	}
+	if ev.Params["Cause"] != "LocalReboot" {
+		t.Errorf("event params = %+v, want Cause=LocalReboot", ev.Params)
+	}
+}
+
+// TestHandlerNotifyDroppedWhenUnreconciled covers the checklist's
+// unreconciled-connection row for all four Notify types: dropped,
+// logged, no writes -- not even a NotifyResp, despite SendResp true.
+func TestHandlerNotifyDroppedWhenUnreconciled(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  *uspproto.Msg
+	}{
+		{"ValueChange", valueChangeMsg("sub-1", true, "Device.WiFi.SSID.1.SSID", "MyNetwork")},
+		{"ObjectCreation", objectCreationMsg("sub-1", true, "Device.WiFi.SSID.1.", map[string]string{"Alias": "x"})},
+		{"ObjectDeletion", objectDeletionMsg("sub-1", true, "Device.WiFi.SSID.1.")},
+		{"Event", eventMsg("sub-1", true, "Device.", "Boot!", map[string]string{"Cause": "LocalReboot"})},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, deviceID := newNotifyTestHandler(t)
+			c := &captureConn{id: agent}
+			// Deliberately not marked reconciled.
+
+			h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, tc.msg)})
+
+			if len(c.sent) != 0 {
+				t.Fatalf("c.sent = %d records, want 0: an unreconciled connection's Notify must be dropped entirely, no NotifyResp even with SendResp true", len(c.sent))
+			}
+			cache, err := h.paramsRepo.Get(context.Background(), deviceID)
+			if err != nil {
+				t.Fatalf("Get parameter cache: %v", err)
+			}
+			if len(cache) != 0 {
+				t.Errorf("parameter cache = %+v, want empty: a dropped Notify must not write", cache)
+			}
+			events, err := h.devicesRepo.Events(context.Background(), deviceID, 0)
+			if err != nil {
+				t.Fatalf("Events: %v", err)
+			}
+			if len(events) != 0 {
+				t.Errorf("device events = %+v, want empty: a dropped Notify must not write", events)
+			}
+		})
+	}
+}
+
+// TestHandlerNotifySendsResp covers the checklist's SendResp row for
+// each of the four types: SendResp true must produce a NotifyResp
+// carrying the Notify's own subscription_id, mirroring
+// TestHandlerOnBoardRequestSendsResp/TestHandlerOperationCompleteSendsResp.
+// Each subtest seeds a real usp_subscriptions row matching its own
+// subscription_id (a valid UUID, per that table's column type) so
+// checkSubscriptionID's own known-id path is taken and no reconcile Get
+// is interleaved into c.sent alongside the NotifyResp this test is
+// actually about (that interleaving is covered separately by
+// TestHandlerUnknownSubscriptionIDTriggersReconcile).
+func TestHandlerNotifySendsResp(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  func(subscriptionID string) *uspproto.Msg
+	}{
+		{"ValueChange", func(id string) *uspproto.Msg { return valueChangeMsg(id, true, "Device.WiFi.SSID.1.SSID", "MyNetwork") }},
+		{"ObjectCreation", func(id string) *uspproto.Msg { return objectCreationMsg(id, true, "Device.WiFi.SSID.1.", nil) }},
+		{"ObjectDeletion", func(id string) *uspproto.Msg { return objectDeletionMsg(id, true, "Device.WiFi.SSID.1.") }},
+		{"Event", func(id string) *uspproto.Msg { return eventMsg(id, true, "Device.", "Boot!", nil) }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, deviceID := newNotifyTestHandler(t)
+			c := &captureConn{id: agent}
+			h.markReconciled(c, deviceID)
+
+			subscriptionID := uuid.New().String()
+			if err := h.subscriptions.repo.Create(context.Background(), subscriptions.Subscription{
+				ID:         subscriptionID,
+				DeviceID:   deviceID,
+				NotifType:  "ValueChange",
+				Persistent: true,
+				CreatedBy:  "test",
+				CreatedAt:  time.Now().UTC().Truncate(time.Microsecond),
+			}); err != nil {
+				t.Fatalf("seed subscription: %v", err)
+			}
+
+			h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, tc.msg(subscriptionID))})
+
+			if len(c.sent) != 1 {
+				t.Fatalf("c.sent has %d records, want exactly 1 (the NotifyResp)", len(c.sent))
+			}
+			rec, err := usp.DecodeRecord(c.sent[0], agent)
+			if err != nil {
+				t.Fatalf("decode NotifyResp record: %v", err)
+			}
+			respMsg, err := usp.DecodeMsg(rec.Payload)
+			if err != nil {
+				t.Fatalf("decode NotifyResp msg: %v", err)
+			}
+			if respMsg.GetHeader().GetMsgType() != uspproto.Header_NOTIFY_RESP {
+				t.Fatalf("msg type = %v, want NOTIFY_RESP", respMsg.GetHeader().GetMsgType())
+			}
+			if got := respMsg.GetBody().GetResponse().GetNotifyResp().GetSubscriptionId(); got != subscriptionID {
+				t.Errorf("NotifyResp subscription_id = %q, want %q", got, subscriptionID)
+			}
+		})
+	}
+}
+
+// TestHandlerUnknownSubscriptionIDTriggersReconcile covers the
+// checklist's unknown-subscription_id row: a ValueChange (representative
+// of all four) carrying a subscription_id with no matching
+// usp_subscriptions row must still be processed (the parameter cache is
+// still updated) AND must trigger a subscription reconciliation pass --
+// observed here as the reconciler's own read Get landing on the same
+// connection (design S7.3: a bookkeeping drift is not evidence the
+// Notify's data itself is wrong).
+func TestHandlerUnknownSubscriptionIDTriggersReconcile(t *testing.T) {
+	h, deviceID := newNotifyTestHandler(t)
+	c := &captureConn{id: agent}
+	h.markReconciled(c, deviceID)
+
+	msg := valueChangeMsg("unknown-subscription-id", false, "Device.WiFi.SSID.1.SSID", "MyNetwork")
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg)})
+
+	cache, err := h.paramsRepo.Get(context.Background(), deviceID)
+	if err != nil {
+		t.Fatalf("Get parameter cache: %v", err)
+	}
+	if cv, ok := cache["Device.WiFi.SSID.1.SSID"]; !ok || cv.Value != "MyNetwork" {
+		t.Errorf("parameter cache = %+v, want Device.WiFi.SSID.1.SSID=MyNetwork despite the unknown subscription_id", cache)
+	}
+
+	if len(c.sent) != 1 {
+		t.Fatalf("c.sent = %d records, want exactly 1 (the subscription reconciler's own read Get)", len(c.sent))
+	}
+	subscriptionReadMsgID(t, c.sent[0])
+}
+
+// TestReconcileTriggersSubscriptionReconcile covers the checklist's
+// on-connect row: resolveAndMarkReconciled's success path must trigger
+// subscription reconciliation alongside job dispatch (B-3b's own
+// tryDispatch trigger), observed as the subscription reconciler's read
+// Get landing on the connection. Uses a fakeIdentityStore (like
+// dispatcher_test.go's own tryDispatch tests) for reconciler/dispatcher,
+// since neither is what this test is about; only h.subscriptions needs a
+// real *subscriptions.Repository (reconcile's ByDevice is a plain SELECT
+// with no foreign-key dependency on a real devices row, so a device id
+// with no matching devices row is fine here -- it must still be
+// UUID-shaped, though, since usp_subscriptions.device_id is a UUID
+// column and even a plain SELECT's parameter is type-checked against it).
+func TestReconcileTriggersSubscriptionReconcile(t *testing.T) {
+	dsn := os.Getenv("ACS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("ACS_TEST_POSTGRES_DSN not set — skipping DB-backed integration test")
+	}
+	ctx := context.Background()
+	db, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.ExecContext(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx, db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	fakeStore := newFakeIdentityStore()
+	registry := mtp.NewRegistry()
+	c := &captureConn{id: agent}
+	deviceID := uuid.New().String()
+	registerAgent(fakeStore, registry, deviceID, c)
+
+	h := &handler{
+		log:           slog.Default(),
+		registry:      registry,
+		probe:         newProbe(ctrl, slog.Default()),
+		controllerID:  ctrl,
+		metrics:       newUSPMetrics(observability.NewMetrics("uspc-test")),
+		reconciler:    newReconciler(fakeStore, slog.Default()),
+		dispatcher:    newDispatcher(nil, fakeStore, registry, ctrl, slog.Default()),
+		subscriptions: newSubscriptionReconciler(subscriptions.NewRepository(db), ctrl, slog.Default()),
+	}
+
+	h.resolveAndMarkReconciled(c)
+
+	if len(c.sent) != 1 {
+		t.Fatalf("c.sent = %d records, want exactly 1 (the subscription reconciler's own read Get, triggered alongside dispatch)", len(c.sent))
+	}
+	subscriptionReadMsgID(t, c.sent[0])
 }

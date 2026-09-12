@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"acs/internal/devices"
+	"acs/internal/parameters"
 	"acs/internal/usp"
 	"acs/internal/usp/mtp"
 	"acs/internal/usp/uspproto"
@@ -41,13 +42,16 @@ type connIdentity struct {
 // task), and handing the payload to the probe -- real dispatch is a
 // later plan (B-3).
 type handler struct {
-	log          *slog.Logger
-	registry     *mtp.Registry
-	probe        *probe
-	controllerID usp.EndpointID
-	metrics      *uspMetrics
-	reconciler   *reconciler
-	dispatcher   *dispatcher
+	log           *slog.Logger
+	registry      *mtp.Registry
+	probe         *probe
+	controllerID  usp.EndpointID
+	metrics       *uspMetrics
+	reconciler    *reconciler
+	dispatcher    *dispatcher
+	subscriptions *subscriptionReconciler
+	paramsRepo    *parameters.Repository
+	devicesRepo   *devices.Repository
 
 	// identMu guards identities. This is handler's own lock, deliberately
 	// separate from mtp.Registry's internal one -- that lock guards
@@ -180,13 +184,50 @@ func (h *handler) OnRecord(in mtp.Inbound) {
 		return
 	}
 
+	// ValueChange/ObjectCreation/ObjectDeletion/Event are the remaining
+	// four Notify variants -- same "tried first" reasoning as the two
+	// above, and mutually exclusive with them and each other by
+	// construction. msg.GetHeader().GetMsgId() is threaded through to
+	// handleObjectCreation/handleObjectDeletion/handleEvent (not
+	// handleValueChange, which needs no msg_id) because
+	// devices.Repository.RecordEvent's own redelivery dedup is keyed on
+	// exactly that id, and it is not part of the decoded
+	// ObjectCreation/ObjectDeletion/Event structs themselves.
+	if vc, err := usp.DecodeValueChange(msg); err == nil {
+		h.handleValueChange(in.Conn, vc)
+		return
+	}
+	if oc, err := usp.DecodeObjectCreation(msg); err == nil {
+		h.handleObjectCreation(in.Conn, oc, msg.GetHeader().GetMsgId())
+		return
+	}
+	if od, err := usp.DecodeObjectDeletion(msg); err == nil {
+		h.handleObjectDeletion(in.Conn, od, msg.GetHeader().GetMsgId())
+		return
+	}
+	if ev, err := usp.DecodeEvent(msg); err == nil {
+		h.handleEvent(in.Conn, ev, msg.GetHeader().GetMsgId())
+		return
+	}
+
 	if matched := h.probe.handle(rec.From, msg); matched {
 		h.handleProbeFallback(in.Conn, msg)
 		return
 	}
 
 	if h.dispatcher != nil {
-		h.dispatcher.handleResponse(rec.From, msg)
+		if matched := h.dispatcher.handleResponse(rec.From, msg); matched {
+			return
+		}
+	}
+
+	// The subscription reconciler's own AddResp/DeleteResp/GetResp
+	// answers are *Resp-shaped, same family as the probe/dispatcher
+	// checks above, but correlated against subscriptionReconciler's own
+	// separate pending map (its requests were never registered with
+	// dispatcher), so they need their own fallthrough link, tried last.
+	if h.subscriptions != nil {
+		h.subscriptions.handleResponse(rec.From, msg)
 	}
 }
 
@@ -206,21 +247,7 @@ func (h *handler) handleOnBoardRequest(c mtp.Conn, ob *usp.OnBoardRequest) {
 	if !ob.SendResp {
 		return
 	}
-	payload, err := usp.EncodeNotifyResp(usp.NewMsgID(), ob.SubscriptionID)
-	if err != nil {
-		h.log.Warn("uspc: failed to encode NotifyResp", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
-		return
-	}
-	record, err := usp.EncodeRecord(h.controllerID, c.Endpoint(), payload)
-	if err != nil {
-		h.log.Warn("uspc: failed to encode NotifyResp record", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
-		return
-	}
-	sendCtx, sendCancel := context.WithTimeout(context.Background(), sendTimeout)
-	defer sendCancel()
-	if err := c.Send(sendCtx, record); err != nil {
-		h.log.Warn("uspc: failed to send NotifyResp", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
-	}
+	h.sendNotifyResp(c, ob.SubscriptionID)
 }
 
 // handleOperationComplete resolves the job an OperationComplete Notify
@@ -249,7 +276,21 @@ func (h *handler) handleOperationComplete(c mtp.Conn, oc *usp.OperationComplete)
 	if !oc.SendResp {
 		return
 	}
-	payload, err := usp.EncodeNotifyResp(usp.NewMsgID(), oc.SubscriptionID)
+	h.sendNotifyResp(c, oc.SubscriptionID)
+}
+
+// sendNotifyResp encodes and sends a NotifyResp acknowledging
+// subscriptionID, exactly the shape handleOnBoardRequest/
+// handleOperationComplete originally each built inline. Extracted once
+// both of them (plus this task's four new Notify handlers) needed the
+// identical payload/record/send sequence, so it now has exactly one
+// implementation instead of six. Callers are responsible for their own
+// SendResp check before calling this -- it always sends, unconditionally
+// -- and for logging/handling anything beyond a failed send: like the
+// inline code it replaces, this only logs on failure and never
+// propagates an error to its caller.
+func (h *handler) sendNotifyResp(c mtp.Conn, subscriptionID string) {
+	payload, err := usp.EncodeNotifyResp(usp.NewMsgID(), subscriptionID)
 	if err != nil {
 		h.log.Warn("uspc: failed to encode NotifyResp", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
 		return
@@ -264,6 +305,182 @@ func (h *handler) handleOperationComplete(c mtp.Conn, oc *usp.OperationComplete)
 	if err := c.Send(sendCtx, record); err != nil {
 		h.log.Warn("uspc: failed to send NotifyResp", "endpoint", c.Endpoint(), "mtp", c.Kind(), "error", err)
 	}
+}
+
+// checkSubscriptionID validates subscriptionID against deviceID's
+// desired-state subscriptions (usp_subscriptions, via the subscription
+// reconciler's own repository) for each of the four Notify handlers
+// below. A subscription_id with no matching desired row means ACS's own
+// bookkeeping has drifted from what's actually on the device -- not that
+// the Notify's data is wrong -- so this only logs at Info and triggers a
+// fresh subscriptionReconciler.reconcile pass for deviceID (design S7.3,
+// the same reconcile a fresh connect would run); it never causes the
+// caller to drop the Notify's content. h.subscriptions.repo (an
+// unexported field of a sibling type in this same package) is used
+// directly rather than adding a new lookup method to
+// subscriptions.Repository, to stay within this task's file boundary
+// (handler.go/main.go only) -- ByDevice plus a Go-side membership check
+// is enough.
+//
+// A failure to even look up the desired set (a transient DB error) is
+// logged and swallowed without triggering reconcile: an unknown
+// subscription_id is only actionable when the lookup itself succeeded
+// and genuinely found no match.
+func (h *handler) checkSubscriptionID(c mtp.Conn, deviceID, subscriptionID string) {
+	if h.subscriptions == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+	subs, err := h.subscriptions.repo.ByDevice(ctx, deviceID)
+	cancel()
+	if err != nil {
+		h.log.Warn("uspc: failed to look up desired subscriptions to validate a Notify's subscription_id", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "error", err)
+		return
+	}
+	for _, sub := range subs {
+		if sub.ID == subscriptionID {
+			return
+		}
+	}
+
+	h.log.Info("uspc: Notify carries an unknown subscription_id, triggering subscription reconciliation",
+		"endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "subscription_id", subscriptionID)
+	reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), dbCallTimeout)
+	defer reconcileCancel()
+	if err := h.subscriptions.reconcile(reconcileCtx, deviceID, c); err != nil {
+		h.log.Warn("uspc: failed to trigger subscription reconciliation for an unknown subscription_id", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "error", err)
+	}
+}
+
+// handleValueChange updates the parameter cache from a ValueChange
+// Notify (design S7.1). An unreconciled connection is logged and
+// dropped -- there is no device id to attribute the value to -- and an
+// unknown subscription_id is handled per checkSubscriptionID's own
+// contract (logged, reconciled, but the value is still cached: a
+// bookkeeping drift is not evidence the reported value itself is wrong).
+func (h *handler) handleValueChange(c mtp.Conn, vc *usp.ValueChange) {
+	deviceID, ok := h.reconciledDeviceID(c)
+	if !ok {
+		h.log.Warn("uspc: ValueChange from an unreconciled connection, dropping", "endpoint", c.Endpoint(), "mtp", c.Kind(), "subscription_id", vc.SubscriptionID)
+		return
+	}
+	h.checkSubscriptionID(c, deviceID, vc.SubscriptionID)
+
+	if h.paramsRepo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+		err := h.paramsRepo.Upsert(ctx, deviceID, map[string]parameters.CachedValue{
+			vc.ParamPath: {Value: vc.ParamValue, Source: parameters.SourceUSPNotify, UpdatedAt: time.Now()},
+		})
+		cancel()
+		if err != nil {
+			h.log.Warn("uspc: failed to upsert ValueChange into the parameter cache", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "param_path", vc.ParamPath, "error", err)
+		}
+	}
+
+	if !vc.SendResp {
+		return
+	}
+	h.sendNotifyResp(c, vc.SubscriptionID)
+}
+
+// handleObjectCreation invalidates the affected parameter-cache subtree
+// and records the event from an ObjectCreation Notify (design S7.1).
+// msgID is msg.GetHeader().GetMsgId() from OnRecord's own decode -- see
+// OnRecord's own comment for why it can't come from the decoded
+// ObjectCreation itself. Identity/subscription-id handling mirrors
+// handleValueChange exactly.
+func (h *handler) handleObjectCreation(c mtp.Conn, oc *usp.ObjectCreation, msgID string) {
+	deviceID, ok := h.reconciledDeviceID(c)
+	if !ok {
+		h.log.Warn("uspc: ObjectCreation from an unreconciled connection, dropping", "endpoint", c.Endpoint(), "mtp", c.Kind(), "subscription_id", oc.SubscriptionID)
+		return
+	}
+	h.checkSubscriptionID(c, deviceID, oc.SubscriptionID)
+
+	if h.paramsRepo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+		err := h.paramsRepo.InvalidateSubtree(ctx, deviceID, oc.ObjPath)
+		cancel()
+		if err != nil {
+			h.log.Warn("uspc: failed to invalidate parameter cache subtree after ObjectCreation", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath, "error", err)
+		}
+	}
+	if h.devicesRepo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+		err := h.devicesRepo.RecordEvent(ctx, deviceID, msgID, oc.ObjPath, "ObjectCreation", oc.UniqueKeys)
+		cancel()
+		if err != nil {
+			h.log.Warn("uspc: failed to record ObjectCreation event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath, "error", err)
+		}
+	}
+
+	if !oc.SendResp {
+		return
+	}
+	h.sendNotifyResp(c, oc.SubscriptionID)
+}
+
+// handleObjectDeletion is handleObjectCreation's ObjectDeletion
+// counterpart: same subtree invalidation and event recording, but with
+// no UniqueKeys (an ObjectDeletion Notify carries none -- the instance
+// is simply gone).
+func (h *handler) handleObjectDeletion(c mtp.Conn, od *usp.ObjectDeletion, msgID string) {
+	deviceID, ok := h.reconciledDeviceID(c)
+	if !ok {
+		h.log.Warn("uspc: ObjectDeletion from an unreconciled connection, dropping", "endpoint", c.Endpoint(), "mtp", c.Kind(), "subscription_id", od.SubscriptionID)
+		return
+	}
+	h.checkSubscriptionID(c, deviceID, od.SubscriptionID)
+
+	if h.paramsRepo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+		err := h.paramsRepo.InvalidateSubtree(ctx, deviceID, od.ObjPath)
+		cancel()
+		if err != nil {
+			h.log.Warn("uspc: failed to invalidate parameter cache subtree after ObjectDeletion", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath, "error", err)
+		}
+	}
+	if h.devicesRepo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+		err := h.devicesRepo.RecordEvent(ctx, deviceID, msgID, od.ObjPath, "ObjectDeletion", nil)
+		cancel()
+		if err != nil {
+			h.log.Warn("uspc: failed to record ObjectDeletion event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath, "error", err)
+		}
+	}
+
+	if !od.SendResp {
+		return
+	}
+	h.sendNotifyResp(c, od.SubscriptionID)
+}
+
+// handleEvent records the event from an Event Notify (design S7.1) --
+// no parameter cache involvement, since an arbitrary TR-369 event (e.g.
+// Boot!, Device.LocalAgent.Subscription.1.ObjectCreation!) doesn't
+// necessarily correspond to a parameter value at all. Identity/
+// subscription-id/msgID handling mirrors handleObjectCreation.
+func (h *handler) handleEvent(c mtp.Conn, ev *usp.Event, msgID string) {
+	deviceID, ok := h.reconciledDeviceID(c)
+	if !ok {
+		h.log.Warn("uspc: Event from an unreconciled connection, dropping", "endpoint", c.Endpoint(), "mtp", c.Kind(), "subscription_id", ev.SubscriptionID)
+		return
+	}
+	h.checkSubscriptionID(c, deviceID, ev.SubscriptionID)
+
+	if h.devicesRepo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+		err := h.devicesRepo.RecordEvent(ctx, deviceID, msgID, ev.ObjPath, ev.EventName, ev.Params)
+		cancel()
+		if err != nil {
+			h.log.Warn("uspc: failed to record Event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", ev.ObjPath, "event_name", ev.EventName, "error", err)
+		}
+	}
+
+	if !ev.SendResp {
+		return
+	}
+	h.sendNotifyResp(c, ev.SubscriptionID)
 }
 
 // handleProbeFallback is the design spec's "last resort" identity path
@@ -346,6 +563,20 @@ func (h *handler) resolveAndMarkReconciled(c mtp.Conn) {
 	if err := h.dispatcher.tryDispatch(dispatchCtx, agentRow.DeviceID); err != nil {
 		h.log.Warn("uspc: reconciled connection but failed to trigger dispatch for its device", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", agentRow.DeviceID, "error", err)
 	}
+
+	// Same fresh-context-per-call discipline as the dispatch trigger
+	// above, its own separate budget: a subscription-reconcile failure
+	// must not starve (or be starved by) tryDispatch's own call, and vice
+	// versa. h.subscriptions is nil in some test-construction paths
+	// (newTestHandler does not set it), matching h.dispatcher's own
+	// nil-guard convention elsewhere in this file.
+	if h.subscriptions != nil {
+		subsCtx, subsCancel := context.WithTimeout(context.Background(), dbCallTimeout)
+		defer subsCancel()
+		if err := h.subscriptions.reconcile(subsCtx, agentRow.DeviceID, c); err != nil {
+			h.log.Warn("uspc: reconciled connection but failed to trigger subscription reconciliation for its device", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", agentRow.DeviceID, "error", err)
+		}
+	}
 }
 
 // deviceInfoFromGetResp walks a GetResp's resolved parameters looking
@@ -397,6 +628,9 @@ func (h *handler) OnDisconnect(c mtp.Conn, err error) {
 	h.probe.forget(c)
 	if h.dispatcher != nil {
 		h.dispatcher.forget(c)
+	}
+	if h.subscriptions != nil {
+		h.subscriptions.forget(c)
 	}
 	h.metrics.connections.WithLabelValues(string(c.Kind())).Dec()
 

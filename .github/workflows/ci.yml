@@ -170,9 +170,12 @@ jobs:
         # ACS_TEST_POSTGRES_DSN) -- a DB-backed test in a package not on
         # this list never runs in CI (final review, Critical Finding 2:
         # cmd/uspc was missing here entirely, so its 26+ DB-backed tests
-        # silently skipped in every CI run). -p 1: every one resets the
-        # same database.
-        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./cmd/acs/ ./cmd/uspc/
+        # silently skipped in every CI run). internal/subscriptions and
+        # internal/parameters have their own DB-backed tests too (Tasks 3/4
+        # of the usp-subscriptions plan) and were never added here either
+        # (tracked-forward gap from Task 3's review) -- added now. -p 1:
+        # every one resets the same database.
+        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./internal/subscriptions/ ./internal/parameters/ ./cmd/acs/ ./cmd/uspc/
       - name: placeholder secrets are refused (fail-closed)
         run: |
           set +e

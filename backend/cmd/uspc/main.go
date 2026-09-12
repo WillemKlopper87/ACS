@@ -35,7 +35,9 @@ import (
 	"acs/internal/devices"
 	"acs/internal/jobs"
 	"acs/internal/observability"
+	"acs/internal/parameters"
 	"acs/internal/store"
+	"acs/internal/subscriptions"
 	"acs/internal/usp/mtp"
 )
 
@@ -115,14 +117,20 @@ func run(logger *slog.Logger) error {
 	registry := mtp.NewRegistry()
 	jobsRepo := jobs.NewRepository(db)
 	disp := newDispatcher(jobsRepo, repo, registry, cfg.ControllerID, logger)
+	paramsRepo := parameters.NewRepository(db)
+	subsRepo := subscriptions.NewRepository(db)
+	subsReconciler := newSubscriptionReconciler(subsRepo, cfg.ControllerID, logger)
 	h := &handler{
-		log:          logger,
-		registry:     registry,
-		probe:        p,
-		controllerID: cfg.ControllerID,
-		metrics:      uspm,
-		reconciler:   newReconciler(repo, logger),
-		dispatcher:   disp,
+		log:           logger,
+		registry:      registry,
+		probe:         p,
+		controllerID:  cfg.ControllerID,
+		metrics:       uspm,
+		reconciler:    newReconciler(repo, logger),
+		dispatcher:    disp,
+		subscriptions: subsReconciler,
+		paramsRepo:    paramsRepo,
+		devicesRepo:   repo,
 	}
 
 	// dispatchCtx bounds the two dispatch goroutines below independently of
