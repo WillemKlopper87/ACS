@@ -1,0 +1,379 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"acs/internal/store"
+	"acs/internal/subscriptions"
+	"acs/internal/usp"
+	"acs/internal/usp/uspproto"
+)
+
+// newSubscriptionReconcilerTestRepo mirrors the DSN-skip DB-backed test
+// harness used throughout this codebase (internal/subscriptions'
+// own newSubscriptionsTestRepo, dispatcher_test.go's
+// newDispatcherTestDB): a clean, fully migrated schema per test, skipped
+// entirely when no live Postgres is configured. It seeds one devices row
+// directly via SQL -- usp_subscriptions.device_id is a foreign key into
+// devices, and internal/subscriptions must not (and this package need
+// not) depend on internal/devices just to satisfy it.
+func newSubscriptionReconcilerTestRepo(t *testing.T) (context.Context, *subscriptions.Repository, string) {
+	t.Helper()
+	dsn := os.Getenv("ACS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("ACS_TEST_POSTGRES_DSN not set — skipping DB-backed integration test")
+	}
+	ctx := context.Background()
+	db, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.ExecContext(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx, db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	deviceID := uuid.New().String()
+	if _, err := db.ExecContext(ctx, `INSERT INTO devices (id, oui_serial) VALUES ($1, $2)`, deviceID, "seed-"+deviceID); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+
+	return ctx, subscriptions.NewRepository(db), deviceID
+}
+
+// subscriptionReadMsgID decodes wire (the reconciler's own read Get,
+// captureConn's first sent record) and returns its msg_id, asserting it
+// really is a Get(["Device.LocalAgent.Subscription."], maxDepth=1) --
+// mirrors probe_test.go's own sentMsgID.
+func subscriptionReadMsgID(t *testing.T, wire []byte) string {
+	t.Helper()
+	rec, err := usp.DecodeRecord(wire, agent)
+	if err != nil {
+		t.Fatalf("decode subscription read record: %v", err)
+	}
+	if rec.From != ctrl {
+		t.Fatalf("subscription read record From = %q, want %q", rec.From, ctrl)
+	}
+	msg, err := usp.DecodeMsg(rec.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.GetHeader().GetMsgType() != uspproto.Header_GET {
+		t.Fatalf("subscription reconciler sent %v, want GET", msg.GetHeader().GetMsgType())
+	}
+	get := msg.GetBody().GetRequest().GetGet()
+	if paths := get.GetParamPaths(); len(paths) != 1 || paths[0] != subscriptionRootPath {
+		t.Fatalf("subscription read Get paths = %v, want [%s]", paths, subscriptionRootPath)
+	}
+	if get.GetMaxDepth() != 1 {
+		t.Fatalf("subscription read Get max_depth = %d, want 1", get.GetMaxDepth())
+	}
+	return msg.GetHeader().GetMsgId()
+}
+
+// subscriptionGetResp builds a GetResp answering subscriptionRootPath's
+// Get with one resolved instance per params map given, numbered
+// Device.LocalAgent.Subscription.1., .2., etc. -- mirrors probe_test.go's
+// own getResp, generalized to multiple instances since a subscription
+// table read can resolve any number of them.
+func subscriptionGetResp(msgID string, instances ...map[string]string) *uspproto.Msg {
+	resolved := make([]*uspproto.GetResp_ResolvedPathResult, 0, len(instances))
+	for i, params := range instances {
+		resolved = append(resolved, &uspproto.GetResp_ResolvedPathResult{
+			ResolvedPath: fmt.Sprintf("Device.LocalAgent.Subscription.%d.", i+1),
+			ResultParams: params,
+		})
+	}
+	return &uspproto.Msg{
+		Header: &uspproto.Header{MsgId: msgID, MsgType: uspproto.Header_GET_RESP},
+		Body: &uspproto.Body{MsgBody: &uspproto.Body_Response{Response: &uspproto.Response{
+			RespType: &uspproto.Response_GetResp{GetResp: &uspproto.GetResp{
+				ReqPathResults: []*uspproto.GetResp_RequestedPathResult{{RequestedPath: subscriptionRootPath, ResolvedPathResults: resolved}},
+			}},
+		}}},
+	}
+}
+
+// TestReconcileNothingToConverge covers the checklist's converged-case
+// row: no desired subscriptions and no actual ones on the device must
+// send nothing beyond the read itself.
+func TestReconcileNothingToConverge(t *testing.T) {
+	ctx, repo, deviceID := newSubscriptionReconcilerTestRepo(t)
+	s := newSubscriptionReconciler(repo, ctrl, slog.Default())
+	c := &captureConn{id: agent}
+
+	if err := s.reconcile(ctx, deviceID, c); err != nil {
+		t.Fatalf("reconcile() = %v, want nil", err)
+	}
+	if len(c.sent) != 1 {
+		t.Fatalf("c.sent = %d records, want exactly 1 (the read)", len(c.sent))
+	}
+	msgID := subscriptionReadMsgID(t, c.sent[0])
+
+	if matched := s.handleResponse(agent, subscriptionGetResp(msgID)); !matched {
+		t.Fatal("handleResponse() = false, want true for the reconciler's own read msg_id")
+	}
+	if len(c.sent) != 1 {
+		t.Errorf("c.sent = %d records, want still 1: nothing to converge should send nothing beyond the read", len(c.sent))
+	}
+	if len(s.pending) != 0 {
+		t.Errorf("pending = %+v, want none", s.pending)
+	}
+}
+
+// TestReconcileSendsAddForMissingDesired covers the checklist's
+// missing-desired row: a desired subscription absent from the device's
+// actual instances must produce the right Add.
+func TestReconcileSendsAddForMissingDesired(t *testing.T) {
+	ctx, repo, deviceID := newSubscriptionReconcilerTestRepo(t)
+	sub := subscriptions.Subscription{
+		ID:            uuid.New().String(),
+		DeviceID:      deviceID,
+		NotifType:     "ValueChange",
+		ReferenceList: []string{"Device.WiFi.SSID.1.SSID"},
+		Persistent:    true,
+		CreatedBy:     "test",
+		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+	}
+	if err := repo.Create(ctx, sub); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	s := newSubscriptionReconciler(repo, ctrl, slog.Default())
+	c := &captureConn{id: agent}
+	if err := s.reconcile(ctx, deviceID, c); err != nil {
+		t.Fatalf("reconcile() = %v, want nil", err)
+	}
+	msgID := subscriptionReadMsgID(t, c.sent[0])
+
+	if matched := s.handleResponse(agent, subscriptionGetResp(msgID)); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+	if len(c.sent) != 2 {
+		t.Fatalf("c.sent = %d records, want 2 (read + Add)", len(c.sent))
+	}
+
+	rec, err := usp.DecodeRecord(c.sent[1], agent)
+	if err != nil {
+		t.Fatalf("decode Add record: %v", err)
+	}
+	msg, err := usp.DecodeMsg(rec.Payload)
+	if err != nil {
+		t.Fatalf("decode Add msg: %v", err)
+	}
+	add := msg.GetBody().GetRequest().GetAdd()
+	if add == nil {
+		t.Fatal("second sent message is not an Add")
+	}
+	if !add.GetAllowPartial() {
+		t.Error("Add allow_partial = false, want true")
+	}
+	if len(add.GetCreateObjs()) != 1 {
+		t.Fatalf("Add create_objs = %d, want 1", len(add.GetCreateObjs()))
+	}
+	obj := add.GetCreateObjs()[0]
+	if obj.GetObjPath() != subscriptionRootPath {
+		t.Errorf("Add obj_path = %q, want %q", obj.GetObjPath(), subscriptionRootPath)
+	}
+	params := make(map[string]string)
+	for _, p := range obj.GetParamSettings() {
+		params[p.GetParam()] = p.GetValue()
+		if !p.GetRequired() {
+			t.Errorf("Add param %q required = false, want true", p.GetParam())
+		}
+	}
+	if params["ID"] != sub.ID {
+		t.Errorf("Add ID = %q, want %q", params["ID"], sub.ID)
+	}
+	if params["Enable"] != "true" {
+		t.Errorf("Add Enable = %q, want %q", params["Enable"], "true")
+	}
+	if params["NotifType"] != sub.NotifType {
+		t.Errorf("Add NotifType = %q, want %q", params["NotifType"], sub.NotifType)
+	}
+	wantRefs := joinReferenceList(sub.ReferenceList)
+	if params["ReferenceList"] != wantRefs {
+		t.Errorf("Add ReferenceList = %q, want %q", params["ReferenceList"], wantRefs)
+	}
+
+	s.mu.Lock()
+	addEntry, ok := s.pending[msg.GetHeader().GetMsgId()]
+	s.mu.Unlock()
+	if !ok {
+		t.Fatalf("pending = %+v, want an entry for the Add's own msg_id (awaiting its AddResp)", s.pending)
+	}
+	if addEntry.kind != pendingKindAdd || addEntry.key != sub.ID {
+		t.Errorf("pending entry = %+v, want kind=pendingKindAdd key=%q", addEntry, sub.ID)
+	}
+}
+
+// TestReconcileSendsDeleteForUndesiredActual covers the checklist's
+// undesired-actual row: an actual instance on the device with no
+// matching desired row must produce the right Delete.
+func TestReconcileSendsDeleteForUndesiredActual(t *testing.T) {
+	ctx, repo, deviceID := newSubscriptionReconcilerTestRepo(t)
+	s := newSubscriptionReconciler(repo, ctrl, slog.Default())
+	c := &captureConn{id: agent}
+	if err := s.reconcile(ctx, deviceID, c); err != nil {
+		t.Fatalf("reconcile() = %v, want nil", err)
+	}
+	msgID := subscriptionReadMsgID(t, c.sent[0])
+
+	actualID := uuid.New().String()
+	resp := subscriptionGetResp(msgID, map[string]string{
+		"ID":            actualID,
+		"NotifType":     "ObjectCreation",
+		"ReferenceList": "Device.WiFi.AccessPoint.",
+	})
+	if matched := s.handleResponse(agent, resp); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+	if len(c.sent) != 2 {
+		t.Fatalf("c.sent = %d records, want 2 (read + Delete)", len(c.sent))
+	}
+
+	rec, err := usp.DecodeRecord(c.sent[1], agent)
+	if err != nil {
+		t.Fatalf("decode Delete record: %v", err)
+	}
+	msg, err := usp.DecodeMsg(rec.Payload)
+	if err != nil {
+		t.Fatalf("decode Delete msg: %v", err)
+	}
+	del := msg.GetBody().GetRequest().GetDelete()
+	if del == nil {
+		t.Fatal("second sent message is not a Delete")
+	}
+	if !del.GetAllowPartial() {
+		t.Error("Delete allow_partial = false, want true")
+	}
+	wantPath := subscriptionRootPath + actualID + "."
+	if paths := del.GetObjPaths(); len(paths) != 1 || paths[0] != wantPath {
+		t.Errorf("Delete obj_paths = %v, want [%s]", paths, wantPath)
+	}
+
+	s.mu.Lock()
+	delEntry, ok := s.pending[msg.GetHeader().GetMsgId()]
+	s.mu.Unlock()
+	if !ok {
+		t.Fatalf("pending = %+v, want an entry for the Delete's own msg_id (awaiting its DeleteResp)", s.pending)
+	}
+	if delEntry.kind != pendingKindDelete || delEntry.key != actualID {
+		t.Errorf("pending entry = %+v, want kind=pendingKindDelete key=%q", delEntry, actualID)
+	}
+}
+
+// TestReconcileRecreatesOnFingerprintMismatch covers the checklist's
+// fingerprint-mismatch row: a desired/actual pair sharing a Key but
+// disagreeing on NotifType/ReferenceList must be recreated -- Delete
+// (the stale actual) ordered before Add (the desired replacement), since
+// ReferenceList is immutable on the wire.
+func TestReconcileRecreatesOnFingerprintMismatch(t *testing.T) {
+	ctx, repo, deviceID := newSubscriptionReconcilerTestRepo(t)
+	sub := subscriptions.Subscription{
+		ID:            uuid.New().String(),
+		DeviceID:      deviceID,
+		NotifType:     "ValueChange",
+		ReferenceList: []string{"Device.WiFi.SSID.1.SSID"},
+		Persistent:    true,
+		CreatedBy:     "test",
+		CreatedAt:     time.Now().UTC().Truncate(time.Microsecond),
+	}
+	if err := repo.Create(ctx, sub); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	s := newSubscriptionReconciler(repo, ctrl, slog.Default())
+	c := &captureConn{id: agent}
+	if err := s.reconcile(ctx, deviceID, c); err != nil {
+		t.Fatalf("reconcile() = %v, want nil", err)
+	}
+	msgID := subscriptionReadMsgID(t, c.sent[0])
+
+	// Same ID on the device, but a different NotifType than desired --
+	// fingerprint mismatch, must recreate.
+	resp := subscriptionGetResp(msgID, map[string]string{
+		"ID":            sub.ID,
+		"NotifType":     "ObjectCreation",
+		"ReferenceList": "Device.WiFi.SSID.1.SSID",
+	})
+	if matched := s.handleResponse(agent, resp); !matched {
+		t.Fatal("handleResponse() = false, want true")
+	}
+	if len(c.sent) != 3 {
+		t.Fatalf("c.sent = %d records, want 3 (read, Delete, Add)", len(c.sent))
+	}
+
+	deleteRec, err := usp.DecodeRecord(c.sent[1], agent)
+	if err != nil {
+		t.Fatalf("decode second record: %v", err)
+	}
+	deleteMsg, err := usp.DecodeMsg(deleteRec.Payload)
+	if err != nil {
+		t.Fatalf("decode second msg: %v", err)
+	}
+	del := deleteMsg.GetBody().GetRequest().GetDelete()
+	if del == nil {
+		t.Fatal("second sent message must be the Delete: delete must be ordered before add on a fingerprint mismatch")
+	}
+	wantPath := subscriptionRootPath + sub.ID + "."
+	if paths := del.GetObjPaths(); len(paths) != 1 || paths[0] != wantPath {
+		t.Errorf("Delete obj_paths = %v, want [%s]", paths, wantPath)
+	}
+
+	addRec, err := usp.DecodeRecord(c.sent[2], agent)
+	if err != nil {
+		t.Fatalf("decode third record: %v", err)
+	}
+	addMsg, err := usp.DecodeMsg(addRec.Payload)
+	if err != nil {
+		t.Fatalf("decode third msg: %v", err)
+	}
+	add := addMsg.GetBody().GetRequest().GetAdd()
+	if add == nil {
+		t.Fatal("third sent message must be the Add (the desired replacement)")
+	}
+	if len(add.GetCreateObjs()) != 1 || add.GetCreateObjs()[0].GetObjPath() != subscriptionRootPath {
+		t.Fatalf("Add create_objs = %+v, want one object under %s", add.GetCreateObjs(), subscriptionRootPath)
+	}
+	params := make(map[string]string)
+	for _, p := range add.GetCreateObjs()[0].GetParamSettings() {
+		params[p.GetParam()] = p.GetValue()
+	}
+	if params["ID"] != sub.ID {
+		t.Errorf("Add ID = %q, want %q", params["ID"], sub.ID)
+	}
+	if params["NotifType"] != sub.NotifType {
+		t.Errorf("Add NotifType = %q, want the desired (new) value %q, not the stale device value", params["NotifType"], sub.NotifType)
+	}
+}
+
+// TestSubscriptionHandleResponseUnknownMsgID covers the checklist's
+// unknown-msg_id row, mirroring dispatcher_test.go's/probe_test.go's own
+// versions of the same guard. Needs no live DB: it never calls
+// s.repo.ByDevice, so a Repository wrapping a nil *sql.DB is enough,
+// exactly like TestHandleResponseUnknownMsgID's own nil jobsRepo.
+func TestSubscriptionHandleResponseUnknownMsgID(t *testing.T) {
+	s := newSubscriptionReconciler(subscriptions.NewRepository(nil), ctrl, slog.Default())
+
+	if matched := s.handleResponse(agent, subscriptionGetResp("never-sent")); matched {
+		t.Error("handleResponse matched a msg_id this reconciler never sent")
+	}
+	// A nil / bodiless message must not panic.
+	if matched := s.handleResponse(agent, nil); matched {
+		t.Error("handleResponse matched a nil msg")
+	}
+	if matched := s.handleResponse(agent, &uspproto.Msg{Header: &uspproto.Header{MsgId: "x"}}); matched {
+		t.Error("handleResponse matched an unrecognised msg_id")
+	}
+}
