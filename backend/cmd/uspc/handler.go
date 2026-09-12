@@ -240,6 +240,9 @@ func (h *handler) handleOnBoardRequest(c mtp.Conn, ob *usp.OnBoardRequest) {
 	cancel()
 	if err != nil {
 		h.logReconcileFailure(c, "failed to reconcile onboard request", err)
+		if errors.Is(err, devices.ErrUnknownDevice) {
+			_ = c.Close("agent identity not pre-registered")
+		}
 		return
 	}
 	h.resolveAndMarkReconciled(c)
@@ -551,6 +554,9 @@ func (h *handler) handleProbeFallback(c mtp.Conn, msg *uspproto.Msg) {
 	cancel()
 	if err != nil {
 		h.logReconcileFailure(c, "failed to reconcile via probe fallback", err)
+		if errors.Is(err, devices.ErrUnknownDevice) {
+			_ = c.Close("agent identity not pre-registered")
+		}
 		return
 	}
 	h.resolveAndMarkReconciled(c)
@@ -562,9 +568,14 @@ func (h *handler) handleProbeFallback(c mtp.Conn, msg *uspproto.Msg) {
 // it means this connection's endpoint id is already durably bound to a
 // different device in usp_agents, which is not a transient condition --
 // the agent will retry the same OnBoardRequest forever without an
-// operator resolving the collision (final-review finding 6). Every other
-// failure (a transient DB error, etc.) keeps the existing Warn treatment,
-// since a retry may well succeed on its own next time.
+// operator resolving the collision (final-review finding 6).
+// devices.ErrUnknownDevice (the USP agent allowlist's identity gate) is a
+// routine, expected refusal -- not an operator-actionable bug -- so it
+// keeps the default Warn treatment; both call sites additionally close
+// the connection for this specific error (see their own call sites).
+// Every other failure (a transient DB error, etc.) also keeps the
+// existing Warn treatment, since a retry may well succeed on its own next
+// time.
 func (h *handler) logReconcileFailure(c mtp.Conn, msg string, err error) {
 	if errors.Is(err, devices.ErrEndpointIDInUse) {
 		h.log.Error("uspc: "+msg+": endpoint id already linked to a different device -- requires operator intervention, agent will retry indefinitely",

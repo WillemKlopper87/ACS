@@ -17,7 +17,7 @@ import (
 // against a fake and stay fast and DB-free, matching the plan's stated
 // intent for cmd/uspc's own tests.
 type identityStore interface {
-	UpsertFromOnBoard(ctx context.Context, oui, productClass, serialNumber string) (*devices.Device, error)
+	ReconcileFromOnBoard(ctx context.Context, oui, productClass, serialNumber string) (*devices.Device, error)
 	LinkUspAgent(ctx context.Context, deviceID, endpointID, mtpKind string, supportedProtocolVersions []string) error
 	MarkUspAgentDisconnected(ctx context.Context, deviceID, endpointID string) error
 	GetUspAgentByEndpointID(ctx context.Context, endpointID string) (*devices.UspAgent, error)
@@ -71,9 +71,9 @@ func newReconciler(store identityStore, log *slog.Logger) *reconciler {
 // devices row on its oui_serial natural key, then link this
 // connection's endpoint id and MTP kind to it.
 func (r *reconciler) onBoard(ctx context.Context, c mtp.Conn, ob *usp.OnBoardRequest) error {
-	device, err := r.store.UpsertFromOnBoard(ctx, ob.OUI, ob.ProductClass, ob.SerialNumber)
+	device, err := r.store.ReconcileFromOnBoard(ctx, ob.OUI, ob.ProductClass, ob.SerialNumber)
 	if err != nil {
-		return fmt.Errorf("reconcile onboard: upsert device: %w", err)
+		return fmt.Errorf("reconcile onboard: %w", err)
 	}
 	versions := splitProtocolVersions(ob.AgentSupportedProtocolVersions)
 	if err := r.store.LinkUspAgent(ctx, device.ID, string(c.Endpoint()), string(c.Kind()), versions); err != nil {
@@ -89,9 +89,9 @@ func (r *reconciler) onBoard(ctx context.Context, c mtp.Conn, ob *usp.OnBoardReq
 // diagnostically useful, since the primary path (OnBoardRequest) not
 // firing may indicate an agent that doesn't implement it.
 func (r *reconciler) fromProbeFallback(ctx context.Context, c mtp.Conn, oui, productClass, serialNumber string) error {
-	device, err := r.store.UpsertFromOnBoard(ctx, oui, productClass, serialNumber)
+	device, err := r.store.ReconcileFromOnBoard(ctx, oui, productClass, serialNumber)
 	if err != nil {
-		return fmt.Errorf("reconcile probe fallback: upsert device: %w", err)
+		return fmt.Errorf("reconcile probe fallback: %w", err)
 	}
 	// The probe's GetResp carries no AgentSupportedProtocolVersions
 	// equivalent -- nil leaves whatever LinkUspAgent already has for this

@@ -1012,7 +1012,7 @@ func TestReconcileTriggersDispatch(t *testing.T) {
 	registry.Add(c)
 	// Seed the identity link resolveAndMarkReconciled itself resolves via
 	// GetUspAgentByEndpointID -- as if reconciler.onBoard's own
-	// UpsertFromOnBoard/LinkUspAgent had just run.
+	// ReconcileFromOnBoard/LinkUspAgent had just run.
 	store.agentsByEndpointID[string(agent)] = &devices.UspAgent{
 		DeviceID:   deviceID,
 		EndpointID: string(agent),

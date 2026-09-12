@@ -24,14 +24,18 @@ type mtpKindForTest = mtp.Kind
 var _ mtp.Conn = (*captureConn)(nil)
 
 type captureConn struct {
-	id   usp.EndpointID
-	sent [][]byte
+	id     usp.EndpointID
+	sent   [][]byte
+	closed []string
 }
 
-func (c *captureConn) Endpoint() usp.EndpointID               { return c.id }
-func (c *captureConn) Kind() mtpKindForTest                   { return "WebSocket" }
-func (c *captureConn) RemoteAddr() string                     { return "test" }
-func (c *captureConn) Close(string) error                     { return nil }
+func (c *captureConn) Endpoint() usp.EndpointID { return c.id }
+func (c *captureConn) Kind() mtpKindForTest     { return "WebSocket" }
+func (c *captureConn) RemoteAddr() string       { return "test" }
+func (c *captureConn) Close(reason string) error {
+	c.closed = append(c.closed, reason)
+	return nil
+}
 func (c *captureConn) Send(_ context.Context, r []byte) error { c.sent = append(c.sent, r); return nil }
 
 func sentMsgID(t *testing.T, controller, agent usp.EndpointID, wire []byte) string {

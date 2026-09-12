@@ -240,6 +240,7 @@ func deviceInfoParams(oui, productClass, serialNumber string) map[string]string 
 
 func TestHandlerOnBoardRequestReconciles(t *testing.T) {
 	store := newFakeIdentityStore()
+	store.seedKnownDevice("0025C2", "Gateway", "SN12345")
 	h := newTestHandler(store)
 	c := &captureConn{id: agent}
 
@@ -262,6 +263,7 @@ func TestHandlerOnBoardRequestReconciles(t *testing.T) {
 
 func TestHandlerOnBoardRequestSendsResp(t *testing.T) {
 	store := newFakeIdentityStore()
+	store.seedKnownDevice("0025C2", "Gateway", "SN12345")
 	h := newTestHandler(store)
 	c := &captureConn{id: agent}
 
@@ -292,6 +294,7 @@ func TestHandlerOnBoardRequestSendsResp(t *testing.T) {
 
 func TestHandlerOnBoardRequestNoRespWhenNotRequested(t *testing.T) {
 	store := newFakeIdentityStore()
+	store.seedKnownDevice("0025C2", "Gateway", "SN12345")
 	h := newTestHandler(store)
 	c := &captureConn{id: agent}
 
@@ -305,6 +308,7 @@ func TestHandlerOnBoardRequestNoRespWhenNotRequested(t *testing.T) {
 
 func TestHandlerProbeFallbackReconcilesOnce(t *testing.T) {
 	store := newFakeIdentityStore()
+	store.seedKnownDevice("0025C2", "Gateway", "SN12345")
 	h := newTestHandler(store)
 	c := &captureConn{id: agent}
 
@@ -336,6 +340,7 @@ func TestHandlerProbeFallbackReconcilesOnce(t *testing.T) {
 
 func TestHandlerOnBoardRequestSuppressesProbeFallback(t *testing.T) {
 	store := newFakeIdentityStore()
+	store.seedKnownDevice("0025C2", "Gateway", "SN12345")
 	h := newTestHandler(store)
 	c := &captureConn{id: agent}
 
@@ -360,6 +365,7 @@ func TestHandlerOnBoardRequestSuppressesProbeFallback(t *testing.T) {
 
 func TestHandlerDisconnectMarksUspAgent(t *testing.T) {
 	store := newFakeIdentityStore()
+	store.seedKnownDevice("0025C2", "Gateway", "SN12345")
 	h := newTestHandler(store)
 	c := &captureConn{id: agent}
 
@@ -403,6 +409,7 @@ func TestHandlerDisconnectSkipsUnreconciledConnection(t *testing.T) {
 // for the Conn actually still on record in the registry may do that.
 func TestHandlerDisconnectSkipsStaleConnectionAfterTakeover(t *testing.T) {
 	store := newFakeIdentityStore()
+	store.seedKnownDevice("0025C2", "Gateway", "SN12345")
 	h := newTestHandler(store)
 
 	a := &captureConn{id: agent}
@@ -457,6 +464,7 @@ func TestHandlerDisconnectSkipsStaleConnectionAfterTakeover(t *testing.T) {
 // guard) protects the device in this shape.
 func TestHandlerDisconnectStaleEndpointAfterDifferentEndpointReconnect(t *testing.T) {
 	store := newFakeIdentityStore()
+	store.seedKnownDevice("0025C2", "Gateway", "SN12345")
 	h := newTestHandler(store)
 
 	oldEndpoint := usp.EndpointID("os::012345-AAAA-old")
@@ -498,6 +506,49 @@ func TestHandlerDisconnectStaleEndpointAfterDifferentEndpointReconnect(t *testin
 	}
 	if !agentRow.Connected {
 		t.Error("device marked disconnected via a's stale old-endpoint teardown, want still connected: b's session under the new endpoint id is still live")
+	}
+}
+
+// TestHandlerOnBoardRequestClosesConnectionForUnknownDevice and
+// TestHandlerProbeFallbackClosesConnectionForUnknownDevice cover this
+// plan's identity-level gate at the handler layer: an OnBoardRequest (or
+// probe fallback) for an identity the store doesn't recognize must close
+// the connection, not just fail reconciliation silently.
+func TestHandlerOnBoardRequestClosesConnectionForUnknownDevice(t *testing.T) {
+	store := newFakeIdentityStore() // deliberately not seeded
+	h := newTestHandler(store)
+	c := &captureConn{id: agent}
+
+	msg := onBoardRequestMsg("sub-1", false, "0025C2", "Gateway", "SN12345")
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg)})
+
+	if len(c.closed) != 1 {
+		t.Fatalf("c.closed = %v, want exactly 1 close call for an unknown-device OnBoardRequest", c.closed)
+	}
+	if h.isReconciled(c) {
+		t.Error("connection marked reconciled despite an unknown-device refusal")
+	}
+}
+
+func TestHandlerProbeFallbackClosesConnectionForUnknownDevice(t *testing.T) {
+	store := newFakeIdentityStore() // deliberately not seeded
+	h := newTestHandler(store)
+	c := &captureConn{id: agent}
+
+	h.OnConnect(c)
+	if err := h.probe.start(context.Background(), c); err != nil {
+		t.Fatalf("probe.start: %v", err)
+	}
+	if len(c.sent) != 2 {
+		t.Fatalf("c.sent has %d probe Gets, want 2", len(c.sent))
+	}
+	id1 := sentMsgID(t, ctrl, agent, c.sent[0])
+
+	params := deviceInfoParams("0025C2", "Gateway", "SN12345")
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, getResp(id1, params))})
+
+	if len(c.closed) != 1 {
+		t.Fatalf("c.closed = %v, want exactly 1 close call for an unknown-device probe fallback", c.closed)
 	}
 }
 

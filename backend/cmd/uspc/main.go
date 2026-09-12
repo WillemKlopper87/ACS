@@ -11,10 +11,13 @@
 // device that queued a job before it connected, and a periodic sweep as
 // the safety net all converge on dispatcher.tryDispatch.
 //
-// Agent allowlisting does not exist yet: any agent that completes the
-// WebSocket subprotocol/query-parameter handshake or publishes to the
-// MQTT controller topic is accepted. Do not expose this service to an
-// untrusted network until that lands.
+// Agent allowlisting is two independent gates (design
+// docs/superpowers/specs/2026-09-12-usp-agent-allowlist-design.md):
+// network-level (ACS_USP_ALLOWED_CIDRS, empty is permissive) and
+// identity-level (an agent's OUI+SerialNumber must already correspond to
+// a devices row -- pre-registered via the bulk-import API, a prior CWMP
+// Inform, or a prior USP onboarding -- or the connection is refused and
+// closed).
 package main
 
 import (
@@ -68,7 +71,9 @@ func run(logger *slog.Logger) error {
 	logger.Info("config", "var", "ACS_USP_CONTROLLER_ID", "value", cfg.ControllerID)
 	logger.Info("config", "var", "ACS_USP_TLS_CERT", "value", cfg.TLSCert)
 	logger.Info("config", "var", "ACS_USP_TLS_KEY", "value", cfg.TLSKey)
-	logger.Warn("agent allowlisting is not implemented in this build; do not expose uspc to an untrusted network")
+	if len(cfg.AllowedCIDRs) == 0 {
+		logger.Warn("ACS_USP_ALLOWED_CIDRS is not set: any network can reach this service's listeners. Set it for a production deployment.")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

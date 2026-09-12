@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"acs/internal/cwmp"
 	"acs/internal/devices"
 	"acs/internal/store"
 )
@@ -36,7 +37,11 @@ func TestResetUspAgentsConnectedClearsStaleRows(t *testing.T) {
 	// Seed a usp_agents row exactly as a prior process's LinkUspAgent
 	// would have left it: connected = true.
 	repo := devices.NewRepository(db)
-	d, err := repo.UpsertFromOnBoard(ctx, "001122", "Router", "ABC123")
+	ouiSerial := cwmp.DeviceID{OUI: "001122", ProductClass: "Router", SerialNumber: "ABC123"}.NaturalKey()
+	if _, err := repo.PreRegister(ctx, ouiSerial, "Acme", "001122", "Router", "ABC123", nil, nil); err != nil {
+		t.Fatalf("pre-register seed device: %v", err)
+	}
+	d, err := repo.ReconcileFromOnBoard(ctx, "001122", "Router", "ABC123")
 	if err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
