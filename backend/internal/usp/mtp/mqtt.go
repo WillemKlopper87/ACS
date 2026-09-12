@@ -13,7 +13,6 @@ import (
 	"acs/internal/usp"
 
 	mqttserver "github.com/mochi-mqtt/server/v2"
-	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
 	"github.com/mochi-mqtt/server/v2/packets"
 )
@@ -59,7 +58,8 @@ type MQTTConfig struct {
 	AllowPlaintext bool
 	// AllowedCIDRs, when non-empty, restricts accepted CONNECTs to remote
 	// addresses inside one of these networks -- empty is permissive
-	// (design S2.1). Enforced by allowlistHook.OnConnectAuthenticate: a
+	// (design S2.1). Enforced by allowlistHook.OnConnectAuthenticate,
+	// the sole OnConnectAuthenticate hook this transport registers: a
 	// rejected client gets a negative CONNACK and then the connection is
 	// closed, so no MQTT session is ever established.
 	AllowedCIDRs []*net.IPNet
@@ -97,10 +97,10 @@ var (
 )
 
 // NewMQTT validates cfg, constructs the embedded broker with an inline
-// client enabled, wires the allow-all auth hook -- superseded by an
-// allowlist hook in a later task -- and binds its TCP listener. It does
-// not start accepting connections or subscribe to anything -- call
-// Start for that.
+// client enabled, wires the combined allowlist hook that provides both
+// the CONNECT-time CIDR gate and unconditional topic pub/sub access, and
+// binds its TCP listener. It does not start accepting connections or
+// subscribe to anything -- call Start for that.
 func NewMQTT(cfg MQTTConfig, log *slog.Logger) (*MQTT, error) {
 	if cfg.TLS == nil && !cfg.AllowPlaintext {
 		return nil, errors.New("mtp: MQTT requires TLS unless AllowPlaintext is set")
@@ -113,9 +113,6 @@ func NewMQTT(cfg MQTTConfig, log *slog.Logger) (*MQTT, error) {
 	}
 
 	server := mqttserver.New(&mqttserver.Options{InlineClient: true})
-	if err := server.AddHook(new(auth.AllowHook), nil); err != nil {
-		return nil, fmt.Errorf("mtp: MQTT add auth hook: %w", err)
-	}
 
 	m := &MQTT{
 		cfg:    cfg,
@@ -128,10 +125,14 @@ func NewMQTT(cfg MQTTConfig, log *slog.Logger) (*MQTT, error) {
 		return nil, fmt.Errorf("mtp: MQTT add disconnect hook: %w", err)
 	}
 
-	if len(cfg.AllowedCIDRs) > 0 {
-		if err := server.AddHook(&allowlistHook{cidrs: cfg.AllowedCIDRs, log: log}, nil); err != nil {
-			return nil, fmt.Errorf("mtp: MQTT add allowlist hook: %w", err)
-		}
+	// Registered unconditionally, not only when cfg.AllowedCIDRs is
+	// non-empty: this hook is now also the sole source of OnACLCheck (see
+	// its doc comment), which every client -- allowlisted or not -- needs
+	// in order to publish/subscribe at all. Its OnConnectAuthenticate
+	// already handles the empty-cidrs-is-permissive case correctly via
+	// ipAllowed.
+	if err := server.AddHook(&allowlistHook{cidrs: cfg.AllowedCIDRs, log: log}, nil); err != nil {
+		return nil, fmt.Errorf("mtp: MQTT add allowlist hook: %w", err)
 	}
 
 	ln := listeners.NewTCP(listeners.Config{ID: mqttListenerID, Address: cfg.Addr, TLSConfig: cfg.TLS})
@@ -371,12 +372,26 @@ func (h *mqttDisconnectHook) OnDisconnect(cl *mqttserver.Client, err error, _ bo
 	h.m.handleDisconnect(cl, err)
 }
 
-// allowlistHook rejects a CONNECT from a remote address outside cidrs,
-// the network-level half of the USP agent allowlist (design S2.1). It is
-// registered alongside auth.AllowHook, not instead of it: AllowHook still
-// grants topic pub/sub access (unrelated, out of this plan's scope, S7 of
-// the design doc); this hook only gates whether a CONNECT is accepted at
-// all. OnConnectAuthenticate returning false makes mochi-mqtt refuse the
+// allowlistHook is the combined auth hook for the embedded MQTT broker:
+// it provides both OnConnectAuthenticate, the network-level half of the
+// USP agent allowlist (design S2.1), and OnACLCheck, unconditional topic
+// pub/sub access (unrelated to the allowlist, out of this plan's scope,
+// S7 of the design doc).
+//
+// Both halves live on one hook, rather than being split across this hook
+// and mochi-mqtt's own hooks/auth.AllowHook as an earlier revision did,
+// because mochi-mqtt's Hooks.OnConnectAuthenticate ORs every registered
+// hook's answer together and returns true as soon as the FIRST one
+// returns true, in registration order (confirmed against v2.7.9's
+// hooks.go): AllowHook.OnConnectAuthenticate unconditionally returns
+// true, so registering it alongside this hook -- in either order --
+// always won the OR and let every CONNECT through regardless of what
+// this hook's own CIDR check decided. Providing OnACLCheck here instead
+// keeps that unconditional-allow behaviour (matching AllowHook's own
+// OnACLCheck) while making sure this hook's OnConnectAuthenticate is the
+// only vote that can ever run for CONNECT.
+//
+// OnConnectAuthenticate returning false makes mochi-mqtt refuse the
 // CONNECT: the broker sends a negative CONNACK (connection refused) and
 // then closes the connection -- no MQTT session is ever established, so no
 // USP record is ever exchanged with a rejected client.
@@ -389,7 +404,7 @@ type allowlistHook struct {
 func (h *allowlistHook) ID() string { return "usp-allowlist" }
 
 func (h *allowlistHook) Provides(b byte) bool {
-	return b == mqttserver.OnConnectAuthenticate
+	return b == mqttserver.OnConnectAuthenticate || b == mqttserver.OnACLCheck
 }
 
 func (h *allowlistHook) OnConnectAuthenticate(cl *mqttserver.Client, _ packets.Packet) bool {
@@ -403,6 +418,17 @@ func (h *allowlistHook) OnConnectAuthenticate(cl *mqttserver.Client, _ packets.P
 		h.log.Warn("mtp: rejecting MQTT client from a disallowed network", "remote", cl.Net.Remote)
 		return false
 	}
+	return true
+}
+
+// OnACLCheck grants unconditional topic pub/sub access, exactly matching
+// hooks/auth.AllowHook.OnACLCheck's behaviour -- restricting pub/sub
+// access is unrelated to the CIDR allowlist and out of this plan's
+// scope; this method exists only so removing AllowHook (see this hook's
+// doc comment for why) does not also take OnACLCheck's allow-all default
+// with it, since mochi-mqtt's Hooks.OnACLCheck also ORs across every
+// registered hook and defaults to deny when none provides it.
+func (h *allowlistHook) OnACLCheck(_ *mqttserver.Client, _ string, _ bool) bool {
 	return true
 }
 

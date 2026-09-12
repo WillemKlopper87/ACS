@@ -44,6 +44,17 @@ func TestIPAllowedLoopbackNotSpeciallyForbidden(t *testing.T) {
 // listener wrapper actually rejects at the TCP-accept level: a CIDR that
 // deliberately excludes loopback closes a real local dial before any WS
 // upgrade response.
+//
+// The dial URL must include a valid eid query parameter, matching
+// TestFilteringListenerAllowsPermittedRemote's own dial below -- without
+// it, the dial fails with an HTTP 400 from handle()'s unrelated missing-
+// eid check (R-WS.10b/10c) before the connection ever reaches the raw
+// TCP allowlist gate this test means to exercise, which would make this
+// test pass identically even with the CIDR gate removed entirely. With a
+// valid eid, the rejection now happens at Accept time -- websocket.Dial
+// sees the raw TCP connection closed before any HTTP response, still a
+// non-nil error, so the assertion below is unchanged but is now actually
+// proving the CIDR gate fired.
 func TestFilteringListenerRejectsDisallowedRemote(t *testing.T) {
 	ws, err := NewWebSocket(WebSocketConfig{
 		Addr:           "127.0.0.1:0",
@@ -54,7 +65,7 @@ func TestFilteringListenerRejectsDisallowedRemote(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, url := startedWS(t, ws)
-	if _, _, err := dialRaw(url); err == nil {
+	if _, _, err := dialRaw(url + "?eid=os%3A%3A012345-AAAA"); err == nil {
 		t.Error("dial from disallowed 127.0.0.1 succeeded, want a connection error")
 	}
 }

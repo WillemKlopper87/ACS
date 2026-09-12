@@ -486,6 +486,31 @@ jobs:
             echo "forcing a fresh connection attempt against the now-registered identity (docker restart obuspa-mqtt5)"
             docker restart obuspa-mqtt5 >/dev/null || rc=$?
           fi
+
+          # assert-getresp.sh below matches a probe log line that is
+          # emitted BEFORE the identity gate's refusal/acceptance decision
+          # (final review, Important Finding 3) -- on its own it would
+          # report success even if this post-pre-registration reconnect
+          # were still being refused by the gate. Poll usp_agents.connected
+          # directly so this step actually asserts the reconnect was
+          # accepted, not just that some earlier probe line was logged.
+          if [ "$rc" -eq 0 ]; then
+            echo "waiting for the post-pre-registration reconnect to be accepted..."
+            connected=""
+            for i in $(seq 1 30); do
+              connected=$(psql "$ACS_USP_POSTGRES_DSN" -tAc "SELECT connected FROM usp_agents WHERE endpoint_id = '$AGENT_ENDPOINT_ID';" | tr -d '[:space:]')
+              if [ "$connected" = "t" ]; then
+                echo "OK: agent reconnected and is recorded as connected"
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "FAIL: agent never reconnected as 'connected' within 30s after pre-registration" >&2
+                rc=1
+              fi
+              sleep 1
+            done
+          fi
+
           if [ "$rc" -ne 0 ]; then
             kill "$logs_pid" 2>/dev/null || true
             docker rm -f obuspa-mqtt5 >/dev/null 2>&1 || true
@@ -541,6 +566,31 @@ jobs:
             echo "forcing a fresh connection attempt against the now-registered identity (docker restart obuspa-mqtt311)"
             docker restart obuspa-mqtt311 >/dev/null || rc=$?
           fi
+
+          # assert-getresp.sh below matches a probe log line that is
+          # emitted BEFORE the identity gate's refusal/acceptance decision
+          # (final review, Important Finding 3) -- on its own it would
+          # report success even if this post-pre-registration reconnect
+          # were still being refused by the gate. Poll usp_agents.connected
+          # directly so this step actually asserts the reconnect was
+          # accepted, not just that some earlier probe line was logged.
+          if [ "$rc" -eq 0 ]; then
+            echo "waiting for the post-pre-registration reconnect to be accepted..."
+            connected=""
+            for i in $(seq 1 30); do
+              connected=$(psql "$ACS_USP_POSTGRES_DSN" -tAc "SELECT connected FROM usp_agents WHERE endpoint_id = '$AGENT_ENDPOINT_ID';" | tr -d '[:space:]')
+              if [ "$connected" = "t" ]; then
+                echo "OK: agent reconnected and is recorded as connected"
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "FAIL: agent never reconnected as 'connected' within 30s after pre-registration" >&2
+                rc=1
+              fi
+              sleep 1
+            done
+          fi
+
           if [ "$rc" -ne 0 ]; then
             kill "$logs_pid" 2>/dev/null || true
             docker rm -f obuspa-mqtt311 >/dev/null 2>&1 || true

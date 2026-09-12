@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"math"
 	"net"
@@ -377,5 +378,141 @@ func TestAllowlistHookPermissiveWhenEmpty(t *testing.T) {
 	cl.Net.Remote = "203.0.113.5:12345"
 	if !hook.OnConnectAuthenticate(cl, packets.Packet{}) {
 		t.Error("OnConnectAuthenticate with an empty allowlist = false, want true (permissive)")
+	}
+}
+
+// buildMQTTConnectPacket hand-encodes a minimal, valid MQTT 3.1.1 CONNECT
+// packet (clean session, no username/password/will) for clientID. This
+// codebase deliberately carries no real MQTT client library dependency
+// (see TestMQTTOnPublishV5's doc comment), so the two wire-level tests
+// below build and parse raw MQTT bytes directly rather than pulling one
+// in just for this.
+//
+// Fixed header: type/flags byte, then a one-byte remaining length (valid
+// as long as it stays under 128, true for every clientID this file uses).
+// Variable header: protocol name "MQTT", protocol level 4, connect flags
+// 0x02 (clean session), a 60s keepalive. Payload: the client identifier,
+// length-prefixed.
+func buildMQTTConnectPacket(clientID string) []byte {
+	var varHeader bytes.Buffer
+	varHeader.WriteByte(0x00)
+	varHeader.WriteByte(0x04)
+	varHeader.WriteString("MQTT")
+	varHeader.WriteByte(0x04) // protocol level: MQTT 3.1.1
+	varHeader.WriteByte(0x02) // connect flags: clean session only
+	varHeader.WriteByte(0x00)
+	varHeader.WriteByte(0x3C) // keep alive: 60s
+
+	var payload bytes.Buffer
+	payload.WriteByte(byte(len(clientID) >> 8))
+	payload.WriteByte(byte(len(clientID)))
+	payload.WriteString(clientID)
+
+	remLen := varHeader.Len() + payload.Len()
+
+	var pkt bytes.Buffer
+	pkt.WriteByte(0x10) // CONNECT
+	pkt.WriteByte(byte(remLen))
+	pkt.Write(varHeader.Bytes())
+	pkt.Write(payload.Bytes())
+	return pkt.Bytes()
+}
+
+// readMQTTConnackCode reads a CONNACK packet off conn and returns its
+// return/reason code byte (0 = accepted; non-zero = refused). It fails
+// the test outright on any read error or if the packet type read back
+// is not CONNACK, since either would mean the test itself is broken
+// rather than exercising the real refusal/acceptance path.
+func readMQTTConnackCode(t *testing.T, conn net.Conn) byte {
+	t.Helper()
+	buf := make([]byte, 4) // CONNACK is always type/flags, remaining length 2, session-present, return code
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatalf("read CONNACK: %v", err)
+	}
+	if buf[0] != 0x20 {
+		t.Fatalf("first response packet type = %#x, want CONNACK (0x20)", buf[0])
+	}
+	return buf[3]
+}
+
+// TestMQTTWireConnectRejectsDisallowedRemote is the real wire-level
+// regression test for the bug fixed in allowlistHook's doc comment: it
+// dials m's TCP listener directly and writes a real raw MQTT CONNECT
+// packet, so it goes through the broker's actual registered hook chain
+// exactly like a real agent would -- unlike
+// TestAllowlistHookRejectsDisallowedRemote above, which calls
+// hook.OnConnectAuthenticate directly and so could never have caught
+// auth.AllowHook silently overriding it via mochi-mqtt's OR-aggregation
+// (that bug shipped with 100% green tests of the direct-call kind). The
+// dialing address is loopback, deliberately excluded by AllowedCIDRs, so
+// a correct broker must refuse the CONNECT with a non-zero CONNACK
+// return code.
+func TestMQTTWireConnectRejectsDisallowedRemote(t *testing.T) {
+	m, err := NewMQTT(MQTTConfig{
+		Addr: "127.0.0.1:0", ControllerTopic: "/usp/controller",
+		ControllerEndpointID: testControllerEID, AllowPlaintext: true,
+		AllowedCIDRs: []*net.IPNet{mustParseCIDR(t, "10.0.0.0/8")}, // excludes 127.0.0.1
+	}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(ctx, newRecordingHandler()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = m.Stop(context.Background()) }()
+
+	conn, err := net.DialTimeout("tcp", m.Addr(), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial %s: %v", m.Addr(), err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+
+	if _, err := conn.Write(buildMQTTConnectPacket("wire-test-disallowed")); err != nil {
+		t.Fatalf("write CONNECT: %v", err)
+	}
+
+	code := readMQTTConnackCode(t, conn)
+	if code == 0x00 {
+		t.Error("CONNACK return code = 0x00 (accepted) for a disallowed remote, want a non-zero refusal code")
+	}
+}
+
+// TestMQTTWireConnectAllowsPermittedRemote is
+// TestMQTTWireConnectRejectsDisallowedRemote's positive counterpart: the
+// dialing loopback address is inside AllowedCIDRs, so a correct broker
+// must accept the CONNECT with a successful (0x00) CONNACK return code.
+func TestMQTTWireConnectAllowsPermittedRemote(t *testing.T) {
+	m, err := NewMQTT(MQTTConfig{
+		Addr: "127.0.0.1:0", ControllerTopic: "/usp/controller",
+		ControllerEndpointID: testControllerEID, AllowPlaintext: true,
+		AllowedCIDRs: []*net.IPNet{mustParseCIDR(t, "127.0.0.0/8")}, // includes 127.0.0.1
+	}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(ctx, newRecordingHandler()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = m.Stop(context.Background()) }()
+
+	conn, err := net.DialTimeout("tcp", m.Addr(), 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial %s: %v", m.Addr(), err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+
+	if _, err := conn.Write(buildMQTTConnectPacket("wire-test-allowed")); err != nil {
+		t.Fatalf("write CONNECT: %v", err)
+	}
+
+	code := readMQTTConnackCode(t, conn)
+	if code != 0x00 {
+		t.Errorf("CONNACK return code = %#x for a permitted remote, want 0x00 (accepted)", code)
 	}
 }

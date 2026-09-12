@@ -17,7 +17,13 @@
 // identity-level (an agent's OUI+SerialNumber must already correspond to
 // a devices row -- pre-registered via the bulk-import API, a prior CWMP
 // Inform, or a prior USP onboarding -- or the connection is refused and
-// closed).
+// closed). The identity-level refusal fires once an agent attempts
+// identity reconciliation (an OnBoardRequest, or the interop probe's
+// Get as a fallback) -- a connection that completes the transport
+// (WebSocket/MQTT) handshake and then sends nothing is not yet
+// independently timed out or force-closed by this gate; that is a
+// pre-existing gap in the connection-registry/dispatch machinery, out
+// of this plan's scope.
 package main
 
 import (

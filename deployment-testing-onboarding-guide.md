@@ -261,7 +261,12 @@ ACS_INTERNAL_SERVICE_TOKEN (same value as cmd/api's, above)
 #     its first USP contact -- pre-register it via the bulk-import API
 #     (same PreRegister path CWMP fleet onboarding already uses), or
 #     let it connect via CWMP first if it's a dual-stack device. An
-#     unrecognized identity is refused and the connection closed.
+#     unrecognized identity is refused and the connection closed --
+#     but only once the agent actually attempts identity reconciliation
+#     (an OnBoardRequest, or the interop probe's Get as a fallback). A
+#     peer that completes the transport handshake and then sends
+#     nothing is not independently timed out or force-closed by this
+#     gate -- a known, pre-existing scope boundary, not fixed here.
 ACS_USP_ALLOWED_CIDRS (optional, comma-separated CIDR list, empty is
   permissive -- see above),
 ACS_USP_CONTROLLER_ID (required, >=8 bytes, [A-Za-z0-9._-]+, not a
