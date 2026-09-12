@@ -136,6 +136,21 @@ type subscriptionReconciler struct {
 
 	mu      sync.Mutex
 	pending map[string]pendingSubscribe
+	// inFlight is the set of device ids with an outstanding read (a Get
+	// sent, its GetResp not yet answered) -- fix round 1, Important 1.
+	// handler.checkSubscriptionID calls reconcile once per Notify whose
+	// subscription_id doesn't match a known usp_subscriptions row, and an
+	// agent that streams such Notifies (or that simply never answers the
+	// read) would otherwise grow s.pending and re-send the read Get
+	// without bound, throttling that connection's own read loop with a
+	// ByDevice query plus a Get send per Notify. reconcile checks/sets
+	// this before doing any of that work and no-ops if an entry is
+	// already present, so repeated triggers for the same device collapse
+	// into the one pass already in flight. Cleared once that pass's own
+	// read response is processed (handleResponse, for every outcome --
+	// success, an error response, or a malformed one) or, if the
+	// connection dies before any response arrives, by forget.
+	inFlight map[string]bool
 }
 
 // newSubscriptionReconciler returns a subscriptionReconciler ready for
@@ -150,7 +165,20 @@ func newSubscriptionReconciler(repo *subscriptions.Repository, controllerID usp.
 		controllerID: controllerID,
 		log:          log,
 		pending:      make(map[string]pendingSubscribe),
+		inFlight:     make(map[string]bool),
 	}
+}
+
+// reconcileInFlight reports whether deviceID already has an outstanding
+// read (see inFlight's own doc comment) -- handler.checkSubscriptionID
+// uses this to decide whether its own "triggering subscription
+// reconciliation" log line would be accurate before calling reconcile,
+// so a stream of unknown-subscription-id Notifies for one device logs
+// once, not once per Notify.
+func (s *subscriptionReconciler) reconcileInFlight(deviceID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inFlight[deviceID]
 }
 
 // reconcile is the on-connect entry point: it loads deviceID's desired
@@ -161,9 +189,26 @@ func newSubscriptionReconciler(repo *subscriptions.Repository, controllerID usp.
 // this call only kicks that off. One reconcile pass per connect is the
 // whole contract: sends here are not retried or chained beyond this
 // single round trip.
+//
+// If deviceID already has a read outstanding (inFlight), this is a
+// silent no-op (nil error): the caller asked for a reconcile pass and
+// one is already running, which satisfies the request without a second
+// Get/pending entry -- see inFlight's own doc comment (fix round 1,
+// Important 1).
 func (s *subscriptionReconciler) reconcile(ctx context.Context, deviceID string, conn mtp.Conn) error {
+	s.mu.Lock()
+	if s.inFlight[deviceID] {
+		s.mu.Unlock()
+		return nil
+	}
+	s.inFlight[deviceID] = true
+	s.mu.Unlock()
+
 	subs, err := s.repo.ByDevice(ctx, deviceID)
 	if err != nil {
+		s.mu.Lock()
+		delete(s.inFlight, deviceID)
+		s.mu.Unlock()
 		return fmt.Errorf("subscriptionReconciler: list desired subscriptions for device %s: %w", deviceID, err)
 	}
 
@@ -178,10 +223,16 @@ func (s *subscriptionReconciler) reconcile(ctx context.Context, deviceID string,
 	msgID := usp.NewMsgID()
 	payload, err := usp.EncodeGet(msgID, []string{subscriptionRootPath}, 1)
 	if err != nil {
+		s.mu.Lock()
+		delete(s.inFlight, deviceID)
+		s.mu.Unlock()
 		return fmt.Errorf("subscriptionReconciler: encode Get: %w", err)
 	}
 	record, err := usp.EncodeRecord(s.controllerID, conn.Endpoint(), payload)
 	if err != nil {
+		s.mu.Lock()
+		delete(s.inFlight, deviceID)
+		s.mu.Unlock()
 		return fmt.Errorf("subscriptionReconciler: encode record: %w", err)
 	}
 
@@ -194,6 +245,7 @@ func (s *subscriptionReconciler) reconcile(ctx context.Context, deviceID string,
 	if err := conn.Send(sendCtx, record); err != nil {
 		s.mu.Lock()
 		delete(s.pending, msgID)
+		delete(s.inFlight, deviceID)
 		s.mu.Unlock()
 		return fmt.Errorf("subscriptionReconciler: send Get: %w", err)
 	}
@@ -217,6 +269,14 @@ func (s *subscriptionReconciler) handleResponse(from usp.EndpointID, msg *usppro
 	entry, ok := s.pending[msgID]
 	if ok {
 		delete(s.pending, msgID)
+		if entry.kind == pendingKindRead {
+			// This device's read has now been answered (whatever the
+			// outcome), so it no longer counts as in flight -- clears the
+			// debounce reconcile's own inFlight guard set, letting a
+			// future reconcile call for this device actually send a new
+			// Get rather than silently no-op forever.
+			delete(s.inFlight, entry.deviceID)
+		}
 	}
 	s.mu.Unlock()
 	if !ok {
@@ -419,12 +479,24 @@ func (s *subscriptionReconciler) logAddResult(entry pendingSubscribe, msg *usppr
 // old Conn's disconnect callback lands, and keying on endpoint id alone
 // would let a stale disconnect delete the new connection's just-sent
 // entries out from under it.
+//
+// Also clears inFlight for any device whose read (pendingKindRead) was
+// still outstanding on c (task-6 fix round 1, Important 1): without
+// this, a connection that dies between reconcile's own Get send and its
+// GetResp would leave that device's inFlight entry set forever -- no
+// response will ever arrive to clear it via handleResponse -- and every
+// future reconcile call for that device (including a fresh connect's
+// own on-connect trigger) would silently no-op as "already in flight"
+// for a pass that in fact died with the connection.
 func (s *subscriptionReconciler) forget(c mtp.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, entry := range s.pending {
 		if entry.conn == c {
 			delete(s.pending, id)
+			if entry.kind == pendingKindRead {
+				delete(s.inFlight, entry.deviceID)
+			}
 		}
 	}
 }

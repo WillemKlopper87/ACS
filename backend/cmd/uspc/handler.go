@@ -343,6 +343,20 @@ func (h *handler) checkSubscriptionID(c mtp.Conn, deviceID, subscriptionID strin
 		}
 	}
 
+	// A reconcile pass already outstanding for this device (from an
+	// earlier unknown-subscription_id Notify on this same connection, or
+	// from the on-connect trigger) debounces here rather than logging a
+	// misleading "triggering" line for every single Notify in a burst --
+	// subscriptionReconciler.reconcile itself is also debounced
+	// (inFlight), so this peek is a logging nicety on top of that
+	// authoritative guard, not a substitute for it (task-6 fix round 1,
+	// Important 1).
+	if h.subscriptions.reconcileInFlight(deviceID) {
+		h.log.Info("uspc: Notify carries an unknown subscription_id, but a subscription reconciliation is already in flight for this device, not triggering another",
+			"endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "subscription_id", subscriptionID)
+		return
+	}
+
 	h.log.Info("uspc: Notify carries an unknown subscription_id, triggering subscription reconciliation",
 		"endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "subscription_id", subscriptionID)
 	reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), dbCallTimeout)
@@ -375,6 +389,8 @@ func (h *handler) handleValueChange(c mtp.Conn, vc *usp.ValueChange) {
 		if err != nil {
 			h.log.Warn("uspc: failed to upsert ValueChange into the parameter cache", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "param_path", vc.ParamPath, "error", err)
 		}
+	} else {
+		h.log.Warn("uspc: paramsRepo not wired, dropping ValueChange", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "param_path", vc.ParamPath)
 	}
 
 	if !vc.SendResp {
@@ -404,6 +420,8 @@ func (h *handler) handleObjectCreation(c mtp.Conn, oc *usp.ObjectCreation, msgID
 		if err != nil {
 			h.log.Warn("uspc: failed to invalidate parameter cache subtree after ObjectCreation", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath, "error", err)
 		}
+	} else {
+		h.log.Warn("uspc: paramsRepo not wired, dropping ObjectCreation's cache invalidation", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath)
 	}
 	if h.devicesRepo != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
@@ -412,6 +430,8 @@ func (h *handler) handleObjectCreation(c mtp.Conn, oc *usp.ObjectCreation, msgID
 		if err != nil {
 			h.log.Warn("uspc: failed to record ObjectCreation event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath, "error", err)
 		}
+	} else {
+		h.log.Warn("uspc: devicesRepo not wired, dropping ObjectCreation event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", oc.ObjPath)
 	}
 
 	if !oc.SendResp {
@@ -439,6 +459,8 @@ func (h *handler) handleObjectDeletion(c mtp.Conn, od *usp.ObjectDeletion, msgID
 		if err != nil {
 			h.log.Warn("uspc: failed to invalidate parameter cache subtree after ObjectDeletion", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath, "error", err)
 		}
+	} else {
+		h.log.Warn("uspc: paramsRepo not wired, dropping ObjectDeletion's cache invalidation", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath)
 	}
 	if h.devicesRepo != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
@@ -447,6 +469,8 @@ func (h *handler) handleObjectDeletion(c mtp.Conn, od *usp.ObjectDeletion, msgID
 		if err != nil {
 			h.log.Warn("uspc: failed to record ObjectDeletion event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath, "error", err)
 		}
+	} else {
+		h.log.Warn("uspc: devicesRepo not wired, dropping ObjectDeletion event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", od.ObjPath)
 	}
 
 	if !od.SendResp {
@@ -475,6 +499,8 @@ func (h *handler) handleEvent(c mtp.Conn, ev *usp.Event, msgID string) {
 		if err != nil {
 			h.log.Warn("uspc: failed to record Event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", ev.ObjPath, "event_name", ev.EventName, "error", err)
 		}
+	} else {
+		h.log.Warn("uspc: devicesRepo not wired, dropping Event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", ev.ObjPath, "event_name", ev.EventName)
 	}
 
 	if !ev.SendResp {

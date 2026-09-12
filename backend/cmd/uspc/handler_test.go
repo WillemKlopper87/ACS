@@ -680,6 +680,15 @@ func TestHandlerObjectCreationInvalidatesAndRecords(t *testing.T) {
 	if ev.Params["Alias"] != "cpe-ssid-1" {
 		t.Errorf("event params = %+v, want Alias=cpe-ssid-1 (the Notify's UniqueKeys)", ev.Params)
 	}
+	// Fix round 1, Important 2: prove the recorded row's msg_id is
+	// genuinely the incoming Notify's own msg_id (RecordEvent's
+	// (device_id, msg_id) redelivery-dedup key), not an empty string or
+	// some other fixed value that would happen to still pass every other
+	// assertion above while silently breaking dedup for every event after
+	// the first.
+	if ev.MsgID != msg.GetHeader().GetMsgId() {
+		t.Errorf("event msg_id = %q, want %q (the Notify's own msg_id)", ev.MsgID, msg.GetHeader().GetMsgId())
+	}
 }
 
 // TestHandlerObjectDeletionInvalidatesAndRecords is
@@ -723,6 +732,11 @@ func TestHandlerObjectDeletionInvalidatesAndRecords(t *testing.T) {
 	if len(ev.Params) != 0 {
 		t.Errorf("event params = %+v, want empty for an ObjectDeletion", ev.Params)
 	}
+	// Fix round 1, Important 2 -- see
+	// TestHandlerObjectCreationInvalidatesAndRecords' identical assertion.
+	if ev.MsgID != msg.GetHeader().GetMsgId() {
+		t.Errorf("event msg_id = %q, want %q (the Notify's own msg_id)", ev.MsgID, msg.GetHeader().GetMsgId())
+	}
 }
 
 // TestHandlerEventRecordsEvent covers the checklist's Event row: an
@@ -749,6 +763,41 @@ func TestHandlerEventRecordsEvent(t *testing.T) {
 	}
 	if ev.Params["Cause"] != "LocalReboot" {
 		t.Errorf("event params = %+v, want Cause=LocalReboot", ev.Params)
+	}
+	// Fix round 1, Important 2 -- see
+	// TestHandlerObjectCreationInvalidatesAndRecords' identical assertion.
+	if ev.MsgID != msg.GetHeader().GetMsgId() {
+		t.Errorf("event msg_id = %q, want %q (the Notify's own msg_id)", ev.MsgID, msg.GetHeader().GetMsgId())
+	}
+}
+
+// TestHandlerObjectCreationRecordEventDedupsRedelivery covers fix round
+// 1, Important 2(b): USP's Notify delivery is at-least-once, so an agent
+// can (and will) redeliver the exact same Notify -- same msg_id -- after
+// a dropped ack. Feeding the identical wire record through OnRecord
+// twice must still leave exactly one device_events row, proving
+// RecordEvent's own ON CONFLICT (device_id, msg_id) DO NOTHING dedup
+// actually works end-to-end through this handler, not merely that
+// msg_id is passed to it somewhere (which the msg_id assertions above
+// check, but wouldn't by themselves catch e.g. RecordEvent being called
+// with a freshly-generated id per call).
+func TestHandlerObjectCreationRecordEventDedupsRedelivery(t *testing.T) {
+	h, deviceID := newNotifyTestHandler(t)
+	c := &captureConn{id: agent}
+	h.markReconciled(c, deviceID)
+
+	msg := objectCreationMsg("sub-oc-dedup", false, "Device.WiFi.SSID.1.", map[string]string{"Alias": "cpe-ssid-1"})
+	wire := recordWire(t, agent, ctrl, msg)
+
+	h.OnRecord(mtp.Inbound{Conn: c, Record: wire})
+	h.OnRecord(mtp.Inbound{Conn: c, Record: wire}) // simulated redelivery: identical msg_id
+
+	events, err := h.devicesRepo.Events(context.Background(), deviceID, 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("device events = %+v, want exactly 1 despite the redelivered Notify sharing the same msg_id", events)
 	}
 }
 
@@ -806,13 +855,14 @@ func TestHandlerNotifyDroppedWhenUnreconciled(t *testing.T) {
 // TestHandlerUnknownSubscriptionIDTriggersReconcile).
 func TestHandlerNotifySendsResp(t *testing.T) {
 	tests := []struct {
-		name string
-		msg  func(subscriptionID string) *uspproto.Msg
+		name      string
+		notifType string
+		msg       func(subscriptionID string) *uspproto.Msg
 	}{
-		{"ValueChange", func(id string) *uspproto.Msg { return valueChangeMsg(id, true, "Device.WiFi.SSID.1.SSID", "MyNetwork") }},
-		{"ObjectCreation", func(id string) *uspproto.Msg { return objectCreationMsg(id, true, "Device.WiFi.SSID.1.", nil) }},
-		{"ObjectDeletion", func(id string) *uspproto.Msg { return objectDeletionMsg(id, true, "Device.WiFi.SSID.1.") }},
-		{"Event", func(id string) *uspproto.Msg { return eventMsg(id, true, "Device.", "Boot!", nil) }},
+		{"ValueChange", "ValueChange", func(id string) *uspproto.Msg { return valueChangeMsg(id, true, "Device.WiFi.SSID.1.SSID", "MyNetwork") }},
+		{"ObjectCreation", "ObjectCreation", func(id string) *uspproto.Msg { return objectCreationMsg(id, true, "Device.WiFi.SSID.1.", nil) }},
+		{"ObjectDeletion", "ObjectDeletion", func(id string) *uspproto.Msg { return objectDeletionMsg(id, true, "Device.WiFi.SSID.1.") }},
+		{"Event", "Event", func(id string) *uspproto.Msg { return eventMsg(id, true, "Device.", "Boot!", nil) }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -824,7 +874,7 @@ func TestHandlerNotifySendsResp(t *testing.T) {
 			if err := h.subscriptions.repo.Create(context.Background(), subscriptions.Subscription{
 				ID:         subscriptionID,
 				DeviceID:   deviceID,
-				NotifType:  "ValueChange",
+				NotifType:  tc.notifType,
 				Persistent: true,
 				CreatedBy:  "test",
 				CreatedAt:  time.Now().UTC().Truncate(time.Microsecond),
@@ -883,6 +933,51 @@ func TestHandlerUnknownSubscriptionIDTriggersReconcile(t *testing.T) {
 		t.Fatalf("c.sent = %d records, want exactly 1 (the subscription reconciler's own read Get)", len(c.sent))
 	}
 	subscriptionReadMsgID(t, c.sent[0])
+}
+
+// TestHandlerUnknownSubscriptionIDDebouncesReconcile covers fix round 1,
+// Important 1: before subscriptionReconciler.reconcile's own inFlight
+// guard, checkSubscriptionID called reconcile once per Notify with no
+// cap -- a device sending several unknown-subscription-id Notifies
+// before it ever answers the reconciler's own read Get would grow
+// s.pending without bound and re-send the read Get every time, throttling
+// the connection's own message processing with an inline ByDevice query
+// plus a Get send per Notify. Two such Notifies back to back (no
+// response to either in between) must collapse into exactly one reconcile
+// pass: one Get sent, one pending entry -- not two.
+func TestHandlerUnknownSubscriptionIDDebouncesReconcile(t *testing.T) {
+	h, deviceID := newNotifyTestHandler(t)
+	c := &captureConn{id: agent}
+	h.markReconciled(c, deviceID)
+
+	msg1 := valueChangeMsg("unknown-subscription-id-1", false, "Device.WiFi.SSID.1.SSID", "MyNetwork")
+	msg2 := valueChangeMsg("unknown-subscription-id-2", false, "Device.WiFi.SSID.1.SSID", "MyOtherNetwork")
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg1)})
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg2)})
+
+	if len(c.sent) != 1 {
+		t.Fatalf("c.sent = %d records, want exactly 1: two unknown-subscription-id Notifies with no response in between must collapse into one reconcile pass, not two", len(c.sent))
+	}
+	subscriptionReadMsgID(t, c.sent[0])
+
+	h.subscriptions.mu.Lock()
+	pendingLen := len(h.subscriptions.pending)
+	h.subscriptions.mu.Unlock()
+	if pendingLen != 1 {
+		t.Errorf("subscriptions.pending has %d entries, want exactly 1 (the one read already in flight)", pendingLen)
+	}
+
+	// The second Notify's own data must still have been processed --
+	// debouncing the reconcile trigger must not discard the Notify's
+	// content (same "log and reconcile, don't drop" contract
+	// checkSubscriptionID's own doc comment states).
+	cache, err := h.paramsRepo.Get(context.Background(), deviceID)
+	if err != nil {
+		t.Fatalf("Get parameter cache: %v", err)
+	}
+	if cv, ok := cache["Device.WiFi.SSID.1.SSID"]; !ok || cv.Value != "MyOtherNetwork" {
+		t.Errorf("parameter cache = %+v, want Device.WiFi.SSID.1.SSID=MyOtherNetwork (the second Notify's value)", cache)
+	}
 }
 
 // TestReconcileTriggersSubscriptionReconcile covers the checklist's
