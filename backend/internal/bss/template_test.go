@@ -51,8 +51,8 @@ func TestTranslateModifyWifiIGD1(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID":          "Legacy_Gateway",
-		"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase": "OldButGold123",
+		"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID":                         "Legacy_Gateway",
+		"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase": "OldButGold123",
 	}
 	if len(params) != len(want) {
 		t.Fatalf("params len = %d, want %d: %+v", len(params), len(want), params)

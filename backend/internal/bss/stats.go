@@ -8,6 +8,9 @@ import (
 // Stats backs the admin panel's BSS health section — real counts from
 // account_device_mappings/bss_orders/webhook_subscriptions/
 // webhook_deliveries, no synthetic data.
+//
+// Mapping counts cover current assignments only; released assignments are
+// history, and counting them would make the figure drift upward forever.
 type Stats struct {
 	MappingsByStatus map[string]int `json:"mappings_by_status"`
 	OrdersByAction   map[string]int `json:"orders_by_action"`
@@ -23,7 +26,7 @@ func (r *Repository) Stats(ctx context.Context) (*Stats, error) {
 		DeliveriesByStat: map[string]int{},
 	}
 
-	rows, err := r.db.QueryContext(ctx, `SELECT status, count(*) FROM account_device_mappings GROUP BY status`)
+	rows, err := r.db.QueryContext(ctx, `SELECT status, count(*) FROM account_device_mappings WHERE unassigned_at IS NULL GROUP BY status`)
 	if err != nil {
 		return nil, fmt.Errorf("mapping status counts: %w", err)
 	}

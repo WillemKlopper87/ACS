@@ -11,8 +11,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -20,6 +22,28 @@ const (
 	StatusActive        = "ACTIVE"
 	StatusSuspended     = "SUSPENDED"
 	StatusTerminated    = "TERMINATED"
+)
+
+// Roles describe what a device does for an account, not what the device
+// is — the same model can be a gateway at one address and an extender at
+// another. Kept in sync with the CHECK constraint in migration 0052.
+const (
+	RoleGateway  = "gateway"
+	RoleONT      = "ont"
+	RoleExtender = "extender"
+	RoleSTB      = "stb"
+	RoleATA      = "ata"
+	RoleOther    = "other"
+)
+
+// Unassign reasons record why an assignment ended. Kept in sync with the
+// CHECK constraint in migration 0052.
+const (
+	ReasonRMA       = "rma"
+	ReasonUpgrade   = "upgrade"
+	ReasonReturn    = "return"
+	ReasonMoved     = "moved"
+	ReasonCorrected = "corrected"
 )
 
 // ErrDeviceNotFound is returned when a mapping request's oui_serial
@@ -30,18 +54,95 @@ const (
 // writing whatever the caller sent.
 var ErrDeviceNotFound = errors.New("no device found for oui_serial")
 
+// ErrNoDeviceForRole is returned when an account has no active device in
+// the requested role. It is a typed error rather than sql.ErrNoRows so a
+// caller can distinguish "no such device" from any other query failure.
+var ErrNoDeviceForRole = errors.New("no active device assigned in that role")
+
+// ErrRoleAlreadyAssigned is returned when an account already has an active
+// device in the requested role (account_device_mappings_active_role_idx).
+// The caller must UnassignDevice or SwapDevice first.
+var ErrRoleAlreadyAssigned = errors.New("account already has an active device in that role")
+
+// ErrDeviceAlreadyAssigned is returned when the device being assigned is
+// already actively assigned to the account, under some role — possibly a
+// different one than requested (account_device_mappings_active_idx). This
+// is a distinct condition from ErrRoleAlreadyAssigned: that one means the
+// *role* is taken by some device, this one means the *device* is already
+// active for the account.
+var ErrDeviceAlreadyAssigned = errors.New("device is already actively assigned to this account")
+
+// ErrInvalidRole is returned when role isn't one of the Role* constants —
+// a client-side validation error, not a database failure, so callers can
+// map it to 400 instead of 500. Checked before the database sees it so a
+// CHECK-constraint violation (SQLSTATE 23514) never has to propagate.
+var ErrInvalidRole = errors.New("unknown device role")
+
+// ErrInvalidUnassignReason is ErrInvalidRole's counterpart for
+// unassign_reason.
+var ErrInvalidUnassignReason = errors.New("unknown unassign reason")
+
+// validRoles and validReasons are derived from the Role*/Reason* constants
+// above rather than hand-written, so they cannot drift from the CHECK
+// constraints in migration 0052.
+var validRoles = map[string]bool{
+	RoleGateway: true, RoleONT: true, RoleExtender: true,
+	RoleSTB: true, RoleATA: true, RoleOther: true,
+}
+
+var validReasons = map[string]bool{
+	ReasonRMA: true, ReasonUpgrade: true, ReasonReturn: true,
+	ReasonMoved: true, ReasonCorrected: true,
+}
+
+// ValidRole reports whether role is one of the Role* constants.
+func ValidRole(role string) bool { return validRoles[role] }
+
+// ValidUnassignReason reports whether reason is one of the Reason*
+// constants.
+func ValidUnassignReason(reason string) bool { return validReasons[reason] }
+
+// isUniqueViolation reports whether err is Postgres 23505, the code both
+// partial unique indexes raise. Same shape as internal/operators.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// uniqueViolationErr maps a 23505 to the typed error matching which of the
+// two partial unique indexes raised it — account_device_mappings_active_idx
+// means the device itself is already active for the account (possibly
+// under a different role); account_device_mappings_active_role_idx means
+// the role slot is taken. Falls back to ErrRoleAlreadyAssigned if the
+// constraint name doesn't match either (defensive; should not happen).
+func uniqueViolationErr(err error, accountID, role string) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.ConstraintName == "account_device_mappings_active_idx" {
+		return fmt.Errorf("%w: account %s", ErrDeviceAlreadyAssigned, accountID)
+	}
+	return fmt.Errorf("%w: account %s role %s", ErrRoleAlreadyAssigned, accountID, role)
+}
+
 // AccountDeviceMapping is a row of account_device_mappings. JSON tags
 // matter here (unlike a purely-internal repository type) because the
 // admin panel's handlers (cmd/api/bss_admin_handlers.go) encode this
 // struct directly rather than mapping it into a local response type the
 // way cmd/bssadapter's own handlers do.
+//
+// An assignment is current while UnassignedAt is nil and historical once
+// it is set. Status is retained for API compatibility and is NOT what
+// decides whether a device currently serves an account (spec §5.4).
 type AccountDeviceMapping struct {
-	ID          string `json:"id"`
-	AccountID   string `json:"account_id"`
-	DeviceID    string `json:"device_id"`
-	OUISerial   string `json:"oui_serial"`
-	ServicePlan string `json:"service_plan,omitempty"`
-	Status      string `json:"status"`
+	ID             string     `json:"id"`
+	AccountID      string     `json:"account_id"`
+	DeviceID       string     `json:"device_id"`
+	OUISerial      string     `json:"oui_serial"`
+	ServicePlan    string     `json:"service_plan,omitempty"`
+	Status         string     `json:"status"`
+	Role           string     `json:"role"`
+	AssignedAt     time.Time  `json:"assigned_at"`
+	UnassignedAt   *time.Time `json:"unassigned_at,omitempty"`
+	UnassignReason string     `json:"unassign_reason,omitempty"`
 }
 
 type Repository struct {
@@ -52,48 +153,153 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
-// CreateMapping resolves oui_serial against the real devices table and
-// upserts the account/device link (Workflow A in the BSS integration
-// guide).
-func (r *Repository) CreateMapping(ctx context.Context, accountID, ouiSerial, servicePlan string) (*AccountDeviceMapping, error) {
+// resolveDeviceID turns an oui_serial into a devices.id, or ErrDeviceNotFound.
+// q is either the pool or a transaction so AssignDevice and SwapDevice share it.
+func resolveDeviceID(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, ouiSerial string) (string, error) {
 	var deviceID string
-	err := r.db.QueryRowContext(ctx, `SELECT id FROM devices WHERE oui_serial = $1`, ouiSerial).Scan(&deviceID)
+	err := q.QueryRowContext(ctx, `SELECT id FROM devices WHERE oui_serial = $1`, ouiSerial).Scan(&deviceID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("%w: %s", ErrDeviceNotFound, ouiSerial)
+		return "", fmt.Errorf("%w: %s", ErrDeviceNotFound, ouiSerial)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("resolve device for mapping: %w", err)
+		return "", fmt.Errorf("resolve device: %w", err)
 	}
+	return deviceID, nil
+}
 
-	_, err = r.db.ExecContext(ctx, `
-		INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, service_plan, status)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (account_id, device_id) DO UPDATE SET
-			service_plan = EXCLUDED.service_plan,
-			updated_at = now()
-	`, uuid.New().String(), accountID, deviceID, ouiSerial, nullIfEmpty(servicePlan), StatusActive)
+// insertAssignment writes one active assignment row. It is a plain INSERT,
+// not an upsert: the partial unique indexes decide whether it is allowed,
+// and a violation surfaces as ErrRoleAlreadyAssigned.
+func insertAssignment(ctx context.Context, q interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, id, accountID, deviceID, ouiSerial, role string, servicePlan any) error {
+	_, err := q.ExecContext(ctx, `
+		INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, service_plan, status, role)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, id, accountID, deviceID, ouiSerial, servicePlan, StatusActive, role)
+	if isUniqueViolation(err) {
+		return uniqueViolationErr(err, accountID, role)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("create mapping: %w", err)
+		return fmt.Errorf("insert assignment: %w", err)
 	}
+	return nil
+}
 
+// DeviceIDForSerial resolves an oui_serial to a devices.id, or
+// ErrDeviceNotFound. Exported so callers (cmd/bssadapter's createMapping)
+// can validate a caller-supplied device_uuid against the real resolution
+// *before* writing an assignment row, rather than after.
+func (r *Repository) DeviceIDForSerial(ctx context.Context, ouiSerial string) (string, error) {
+	return resolveDeviceID(ctx, r.db, ouiSerial)
+}
+
+// AssignDevice resolves oui_serial against the devices table and records
+// that the device now serves the account in the given role.
+func (r *Repository) AssignDevice(ctx context.Context, accountID, ouiSerial, role, servicePlan string) (*AccountDeviceMapping, error) {
+	if !ValidRole(role) {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidRole, role)
+	}
+	deviceID, err := resolveDeviceID(ctx, r.db, ouiSerial)
+	if err != nil {
+		return nil, err
+	}
+	if err := insertAssignment(ctx, r.db, uuid.New().String(), accountID, deviceID, ouiSerial, role, nullIfEmpty(servicePlan)); err != nil {
+		return nil, err
+	}
 	return r.getByAccountDevice(ctx, accountID, deviceID)
 }
 
+// UnassignDevice ends the account's current assignment in the given role,
+// recording why. The row stays as history.
+func (r *Repository) UnassignDevice(ctx context.Context, accountID, role, reason string) error {
+	if !ValidRole(role) {
+		return fmt.Errorf("%w: %s", ErrInvalidRole, role)
+	}
+	if !ValidUnassignReason(reason) {
+		return fmt.Errorf("%w: %s", ErrInvalidUnassignReason, reason)
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE account_device_mappings
+		   SET unassigned_at = now(), unassign_reason = $3, updated_at = now()
+		 WHERE account_id = $1 AND role = $2 AND unassigned_at IS NULL
+	`, accountID, role, reason)
+	if err != nil {
+		return fmt.Errorf("unassign device: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("%w: account %s role %s", ErrNoDeviceForRole, accountID, role)
+	}
+	return nil
+}
+
+// SwapDevice replaces the device serving an account in a role: close the
+// old assignment, then open the new one, in one transaction.
+//
+// The order and the transaction are both load-bearing. The role-unique
+// index rejects the insert while the old row is active, so close must
+// come first; and if the insert then fails, the close must roll back or
+// the account is left with no device in that role at all -- worse than
+// the addressing defect this model exists to fix. The service plan
+// carries over to the replacement.
+func (r *Repository) SwapDevice(ctx context.Context, accountID, role, newOUISerial, reason string) (*AccountDeviceMapping, error) {
+	if !ValidRole(role) {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidRole, role)
+	}
+	if !ValidUnassignReason(reason) {
+		return nil, fmt.Errorf("%w: %s", ErrInvalidUnassignReason, reason)
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin swap: %w", err)
+	}
+	defer tx.Rollback()
+
+	var servicePlan sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		UPDATE account_device_mappings
+		   SET unassigned_at = now(), unassign_reason = $3, updated_at = now()
+		 WHERE account_id = $1 AND role = $2 AND unassigned_at IS NULL
+		 RETURNING service_plan
+	`, accountID, role, reason).Scan(&servicePlan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: account %s role %s", ErrNoDeviceForRole, accountID, role)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("release old assignment: %w", err)
+	}
+
+	newDeviceID, err := resolveDeviceID(ctx, tx, newOUISerial)
+	if err != nil {
+		return nil, err // deferred Rollback restores the old assignment
+	}
+	var plan any
+	if servicePlan.Valid {
+		plan = servicePlan.String
+	}
+	if err := insertAssignment(ctx, tx, uuid.New().String(), accountID, newDeviceID, newOUISerial, role, plan); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit swap: %w", err)
+	}
+	return r.getByAccountDevice(ctx, accountID, newDeviceID)
+}
+
 func (r *Repository) getByAccountDevice(ctx context.Context, accountID, deviceID string) (*AccountDeviceMapping, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, account_id, device_id, oui_serial, service_plan, status
-		FROM account_device_mappings WHERE account_id = $1 AND device_id = $2
-	`, accountID, deviceID)
+	row := r.db.QueryRowContext(ctx,
+		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE account_id = $1 AND device_id = $2 AND unassigned_at IS NULL",
+		accountID, deviceID)
 	return scanMapping(row)
 }
 
-// ListByAccount returns every device mapped to an account.
+// ListByAccount returns every device *currently* assigned to an account.
 func (r *Repository) ListByAccount(ctx context.Context, accountID string) ([]AccountDeviceMapping, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, account_id, device_id, oui_serial, service_plan, status
-		FROM account_device_mappings WHERE account_id = $1
-		ORDER BY created_at ASC
-	`, accountID)
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE account_id = $1 AND unassigned_at IS NULL ORDER BY assigned_at ASC, id ASC",
+		accountID)
 	if err != nil {
 		return nil, fmt.Errorf("list mappings: %w", err)
 	}
@@ -110,34 +316,57 @@ func (r *Repository) ListByAccount(ctx context.Context, accountID string) ([]Acc
 	return out, rows.Err()
 }
 
-// PrimaryDeviceForAccount returns the account's most recently mapped
-// active device — the mapping an order dispatch resolves against.
-// Phase 8b assumes one primary device per account, matching every
-// example in the BSS integration guide; an account genuinely managing
-// multiple devices needs the order to name a device explicitly, which
-// isn't part of this phase's scope.
-func (r *Repository) PrimaryDeviceForAccount(ctx context.Context, accountID string) (*AccountDeviceMapping, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT id, account_id, device_id, oui_serial, service_plan, status
-		FROM account_device_mappings
-		WHERE account_id = $1 AND status = 'ACTIVE'
-		ORDER BY updated_at DESC
-		LIMIT 1
-	`, accountID)
-	return scanMapping(row)
-}
-
-// ListAll returns every account-device mapping, newest first — backs the
-// admin-panel onboarding/setup view (not part of the BSS-facing API,
-// which only exposes ListByAccount since a BSS caller only ever knows its
-// own account IDs).
+// ListAll returns every currently assigned account-device mapping, newest
+// first — backs the admin-panel onboarding/setup view (not part of the
+// BSS-facing API, which only exposes ListByAccount since a BSS caller only
+// ever knows its own account IDs).
 func (r *Repository) ListAll(ctx context.Context, limit int) ([]AccountDeviceMapping, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, account_id, device_id, oui_serial, service_plan, status
-		FROM account_device_mappings ORDER BY created_at DESC LIMIT $1
-	`, limit)
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE unassigned_at IS NULL ORDER BY assigned_at DESC LIMIT $1",
+		limit)
 	if err != nil {
 		return nil, fmt.Errorf("list all mappings: %w", err)
+	}
+	defer rows.Close()
+
+	var out []AccountDeviceMapping
+	for rows.Next() {
+		m, err := scanMapping(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *m)
+	}
+	return out, rows.Err()
+}
+
+// ActiveDeviceForAccount resolves the one device currently serving an
+// account in the given role — the mapping an order dispatches against.
+//
+// This has exactly one rule and no tiebreak. The partial unique index
+// account_device_mappings_active_role_idx guarantees at most one active
+// row per (account, role), so there is nothing to order by and no LIMIT 1
+// hiding a multiplicity. An unfilled role is ErrNoDeviceForRole.
+func (r *Repository) ActiveDeviceForAccount(ctx context.Context, accountID, role string) (*AccountDeviceMapping, error) {
+	row := r.db.QueryRowContext(ctx,
+		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE account_id = $1 AND role = $2 AND unassigned_at IS NULL",
+		accountID, role)
+	m, err := scanMapping(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: account %s role %s", ErrNoDeviceForRole, accountID, role)
+	}
+	return m, err
+}
+
+// AssignmentHistory returns every assignment an account has ever had,
+// current and released, oldest first — the care-agent view that answers
+// "this started after you swapped my router".
+func (r *Repository) AssignmentHistory(ctx context.Context, accountID string) ([]AccountDeviceMapping, error) {
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE account_id = $1 ORDER BY assigned_at ASC, id ASC",
+		accountID)
+	if err != nil {
+		return nil, fmt.Errorf("assignment history: %w", err)
 	}
 	defer rows.Close()
 
@@ -156,14 +385,27 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
+// mappingColumns is every column scanMapping reads, in scan order. Every
+// SELECT against account_device_mappings uses it so the two cannot drift.
+const mappingColumns = `id, account_id, device_id, oui_serial, service_plan, status, role, assigned_at, unassigned_at, unassign_reason`
+
 func scanMapping(s scanner) (*AccountDeviceMapping, error) {
 	var m AccountDeviceMapping
-	var servicePlan sql.NullString
-	if err := s.Scan(&m.ID, &m.AccountID, &m.DeviceID, &m.OUISerial, &servicePlan, &m.Status); err != nil {
+	var servicePlan, reason sql.NullString
+	var unassigned sql.NullTime
+	if err := s.Scan(&m.ID, &m.AccountID, &m.DeviceID, &m.OUISerial, &servicePlan, &m.Status,
+		&m.Role, &m.AssignedAt, &unassigned, &reason); err != nil {
 		return nil, fmt.Errorf("scan mapping: %w", err)
 	}
 	if servicePlan.Valid {
 		m.ServicePlan = servicePlan.String
+	}
+	if unassigned.Valid {
+		t := unassigned.Time
+		m.UnassignedAt = &t
+	}
+	if reason.Valid {
+		m.UnassignReason = reason.String
 	}
 	return &m, nil
 }

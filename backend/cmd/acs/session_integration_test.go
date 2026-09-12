@@ -52,7 +52,11 @@ type mockCPE struct {
 	user, pass string
 }
 
-func (c *mockCPE) post(body string) (int, string) {
+// tryPost performs a CWMP POST and returns any transport or protocol error
+// to the caller instead of aborting the test, so it is safe to call from
+// any goroutine, including worker goroutines that need to record their own
+// failures. It never calls t.Fatal/t.Fatalf.
+func (c *mockCPE) tryPost(body string) (int, string, error) {
 	c.t.Helper()
 	for attempt := 0; attempt < 2; attempt++ {
 		req, _ := http.NewRequest(http.MethodPost, c.url, strings.NewReader(body))
@@ -66,7 +70,7 @@ func (c *mockCPE) post(body string) (int, string) {
 		}
 		res, err := c.client.Do(req)
 		if err != nil {
-			c.t.Fatal(err)
+			return 0, "", err
 		}
 		b, _ := io.ReadAll(res.Body)
 		res.Body.Close()
@@ -79,15 +83,28 @@ func (c *mockCPE) post(body string) (int, string) {
 			hdr := res.Header.Get("WWW-Authenticate")
 			m := regexp.MustCompile(`nonce="([^"]+)"`).FindStringSubmatch(hdr)
 			if m == nil {
-				c.t.Fatalf("401 without a Digest nonce: %q", hdr)
+				return 0, "", fmt.Errorf("401 without a Digest nonce: %q", hdr)
 			}
 			c.nonce, c.nc = m[1], 0
 			continue
 		}
-		return res.StatusCode, string(b)
+		return res.StatusCode, string(b), nil
 	}
-	c.t.Fatal("still unauthorized after answering the challenge")
-	return 0, ""
+	return 0, "", fmt.Errorf("still unauthorized after answering the challenge")
+}
+
+// post performs a CWMP POST and aborts the test on any error tryPost
+// returns (transport or protocol). Safe only from the goroutine running
+// the test: t.Fatal elsewhere runs runtime.Goexit() and silently kills
+// the caller. Concurrent callers must use tryPost and handle the error
+// themselves.
+func (c *mockCPE) post(body string) (int, string) {
+	c.t.Helper()
+	code, body2, err := c.tryPost(body)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return code, body2
 }
 
 func (c *mockCPE) digest(method, uri string) string {
@@ -582,11 +599,18 @@ func TestIntegration_CPELoad(t *testing.T) {
 			defer wg.Done()
 			cpe := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
 			serial := fmt.Sprintf("LOAD%06d", i)
-			if code, _ := cpe.post(vendorInform(t, "Zyxel", "001349", "NR7101", serial)); code != 200 {
+			code, _, err := cpe.tryPost(vendorInform(t, "Zyxel", "001349", "NR7101", serial))
+			if err != nil {
+				errs <- fmt.Errorf("device %d Inform transport error: %w", i, err)
+				return
+			}
+			if code != 200 {
 				errs <- fmt.Errorf("device %d Inform: %d", i, code)
 				return
 			}
-			cpe.post("")
+			if _, _, err := cpe.tryPost(""); err != nil {
+				errs <- fmt.Errorf("device %d session close transport error: %w", i, err)
+			}
 		}(i)
 	}
 	wg.Wait()
@@ -600,5 +624,26 @@ func TestIntegration_CPELoad(t *testing.T) {
 	t.Logf("load: %d devices, %d failed, %.1f sessions/s, %d registered", n, failed, float64(n)/elapsed.Seconds(), list.Total)
 	if failed > 0 || list.Total != n {
 		t.Errorf("load run: %d failures, %d/%d registered", failed, list.Total, n)
+	}
+}
+
+// TestTryPostReturnsTransportErrors is a regression guard for the load
+// harness's failure counting. post() calls t.Fatal, which from a worker
+// goroutine runs runtime.Goexit() and kills the goroutine before it can
+// record the failure -- which is why a run that lost 183 of 500 devices
+// still reported "0 failed". tryPost must hand the error back instead.
+func TestTryPostReturnsTransportErrors(t *testing.T) {
+	// A closed listener's address: nothing is accepting connections.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL + "/cwmp"
+	srv.Close()
+
+	cpe := &mockCPE{t: t, client: &http.Client{Timeout: 2 * time.Second}, url: url}
+	code, _, err := cpe.tryPost("")
+	if err == nil {
+		t.Fatalf("tryPost against a closed server returned err = nil (code %d), want a transport error", code)
+	}
+	if code != 0 {
+		t.Errorf("tryPost returned code %d alongside an error, want 0", code)
 	}
 }

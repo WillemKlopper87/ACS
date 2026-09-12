@@ -1,0 +1,47 @@
+# obuspa factory-reset config: WebSocket, unencrypted.
+#
+# Derived from ci/configs/WebSocket.txt in github.com/BroadbandForum/obuspa
+# at commit 2d885f12d7fd345435b5db651b3111cb6d3a879e (tag v11.0.0-master).
+# Overridden from the upstream file:
+#   - Device.LocalAgent.EndpointID: a fixed test agent id instead of the
+#     placeholder "proto::agent-id".
+#   - Device.LocalAgent.Controller.1.EndpointID: must be exactly
+#     "self::" + $ACS_USP_CONTROLLER_ID from the matching CI step, since
+#     cmd/uspc refuses records whose To does not match its own
+#     configured controller id.
+#   - Device.LocalAgent.Controller.1.MTP.1.WebSocket.Host/Port/Path: point
+#     at cmd/uspc's WebSocket listener (ACS_USP_WS_ADDR/ACS_USP_WS_PATH),
+#     reached via the CI job's --network host instead of the upstream
+#     placeholder "controller.cdroutertest.com".
+#   - EnableEncryption stays "false": this run is deliberately plaintext
+#     (design §8: TLS is the default, plaintext only for CI).
+#
+# Everything else (aliases, notification intervals, retry backoff, role
+# assignment) is copied verbatim from the upstream file; none of it
+# affects whether the Get/GetResp interop check passes.
+
+Device.LocalAgent.EndpointID "os::012345-CIAGENT"
+
+Device.LocalAgent.MTP.1.Alias "cpe-1"
+Device.LocalAgent.MTP.1.Enable "true"
+Device.LocalAgent.MTP.1.Protocol "WebSocket"
+
+Device.LocalAgent.Controller.1.Alias "cpe-1"
+Device.LocalAgent.Controller.1.Enable "true"
+Device.LocalAgent.Controller.1.AssignedRole "Device.LocalAgent.ControllerTrust.Role.1"
+Device.LocalAgent.Controller.1.PeriodicNotifInterval "86400"
+Device.LocalAgent.Controller.1.PeriodicNotifTime "0001-01-01T00:00:00Z"
+Device.LocalAgent.Controller.1.USPNotifRetryMinimumWaitInterval "5"
+Device.LocalAgent.Controller.1.USPNotifRetryIntervalMultiplier "2000"
+Device.LocalAgent.Controller.1.ControllerCode ""
+Device.LocalAgent.Controller.1.EndpointID "self::ci-obuspa-interop"
+
+Device.LocalAgent.Controller.1.MTP.1.Alias "cpe-1"
+Device.LocalAgent.Controller.1.MTP.1.Enable "true"
+Device.LocalAgent.Controller.1.MTP.1.Protocol "WebSocket"
+Device.LocalAgent.Controller.1.MTP.1.WebSocket.Host "127.0.0.1"
+Device.LocalAgent.Controller.1.MTP.1.WebSocket.Port "9877"
+Device.LocalAgent.Controller.1.MTP.1.WebSocket.Path "/usp"
+Device.LocalAgent.Controller.1.MTP.1.WebSocket.EnableEncryption "false"
+
+Internal.Reboot.Cause "LocalFactoryReset"

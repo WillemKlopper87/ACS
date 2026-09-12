@@ -22,7 +22,7 @@ func TestResolvePathIGD1(t *testing.T) {
 		ManagementServerConnectionRequestUser: "InternetGatewayDevice.ManagementServer.ConnectionRequestUsername",
 		ManagementServerConnectionRequestPass: "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword",
 		WiFiSSID:                              "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
-		WiFiKeyPassphrase:                     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase",
+		WiFiKeyPassphrase:                     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase",
 	}
 	for canonical, want := range cases {
 		got, ok := ResolvePath(devices.DataModelRootIGD1, canonical)
@@ -64,5 +64,56 @@ func TestWiFiAssociatedDevicesPrefix(t *testing.T) {
 	}
 	if got := WiFiAssociatedDevicesPrefix(devices.DataModelRootIGD1); got != "InternetGatewayDevice.LANDevice.1.WLANConfiguration." {
 		t.Errorf("IGD1 prefix = %q, want InternetGatewayDevice.LANDevice.1.WLANConfiguration.", got)
+	}
+}
+
+func TestResolvePathCandidatesSinglePathParameters(t *testing.T) {
+	got := ResolvePathCandidates(devices.DataModelRootDevice2, DeviceInfoSoftwareVersion)
+	want := []string{"Device.DeviceInfo.SoftwareVersion"}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("ResolvePathCandidates(DEVICE2, software_version) = %v, want %v", got, want)
+	}
+}
+
+func TestResolvePathCandidatesUnknownParameterReturnsNil(t *testing.T) {
+	if got := ResolvePathCandidates(devices.DataModelRootDevice2, CanonicalParameter("nope.not.real")); got != nil {
+		t.Errorf("ResolvePathCandidates for an unknown parameter = %v, want nil", got)
+	}
+}
+
+// ResolvePath must stay consistent with ResolvePathCandidates: it returns
+// the single most-preferred candidate.
+func TestResolvePathReturnsFirstCandidate(t *testing.T) {
+	for _, root := range []string{devices.DataModelRootDevice2, devices.DataModelRootIGD1} {
+		for _, p := range []CanonicalParameter{DeviceInfoSoftwareVersion, WiFiSSID, WiFiKeyPassphrase} {
+			cands := ResolvePathCandidates(root, p)
+			path, ok := ResolvePath(root, p)
+			if len(cands) == 0 {
+				t.Fatalf("root %q param %q: no candidates", root, p)
+			}
+			if !ok || path != cands[0] {
+				t.Errorf("root %q param %q: ResolvePath = (%q, %v), want (%q, true)", root, p, path, ok, cands[0])
+			}
+		}
+	}
+}
+
+// TestIGD1PassphrasePrefersPreSharedKey pins the preference order. Huawei
+// EchoLife ONTs advertise WLANConfiguration.{i}.KeyPassphrase as
+// non-writable and only accept PreSharedKey.1.KeyPassphrase, and they are
+// the largest TR-098 fleet, so the PreSharedKey form leads.
+func TestIGD1PassphrasePrefersPreSharedKey(t *testing.T) {
+	got := ResolvePathCandidates(devices.DataModelRootIGD1, WiFiKeyPassphrase)
+	want := []string{
+		"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase",
+		"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("candidates = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("candidate[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }

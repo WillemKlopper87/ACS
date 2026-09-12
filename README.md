@@ -13,6 +13,7 @@ and an operator console.
 | CWMP gateway | `backend/cmd/acs` | Terminates CPE sessions on `:7547` (Digest or mTLS), dispatches leased jobs, runs the stale-lease reaper, STUN on `:3478/udp`. |
 | Operator API | `backend/cmd/api` | REST API on `:8080` (JWT auth, RBAC, tenancy scoping), connection-request and schedule workers, retention pruning, firmware/upload file serving. |
 | BSS adapter | `backend/cmd/bssadapter` | `/bss/v1` on `:8090` for CRM/BSS systems (OAuth2 client credentials or shared token), webhooks. |
+| USP controller | `backend/cmd/uspc` | TR-369/USP controller: WebSocket (`:9877`) and MQTT (`:1883`) MTPs, `/healthz`/`/readyz`/`/metrics` on `:8092`. Dispatches queued jobs, reconciles subscriptions, and gates connections with a network CIDR allowlist (`ACS_USP_ALLOWED_CIDRS`) plus an identity allowlist (the agent must already be a known `devices` row — see below). |
 | Migrate tool | `backend/cmd/migrate` | Applies embedded migrations standalone (CI, pre-deploy). |
 | Console | `frontend/` | React 19 + Vite operator UI, served by nginx in containers. |
 | Persistence | PostgreSQL 18 | Forward-only embedded migrations, advisory-locked and checksum-verified at startup. Firmware and CPE uploads on local disk. |
@@ -31,10 +32,13 @@ opt-out is `ACS_INSECURE_DEV_MODE=true`, for isolated local development.
 Bare-metal (Postgres from compose, services via `go run`):
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d postgres
+GRAFANA_ADMIN_PASSWORD=unused-postgres-only ACS_GRAFANA_DB_PASSWORD=unused-postgres-only \
+  docker compose -f infra/docker-compose.yml up -d postgres
 source scripts/gen-env.sh            # generates and persists real secrets in ~/.acs-secrets.env
 scripts/start.sh
 ```
+
+Note: `docker compose` interpolates the entire file before selecting services, so the Grafana service's mandatory password variables must resolve even when starting only Postgres. `unused-postgres-only` is not a placeholder secret — Grafana isn't started in this command, so the value only needs to satisfy interpolation, and keeping it unexported (a single-command prefix, not `export`) keeps it out of any later `docker compose up` in the same shell. A real deployment must set real passwords via `ACS_POSTGRES_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, and `ACS_GRAFANA_DB_PASSWORD` before starting Grafana itself.
 
 Fully containerized:
 
@@ -61,6 +65,10 @@ reverse proxy in front of the API and console.
 
 Recommended hardening variables: `ACS_DEVICE_NET_ALLOWED_CIDRS` (SSRF
 allowlist for the web-GUI proxy and console bridge),
+`ACS_USP_ALLOWED_CIDRS` (network-level allowlist for the USP
+controller's WebSocket/MQTT listeners; identity-level allowlisting is
+unconditional — pre-register a device via the bulk-import API before
+its first USP contact),
 `ACS_API_CORS_ORIGIN` (defaults to `ACS_FRONTEND_BASE_URL`),
 `ACS_UPLOAD_MAX_BYTES`, `ACS_DB_MAX_OPEN_CONNS`, `ACS_RETENTION_*_DAYS`,
 `ACS_TLS_CERT`/`ACS_TLS_KEY`. The full variable reference is in

@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"acs/internal/bss"
@@ -159,10 +160,17 @@ func (h *handler) deliverDueWebhooks(ctx context.Context, client *http.Client) {
 	}
 }
 
-// sendWebhookDelivery POSTs one delivery, signed the way most webhook
-// contracts expect: X-Webhook-Signature is hex(HMAC-SHA256(secret, body)),
-// letting the receiver verify the payload actually came from here and
-// wasn't tampered with in transit.
+// sendWebhookDelivery POSTs one delivery, signed with a scheme modelled on
+// Standard Webhooks: Webhook-Signature is "v1," + hex(HMAC-SHA256(secret,
+// "<id>.<timestamp>.<body>")). Binding the delivery id and the send-time
+// timestamp into the signed string, not just the body, is what lets a
+// receiver reject a captured-and-replayed delivery and dedupe legitimate
+// retries — a body-only HMAC (the previous scheme) gives it neither.
+//
+// This is not wire-compatible with stock Standard Webhooks verifiers: we
+// hex-encode the MAC and use a plain shared secret, where Standard
+// Webhooks base64-encodes it and expects a whsec_-prefixed, base64-decoded
+// secret. Only the signed-string construction and header names match.
 func (h *handler) sendWebhookDelivery(ctx context.Context, client *http.Client, d bss.WebhookDelivery) bool {
 	// audit H-7: re-checked at send time, not just at subscription
 	// creation — a target allowed when the subscription was created
@@ -175,9 +183,11 @@ func (h *handler) sendWebhookDelivery(ctx context.Context, client *http.Client, 
 		return false
 	}
 
-	mac := hmac.New(sha256.New, []byte(d.Secret))
-	mac.Write(d.Payload)
-	signature := hex.EncodeToString(mac.Sum(nil))
+	// Fresh timestamp per attempt, not per delivery: a retry an hour later
+	// must still land inside the consumer's freshness window, while any
+	// captured copy of an earlier attempt falls outside it.
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	signature := webhookSignature(d.Secret, d.ID, timestamp, d.Payload)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.TargetURL, bytes.NewReader(d.Payload))
 	if err != nil {
@@ -185,7 +195,9 @@ func (h *handler) sendWebhookDelivery(ctx context.Context, client *http.Client, 
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Webhook-Signature", signature)
+	req.Header.Set("Webhook-Id", d.ID)
+	req.Header.Set("Webhook-Timestamp", timestamp)
+	req.Header.Set("Webhook-Signature", "v1,"+signature)
 	req.Header.Set("X-Webhook-Event", d.EventType)
 
 	resp, err := client.Do(req)
@@ -200,6 +212,27 @@ func (h *handler) sendWebhookDelivery(ctx context.Context, client *http.Client, 
 		h.logger.Warn("webhook delivery rejected", "delivery_id", d.ID, "target_url", d.TargetURL, "status", resp.StatusCode, "attempt", d.Attempts+1)
 	}
 	return ok
+}
+
+// webhookSignature signs a delivery using a scheme modelled on Standard
+// Webhooks' signed-string construction: HMAC-SHA256 over
+// "<msg-id>.<timestamp>.<payload>", hex-encoded (Standard Webhooks itself
+// base64-encodes the MAC and uses a whsec_-prefixed, base64-decoded
+// secret -- deliberately not replicated here, so this is not wire-compatible
+// with off-the-shelf Standard Webhooks verifier libraries).
+//
+// Binding the id and timestamp into the signed string is what makes the
+// signature non-replayable. Signing the body alone -- which this worker
+// used to do -- produces a token an interceptor can resend forever, with
+// the consumer unable to tell the difference.
+func webhookSignature(secret, msgID, timestamp string, payload []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(msgID))
+	mac.Write([]byte("."))
+	mac.Write([]byte(timestamp))
+	mac.Write([]byte("."))
+	mac.Write(payload)
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // --- subscription management REST endpoints ---

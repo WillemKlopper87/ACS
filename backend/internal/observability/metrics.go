@@ -126,6 +126,26 @@ func NewMetrics(service string) *Metrics {
 	}
 }
 
+// Registry returns the underlying Prometheus registry, so a caller can
+// register metrics beyond the fixed set NewMetrics builds -- e.g.
+// cmd/uspc's USP-specific connections gauge and records counter, which
+// have no home in this shared package.
+func (m *Metrics) Registry() *prometheus.Registry {
+	return m.registry
+}
+
+// Factory returns the same labeled promauto.Factory NewMetrics uses
+// internally -- bound to this Metrics' registry and already applying
+// the "service" const label every other acs_* metric in the registry
+// carries. A caller registering metrics beyond the fixed set NewMetrics
+// builds (e.g. cmd/uspc's USP-specific connections gauge and records
+// counter) should build them via this Factory rather than a bare
+// promauto.With(m.Registry()), so those metrics get the same "service"
+// label as everything else in the registry.
+func (m *Metrics) Factory() promauto.Factory {
+	return m.factory
+}
+
 // Handler serves this process's metrics in the Prometheus exposition
 // format. Deliberately unauthenticated wherever it's mounted (a scraper
 // has no operator JWT or CPE credential to present) — the same "public,

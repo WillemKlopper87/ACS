@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"acs/internal/store"
@@ -19,6 +20,7 @@ const (
 	SourceInform    = "INFORM"
 	SourceGetValues = "GET_PARAMETER_VALUES"
 	SourceSetValues = "SET_PARAMETER_VALUES"
+	SourceUSPNotify = "USP_NOTIFY_VALUE_CHANGE"
 )
 
 // CachedValue is one entry in a device's parameter cache.
@@ -100,6 +102,96 @@ func (r *Repository) Upsert(ctx context.Context, deviceID string, values map[str
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit parameter cache upsert tx: %w", err)
+	}
+	return nil
+}
+
+// InvalidateSubtree removes every cached parameter under objPath (a
+// TR-181-style prefix, e.g. "Device.WiFi.") from a device's parameter
+// cache. This is what a USP ObjectCreation/ObjectDeletion Notify needs:
+// the cache is stale under that one subtree, not globally, and the CPE
+// hasn't necessarily told us what the new/removed values are, so there is
+// nothing to Upsert -- only something to drop.
+//
+// It does not touch parameter_history: history is a record of what was
+// true at the time it was recorded, not a live cache, so there is nothing
+// to invalidate there.
+//
+// Unlike Upsert, this cannot use the jsonb `||` concatenation operator --
+// `||` can only add or overwrite keys, never remove them. So the whole
+// map is read into Go under the same FOR UPDATE row lock Upsert takes,
+// filtered there, and written back as a full replace.
+//
+// An empty objPath is rejected outright rather than silently no-op'd or
+// (worse) matched against every cached key: strings.HasPrefix(x, "")
+// is true for every x, so an empty objPath would wipe a device's entire
+// parameter cache (final-review finding 1). A non-empty objPath that
+// doesn't already end in "." is normalized by appending one, so a caller
+// passing e.g. "Device.WiFi.SSID.1" can't over-invalidate a sibling
+// instance like "Device.WiFi.SSID.10.*" via a bare textual prefix match
+// -- the trailing-dot contract every other caller in this codebase
+// otherwise only follows by convention.
+func (r *Repository) InvalidateSubtree(ctx context.Context, deviceID, objPath string) error {
+	if objPath == "" {
+		return fmt.Errorf("invalidate parameter cache subtree: empty objPath would invalidate the whole cache")
+	}
+	if !strings.HasSuffix(objPath, ".") {
+		objPath += "."
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin parameter cache invalidate tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var raw []byte
+	err = tx.QueryRowContext(ctx, `SELECT parameters FROM device_parameter_cache WHERE device_id = $1 FOR UPDATE`, deviceID).Scan(&raw)
+	if err == sql.ErrNoRows {
+		// Nothing cached for this device yet -- invalidating a subtree of
+		// an empty cache is a no-op, not an error.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load current parameter cache: %w", err)
+	}
+	current := map[string]CachedValue{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return fmt.Errorf("unmarshal current parameter cache: %w", err)
+		}
+	}
+
+	changed := false
+	for name := range current {
+		if strings.HasPrefix(name, objPath) {
+			delete(current, name)
+			changed = true
+		}
+	}
+	if !changed {
+		// No matching keys -- nothing to write back, and no need to hold
+		// the row lock past this point.
+		return nil
+	}
+
+	replacement, err := json.Marshal(current)
+	if err != nil {
+		return fmt.Errorf("marshal parameter cache after invalidation: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO device_parameter_cache (device_id, parameters, updated_at)
+		VALUES ($1, $2::jsonb, now())
+		ON CONFLICT (device_id) DO UPDATE SET
+			parameters = EXCLUDED.parameters,
+			updated_at = now()
+	`, deviceID, replacement); err != nil {
+		return fmt.Errorf("invalidate parameter cache subtree: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit parameter cache invalidate tx: %w", err)
 	}
 	return nil
 }

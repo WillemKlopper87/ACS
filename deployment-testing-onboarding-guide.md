@@ -68,11 +68,14 @@ URL field — everything below calls it `<ACS_URL>` (e.g.
 
 ```bash
 cd ACS/infra
-docker compose up -d postgres        # add prometheus/grafana too if you want metrics dashboards
+GRAFANA_ADMIN_PASSWORD=unused-postgres-only ACS_GRAFANA_DB_PASSWORD=unused-postgres-only \
+  docker compose up -d postgres
 
 cd ../backend
 export ACS_POSTGRES_DSN="postgres://acs:acs@localhost:5432/acs?sslmode=disable"
 ```
+
+Note: `docker compose` interpolates the entire file before selecting services, so the Grafana service's mandatory password variables must be set even when starting only Postgres. `unused-postgres-only` is not exported and only satisfies interpolation for this one command — it is never a real Grafana credential, and it must never be typed into a later `docker compose up` that actually starts Grafana. If you want metrics dashboards, start `prometheus`/`grafana` separately with real passwords (`GRAFANA_ADMIN_PASSWORD` and `ACS_GRAFANA_DB_PASSWORD` set to generated secrets, not placeholders).
 
 Set these before starting `cmd/acs` and `cmd/api` — this is the realistic
 minimum for a device test, not the full production list (see §7 for
@@ -247,6 +250,36 @@ ACS_BSS_TLS_CERT, ACS_BSS_TLS_KEY, ACS_BSS_MTLS_CA_CERT,
 ACS_BSS_RATE_LIMIT_PER_SECOND, ACS_BSS_RATE_LIMIT_BURST,
 ACS_INTERNAL_API_URL (where cmd/api lives, default http://localhost:8080),
 ACS_INTERNAL_SERVICE_TOKEN (same value as cmd/api's, above)
+
+# cmd/uspc (TR-369/USP controller: WebSocket + MQTT MTPs)
+# Two independent allowlist gates:
+#   - Network-level: ACS_USP_ALLOWED_CIDRS (comma-separated CIDRs,
+#     e.g. "10.0.0.0/8,192.168.1.0/24"). Empty/unset is permissive --
+#     set this for a production deployment.
+#   - Identity-level: unconditional, no config flag. An agent's
+#     OUI+SerialNumber must already correspond to a devices row before
+#     its first USP contact -- pre-register it via the bulk-import API
+#     (same PreRegister path CWMP fleet onboarding already uses), or
+#     let it connect via CWMP first if it's a dual-stack device. An
+#     unrecognized identity is refused and the connection closed --
+#     but only once the agent actually attempts identity reconciliation
+#     (an OnBoardRequest, or the interop probe's Get as a fallback). A
+#     peer that completes the transport handshake and then sends
+#     nothing is not independently timed out or force-closed by this
+#     gate -- a known, pre-existing scope boundary, not fixed here.
+ACS_USP_ALLOWED_CIDRS (optional, comma-separated CIDR list, empty is
+  permissive -- see above),
+ACS_USP_CONTROLLER_ID (required, >=8 bytes, [A-Za-z0-9._-]+, not a
+  placeholder -- this controller's endpoint id is self:: plus this value,
+  stored verbatim in every connected agent's controller table),
+ACS_USP_WS_ADDR (default :9877), ACS_USP_WS_PATH (default /usp),
+ACS_USP_MQTT_ADDR (default :1883),
+ACS_USP_MQTT_CONTROLLER_TOPIC (default /usp/controller),
+ACS_USP_TLS_CERT, ACS_USP_TLS_KEY (both or neither -- when set, both MTPs
+  serve TLS), ACS_USP_ALLOW_PLAINTEXT (literal "true" opts into serving
+  with no TLS; default false, so a missing cert/key pair without this is
+  a fatal startup error), ACS_USP_HTTP_ADDR (default :8092 --
+  /healthz, /readyz, /metrics)
 
 # cmd/probe only
 ACS_RESULTS_FILE

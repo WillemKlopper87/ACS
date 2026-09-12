@@ -91,8 +91,19 @@ type DiagnosticsTraceroutePayload struct {
 // DeleteObject were the biggest protocol-completeness gap against an
 // off-the-shelf ACS — every prior write path could only edit parameters
 // that already existed on the device).
+//
+// Parameters is optional: initial values to set on the object once the
+// CPE has created it and returned its instance number. Each
+// Parameters[].Name is a leaf parameter name *relative to the new
+// instance*, not a full dotted path — e.g. for a new "Device.WiFi.SSID."
+// instance, Name is "SSID", not "Device.WiFi.SSID.5.SSID" (the instance
+// number isn't known until the CPE's AddObjectResponse arrives, so a full
+// path can't be written at job-creation time anyway). omitempty keeps
+// every existing CWMP-created ADD_OBJECT payload — none of which populate
+// this field — round-tripping through JSON unchanged.
 type AddObjectPayload struct {
-	ObjectPath string `json:"object_path"`
+	ObjectPath string           `json:"object_path"`
+	Parameters []ParameterWrite `json:"parameters,omitempty"`
 }
 
 // DeleteObjectPayload is the payload shape for a DELETE_OBJECT job.

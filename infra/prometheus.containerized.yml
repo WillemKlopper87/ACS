@@ -30,3 +30,6 @@ scrape_configs:
   - job_name: bssadapter
     static_configs:
       - targets: ['bssadapter:8090']
+  - job_name: uspc
+    static_configs:
+      - targets: ['uspc:8092']

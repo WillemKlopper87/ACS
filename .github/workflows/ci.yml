@@ -1,6 +1,6 @@
 # Required delivery gate (audit P1.6). Every job must pass before merge;
 # configure branch protection on main to require: go, frontend,
-# migrations, containers, scan, security.
+# migrations, containers, scan, security, usp-interop.
 name: ci
 
 on:
@@ -30,6 +30,17 @@ jobs:
         run: |
           out=$(gofmt -l .)
           if [ -n "$out" ]; then echo "unformatted:"; echo "$out"; exit 1; fi
+      - name: USP protobuf bindings match their .proto
+        run: |
+          PROTOC_VERSION=29.3
+          curl -sSL -o /tmp/protoc.zip \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          unzip -q -o /tmp/protoc.zip -d /tmp/protoc
+          export PATH="/tmp/protoc/bin:$(go env GOPATH)/bin:$PATH"
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          ./internal/usp/proto/generate.sh
+          test -z "$(git status --porcelain -uall -- internal/usp/uspproto/)" || { git status --porcelain -uall -- internal/usp/uspproto/; exit 1; }
+        working-directory: backend
       - run: go vet ./...
       - run: go build ./...
       - run: go test -race -count=1 ./...
@@ -144,6 +155,27 @@ jobs:
         env:
           ACS_TEST_POSTGRES_DSN: postgres://acs:acs@localhost:5432/acs?sslmode=disable
         run: go test -race -count=1 -p 1 -run Integration ./cmd/api/ ./cmd/acs/  # -p 1: both suites reset the same database, so packages must not run concurrently
+      - name: DB-backed repository tests (assignment constraints, Digest replay, lease recovery, dashboard SQL, OAuth revocation, liveness transitions)
+        env:
+          ACS_TEST_POSTGRES_DSN: postgres://acs:acs@localhost:5432/acs?sslmode=disable
+        # These packages' DB-backed tests are not named *Integration*, so the
+        # step above never ran them. That includes cmd/acs's
+        # TestRepository_RefreshLivenessTransitions, so ./cmd/acs/ is
+        # covered here too — this reruns cmd/acs's TestIntegration_* tests
+        # as a side effect (harmless) but TestIntegration_CPELoad stays
+        # skipped since ACS_TEST_LOAD_DEVICES is unset. Also covers
+        # internal/devices' usp_agents-backed repository tests (identity
+        # reconciliation) and cmd/uspc's own dispatcher/response-handling
+        # suite (job dispatch over USP, gated the same way on
+        # ACS_TEST_POSTGRES_DSN) -- a DB-backed test in a package not on
+        # this list never runs in CI (final review, Critical Finding 2:
+        # cmd/uspc was missing here entirely, so its 26+ DB-backed tests
+        # silently skipped in every CI run). internal/subscriptions and
+        # internal/parameters have their own DB-backed tests too (Tasks 3/4
+        # of the usp-subscriptions plan) and were never added here either
+        # (tracked-forward gap from Task 3's review) -- added now. -p 1:
+        # every one resets the same database.
+        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./internal/subscriptions/ ./internal/parameters/ ./cmd/acs/ ./cmd/uspc/
       - name: placeholder secrets are refused (fail-closed)
         run: |
           set +e
@@ -225,6 +257,354 @@ jobs:
           # Every entry in here carries an expired_at, so an exception
           # cannot quietly outlive its justification — see the file.
           trivyignores: .trivyignore.yaml
+
+  usp-interop:
+    name: usp-interop (obuspa reference agent, WebSocket + MQTT 5 + MQTT 3.1.1)
+    # Spec §9: protocol code that has never met a real agent is an
+    # intention, not a capability. This job runs the Broadband Forum
+    # reference USP agent (obuspa) against cmd/uspc over both MTPs and
+    # asserts the controller logged a GetResp for Device.DeviceInfo.
+    # from it -- needs: [go] so it never runs against a build that
+    # already fails.
+    needs: [go]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env: { POSTGRES_USER: acs, POSTGRES_PASSWORD: acs, POSTGRES_DB: acs }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U acs -d acs"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # cmd/uspc's own env (backend/cmd/uspc/config.go, main.go).
+      # ACS_USP_CONTROLLER_ID must be >=8 bytes, match
+      # ^[A-Za-z0-9._-]+$, and not read as a placeholder -- it becomes
+      # this controller's self::<id> endpoint id, which every obuspa
+      # factory-reset file in ci/usp/ must name exactly as its
+      # Controller.1.EndpointID, or obuspa refuses the record.
+      ACS_USP_CONTROLLER_ID: ci-obuspa-interop
+      ACS_USP_WS_ADDR: ":9877"
+      ACS_USP_WS_PATH: "/usp"
+      ACS_USP_MQTT_ADDR: ":1883"
+      ACS_USP_MQTT_CONTROLLER_TOPIC: "/usp/controller"
+      ACS_USP_ALLOW_PLAINTEXT: "true"
+      ACS_USP_HTTP_ADDR: ":8092"
+      # cmd/uspc now opens a database at startup (identity reconciliation,
+      # Task 5) -- same DSN shape as the migrations job's own service.
+      ACS_USP_POSTGRES_DSN: postgres://acs:acs@localhost:5432/acs?sslmode=disable
+      # Pinned commit, not a floating branch (obuspa has no "v11.0.7"
+      # release -- that tag does not exist). This is
+      # github.com/BroadbandForum/obuspa's tag v11.0.0-master, the
+      # latest master-branch release tag as of 2026-09-11, verified
+      # live against the upstream repository before pinning.
+      OBUSPA_COMMIT: 2d885f12d7fd345435b5db651b3111cb6d3a879e
+      AGENT_ENDPOINT_ID: os::012345-CIAGENT
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: build uspc
+        working-directory: backend
+        run: go build -o /tmp/uspc ./cmd/uspc
+      - name: executable bit on assert-getresp.sh / assert-job-dispatch.sh / assert-subscription.sh / assert-allowlist.sh / preregister.sh (committed as 100755)
+        run: |
+          test -x ci/usp/assert-getresp.sh
+          test -x ci/usp/assert-job-dispatch.sh
+          test -x ci/usp/assert-subscription.sh
+          test -x ci/usp/assert-allowlist.sh
+          test -x ci/usp/preregister.sh
+      - name: clone obuspa at the pinned commit
+        run: |
+          git init -q obuspa-src
+          cd obuspa-src
+          git remote add origin https://github.com/BroadbandForum/obuspa.git
+          git fetch --depth 1 origin "$OBUSPA_COMMIT"
+          git checkout -q FETCH_HEAD
+          actual="$(git rev-parse HEAD)"
+          [ "$actual" = "$OBUSPA_COMMIT" ] || { echo "checked out $actual, expected $OBUSPA_COMMIT"; exit 1; }
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: build obuspa's ci/Dockerfile, unmodified (CoAP compiled in but never configured -- harmless here)
+        run: docker build -f obuspa-src/ci/Dockerfile -t obuspa:ci obuspa-src
+      - name: migrate the database (once -- all three steps below share this job's one postgres service and never reset its schema)
+        working-directory: backend
+        env:
+          # cmd/migrate reads ACS_POSTGRES_DSN (its own var, matching the
+          # migrations job), distinct from cmd/uspc's ACS_USP_POSTGRES_DSN
+          # above -- same database, same DSN value, different var name.
+          ACS_POSTGRES_DSN: postgres://acs:acs@localhost:5432/acs?sslmode=disable
+        run: |
+          go build -o /tmp/migrate ./cmd/migrate
+          /tmp/migrate
+
+      - name: "usp-interop: websocket"
+        run: |
+          rm -f /tmp/uspc-ws.log /tmp/obuspa-ws.log
+          /tmp/uspc > /tmp/uspc-ws.log 2>&1 &
+          uspc_pid=$!
+          ready=0
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8092/readyz >/dev/null 2>&1 && { ready=1; break; }
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "FAIL: uspc did not become ready (GET /readyz) within 20s"
+            cat /tmp/uspc-ws.log
+            kill "$uspc_pid" 2>/dev/null || true
+            exit 1
+          fi
+          docker run -d --name obuspa-ws --network host \
+            -v "$PWD/ci/usp:/ci/usp:ro" \
+            obuspa:ci -p -v4 -r /ci/usp/obuspa-websocket.txt -t /etc/obuspa/certs -f /tmp/usp-ws.db
+          sleep 2
+          if [ "$(docker inspect -f '{{.State.Running}}' obuspa-ws 2>/dev/null)" != "true" ]; then
+            echo "FAIL: obuspa-ws container is not running shortly after start"
+            docker logs obuspa-ws || true
+            docker rm -f obuspa-ws >/dev/null 2>&1 || true
+            kill "$uspc_pid" 2>/dev/null || true
+            exit 1
+          fi
+          docker logs -f obuspa-ws > /tmp/obuspa-ws.log 2>&1 &
+          logs_pid=$!
+          rc=0
+
+          # USP agent allowlist (Task 5): obuspa-ws's identity is
+          # generated/persisted at its first boot, not a fixed, predictable
+          # value (only ManufacturerOUI/ProductClass are fixed compile-time
+          # defaults, and even those aren't mirrored anywhere in this repo),
+          # so it cannot be pre-registered before obuspa ever connects. Its
+          # connection attempt(s) up to this point have therefore already
+          # been refused by cmd/uspc's identity gate (Tasks 3-4) -- expected,
+          # and itself usable as refusal evidence. ci/usp/preregister.sh
+          # extracts the real identity via obuspa's own "-c get" CLI (the
+          # same out-of-band-oracle pattern assert-subscription.sh already
+          # established below), and -- since this step also needs to prove
+          # the refusal via assert-allowlist.sh strictly before the identity
+          # is registered -- runs it as a pre-insert hook, passing the
+          # computed oui_serial as assert-allowlist.sh's final argument.
+          # Once both pass, pre-register the real identity and force a
+          # fresh connection attempt so the rest of this step (which all
+          # assume a successfully reconciled device) can proceed. See
+          # task-5-report.md for why this supersedes the original plan's
+          # second, deliberately-unregistered obuspa instance, and for why
+          # this extraction/pre-registration logic now lives in one shared
+          # script rather than copy-pasted per step.
+          ci/usp/preregister.sh obuspa-ws "$ACS_USP_POSTGRES_DSN" \
+            ci/usp/assert-allowlist.sh /tmp/uspc-ws.log "$ACS_USP_POSTGRES_DSN" "$AGENT_ENDPOINT_ID" || rc=$?
+
+          if [ "$rc" -eq 0 ]; then
+            echo "forcing a fresh connection attempt against the now-registered identity (docker restart obuspa-ws)"
+            docker restart obuspa-ws >/dev/null || rc=$?
+          fi
+
+          if [ "$rc" -ne 0 ]; then
+            kill "$logs_pid" 2>/dev/null || true
+            docker rm -f obuspa-ws >/dev/null 2>&1 || true
+            kill "$uspc_pid" 2>/dev/null || true
+            wait "$uspc_pid" 2>/dev/null || true
+            exit "$rc"
+          fi
+
+          ci/usp/assert-getresp.sh /tmp/uspc-ws.log "$AGENT_ENDPOINT_ID" WebSocket /tmp/obuspa-ws.log || rc=$?
+          # The probe GetResp above is also what triggers B-3a's
+          # probe-fallback identity reconciliation (handleProbeFallback
+          # -> fromProbeFallback -> UpsertFromOnBoard -> LinkUspAgent),
+          # so once it has succeeded, usp_agents.endpoint_id -> device_id
+          # is guaranteed to resolve. Reuse this same running uspc/obuspa
+          # pair (cheaper than starting a fresh one) to queue a real
+          # GET_PARAMETER job and prove it dispatches via LISTEN/NOTIFY
+          # and resolves with real data from the agent -- the concrete
+          # proof this whole plan exists to produce (spec §9).
+          if [ "$rc" -eq 0 ]; then
+            ci/usp/assert-job-dispatch.sh "$ACS_USP_POSTGRES_DSN" "$AGENT_ENDPOINT_ID" /tmp/uspc-ws.log || rc=$?
+          fi
+          # B-3c (last unproven piece of the USP subscription/Notify work):
+          # insert a desired usp_subscriptions row for this same device, force
+          # a genuine reconnect (docker restart, same container/uspc process
+          # pair -- cheaper than a fresh one, and this is also the "across an
+          # agent restart" coverage design spec S9 asks for), and prove it
+          # converges onto the real agent plus that a resulting ValueChange
+          # Notify gets routed and cached. See assert-subscription.sh's own
+          # header comment for exactly what's proven vs. assumed.
+          if [ "$rc" -eq 0 ]; then
+            ci/usp/assert-subscription.sh "$ACS_USP_POSTGRES_DSN" "$AGENT_ENDPOINT_ID" /tmp/uspc-ws.log obuspa-ws || rc=$?
+          fi
+          kill "$logs_pid" 2>/dev/null || true
+          docker rm -f obuspa-ws >/dev/null 2>&1 || true
+          kill "$uspc_pid" 2>/dev/null || true
+          wait "$uspc_pid" 2>/dev/null || true
+          exit "$rc"
+
+      - name: "usp-interop: mqtt-v5"
+        run: |
+          rm -f /tmp/uspc-mqtt5.log /tmp/obuspa-mqtt5.log
+          /tmp/uspc > /tmp/uspc-mqtt5.log 2>&1 &
+          uspc_pid=$!
+          ready=0
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8092/readyz >/dev/null 2>&1 && { ready=1; break; }
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "FAIL: uspc did not become ready (GET /readyz) within 20s"
+            cat /tmp/uspc-mqtt5.log
+            kill "$uspc_pid" 2>/dev/null || true
+            exit 1
+          fi
+          docker run -d --name obuspa-mqtt5 --network host \
+            -v "$PWD/ci/usp:/ci/usp:ro" \
+            obuspa:ci -p -v4 -r /ci/usp/obuspa-mqtt-v5.txt -t /etc/obuspa/certs -f /tmp/usp-mqtt5.db
+          sleep 2
+          if [ "$(docker inspect -f '{{.State.Running}}' obuspa-mqtt5 2>/dev/null)" != "true" ]; then
+            echo "FAIL: obuspa-mqtt5 container is not running shortly after start"
+            docker logs obuspa-mqtt5 || true
+            docker rm -f obuspa-mqtt5 >/dev/null 2>&1 || true
+            kill "$uspc_pid" 2>/dev/null || true
+            exit 1
+          fi
+          docker logs -f obuspa-mqtt5 > /tmp/obuspa-mqtt5.log 2>&1 &
+          logs_pid=$!
+          rc=0
+
+          # USP agent allowlist (Task 5): same pre-registration workaround
+          # as the WebSocket step above (ci/usp/preregister.sh) -- obuspa-
+          # mqtt5's identity is only known once extracted via its own "-c
+          # get" CLI, so its first connection attempt(s) above were refused
+          # by cmd/uspc's identity gate. The gate's refusal itself is
+          # already proven once by the WebSocket step's assert-allowlist.sh
+          # call (the gate is MTP-agnostic Go logic, not re-proven per
+          # transport); this step only needs the same pre-register-and-
+          # reconnect workaround (no pre-insert hook) so its own GetResp
+          # assertion below runs against a fully-reconciled agent rather
+          # than one stuck in a refusal/retry loop for the rest of the
+          # step's duration.
+          ci/usp/preregister.sh obuspa-mqtt5 "$ACS_USP_POSTGRES_DSN" || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "forcing a fresh connection attempt against the now-registered identity (docker restart obuspa-mqtt5)"
+            docker restart obuspa-mqtt5 >/dev/null || rc=$?
+          fi
+
+          # assert-getresp.sh below matches a probe log line that is
+          # emitted BEFORE the identity gate's refusal/acceptance decision
+          # (final review, Important Finding 3) -- on its own it would
+          # report success even if this post-pre-registration reconnect
+          # were still being refused by the gate. Poll usp_agents.connected
+          # directly so this step actually asserts the reconnect was
+          # accepted, not just that some earlier probe line was logged.
+          if [ "$rc" -eq 0 ]; then
+            echo "waiting for the post-pre-registration reconnect to be accepted..."
+            connected=""
+            for i in $(seq 1 30); do
+              connected=$(psql "$ACS_USP_POSTGRES_DSN" -tAc "SELECT connected FROM usp_agents WHERE endpoint_id = '$AGENT_ENDPOINT_ID';" | tr -d '[:space:]')
+              if [ "$connected" = "t" ]; then
+                echo "OK: agent reconnected and is recorded as connected"
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "FAIL: agent never reconnected as 'connected' within 30s after pre-registration" >&2
+                rc=1
+              fi
+              sleep 1
+            done
+          fi
+
+          if [ "$rc" -ne 0 ]; then
+            kill "$logs_pid" 2>/dev/null || true
+            docker rm -f obuspa-mqtt5 >/dev/null 2>&1 || true
+            kill "$uspc_pid" 2>/dev/null || true
+            wait "$uspc_pid" 2>/dev/null || true
+            exit "$rc"
+          fi
+
+          ci/usp/assert-getresp.sh /tmp/uspc-mqtt5.log "$AGENT_ENDPOINT_ID" MQTT /tmp/obuspa-mqtt5.log || rc=$?
+          kill "$logs_pid" 2>/dev/null || true
+          docker rm -f obuspa-mqtt5 >/dev/null 2>&1 || true
+          kill "$uspc_pid" 2>/dev/null || true
+          wait "$uspc_pid" 2>/dev/null || true
+          exit "$rc"
+
+      - name: "usp-interop: mqtt-v311"
+        run: |
+          rm -f /tmp/uspc-mqtt311.log /tmp/obuspa-mqtt311.log
+          /tmp/uspc > /tmp/uspc-mqtt311.log 2>&1 &
+          uspc_pid=$!
+          ready=0
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8092/readyz >/dev/null 2>&1 && { ready=1; break; }
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "FAIL: uspc did not become ready (GET /readyz) within 20s"
+            cat /tmp/uspc-mqtt311.log
+            kill "$uspc_pid" 2>/dev/null || true
+            exit 1
+          fi
+          docker run -d --name obuspa-mqtt311 --network host \
+            -v "$PWD/ci/usp:/ci/usp:ro" \
+            obuspa:ci -p -v4 -r /ci/usp/obuspa-mqtt-v311.txt -t /etc/obuspa/certs -f /tmp/usp-mqtt311.db
+          sleep 2
+          if [ "$(docker inspect -f '{{.State.Running}}' obuspa-mqtt311 2>/dev/null)" != "true" ]; then
+            echo "FAIL: obuspa-mqtt311 container is not running shortly after start"
+            docker logs obuspa-mqtt311 || true
+            docker rm -f obuspa-mqtt311 >/dev/null 2>&1 || true
+            kill "$uspc_pid" 2>/dev/null || true
+            exit 1
+          fi
+          docker logs -f obuspa-mqtt311 > /tmp/obuspa-mqtt311.log 2>&1 &
+          logs_pid=$!
+          rc=0
+
+          # USP agent allowlist (Task 5): same pre-registration workaround
+          # as the WebSocket/mqtt-v5 steps above (ci/usp/preregister.sh) --
+          # see the mqtt-v5 step's own comment for why this doesn't also
+          # re-run assert-allowlist.sh.
+          ci/usp/preregister.sh obuspa-mqtt311 "$ACS_USP_POSTGRES_DSN" || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "forcing a fresh connection attempt against the now-registered identity (docker restart obuspa-mqtt311)"
+            docker restart obuspa-mqtt311 >/dev/null || rc=$?
+          fi
+
+          # assert-getresp.sh below matches a probe log line that is
+          # emitted BEFORE the identity gate's refusal/acceptance decision
+          # (final review, Important Finding 3) -- on its own it would
+          # report success even if this post-pre-registration reconnect
+          # were still being refused by the gate. Poll usp_agents.connected
+          # directly so this step actually asserts the reconnect was
+          # accepted, not just that some earlier probe line was logged.
+          if [ "$rc" -eq 0 ]; then
+            echo "waiting for the post-pre-registration reconnect to be accepted..."
+            connected=""
+            for i in $(seq 1 30); do
+              connected=$(psql "$ACS_USP_POSTGRES_DSN" -tAc "SELECT connected FROM usp_agents WHERE endpoint_id = '$AGENT_ENDPOINT_ID';" | tr -d '[:space:]')
+              if [ "$connected" = "t" ]; then
+                echo "OK: agent reconnected and is recorded as connected"
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "FAIL: agent never reconnected as 'connected' within 30s after pre-registration" >&2
+                rc=1
+              fi
+              sleep 1
+            done
+          fi
+
+          if [ "$rc" -ne 0 ]; then
+            kill "$logs_pid" 2>/dev/null || true
+            docker rm -f obuspa-mqtt311 >/dev/null 2>&1 || true
+            kill "$uspc_pid" 2>/dev/null || true
+            wait "$uspc_pid" 2>/dev/null || true
+            exit "$rc"
+          fi
+
+          ci/usp/assert-getresp.sh /tmp/uspc-mqtt311.log "$AGENT_ENDPOINT_ID" MQTT /tmp/obuspa-mqtt311.log || rc=$?
+          kill "$logs_pid" 2>/dev/null || true
+          docker rm -f obuspa-mqtt311 >/dev/null 2>&1 || true
+          kill "$uspc_pid" 2>/dev/null || true
+          wait "$uspc_pid" 2>/dev/null || true
+          exit "$rc"
 
   security:
     name: secrets scan

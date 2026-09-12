@@ -69,6 +69,8 @@ Unknown `oui_serial` (`404`):
 }
 ```
 
+Every assignment carries a `role` (`gateway`, `ont`, `extender`, `stb`, `ata`, `other`). A mapping request that omits `role` targets `gateway`, so existing integrations that never sent it keep working unchanged. An account may have at most one *active* device per role — a second `POST /bss/v1/mappings` naming a role that's already assigned gets a `409 ErrRoleAlreadyAssigned` rather than silently displacing the current device; replace a device in a role by unassigning or swapping the existing mapping first, not by creating a second one.
+
 List an account's mapped devices:
 
 ```http
@@ -100,6 +102,8 @@ Content-Type: application/json
 ```
 
 `action` must currently be `MODIFY_WIFI`. `parameters` needs at least one of `wifi_ssid` / `wifi_password` — either alone is fine (only the fields you send get written).
+
+An order also accepts an optional `role`, resolved the same way a mapping's role is: an order that names no role targets the account's `gateway`. The order dispatches against whichever device is currently the *active* assignment for that role on the account — not whichever device was most recently touched — so if an account has more than one device (a gateway and an extender, say), naming the role is how you address the right one.
 
 #### 2. ACS Immediate Response — captured, `202 Accepted`
 
@@ -337,15 +341,33 @@ Once an order's underlying job reaches a terminal status (`SUCCESS`, `FAILED`, o
 
 (`fault_code`/`fault_string` are also present, `null` unless `status` is `FAILED`.)
 
-Every delivery carries:
+Each delivery carries `Content-Type: application/json` plus:
 
-```
-Content-Type: application/json
-X-Webhook-Event: JOB_COMPLETED
-X-Webhook-Signature: <hex HMAC-SHA256 of the raw body, keyed on your subscription's secret>
-```
+| Header | Value |
+|---|---|
+| `Webhook-Id` | Unique delivery id. Stable across retries of the same delivery — use it as your idempotency key. |
+| `Webhook-Timestamp` | Unix seconds at send time. Fresh per attempt. |
+| `Webhook-Signature` | `v1,<hex>` where `<hex>` is HMAC-SHA256 over `<Webhook-Id>.<Webhook-Timestamp>.<raw body>` using your subscription secret. |
+| `X-Webhook-Event` | Event type. |
 
-Verify it the standard way: `hex(HMAC-SHA256(secret, request_body))` should equal `X-Webhook-Signature`. Reject anything that doesn't match.
+This scheme is modelled on [Standard Webhooks](https://www.standardwebhooks.com/)
+(same `<id>.<timestamp>.<body>` signed-string construction and header
+names) but is **not wire-compatible** with it: `<hex>` above is
+hex-encoded HMAC-SHA256 with a plain shared secret, whereas Standard
+Webhooks base64-encodes the MAC and expects a `whsec_`-prefixed,
+base64-decoded secret. Verify against the construction documented here,
+not with an off-the-shelf Standard Webhooks verifier library.
+
+**Breaking change:** the old `X-Webhook-Signature` header (a body-only
+HMAC, with no id or timestamp bound in) has been removed, not deprecated.
+A body-only signature is replayable — keeping it around, even as a
+fallback, would defeat the point of this change. If your integration
+verified `X-Webhook-Signature`, switch to `Webhook-Signature`.
+
+Verify by recomputing the HMAC over the concatenation — not over the body
+alone — and reject deliveries whose `Webhook-Timestamp` is outside a
+tolerance window (5 minutes is the common choice). Deduplicate on
+`Webhook-Id`: delivery is at-least-once, so the same id can arrive twice.
 
 Your endpoint must respond `2xx` to acknowledge. A non-2xx or a failed request is retried with exponential backoff (2^attempts minutes) up to 8 attempts, after which the delivery is left `FAILED` — there's no operator-facing UI onto individual delivery status yet, so a persistently-failing `target_url` needs to be diagnosed from `cmd/bssadapter`'s own logs for now.
 

@@ -148,6 +148,26 @@ services:
       api:
         condition: service_started
 
+  uspc:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.uspc
+    profiles: ["containerized"]
+    ports:
+      - "127.0.0.1:9877:9877"
+      - "127.0.0.1:1883:1883"
+      - "127.0.0.1:8092:8092"
+    env_file: .env.containerized
+    environment:
+      # No database and no dependency on the other services (design
+      # §4.1: cmd/uspc wires protocol to transport only) -- it does not
+      # need postgres/api/bssadapter to be up first. ACS_USP_ALLOW_PLAINTEXT
+      # stands in for a real cert here, same as this compose file's other
+      # dev-friendly defaults; put TLS in front for anything reachable
+      # beyond this host.
+      ACS_USP_CONTROLLER_ID: ${ACS_USP_CONTROLLER_ID:-uspc-containerized}
+      ACS_USP_ALLOW_PLAINTEXT: "true"
+
   frontend:
     build:
       context: ../frontend
