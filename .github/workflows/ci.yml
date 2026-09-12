@@ -310,12 +310,13 @@ jobs:
       - name: build uspc
         working-directory: backend
         run: go build -o /tmp/uspc ./cmd/uspc
-      - name: executable bit on assert-getresp.sh / assert-job-dispatch.sh / assert-subscription.sh / assert-allowlist.sh (committed as 100755)
+      - name: executable bit on assert-getresp.sh / assert-job-dispatch.sh / assert-subscription.sh / assert-allowlist.sh / preregister.sh (committed as 100755)
         run: |
           test -x ci/usp/assert-getresp.sh
           test -x ci/usp/assert-job-dispatch.sh
           test -x ci/usp/assert-subscription.sh
           test -x ci/usp/assert-allowlist.sh
+          test -x ci/usp/preregister.sh
       - name: clone obuspa at the pinned commit
         run: |
           git init -q obuspa-src
@@ -377,57 +378,22 @@ jobs:
           # so it cannot be pre-registered before obuspa ever connects. Its
           # connection attempt(s) up to this point have therefore already
           # been refused by cmd/uspc's identity gate (Tasks 3-4) -- expected,
-          # and itself usable as refusal evidence. Extract the real identity
-          # via obuspa's own "-c get" CLI (the same out-of-band-oracle
-          # pattern assert-subscription.sh already established below), prove
-          # the refusal via assert-allowlist.sh, then pre-register the real
-          # identity and force a fresh connection attempt so the rest of
-          # this step (which all assume a successfully reconciled device)
-          # can proceed. See task-5-report.md for why this supersedes the
-          # original plan's second, deliberately-unregistered obuspa
-          # instance.
-          get_param() {
-            local path="$1" out="" value=""
-            for _ in $(seq 1 15); do
-              out=$(docker exec obuspa-ws obuspa -c get "$path" 2>&1 || true)
-              value=$(echo "$out" | sed -n 's/.*=> //p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr -d '\r')
-              if [ -n "$value" ]; then
-                echo "$value"
-                return 0
-              fi
-              sleep 1
-            done
-            echo "FAIL: obuspa -c get $path never returned a value -- last output: $out" >&2
-            return 1
-          }
-          esc_natural_key() {
-            # Mirrors backend/internal/cwmp/types.go's DeviceID.NaturalKey()
-            # byte for byte: escape \ then + (order matters), per component.
-            printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/+/\\+/g'
-          }
-          sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
-
-          oui=$(get_param "Device.DeviceInfo.ManufacturerOUI") || rc=1
-          product_class=$(get_param "Device.DeviceInfo.ProductClass") || rc=1
-          serial_number=$(get_param "Device.DeviceInfo.SerialNumber") || rc=1
-          if [ "$rc" -eq 0 ]; then
-            echo "OK: obuspa-ws's real identity = OUI=$oui ProductClass=$product_class SerialNumber=$serial_number"
-            if [ -n "$product_class" ]; then
-              oui_serial="$(esc_natural_key "$oui")+$(esc_natural_key "$product_class")+$(esc_natural_key "$serial_number")"
-            else
-              oui_serial="$(esc_natural_key "$oui")+$(esc_natural_key "$serial_number")"
-            fi
-            ci/usp/assert-allowlist.sh /tmp/uspc-ws.log "$ACS_USP_POSTGRES_DSN" "$AGENT_ENDPOINT_ID" "$oui_serial" || rc=$?
-          fi
-
-          if [ "$rc" -eq 0 ]; then
-            echo "pre-registering obuspa-ws's real identity (oui_serial=$oui_serial) -- required since cmd/uspc's identity gate now refuses an unknown OUI+ProductClass+SerialNumber"
-            psql "$ACS_USP_POSTGRES_DSN" -c "
-              INSERT INTO devices (id, oui_serial, manufacturer, oui, product_class, serial_number, online_status, first_seen_at, last_updated_at, customer_id, tags)
-              VALUES (gen_random_uuid(), '$(sql_escape "$oui_serial")', 'obuspa-ci', '$(sql_escape "$oui")', '$(sql_escape "$product_class")', '$(sql_escape "$serial_number")', 'OFFLINE', now(), now(), NULL, '{}')
-              ON CONFLICT (oui_serial) DO NOTHING;
-            " || rc=$?
-          fi
+          # and itself usable as refusal evidence. ci/usp/preregister.sh
+          # extracts the real identity via obuspa's own "-c get" CLI (the
+          # same out-of-band-oracle pattern assert-subscription.sh already
+          # established below), and -- since this step also needs to prove
+          # the refusal via assert-allowlist.sh strictly before the identity
+          # is registered -- runs it as a pre-insert hook, passing the
+          # computed oui_serial as assert-allowlist.sh's final argument.
+          # Once both pass, pre-register the real identity and force a
+          # fresh connection attempt so the rest of this step (which all
+          # assume a successfully reconciled device) can proceed. See
+          # task-5-report.md for why this supersedes the original plan's
+          # second, deliberately-unregistered obuspa instance, and for why
+          # this extraction/pre-registration logic now lives in one shared
+          # script rather than copy-pasted per step.
+          ci/usp/preregister.sh obuspa-ws "$ACS_USP_POSTGRES_DSN" \
+            ci/usp/assert-allowlist.sh /tmp/uspc-ws.log "$ACS_USP_POSTGRES_DSN" "$AGENT_ENDPOINT_ID" || rc=$?
 
           if [ "$rc" -eq 0 ]; then
             echo "forcing a fresh connection attempt against the now-registered identity (docker restart obuspa-ws)"
@@ -504,50 +470,18 @@ jobs:
           rc=0
 
           # USP agent allowlist (Task 5): same pre-registration workaround
-          # as the WebSocket step above -- obuspa-mqtt5's identity is only
-          # known once extracted via its own "-c get" CLI, so its first
-          # connection attempt(s) above were refused by cmd/uspc's identity
-          # gate. The gate's refusal itself is already proven once by the
-          # WebSocket step's assert-allowlist.sh call (the gate is
-          # MTP-agnostic Go logic, not re-proven per transport); this step
-          # only needs the same pre-register-and-reconnect workaround so its
-          # own GetResp assertion below runs against a fully-reconciled
-          # agent rather than one stuck in a refusal/retry loop for the rest
-          # of the step's duration.
-          get_param() {
-            local path="$1" out="" value=""
-            for _ in $(seq 1 15); do
-              out=$(docker exec obuspa-mqtt5 obuspa -c get "$path" 2>&1 || true)
-              value=$(echo "$out" | sed -n 's/.*=> //p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr -d '\r')
-              if [ -n "$value" ]; then
-                echo "$value"
-                return 0
-              fi
-              sleep 1
-            done
-            echo "FAIL: obuspa -c get $path never returned a value -- last output: $out" >&2
-            return 1
-          }
-          esc_natural_key() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/+/\\+/g'; }
-          sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
-
-          oui=$(get_param "Device.DeviceInfo.ManufacturerOUI") || rc=1
-          product_class=$(get_param "Device.DeviceInfo.ProductClass") || rc=1
-          serial_number=$(get_param "Device.DeviceInfo.SerialNumber") || rc=1
-          if [ "$rc" -eq 0 ]; then
-            echo "OK: obuspa-mqtt5's real identity = OUI=$oui ProductClass=$product_class SerialNumber=$serial_number"
-            if [ -n "$product_class" ]; then
-              oui_serial="$(esc_natural_key "$oui")+$(esc_natural_key "$product_class")+$(esc_natural_key "$serial_number")"
-            else
-              oui_serial="$(esc_natural_key "$oui")+$(esc_natural_key "$serial_number")"
-            fi
-            echo "pre-registering obuspa-mqtt5's real identity (oui_serial=$oui_serial)"
-            psql "$ACS_USP_POSTGRES_DSN" -c "
-              INSERT INTO devices (id, oui_serial, manufacturer, oui, product_class, serial_number, online_status, first_seen_at, last_updated_at, customer_id, tags)
-              VALUES (gen_random_uuid(), '$(sql_escape "$oui_serial")', 'obuspa-ci', '$(sql_escape "$oui")', '$(sql_escape "$product_class")', '$(sql_escape "$serial_number")', 'OFFLINE', now(), now(), NULL, '{}')
-              ON CONFLICT (oui_serial) DO NOTHING;
-            " || rc=$?
-          fi
+          # as the WebSocket step above (ci/usp/preregister.sh) -- obuspa-
+          # mqtt5's identity is only known once extracted via its own "-c
+          # get" CLI, so its first connection attempt(s) above were refused
+          # by cmd/uspc's identity gate. The gate's refusal itself is
+          # already proven once by the WebSocket step's assert-allowlist.sh
+          # call (the gate is MTP-agnostic Go logic, not re-proven per
+          # transport); this step only needs the same pre-register-and-
+          # reconnect workaround (no pre-insert hook) so its own GetResp
+          # assertion below runs against a fully-reconciled agent rather
+          # than one stuck in a refusal/retry loop for the rest of the
+          # step's duration.
+          ci/usp/preregister.sh obuspa-mqtt5 "$ACS_USP_POSTGRES_DSN" || rc=$?
           if [ "$rc" -eq 0 ]; then
             echo "forcing a fresh connection attempt against the now-registered identity (docker restart obuspa-mqtt5)"
             docker restart obuspa-mqtt5 >/dev/null || rc=$?
@@ -599,42 +533,10 @@ jobs:
           rc=0
 
           # USP agent allowlist (Task 5): same pre-registration workaround
-          # as the WebSocket/mqtt-v5 steps above -- see the mqtt-v5 step's
-          # own comment for why this doesn't also re-run assert-allowlist.sh.
-          get_param() {
-            local path="$1" out="" value=""
-            for _ in $(seq 1 15); do
-              out=$(docker exec obuspa-mqtt311 obuspa -c get "$path" 2>&1 || true)
-              value=$(echo "$out" | sed -n 's/.*=> //p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr -d '\r')
-              if [ -n "$value" ]; then
-                echo "$value"
-                return 0
-              fi
-              sleep 1
-            done
-            echo "FAIL: obuspa -c get $path never returned a value -- last output: $out" >&2
-            return 1
-          }
-          esc_natural_key() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/+/\\+/g'; }
-          sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
-
-          oui=$(get_param "Device.DeviceInfo.ManufacturerOUI") || rc=1
-          product_class=$(get_param "Device.DeviceInfo.ProductClass") || rc=1
-          serial_number=$(get_param "Device.DeviceInfo.SerialNumber") || rc=1
-          if [ "$rc" -eq 0 ]; then
-            echo "OK: obuspa-mqtt311's real identity = OUI=$oui ProductClass=$product_class SerialNumber=$serial_number"
-            if [ -n "$product_class" ]; then
-              oui_serial="$(esc_natural_key "$oui")+$(esc_natural_key "$product_class")+$(esc_natural_key "$serial_number")"
-            else
-              oui_serial="$(esc_natural_key "$oui")+$(esc_natural_key "$serial_number")"
-            fi
-            echo "pre-registering obuspa-mqtt311's real identity (oui_serial=$oui_serial)"
-            psql "$ACS_USP_POSTGRES_DSN" -c "
-              INSERT INTO devices (id, oui_serial, manufacturer, oui, product_class, serial_number, online_status, first_seen_at, last_updated_at, customer_id, tags)
-              VALUES (gen_random_uuid(), '$(sql_escape "$oui_serial")', 'obuspa-ci', '$(sql_escape "$oui")', '$(sql_escape "$product_class")', '$(sql_escape "$serial_number")', 'OFFLINE', now(), now(), NULL, '{}')
-              ON CONFLICT (oui_serial) DO NOTHING;
-            " || rc=$?
-          fi
+          # as the WebSocket/mqtt-v5 steps above (ci/usp/preregister.sh) --
+          # see the mqtt-v5 step's own comment for why this doesn't also
+          # re-run assert-allowlist.sh.
+          ci/usp/preregister.sh obuspa-mqtt311 "$ACS_USP_POSTGRES_DSN" || rc=$?
           if [ "$rc" -eq 0 ]; then
             echo "forcing a fresh connection attempt against the now-registered identity (docker restart obuspa-mqtt311)"
             docker restart obuspa-mqtt311 >/dev/null || rc=$?

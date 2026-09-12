@@ -57,6 +57,18 @@ above it.
   pre-registered, `cmd/uspc` must refuse to reconcile it and must not
   silently create a `devices` row for it anyway. Usage: `assert-allowlist.sh
   <uspc_log_file> <postgres_dsn> <endpoint_id> <oui_serial>`.
+- `preregister.sh` -- extracts a running obuspa instance's real identity via
+  its own `-c get` CLI, escapes it exactly as
+  `backend/internal/cwmp/types.go`'s `DeviceID.NaturalKey()` does, and
+  inserts it into `devices` with the same column shape as
+  `backend/internal/devices/repository.go`'s `PreRegister`. Shared by all
+  three `usp-interop` steps so this logic exists in one place instead of a
+  copy per step. Usage: `preregister.sh <obuspa_container_name>
+  <postgres_dsn> [pre_insert_cmd...]` -- any trailing args are run as a
+  hook after identity extraction but before the `INSERT`, with the computed
+  `oui_serial` appended as their final argument (used by the WebSocket step
+  to run `assert-allowlist.sh` at the one point where its "no row yet"
+  check is still valid).
 
 Each config file's own header comment records exactly which upstream file
 and commit it was derived from and which fields were overridden and why.
