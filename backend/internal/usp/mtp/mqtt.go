@@ -59,8 +59,9 @@ type MQTTConfig struct {
 	AllowPlaintext bool
 	// AllowedCIDRs, when non-empty, restricts accepted CONNECTs to remote
 	// addresses inside one of these networks -- empty is permissive
-	// (design S2.1). Enforced by allowlistHook.OnConnectAuthenticate,
-	// before any CONNACK is sent.
+	// (design S2.1). Enforced by allowlistHook.OnConnectAuthenticate: a
+	// rejected client gets a negative CONNACK and then the connection is
+	// closed, so no MQTT session is ever established.
 	AllowedCIDRs []*net.IPNet
 }
 
@@ -376,8 +377,9 @@ func (h *mqttDisconnectHook) OnDisconnect(cl *mqttserver.Client, err error, _ bo
 // grants topic pub/sub access (unrelated, out of this plan's scope, S7 of
 // the design doc); this hook only gates whether a CONNECT is accepted at
 // all. OnConnectAuthenticate returning false makes mochi-mqtt refuse the
-// CONNECT and close the connection before any CONNACK is sent -- no USP
-// record is ever exchanged with a rejected client.
+// CONNECT: the broker sends a negative CONNACK (connection refused) and
+// then closes the connection -- no MQTT session is ever established, so no
+// USP record is ever exchanged with a rejected client.
 type allowlistHook struct {
 	mqttserver.HookBase
 	cidrs []*net.IPNet
