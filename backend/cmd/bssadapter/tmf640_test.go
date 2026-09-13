@@ -174,3 +174,104 @@ func TestListServicesReturnsAccountMappings(t *testing.T) {
 		t.Fatalf("got %d services, want 1", len(svcs))
 	}
 }
+
+func TestGetMonitorPendingDispatch(t *testing.T) {
+	ctx, h, db := newTMF640TestHandler(t, tmf640ACSHandler(t))
+	const accountID, deviceID = "acct-1", "11111111-1111-1111-1111-111111111111"
+	seedTMF640Device(t, ctx, db, accountID, deviceID)
+	params := []bss.ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
+	if err := h.mappings.InsertPending(ctx, "mon-pending", accountID, "SUSPEND", deviceID, params); err != nil {
+		t.Fatalf("InsertPending: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/tmf-api/serviceActivationAndConfiguration/v4/monitor/mon-pending", nil)
+	req = req.WithContext(ctx)
+	req.SetPathValue("id", "mon-pending")
+	rec := httptest.NewRecorder()
+	h.getMonitor(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var mon tmfMonitor
+	if err := json.Unmarshal(rec.Body.Bytes(), &mon); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if mon.State != "InProgress" {
+		t.Errorf("State = %q, want InProgress", mon.State)
+	}
+}
+
+func TestGetMonitorDeadLettered(t *testing.T) {
+	ctx, h, db := newTMF640TestHandler(t, tmf640ACSHandler(t))
+	const accountID, deviceID = "acct-1", "11111111-1111-1111-1111-111111111111"
+	seedTMF640Device(t, ctx, db, accountID, deviceID)
+	params := []bss.ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
+	if err := h.mappings.InsertPending(ctx, "mon-dlq", accountID, "SUSPEND", deviceID, params); err != nil {
+		t.Fatalf("InsertPending: %v", err)
+	}
+	for i := 0; i < 8; i++ {
+		if err := h.mappings.MarkDispatchFailed(ctx, "mon-dlq", "boom"); err != nil {
+			t.Fatalf("MarkDispatchFailed %d: %v", i, err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/tmf-api/serviceActivationAndConfiguration/v4/monitor/mon-dlq", nil)
+	req = req.WithContext(ctx)
+	req.SetPathValue("id", "mon-dlq")
+	rec := httptest.NewRecorder()
+	h.getMonitor(rec, req)
+
+	var mon tmfMonitor
+	if err := json.Unmarshal(rec.Body.Bytes(), &mon); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if mon.State != "InError" {
+		t.Errorf("State = %q, want InError", mon.State)
+	}
+}
+
+func TestGetMonitorCompleted(t *testing.T) {
+	acs := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{
+			"command_key": "ck-done", "status": "SUCCESS",
+		})
+	})
+	ctx, h, db := newTMF640TestHandler(t, acs)
+	const accountID, deviceID = "acct-1", "11111111-1111-1111-1111-111111111111"
+	seedTMF640Device(t, ctx, db, accountID, deviceID)
+	params := []bss.ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
+	if err := h.mappings.InsertPending(ctx, "mon-done", accountID, "SUSPEND", deviceID, params); err != nil {
+		t.Fatalf("InsertPending: %v", err)
+	}
+	if err := h.mappings.MarkDispatched(ctx, "mon-done", "ck-done"); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/tmf-api/serviceActivationAndConfiguration/v4/monitor/mon-done", nil)
+	req = req.WithContext(ctx)
+	req.SetPathValue("id", "mon-done")
+	rec := httptest.NewRecorder()
+	h.getMonitor(rec, req)
+
+	var mon tmfMonitor
+	if err := json.Unmarshal(rec.Body.Bytes(), &mon); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if mon.State != "Completed" {
+		t.Errorf("State = %q, want Completed", mon.State)
+	}
+}
+
+func TestGetMonitorNotFound(t *testing.T) {
+	ctx, h, _ := newTMF640TestHandler(t, tmf640ACSHandler(t))
+	req := httptest.NewRequest(http.MethodGet, "/tmf-api/serviceActivationAndConfiguration/v4/monitor/no-such-order", nil)
+	req = req.WithContext(ctx)
+	req.SetPathValue("id", "no-such-order")
+	rec := httptest.NewRecorder()
+	h.getMonitor(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body: %s", rec.Code, rec.Body.String())
+	}
+}

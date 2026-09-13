@@ -152,3 +152,89 @@ func (h *handler) listServices(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, svcs)
 }
+
+type tmfMonitorResponse struct {
+	StatusCode string `json:"statusCode"`
+	Body       string `json:"body"`
+}
+
+// tmfMonitor is TMF640's Monitor resource, reduced to the fields this
+// increment populates (design §4.3).
+type tmfMonitor struct {
+	ID         string              `json:"id"`
+	Href       string              `json:"href"`
+	SourceHref string              `json:"sourceHref,omitempty"`
+	State      string              `json:"state"`
+	Response   *tmfMonitorResponse `json:"response,omitempty"`
+}
+
+// monitorFromOrder reshapes bss_orders' existing status (C-1) into
+// TMF640's InProgress/Completed/InError envelope (design §4.3) -- the
+// one place this mapping exists, shared between GET /monitor/{id} and
+// PATCH /service/{id}'s response body (TMF640's own "server returns
+// Monitor as POST/PATCH response" pattern, added in the next task) so
+// the two can never disagree about what "done" means. serviceID is the
+// mapping id to link back to via sourceHref -- empty when called from
+// GET /monitor/{id} directly (no service context available there without
+// an extra lookup this increment doesn't need), populated when called
+// from PATCH, which already has it from its own URL path.
+func (h *handler) monitorFromOrder(r *http.Request, externalOrderID, serviceID string, order *bss.OrderRecord) tmfMonitor {
+	m := tmfMonitor{
+		ID:   externalOrderID,
+		Href: tmfMonitorBasePath + externalOrderID,
+	}
+	if serviceID != "" {
+		m.SourceHref = tmfServiceBasePath + serviceID
+	}
+
+	switch order.Status {
+	case bss.OrderStatusPendingDispatch:
+		m.State = "InProgress"
+	case bss.OrderStatusDeadLettered:
+		m.State = "InError"
+		m.Response = &tmfMonitorResponse{StatusCode: "500", Body: order.LastError}
+	case bss.OrderStatusDispatched:
+		status, err := h.acs.GetJobStatus(r.Context(), order.CommandKey)
+		if err != nil {
+			// Can't confirm a terminal state right now (a transient ACS
+			// blip); a later poll will resolve it -- report InProgress
+			// rather than surfacing an unreachable-ACS error for a pure
+			// status read.
+			m.State = "InProgress"
+			return m
+		}
+		switch status.Status {
+		case "SUCCESS":
+			m.State = "Completed"
+			m.Response = &tmfMonitorResponse{StatusCode: "200", Body: "completed"}
+		case "FAILED", "TIMEOUT":
+			m.State = "InError"
+			fault := ""
+			if status.FaultString != nil {
+				fault = *status.FaultString
+			}
+			m.Response = &tmfMonitorResponse{StatusCode: "500", Body: fault}
+		default:
+			m.State = "InProgress"
+		}
+	}
+	return m
+}
+
+// getMonitor implements GET /monitor/{id}. id is the same
+// external_order_id a PATCH /service/{id} caller supplied as
+// X-Idempotency-Key (added in the next task).
+func (h *handler) getMonitor(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	order, err := h.mappings.FindOrder(r.Context(), id)
+	if err != nil {
+		h.logger.Error("failed to look up order for monitor", "err", err, "id", id)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+	if order == nil {
+		writeError(w, http.StatusNotFound, "ErrNotFound", "no such monitor")
+		return
+	}
+	writeJSON(w, http.StatusOK, h.monitorFromOrder(r, id, "", order))
+}
