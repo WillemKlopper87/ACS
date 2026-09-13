@@ -79,6 +79,27 @@ behavior — from "silently lost, and a retry double-dispatches" to
 "durably recorded, and a reconciler retries exactly this order, not a
 fresh duplicate."
 
+**Known residual, disclosed rather than hidden**: this narrows the
+double-dispatch window dramatically but does not close it completely.
+`cmd/api`'s job-creation endpoint (`PUT /api/v1/devices/{id}/parameters`)
+has no idempotency-key support — a retried `SetParameters` call is not
+deduplicated at that end. So if step 5's own `UPDATE` (recording
+`DISPATCHED` + the real `command_key`) fails *after* step 4's
+`SetParameters` call already succeeded, the row is left
+`PENDING_DISPATCH` with no `command_key`, and the reconciler (§5) will
+retry `SetParameters` for it — genuinely dispatching a second job. Today
+that same failure mode is reachable any time a BSS caller happens to
+retry (hours or days later, an open-ended window); this design narrows
+it to the width of one same-database `UPDATE` statement immediately
+following the `SetParameters` call — milliseconds, not an open window —
+which is a real, substantial improvement, just not a mathematical
+guarantee. Closing it completely would need idempotency-key support on
+`cmd/api`'s job-creation endpoint, a change to a second service's
+internal contract with its own design questions (what the key is keyed
+on, how long it's remembered, interaction with the existing `jobs`
+table's own dedup story) — out of scope for C-1, a candidate for a
+future increment if the residual window proves to matter in practice.
+
 ## 4. Action set: from a hardcoded switch to a registry
 
 **Current gap**: `bss.Translate` (`internal/bss/template.go:67-101`) is a
@@ -200,3 +221,4 @@ that already shows webhook stats — no new UI surface.
 | Dead-lettering for webhook deliveries | Existing `FAILED` status already serves this; not the gap targeted here |
 | Manual requeue endpoint/UI for dead-lettered orders | No precedent for this in the codebase's existing dead-lettering (`internal/jobs`); not requested |
 | Changes to the `/bss/v1/orders` request/response JSON contract | Explicitly preserved byte-for-byte (§2) |
+| Idempotency-key support on `cmd/api`'s job-creation endpoint | Would fully close §3's residual double-dispatch window, but changes a second service's internal contract — a separate, larger design question deferred to a future increment (§3) |
