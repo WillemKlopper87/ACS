@@ -68,13 +68,26 @@ role-aware, temporal mapping model rather than inventing a new identity.
 | `id` | the mapping's own `id` |
 | `href` | `/tmf-api/serviceActivationAndConfiguration/v4/service/{id}` |
 | `state` | always `"active"` — a mapping either exists (active) or doesn't; ACS has no `reserved`/`designed`/`feasibilityChecked` concept for an already-provisioned CPE |
-| `serviceCharacteristic` | current-value reflection of the two writable characteristics this increment supports: `SSID`, `WiFiPassword` — a read, not a pending-write view |
+| `serviceCharacteristic` | current-value reflection of `SSID` only — a read, not a pending-write view. `WiFiPassword` is writable (§4.2) but **never read back** (see correction below) |
 | `relatedParty` | the mapping's `account_id` |
 | `category` | `"customer facing service"` (fixed) |
 
+**Correction (post-implementation security review):** this section
+originally specified reflecting both `SSID` and `WiFiPassword` in
+`GET /service`. A security review of the implementation flagged that as
+exposing the device's live WiFi passphrase in cleartext to any
+authenticated BSS integrator. The user chose to redact it: `GET /service`
+and `GET /service/{id}` never resolve or request the
+`WiFiKeyPassphrase` path at all (data minimization, not just
+response-field filtering — the plaintext value never transits
+`ACSClient.GetParameters` for a read), matching common TR-069/TR-369
+practice of treating `KeyPassphrase` as write-only. `PATCH /service/{id}`
+(§4.2) is unaffected — it can still write `WiFiPassword` via the
+existing `dispatchOrder`/`SetParameters` path.
+
 `GET /service`/`GET /service/{id}` are pure reads — no outbox
-involvement, no dispatch. Reading the two characteristics' current
-values does **not** import `internal/parameters` directly (that would
+involvement, no dispatch. Reading `SSID`'s current value does **not**
+import `internal/parameters` directly (that would
 break `bssadapter`'s established process-boundary discipline — it never
 touches ACS-owned data except through `cmd/api`'s HTTP surface, the same
 rule `internal/bss/acsclient.go`'s doc comment states and every existing
@@ -84,12 +97,13 @@ this (`cmd/api/device_handlers.go`'s `getParameters`) — `ACSClient` gains
 one new method, `GetParameters(ctx, deviceID string, paths []string)
 (map[string]CachedParameter, error)`, wrapping that call the same way
 `GetDevice`/`GetJobStatus`/`SetParameters` already wrap their own
-endpoints. The two paths requested are computed via
-`internal/devices/adapters.ResolvePath(dataModelRoot, adapters.WiFiSSID)`/
-`ResolvePath(dataModelRoot, adapters.WiFiKeyPassphrase)` — the exact same
-canonical-parameter resolution `internal/bss/template.go`'s
-`translateModifyWifi` already uses for the write side, so read and write
-paths can never disagree about which TR-181/TR-098 path a characteristic
+endpoints. The `SSID` path requested is computed via
+`internal/devices/adapters.ResolvePath(dataModelRoot, adapters.WiFiSSID)`
+— the exact same canonical-parameter resolution
+`internal/bss/template.go`'s `translateModifyWifi` already uses for the
+write side (which also resolves `adapters.WiFiKeyPassphrase` for writes —
+just never for this read path, per the correction above), so read and
+write can never disagree about which TR-181/TR-098 path a characteristic
 means. `internal/devices/adapters` is a pure, boundary-safe helper
 package `internal/bss` already imports directly (unlike `internal/devices`
 itself, which stays off-limits) — reusing it here is consistent with that
