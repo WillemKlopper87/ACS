@@ -414,7 +414,10 @@ as `/bss/v1/*`.
 - **`GET /service?accountId=<id>`** — lists the account's active
   services (one per mapped device).
 - **`GET /service/{id}`** — retrieves one service. `id` is the same
-  value a mapping already has.
+  value a mapping already has. `serviceCharacteristic` only ever
+  reflects `SSID`; `WiFiPassword` is **never returned by a read**
+  (security decision, redacted to avoid exposing a live credential in
+  cleartext) even though `PATCH` can still write it.
 - **`PATCH /service/{id}`** — triggers a change. Requires an
   `X-Idempotency-Key` header (not part of the TMF640 spec itself, layered
   on top so a retried PATCH cannot double-dispatch). Body is a JSON
