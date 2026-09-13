@@ -400,3 +400,136 @@ func TestPatchServiceRetriedIdempotencyKeyReturnsSameMonitor(t *testing.T) {
 	}
 	_ = ctx
 }
+
+// X-Idempotency-Key shares one keyspace with external_order_id (same
+// bss_orders primary key). Reusing a key that was already used against a
+// different service's mapping id must not fabricate a false success for
+// the new {id} -- it must 409, since the found order never touched this
+// service.
+func TestPatchServiceRejectsIdempotencyKeyReusedForDifferentService(t *testing.T) {
+	acs := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-cross"})
+	})
+	ctx, h, db := newTMF640TestHandler(t, acs)
+	const accountID1, deviceID1 = "acct-1", "11111111-1111-1111-1111-111111111111"
+	const accountID2, deviceID2 = "acct-2", "22222222-2222-2222-2222-222222222222"
+	seedTMF640Device(t, ctx, db, accountID1, deviceID1)
+	seedTMF640Device(t, ctx, db, accountID2, deviceID2)
+
+	var mappingID1, mappingID2 string
+	if err := db.QueryRowContext(ctx, `SELECT id FROM account_device_mappings WHERE account_id = $1`, accountID1).Scan(&mappingID1); err != nil {
+		t.Fatalf("read seeded mapping id 1: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT id FROM account_device_mappings WHERE account_id = $1`, accountID2).Scan(&mappingID2); err != nil {
+		t.Fatalf("read seeded mapping id 2: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]string{"state": "inactive"})
+	req1 := httptest.NewRequest(http.MethodPatch, "/tmf-api/serviceActivationAndConfiguration/v4/service/"+mappingID1, bytes.NewReader(body))
+	req1.Header.Set("X-Idempotency-Key", "idem-cross")
+	req1.SetPathValue("id", mappingID1)
+	rec1 := httptest.NewRecorder()
+	h.patchService(rec1, req1)
+	if rec1.Code != http.StatusAccepted {
+		t.Fatalf("first PATCH status = %d, want 202; body: %s", rec1.Code, rec1.Body.String())
+	}
+
+	req2 := httptest.NewRequest(http.MethodPatch, "/tmf-api/serviceActivationAndConfiguration/v4/service/"+mappingID2, bytes.NewReader(body))
+	req2.Header.Set("X-Idempotency-Key", "idem-cross")
+	req2.SetPathValue("id", mappingID2)
+	rec2 := httptest.NewRecorder()
+	h.patchService(rec2, req2)
+	if rec2.Code != http.StatusConflict {
+		t.Fatalf("second PATCH (same key, different service) status = %d, want 409; body: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+// An unknown {id} must 404 even when X-Idempotency-Key was already used
+// successfully elsewhere -- the mapping lookup must run before the
+// idempotency short-circuit can return a fabricated success.
+func TestPatchServiceUnknownIDWithReusedKeyReturns404NotFound(t *testing.T) {
+	acs := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-404"})
+	})
+	ctx, h, db := newTMF640TestHandler(t, acs)
+	const accountID, deviceID = "acct-1", "11111111-1111-1111-1111-111111111111"
+	seedTMF640Device(t, ctx, db, accountID, deviceID)
+	var mappingID string
+	if err := db.QueryRowContext(ctx, `SELECT id FROM account_device_mappings WHERE account_id = $1`, accountID).Scan(&mappingID); err != nil {
+		t.Fatalf("read seeded mapping id: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]string{"state": "inactive"})
+	req1 := httptest.NewRequest(http.MethodPatch, "/tmf-api/serviceActivationAndConfiguration/v4/service/"+mappingID, bytes.NewReader(body))
+	req1.Header.Set("X-Idempotency-Key", "idem-404")
+	req1.SetPathValue("id", mappingID)
+	rec1 := httptest.NewRecorder()
+	h.patchService(rec1, req1)
+	if rec1.Code != http.StatusAccepted {
+		t.Fatalf("first PATCH status = %d, want 202; body: %s", rec1.Code, rec1.Body.String())
+	}
+
+	const unknownID = "99999999-9999-9999-9999-999999999999"
+	req2 := httptest.NewRequest(http.MethodPatch, "/tmf-api/serviceActivationAndConfiguration/v4/service/"+unknownID, bytes.NewReader(body))
+	req2.Header.Set("X-Idempotency-Key", "idem-404")
+	req2.SetPathValue("id", unknownID)
+	rec2 := httptest.NewRecorder()
+	h.patchService(rec2, req2)
+	if rec2.Code != http.StatusNotFound {
+		t.Fatalf("second PATCH (unknown id, reused key) status = %d, want 404; body: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+// A PATCH body naming any field beyond state/serviceCharacteristic is a
+// documented 400 (design §4.2, integration guide), not a silently ignored
+// extra field.
+func TestPatchServiceRejectsUnknownField(t *testing.T) {
+	ctx, h, db := newTMF640TestHandler(t, tmf640ACSHandler(t))
+	const accountID, deviceID = "acct-1", "11111111-1111-1111-1111-111111111111"
+	seedTMF640Device(t, ctx, db, accountID, deviceID)
+	var mappingID string
+	if err := db.QueryRowContext(ctx, `SELECT id FROM account_device_mappings WHERE account_id = $1`, accountID).Scan(&mappingID); err != nil {
+		t.Fatalf("read seeded mapping id: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]any{"state": "active", "serviceRelationship": []any{}})
+	req := httptest.NewRequest(http.MethodPatch, "/tmf-api/serviceActivationAndConfiguration/v4/service/"+mappingID, bytes.NewReader(body))
+	req.Header.Set("X-Idempotency-Key", "idem-unknown-field")
+	req.SetPathValue("id", mappingID)
+	rec := httptest.NewRecorder()
+	h.patchService(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (unknown field serviceRelationship rejected); body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Two serviceCharacteristic entries with the same name must be rejected
+// rather than letting the last one silently win.
+func TestPatchServiceRejectsDuplicateCharacteristic(t *testing.T) {
+	ctx, h, db := newTMF640TestHandler(t, tmf640ACSHandler(t))
+	const accountID, deviceID = "acct-1", "11111111-1111-1111-1111-111111111111"
+	seedTMF640Device(t, ctx, db, accountID, deviceID)
+	var mappingID string
+	if err := db.QueryRowContext(ctx, `SELECT id FROM account_device_mappings WHERE account_id = $1`, accountID).Scan(&mappingID); err != nil {
+		t.Fatalf("read seeded mapping id: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"serviceCharacteristic": []map[string]string{
+			{"name": "SSID", "value": "FirstName"},
+			{"name": "SSID", "value": "SecondName"},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPatch, "/tmf-api/serviceActivationAndConfiguration/v4/service/"+mappingID, bytes.NewReader(body))
+	req.Header.Set("X-Idempotency-Key", "idem-dup-char")
+	req.SetPathValue("id", mappingID)
+	rec := httptest.NewRecorder()
+	h.patchService(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (duplicate serviceCharacteristic SSID rejected); body: %s", rec.Code, rec.Body.String())
+	}
+}

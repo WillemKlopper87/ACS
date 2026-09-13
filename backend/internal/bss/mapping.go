@@ -114,6 +114,13 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
+// isInvalidTextRepresentation reports whether err is Postgres 22P02 --
+// e.g. a syntactically invalid UUID passed as a query parameter.
+func isInvalidTextRepresentation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "22P02"
+}
+
 // uniqueViolationErr maps a 23505 to the typed error matching which of the
 // two partial unique indexes raised it — account_device_mappings_active_idx
 // means the device itself is already active for the account (possibly
@@ -363,15 +370,18 @@ func (r *Repository) ActiveDeviceForAccount(ctx context.Context, accountID, role
 	return m, err
 }
 
-// GetMappingByID looks up a mapping by its own id, active or historical
-// — TMF640's Service.id is this mapping id (design
+// GetMappingByID looks up a mapping by its own id, active only — TMF640's
+// Service.id is this mapping id (design
 // docs/superpowers/specs/2026-09-13-bss-tmf640-design.md §4.1), and
 // GET/PATCH /service/{id} both need to resolve it directly, unlike every
-// other lookup in this file which goes through (account_id, role).
+// other lookup in this file which goes through (account_id, role). A
+// historical (released) id returns ErrMappingNotFound, same as an unknown
+// one — there is exactly one Service per active mapping row (§4.1), so a
+// released mapping is not a valid Service to read or PATCH.
 func (r *Repository) GetMappingByID(ctx context.Context, id string) (*AccountDeviceMapping, error) {
-	row := r.db.QueryRowContext(ctx, "SELECT "+mappingColumns+" FROM account_device_mappings WHERE id = $1", id)
+	row := r.db.QueryRowContext(ctx, "SELECT "+mappingColumns+" FROM account_device_mappings WHERE id = $1 AND unassigned_at IS NULL", id)
 	m, err := scanMapping(row)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) || isInvalidTextRepresentation(err) {
 		return nil, fmt.Errorf("%w: %s", ErrMappingNotFound, id)
 	}
 	return m, err

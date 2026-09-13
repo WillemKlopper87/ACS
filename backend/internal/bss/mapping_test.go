@@ -405,3 +405,37 @@ func TestGetMappingByIDNotFound(t *testing.T) {
 		t.Fatalf("GetMappingByID for an unknown id = %v, want ErrMappingNotFound", err)
 	}
 }
+
+// A released (historical) mapping id must resolve as not-found, same as an
+// unknown one -- GetMappingByID backs GET/PATCH /service/{id}, and there is
+// exactly one Service per active mapping row (design §4.1). Without the
+// unassigned_at filter this would still resolve, letting a stale service
+// href PATCH a device that now belongs to a different account.
+func TestGetMappingByIDExcludesHistorical(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, "11111111-1111-1111-1111-111111111111", "AABBCC-SERIAL-1")
+
+	created, err := r.AssignDevice(ctx, "acct-1", "AABBCC-SERIAL-1", RoleGateway, "")
+	if err != nil {
+		t.Fatalf("AssignDevice: %v", err)
+	}
+	if err := r.UnassignDevice(ctx, "acct-1", RoleGateway, ReasonReturn); err != nil {
+		t.Fatalf("UnassignDevice: %v", err)
+	}
+
+	_, err = r.GetMappingByID(ctx, created.ID)
+	if !errors.Is(err, ErrMappingNotFound) {
+		t.Fatalf("GetMappingByID for a released mapping = %v, want ErrMappingNotFound", err)
+	}
+}
+
+// A syntactically invalid UUID must 404 (via ErrMappingNotFound), not
+// surface Postgres's raw 22P02 as a 500 -- GET /service/undefined and
+// similar malformed-id requests are a client error, not a server failure.
+func TestGetMappingByIDMalformedUUID(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	_, err := r.GetMappingByID(ctx, "not-a-uuid")
+	if !errors.Is(err, ErrMappingNotFound) {
+		t.Fatalf("GetMappingByID(%q) = %v, want ErrMappingNotFound", "not-a-uuid", err)
+	}
+}

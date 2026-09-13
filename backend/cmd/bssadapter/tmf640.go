@@ -69,11 +69,12 @@ type tmfService struct {
 // TR-069/TR-369 practice of treating KeyPassphrase as write-only.
 func (h *handler) serviceFromMapping(r *http.Request, m *bss.AccountDeviceMapping) (tmfService, error) {
 	svc := tmfService{
-		ID:           m.ID,
-		Href:         tmfServiceBasePath + m.ID,
-		Category:     "customer facing service",
-		State:        "active",
-		RelatedParty: []tmfRelatedParty{{ID: m.AccountID}},
+		ID:                    m.ID,
+		Href:                  tmfServiceBasePath + m.ID,
+		Category:              "customer facing service",
+		State:                 "active",
+		ServiceCharacteristic: []tmfServiceCharacteristic{},
+		RelatedParty:          []tmfRelatedParty{{ID: m.AccountID}},
 	}
 
 	dev, err := h.acs.GetDevice(r.Context(), m.DeviceID)
@@ -145,6 +146,10 @@ func (h *handler) listServices(w http.ResponseWriter, r *http.Request) {
 	svcs := make([]tmfService, 0, len(mappings))
 	for i := range mappings {
 		svc, err := h.serviceFromMapping(r, &mappings[i])
+		if errors.Is(err, bss.ErrACSUnreachable) {
+			writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
+			return
+		}
 		if err != nil {
 			h.logger.Error("failed to build service resource", "err", err, "id", mappings[i].ID)
 			writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
@@ -194,7 +199,7 @@ func (h *handler) monitorFromOrder(r *http.Request, externalOrderID, serviceID s
 		m.State = "InProgress"
 	case bss.OrderStatusDeadLettered:
 		m.State = "InError"
-		m.Response = &tmfMonitorResponse{StatusCode: "500", Body: order.LastError}
+		m.Response = &tmfMonitorResponse{StatusCode: "500", Body: "dispatch failed after repeated retries"}
 	case bss.OrderStatusDispatched:
 		status, err := h.acs.GetJobStatus(r.Context(), order.CommandKey)
 		if err != nil {
@@ -269,7 +274,12 @@ func interpretServicePatch(patch tmfServicePatch) (action string, params map[str
 	}
 	if hasChar {
 		params = map[string]string{}
+		seen := map[string]bool{}
 		for _, c := range patch.ServiceCharacteristic {
+			if seen[c.Name] {
+				return "", nil, fmt.Errorf("duplicate serviceCharacteristic %q", c.Name)
+			}
+			seen[c.Name] = true
 			switch c.Name {
 			case "SSID":
 				params["wifi_ssid"] = c.Value
@@ -300,22 +310,15 @@ func (h *handler) patchService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var patch tmfServicePatch
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&patch); err != nil {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "invalid JSON body")
 		return
 	}
 	action, params, err := interpretServicePatch(patch)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", err.Error())
-		return
-	}
-
-	if existing, err := h.mappings.FindOrder(r.Context(), idempotencyKey); err != nil {
-		h.logger.Error("failed to check order idempotency", "err", err, "external_order_id", idempotencyKey)
-		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
-		return
-	} else if existing != nil {
-		writeJSON(w, http.StatusAccepted, h.monitorFromOrder(r, idempotencyKey, id, existing))
 		return
 	}
 
@@ -327,6 +330,19 @@ func (h *handler) patchService(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Error("failed to resolve service for patch", "err", err, "id", id)
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+
+	if existing, err := h.mappings.FindOrder(r.Context(), idempotencyKey); err != nil {
+		h.logger.Error("failed to check order idempotency", "err", err, "external_order_id", idempotencyKey)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	} else if existing != nil {
+		if existing.DeviceID != mapping.DeviceID {
+			writeError(w, http.StatusConflict, "ErrIdempotencyKeyReused", "X-Idempotency-Key was already used for a different service")
+			return
+		}
+		writeJSON(w, http.StatusAccepted, h.monitorFromOrder(r, idempotencyKey, id, existing))
 		return
 	}
 
@@ -357,6 +373,10 @@ func (h *handler) patchService(w http.ResponseWriter, r *http.Request) {
 			if findErr != nil || existing == nil {
 				h.logger.Error("failed to resolve order after InsertPending race", "err", findErr, "external_order_id", idempotencyKey)
 				writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+				return
+			}
+			if existing.DeviceID != mapping.DeviceID {
+				writeError(w, http.StatusConflict, "ErrIdempotencyKeyReused", "X-Idempotency-Key was already used for a different service")
 				return
 			}
 			writeJSON(w, http.StatusAccepted, h.monitorFromOrder(r, idempotencyKey, id, existing))
