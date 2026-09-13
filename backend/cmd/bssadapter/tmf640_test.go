@@ -124,8 +124,11 @@ func TestGetServiceReturnsCurrentCharacteristics(t *testing.T) {
 	for _, c := range svc.ServiceCharacteristic {
 		found[c.Name] = c.Value
 	}
-	if found["SSID"] != "MyNetwork" || found["WiFiPassword"] != "s3cr3t" {
-		t.Errorf("ServiceCharacteristic = %+v, want SSID=MyNetwork WiFiPassword=s3cr3t", svc.ServiceCharacteristic)
+	if found["SSID"] != "MyNetwork" {
+		t.Errorf("ServiceCharacteristic SSID = %q, want MyNetwork", found["SSID"])
+	}
+	if _, present := found["WiFiPassword"]; present {
+		t.Errorf("ServiceCharacteristic must never include WiFiPassword on a read (security decision -- GET redacts it): got %+v", svc.ServiceCharacteristic)
 	}
 }
 

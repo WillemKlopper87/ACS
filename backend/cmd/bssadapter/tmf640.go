@@ -46,16 +46,25 @@ type tmfService struct {
 	RelatedParty          []tmfRelatedParty          `json:"relatedParty"`
 }
 
-// serviceFromMapping builds a Service resource for one mapping,
-// resolving its two writable characteristics' current values via
-// ACSClient.GetParameters (never internal/parameters directly -- design
-// S4.1's process-boundary rule) using the exact same canonical-parameter
-// resolution internal/bss/template.go's translateModifyWifi already uses
-// for the write side, so read and write can never disagree about which
+// serviceFromMapping builds a Service resource for one mapping, resolving
+// SSID's current value via ACSClient.GetParameters (never
+// internal/parameters directly -- design S4.1's process-boundary rule)
+// using the exact same canonical-parameter resolution
+// internal/bss/template.go's translateModifyWifi already uses for the
+// write side, so read and write can never disagree about which
 // TR-181/TR-098 path a characteristic means. A characteristic whose
 // value isn't in the cache yet (device never reported it) is simply
 // omitted from ServiceCharacteristic, not an error -- a fresh device's
 // Service is still a valid, mostly-empty read.
+//
+// WiFiPassword is deliberately never read back here: a security review
+// flagged the original design (reflecting its live value in GET, per the
+// spec as first written) as exposing a plaintext credential to any
+// authenticated BSS integrator. Redacting it in reads -- and never even
+// requesting its value from ACSClient.GetParameters, so the plaintext
+// doesn't transit this path at all -- was the resulting decision;
+// PATCH /service/{id} (a later task) can still write it, matching common
+// TR-069/TR-369 practice of treating KeyPassphrase as write-only.
 func (h *handler) serviceFromMapping(r *http.Request, m *bss.AccountDeviceMapping) (tmfService, error) {
 	svc := tmfService{
 		ID:           m.ID,
@@ -70,27 +79,16 @@ func (h *handler) serviceFromMapping(r *http.Request, m *bss.AccountDeviceMappin
 		return tmfService{}, err
 	}
 	ssidPath, ssidOK := adapters.ResolvePath(dev.DataModelRoot, adapters.WiFiSSID)
-	passPath, passOK := adapters.ResolvePath(dev.DataModelRoot, adapters.WiFiKeyPassphrase)
-	var paths []string
-	if ssidOK {
-		paths = append(paths, ssidPath)
-	}
-	if passOK {
-		paths = append(paths, passPath)
-	}
-	if len(paths) == 0 {
+	if !ssidOK {
 		return svc, nil
 	}
 
-	cached, err := h.acs.GetParameters(r.Context(), m.DeviceID, paths)
+	cached, err := h.acs.GetParameters(r.Context(), m.DeviceID, []string{ssidPath})
 	if err != nil {
 		return tmfService{}, err
 	}
 	if v, ok := cached[ssidPath]; ok {
 		svc.ServiceCharacteristic = append(svc.ServiceCharacteristic, tmfServiceCharacteristic{Name: "SSID", Value: v.Value})
-	}
-	if v, ok := cached[passPath]; ok {
-		svc.ServiceCharacteristic = append(svc.ServiceCharacteristic, tmfServiceCharacteristic{Name: "WiFiPassword", Value: v.Value})
 	}
 	return svc, nil
 }
