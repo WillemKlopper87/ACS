@@ -423,7 +423,11 @@ as `/bss/v1/*`.
   on top so a retried PATCH cannot double-dispatch). Body is a JSON
   merge-patch setting *either* `state` (`"active"` or `"inactive"`) *or*
   `serviceCharacteristic` (`SSID` or `WiFiPassword`) — not both, and no
-  other field. Returns `202` with a `Monitor` resource.
+  other field. Returns `202` with a `Monitor` resource. If
+  `X-Idempotency-Key` was already used for a *different* service, returns
+  `409 ErrIdempotencyKeyReused` rather than a false success — idempotency
+  keys are not scoped per-service, so reusing one across two different
+  `{id}`s is a client error, not a safe retry.
 - **`GET /monitor/{id}`** — polls the async result of a PATCH, `id` =
   the same value passed as `X-Idempotency-Key`. `state` is one of
   `InProgress`, `Completed`, `InError`.
