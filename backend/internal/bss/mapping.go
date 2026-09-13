@@ -82,6 +82,11 @@ var ErrInvalidRole = errors.New("unknown device role")
 // unassign_reason.
 var ErrInvalidUnassignReason = errors.New("unknown unassign reason")
 
+// ErrMappingNotFound is returned by GetMappingByID when no mapping has
+// that id at all — distinct from ErrNoDeviceForRole (a different lookup:
+// account+role, with a different "currently no active device" meaning).
+var ErrMappingNotFound = errors.New("no mapping with that id")
+
 // validRoles and validReasons are derived from the Role*/Reason* constants
 // above rather than hand-written, so they cannot drift from the CHECK
 // constraints in migration 0052.
@@ -354,6 +359,20 @@ func (r *Repository) ActiveDeviceForAccount(ctx context.Context, accountID, role
 	m, err := scanMapping(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: account %s role %s", ErrNoDeviceForRole, accountID, role)
+	}
+	return m, err
+}
+
+// GetMappingByID looks up a mapping by its own id, active or historical
+// — TMF640's Service.id is this mapping id (design
+// docs/superpowers/specs/2026-09-13-bss-tmf640-design.md §4.1), and
+// GET/PATCH /service/{id} both need to resolve it directly, unlike every
+// other lookup in this file which goes through (account_id, role).
+func (r *Repository) GetMappingByID(ctx context.Context, id string) (*AccountDeviceMapping, error) {
+	row := r.db.QueryRowContext(ctx, "SELECT "+mappingColumns+" FROM account_device_mappings WHERE id = $1", id)
+	m, err := scanMapping(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", ErrMappingNotFound, id)
 	}
 	return m, err
 }
