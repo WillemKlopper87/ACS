@@ -68,12 +68,32 @@ role-aware, temporal mapping model rather than inventing a new identity.
 | `id` | the mapping's own `id` |
 | `href` | `/tmf-api/serviceActivationAndConfiguration/v4/service/{id}` |
 | `state` | always `"active"` — a mapping either exists (active) or doesn't; ACS has no `reserved`/`designed`/`feasibilityChecked` concept for an already-provisioned CPE |
-| `serviceCharacteristic` | current-value reflection of the two writable characteristics this increment supports: `SSID`, `WiFiPassword`, read from the device's existing parameter cache (`internal/parameters`) — a read, not a pending-write view |
+| `serviceCharacteristic` | current-value reflection of the two writable characteristics this increment supports: `SSID`, `WiFiPassword` — a read, not a pending-write view |
 | `relatedParty` | the mapping's `account_id` |
 | `category` | `"customer facing service"` (fixed) |
 
 `GET /service`/`GET /service/{id}` are pure reads — no outbox
-involvement, no dispatch. `feature`, `serviceRelationship`,
+involvement, no dispatch. Reading the two characteristics' current
+values does **not** import `internal/parameters` directly (that would
+break `bssadapter`'s established process-boundary discipline — it never
+touches ACS-owned data except through `cmd/api`'s HTTP surface, the same
+rule `internal/bss/acsclient.go`'s doc comment states and every existing
+`ACSClient` method already follows). `cmd/api` already exposes
+`GET /api/v1/devices/{id}/parameters?paths=<comma-separated>` for exactly
+this (`cmd/api/device_handlers.go`'s `getParameters`) — `ACSClient` gains
+one new method, `GetParameters(ctx, deviceID string, paths []string)
+(map[string]CachedParameter, error)`, wrapping that call the same way
+`GetDevice`/`GetJobStatus`/`SetParameters` already wrap their own
+endpoints. The two paths requested are computed via
+`internal/devices/adapters.ResolvePath(dataModelRoot, adapters.WiFiSSID)`/
+`ResolvePath(dataModelRoot, adapters.WiFiKeyPassphrase)` — the exact same
+canonical-parameter resolution `internal/bss/template.go`'s
+`translateModifyWifi` already uses for the write side, so read and write
+paths can never disagree about which TR-181/TR-098 path a characteristic
+means. `internal/devices/adapters` is a pure, boundary-safe helper
+package `internal/bss` already imports directly (unlike `internal/devices`
+itself, which stays off-limits) — reusing it here is consistent with that
+existing precedent, not a new exception. `feature`, `serviceRelationship`,
 `supportingResource`, and the other TMF640 fields not listed above are
 omitted (TMF's own `@schemaLocation`/`@baseType`/`@type` extensibility
 pattern means omission of an unused field is valid, not an error).
