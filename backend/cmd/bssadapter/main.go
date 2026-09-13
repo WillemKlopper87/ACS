@@ -591,9 +591,15 @@ type orderResponse struct {
 }
 
 // createOrder implements Workflow B, idempotently: a retried
-// external_order_id is answered from bss_orders (with the job's *current*
-// status, not a stale "QUEUED") instead of dispatching a second job — the
-// gap build plan §5.3 flagged in the reference draft.
+// external_order_id is answered from bss_orders (with the order's
+// *current* status, not a stale "QUEUED") instead of dispatching a
+// second job. The order's intent -- including exactly what dispatch
+// would send -- is written to bss_orders BEFORE SetParameters is called
+// (design S3's write-ahead outbox), so a crash or failure after that
+// point leaves a durable row order_reconciler.go can retry, rather than
+// nothing being written at all (the gap build plan §5.3 flagged in the
+// reference draft, and bss-integration-guide.md §6 documented as a
+// known limitation until this).
 func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 	var req createOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -610,6 +616,17 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	} else if existing != nil {
+		if existing.Status != bss.OrderStatusDispatched {
+			// Still PENDING_DISPATCH or DEAD_LETTERED -- there is no
+			// command_key to poll cmd/api for yet. Report the order's own
+			// internal status directly instead of trying (and failing) to
+			// look up a job that was never created.
+			writeJSON(w, http.StatusAccepted, orderResponse{
+				OrderTrackingID: req.ExternalOrderID, CommandKey: "",
+				Status: existing.Status, Timestamp: time.Now().UTC(),
+			})
+			return
+		}
 		status, err := h.acs.GetJobStatus(r.Context(), existing.CommandKey)
 		if err != nil {
 			h.logger.Error("failed to fetch status for existing order", "err", err, "command_key", existing.CommandKey)
@@ -660,27 +677,36 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	commandKey, err := h.acs.SetParameters(r.Context(), mapping.DeviceID, params)
-	if errors.Is(err, bss.ErrACSUnreachable) {
-		writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
+	// Write-ahead: the order's intent, including exactly what dispatch
+	// would send, is durable before dispatch is attempted (design S3).
+	if err := h.mappings.InsertPending(r.Context(), req.ExternalOrderID, req.AccountID, req.Action, mapping.DeviceID, params); err != nil {
+		h.logger.Error("failed to record pending order", "err", err, "external_order_id", req.ExternalOrderID)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
+
+	commandKey, err := h.acs.SetParameters(r.Context(), mapping.DeviceID, params)
 	if err != nil {
+		if markErr := h.mappings.MarkDispatchFailed(r.Context(), req.ExternalOrderID, err.Error()); markErr != nil {
+			h.logger.Error("failed to record dispatch failure", "err", markErr, "external_order_id", req.ExternalOrderID)
+		}
+		if errors.Is(err, bss.ErrACSUnreachable) {
+			writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
+			return
+		}
 		h.logger.Error("failed to dispatch order to ACS", "err", err, "account_id", req.AccountID, "action", req.Action)
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
 
-	// Best-effort: the job is already queued on the ACS side at this
-	// point. If recording the idempotency row fails, a retried
-	// external_order_id will not find it and will dispatch a second job —
-	// true exactly-once here would need an outbox/distributed-transaction
-	// pattern, which is out of scope for Phase 8b. Logged loudly so it's
-	// visible in practice rather than silently accepted.
-	if err := h.mappings.RecordOrder(r.Context(), bss.OrderRecord{
-		ExternalOrderID: req.ExternalOrderID, AccountID: req.AccountID, Action: req.Action, CommandKey: commandKey,
-	}); err != nil {
-		h.logger.Error("failed to record order idempotency row — a retry of this external_order_id WILL double-dispatch",
+	// Dispatch succeeded. If this update itself fails, the job IS already
+	// queued on the ACS side but the row stays PENDING_DISPATCH with no
+	// command_key recorded -- order_reconciler.go will retry SetParameters
+	// for it, which can double-dispatch in this narrow window (design S3's
+	// disclosed residual: one UPDATE statement wide, not the open-ended
+	// "any future BSS retry" window this design replaces).
+	if err := h.mappings.MarkDispatched(r.Context(), req.ExternalOrderID, commandKey); err != nil {
+		h.logger.Error("failed to record order dispatched -- reconciler retry may double-dispatch",
 			"err", err, "external_order_id", req.ExternalOrderID, "command_key", commandKey)
 	}
 
