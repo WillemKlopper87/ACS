@@ -1,6 +1,7 @@
 package bss
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -134,5 +135,43 @@ func TestNewACSClientDefaultsTimeout(t *testing.T) {
 	client := NewACSClient("http://example.invalid", 0, "")
 	if client.http.Timeout != defaultHTTPTimeout {
 		t.Errorf("Timeout = %v, want default %v", client.http.Timeout, defaultHTTPTimeout)
+	}
+}
+
+func TestACSClientGetParameters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/devices/dev-1/parameters" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.URL.Query().Get("paths"); got != "Device.WiFi.SSID.1.SSID,Device.WiFi.AccessPoint.1.Security.KeyPassphrase" {
+			t.Fatalf("paths query = %q, want the two requested paths comma-joined", got)
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{
+			"parameters": map[string]any{
+				"Device.WiFi.SSID.1.SSID": map[string]any{
+					"value": "MyNetwork", "type": "string", "updated_at": "2026-09-13T10:00:00Z", "source": "GET_PARAMETER_VALUES",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewACSClient(server.URL, time.Second, "")
+	got, err := client.GetParameters(context.Background(), "dev-1", []string{"Device.WiFi.SSID.1.SSID", "Device.WiFi.AccessPoint.1.Security.KeyPassphrase"})
+	if err != nil {
+		t.Fatalf("GetParameters: %v", err)
+	}
+	v, ok := got["Device.WiFi.SSID.1.SSID"]
+	if !ok || v.Value != "MyNetwork" {
+		t.Errorf("GetParameters result = %+v, want Device.WiFi.SSID.1.SSID = MyNetwork", got)
+	}
+}
+
+func TestACSClientGetParametersUnreachable(t *testing.T) {
+	client := NewACSClient("http://127.0.0.1:1", time.Millisecond*50, "")
+	_, err := client.GetParameters(context.Background(), "dev-1", []string{"p"})
+	if !errors.Is(err, ErrACSUnreachable) {
+		t.Fatalf("GetParameters against an unreachable ACS = %v, want ErrACSUnreachable", err)
 	}
 }
