@@ -51,19 +51,29 @@ log line.
 
 **Fix**: reorder to a write-ahead pattern. `bss_orders` gains a `status`
 column (`PENDING_DISPATCH` / `DISPATCHED` / `DEAD_LETTERED`), an
-`attempts` counter, and a `last_error` text column. `createOrder`'s
+`attempts` counter, a `last_error` text column, and — necessary for the
+reconciler in §5 to retry safely, not merely to record intent —
+`device_id` and the already-translated `parameters` (JSONB). Storing the
+*resolved* device and the *already-translated* parameter writes, not
+just the business-level action name, matters: a retry must replay
+exactly what the original attempt would have sent, not re-run
+`ActiveDeviceForAccount` (which could resolve to a different device if
+the account's mapping changed between the original request and a later
+retry — e.g. a device swap) or re-run `Translate`. `createOrder`'s
 sequence becomes:
 
-1. Validate the request and translate the action (unchanged — this can
-   still fail before anything is written, exactly as today).
+1. Validate the request, resolve the account's active device, and
+   translate the action (unchanged — this can still fail before
+   anything is written, exactly as today).
 2. Idempotency check via `FindOrder` on `external_order_id` (unchanged
    behavior: a duplicate returns the existing order's current
    status/`command_key` rather than re-dispatching).
-3. **Insert** the `bss_orders` row with `status = 'PENDING_DISPATCH'`
-   — this is new, and happens *before* calling `cmd/api`. The
-   `external_order_id` primary key still gives the idempotency
-   guarantee at write time; what's new is that intent is now durable
-   before dispatch is attempted at all.
+3. **Insert** the `bss_orders` row with `status = 'PENDING_DISPATCH'`,
+   the resolved `device_id`, and the translated `parameters` — this is
+   new, and happens *before* calling `cmd/api`. The `external_order_id`
+   primary key still gives the idempotency guarantee at write time;
+   what's new is that intent (including exactly what would be sent) is
+   now durable before dispatch is attempted at all.
 4. Call `SetParameters` synchronously, exactly as today.
 5. On success: update the row to `status = 'DISPATCHED'` with the real
    `command_key`, and return the response the caller sees today
