@@ -406,6 +406,12 @@ export function BSSIntegration() {
                     <span className="val">{n}</span>
                   </div>
                 ))}
+                {stats && Object.entries(stats.orders_by_status).map(([status, n]) => (
+                  <div className="param-row" key={status}>
+                    <span className="path">{status}</span>
+                    <span className="val">{n}</span>
+                  </div>
+                ))}
                 <div className="param-row">
                   <span className="path">Last 24h</span>
                   <span className="val">{stats.orders_last_24h}</span>

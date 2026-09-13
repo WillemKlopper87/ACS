@@ -392,6 +392,7 @@ export interface BSSWebhookSubscription {
 export interface BSSStats {
   mappings_by_status: Record<string, number>;
   orders_by_action: Record<string, number>;
+  orders_by_status: Record<string, number>;
   orders_last_24h: number;
   webhook_subscriptions: number;
   deliveries_by_status: Record<string, number>;

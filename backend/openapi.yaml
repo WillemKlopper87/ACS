@@ -2128,6 +2128,7 @@ components:
       properties:
         mappings_by_status: { type: object, additionalProperties: { type: integer } }
         orders_by_action: { type: object, additionalProperties: { type: integer } }
+        orders_by_status: { type: object, additionalProperties: { type: integer } }
         orders_last_24h: { type: integer }
         webhook_subscriptions: { type: integer }
         deliveries_by_status: { type: object, additionalProperties: { type: integer } }

@@ -5437,6 +5437,9 @@ export interface components {
             orders_by_action?: {
                 [key: string]: number;
             };
+            orders_by_status?: {
+                [key: string]: number;
+            };
             orders_last_24h?: number;
             webhook_subscriptions?: number;
             deliveries_by_status?: {
