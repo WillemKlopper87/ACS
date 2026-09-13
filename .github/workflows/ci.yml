@@ -173,9 +173,13 @@ jobs:
         # silently skipped in every CI run). internal/subscriptions and
         # internal/parameters have their own DB-backed tests too (Tasks 3/4
         # of the usp-subscriptions plan) and were never added here either
-        # (tracked-forward gap from Task 3's review) -- added now. -p 1:
-        # every one resets the same database.
-        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./internal/subscriptions/ ./internal/parameters/ ./cmd/acs/ ./cmd/uspc/
+        # (tracked-forward gap from Task 3's review) -- added now. cmd/bssadapter
+        # has its own substantial DB-backed suite too (outbox dispatch,
+        # TMF640 service/monitor/patch handlers) and was never added here
+        # either -- same silent-skip gap, found while finishing
+        # design/bss-tmf640 -- added now. -p 1: every one resets the same
+        # database.
+        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./internal/subscriptions/ ./internal/parameters/ ./cmd/acs/ ./cmd/uspc/ ./cmd/bssadapter/
       - name: placeholder secrets are refused (fail-closed)
         run: |
           set +e
