@@ -647,6 +647,14 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 	// Write-ahead: the order's intent, including exactly what dispatch
 	// would send, is durable before dispatch is attempted (design S3).
 	if err := h.mappings.InsertPending(ctx, externalOrderID, accountID, action, deviceID, params); err != nil {
+		// ErrOrderAlreadyExists is the expected idempotent-retry race --
+		// the caller routes it to its own existing-order response, not
+		// an error worth logging here. Any other InsertPending failure
+		// (e.g. a DB connectivity error) never reached ACS at all, so it
+		// gets its own log line distinct from a dispatch failure below.
+		if !errors.Is(err, bss.ErrOrderAlreadyExists) {
+			h.logger.Error("failed to record pending order", "err", err, "external_order_id", externalOrderID)
+		}
 		return "", err
 	}
 
@@ -654,6 +662,14 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 	if err != nil {
 		if markErr := h.mappings.MarkDispatchFailed(ctx, externalOrderID, err.Error()); markErr != nil {
 			h.logger.Error("failed to record dispatch failure", "err", markErr, "external_order_id", externalOrderID)
+		}
+		// ErrACSUnreachable maps to its own 502 at the caller with no
+		// extra logging there; any other SetParameters failure is logged
+		// here (with the context a caller-side generic branch wouldn't
+		// have without re-deriving it) before the caller turns it into a
+		// generic 500.
+		if !errors.Is(err, bss.ErrACSUnreachable) {
+			h.logger.Error("failed to dispatch order to ACS", "err", err, "account_id", accountID, "action", action)
 		}
 		return "", err
 	}
@@ -774,7 +790,9 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
 			return
 		}
-		h.logger.Error("failed to dispatch order to ACS", "err", err, "account_id", req.AccountID, "action", req.Action)
+		// Any other failure was already logged inside dispatchOrder,
+		// which knows which step (InsertPending vs SetParameters) it
+		// came from -- this branch only shapes the HTTP response.
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
