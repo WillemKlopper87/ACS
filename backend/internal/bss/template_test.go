@@ -121,3 +121,18 @@ func TestTranslateUnknownAction(t *testing.T) {
 		t.Errorf("err = %v, want ErrUnsupportedAction", err)
 	}
 }
+
+// TestActionRegistryListsExactlyThreeActions pins the registry's
+// contents so an accidental addition/removal is caught explicitly,
+// rather than only being noticed via a downstream Translate test.
+func TestActionRegistryListsExactlyThreeActions(t *testing.T) {
+	want := map[string]bool{"MODIFY_WIFI": true, "SUSPEND": true, "ACTIVATE": true}
+	if len(actionRegistry) != len(want) {
+		t.Fatalf("actionRegistry has %d entries, want %d", len(actionRegistry), len(want))
+	}
+	for action := range want {
+		if _, ok := actionRegistry[action]; !ok {
+			t.Errorf("actionRegistry missing %q", action)
+		}
+	}
+}

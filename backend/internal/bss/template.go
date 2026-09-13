@@ -55,26 +55,40 @@ func (c WalledGardenConfig) configured() bool {
 	return c.Parameter != "" && c.SuspendValue != "" && c.ActiveValue != ""
 }
 
+// actionTranslator turns one BSS action's business parameters into the
+// canonical parameter writes to queue.
+type actionTranslator func(params map[string]string, wg WalledGardenConfig, dataModelRoot string) ([]ParameterWrite, error)
+
+// actionRegistry is the single place that lists every BSS action this
+// system knows about (design S4) — previously a hardcoded switch inside
+// Translate. Adding a fourth action means adding an entry here plus a
+// test, the same cost as adding any other action/job type in this
+// codebase (a CWMP or USP job type).
+var actionRegistry = map[string]actionTranslator{
+	"MODIFY_WIFI": func(params map[string]string, _ WalledGardenConfig, dataModelRoot string) ([]ParameterWrite, error) {
+		return translateModifyWifi(params, dataModelRoot)
+	},
+	"SUSPEND": func(_ map[string]string, wg WalledGardenConfig, _ string) ([]ParameterWrite, error) {
+		return translateWalledGarden(wg, wg.SuspendValue)
+	},
+	"ACTIVATE": func(_ map[string]string, wg WalledGardenConfig, _ string) ([]ParameterWrite, error) {
+		return translateWalledGarden(wg, wg.ActiveValue)
+	},
+}
+
 // Translate turns a BSS order's action + business parameters into the
 // canonical parameter writes to queue (design doc v3 §6.2's canonical-name
 // indirection, applied one layer up from vendor path resolution to
 // business action — build plan §5.3), resolved to the actual device tree
 // via internal/devices/adapters.ResolvePath and the target device's own
-// discovered dataModelRoot — previously hardcoded to TR-181 regardless of
-// what the device actually spoke (build plan §10's data_model_root
-// branching gap). dataModelRoot may be "" (devices.DataModelRootUnknown)
+// discovered dataModelRoot. dataModelRoot may be "" (devices.DataModelRootUnknown)
 // for actions, like SUSPEND/ACTIVATE, that don't need it at all.
 func Translate(action string, params map[string]string, wg WalledGardenConfig, dataModelRoot string) ([]ParameterWrite, error) {
-	switch action {
-	case "MODIFY_WIFI":
-		return translateModifyWifi(params, dataModelRoot)
-	case "SUSPEND":
-		return translateWalledGarden(wg, wg.SuspendValue)
-	case "ACTIVATE":
-		return translateWalledGarden(wg, wg.ActiveValue)
-	default:
+	translator, ok := actionRegistry[action]
+	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedAction, action)
 	}
+	return translator(params, wg, dataModelRoot)
 }
 
 func translateWalledGarden(wg WalledGardenConfig, value string) ([]ParameterWrite, error) {
