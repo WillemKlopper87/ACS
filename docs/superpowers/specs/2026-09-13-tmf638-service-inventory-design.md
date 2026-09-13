@@ -60,8 +60,23 @@ C-3 depends on C-2 landing. It shares C-2's `Service` field mapping
 (`2026-09-13-bss-tmf640-design.md` §4.1) unchanged: one `Service` per
 active `account_device_mappings` row (`WHERE unassigned_at IS NULL`),
 `id` = the mapping's own id, `relatedParty` = `account_id`, `category` =
-`"customer facing service"`, `serviceCharacteristic` = current `SSID` and
-`WiFiPassword` values read through `ACSClient.GetParameters`.
+`"customer facing service"`, `serviceCharacteristic` = current `SSID`
+value read through `ACSClient.GetParameters`.
+
+**Correction:** an earlier draft of this section (and this line) named
+`WiFiPassword` here too, matching C-2's *original* field mapping. That
+mapping changed mid-implementation: a security review of C-2 found `GET
+/service` reflecting the device's live WiFi passphrase in cleartext to
+any authenticated BSS integrator, and it was redacted (C-2 design §4.1's
+own correction, commit `4c4103b` on `design/bss-tmf640`) — reads never
+resolve or return `WiFiPassword` at all; only `PATCH` can still write it.
+"Shares C-2's mapping unchanged" therefore now means: `serviceCharacteristic`
+carries `SSID` only, on both APIs. Building C-3's read path against the
+stale two-characteristic mapping would reopen the exact exposure C-2
+closed, through a second API surface — and would immediately fail this
+document's own §6 acceptance test (byte-identical `Service` from both
+APIs), just not until implementation time. `role` (§4.1) remains the only
+other `serviceCharacteristic` C-3 adds.
 
 Two fields differ, and both are deliberate:
 
