@@ -12,7 +12,9 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"acs/internal/bss"
@@ -237,4 +239,143 @@ func (h *handler) getMonitor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, h.monitorFromOrder(r, id, "", order))
+}
+
+type tmfServicePatch struct {
+	State                 *string                    `json:"state,omitempty"`
+	ServiceCharacteristic []tmfServiceCharacteristic `json:"serviceCharacteristic,omitempty"`
+}
+
+// interpretServicePatch turns a TMF640 JSON-merge-patch body into
+// exactly one of the three actions internal/bss/template.go's registry
+// already knows (design §4.2) -- one recognized shape per PATCH, mixing
+// or naming anything else is rejected.
+func interpretServicePatch(patch tmfServicePatch) (action string, params map[string]string, err error) {
+	hasState := patch.State != nil
+	hasChar := len(patch.ServiceCharacteristic) > 0
+
+	if hasState && hasChar {
+		return "", nil, errors.New("a PATCH may change either state or serviceCharacteristic, not both")
+	}
+	if hasState {
+		switch *patch.State {
+		case "active":
+			return "ACTIVATE", nil, nil
+		case "inactive":
+			return "SUSPEND", nil, nil
+		default:
+			return "", nil, fmt.Errorf("unsupported state %q: only \"active\" and \"inactive\" are supported", *patch.State)
+		}
+	}
+	if hasChar {
+		params = map[string]string{}
+		for _, c := range patch.ServiceCharacteristic {
+			switch c.Name {
+			case "SSID":
+				params["wifi_ssid"] = c.Value
+			case "WiFiPassword":
+				params["wifi_password"] = c.Value
+			default:
+				return "", nil, fmt.Errorf("unsupported serviceCharacteristic %q: only \"SSID\" and \"WiFiPassword\" are supported", c.Name)
+			}
+		}
+		return "MODIFY_WIFI", params, nil
+	}
+	return "", nil, errors.New("PATCH body must set either state or serviceCharacteristic")
+}
+
+// patchService implements PATCH /service/{id} -- TMF640's activation/
+// configuration entry point (design §4.2). X-Idempotency-Key maps onto
+// external_order_id; without it, an ordinary network-level retry of this
+// PATCH would double-dispatch, reopening the exact risk C-1's outbox
+// exists to close for /bss/v1/orders. The interpreted action is handed
+// to dispatchOrder (Task 3) -- the exact same write-ahead-then-dispatch
+// sequence /bss/v1/orders uses, not a parallel copy.
+func (h *handler) patchService(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	idempotencyKey := r.Header.Get("X-Idempotency-Key")
+	if idempotencyKey == "" {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "X-Idempotency-Key header is required")
+		return
+	}
+
+	var patch tmfServicePatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "invalid JSON body")
+		return
+	}
+	action, params, err := interpretServicePatch(patch)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", err.Error())
+		return
+	}
+
+	if existing, err := h.mappings.FindOrder(r.Context(), idempotencyKey); err != nil {
+		h.logger.Error("failed to check order idempotency", "err", err, "external_order_id", idempotencyKey)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	} else if existing != nil {
+		writeJSON(w, http.StatusAccepted, h.monitorFromOrder(r, idempotencyKey, id, existing))
+		return
+	}
+
+	mapping, err := h.mappings.GetMappingByID(r.Context(), id)
+	if errors.Is(err, bss.ErrMappingNotFound) {
+		writeError(w, http.StatusNotFound, "ErrNotFound", "no such service")
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to resolve service for patch", "err", err, "id", id)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+
+	dataModelRoot := ""
+	if action == "MODIFY_WIFI" {
+		dev, err := h.acs.GetDevice(r.Context(), mapping.DeviceID)
+		if errors.Is(err, bss.ErrACSUnreachable) {
+			writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
+			return
+		}
+		if err != nil {
+			h.logger.Error("failed to resolve device for patch translation", "err", err, "device_id", mapping.DeviceID)
+			writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+			return
+		}
+		dataModelRoot = dev.DataModelRoot
+	}
+
+	translated, err := bss.Translate(action, params, h.walledGarden, dataModelRoot)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", err.Error())
+		return
+	}
+
+	if _, err := h.dispatchOrder(r.Context(), idempotencyKey, mapping.AccountID, action, mapping.DeviceID, translated); err != nil {
+		if errors.Is(err, bss.ErrOrderAlreadyExists) {
+			existing, findErr := h.mappings.FindOrder(r.Context(), idempotencyKey)
+			if findErr != nil || existing == nil {
+				h.logger.Error("failed to resolve order after InsertPending race", "err", findErr, "external_order_id", idempotencyKey)
+				writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+				return
+			}
+			writeJSON(w, http.StatusAccepted, h.monitorFromOrder(r, idempotencyKey, id, existing))
+			return
+		}
+		if errors.Is(err, bss.ErrACSUnreachable) {
+			writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
+			return
+		}
+		h.logger.Error("failed to dispatch service patch to ACS", "err", err, "id", id, "action", action)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+
+	order, err := h.mappings.FindOrder(r.Context(), idempotencyKey)
+	if err != nil || order == nil {
+		h.logger.Error("failed to re-read order after dispatch", "err", err, "external_order_id", idempotencyKey)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, h.monitorFromOrder(r, idempotencyKey, id, order))
 }

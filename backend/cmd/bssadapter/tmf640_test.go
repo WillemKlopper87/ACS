@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -274,4 +275,128 @@ func TestGetMonitorNotFound(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body: %s", rec.Code, rec.Body.String())
 	}
+}
+
+func TestPatchServiceRequiresIdempotencyKey(t *testing.T) {
+	ctx, h, db := newTMF640TestHandler(t, tmf640ACSHandler(t))
+	const accountID, deviceID = "acct-1", "11111111-1111-1111-1111-111111111111"
+	seedTMF640Device(t, ctx, db, accountID, deviceID)
+	var mappingID string
+	if err := db.QueryRowContext(ctx, `SELECT id FROM account_device_mappings WHERE account_id = $1`, accountID).Scan(&mappingID); err != nil {
+		t.Fatalf("read seeded mapping id: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]string{"state": "inactive"})
+	req := httptest.NewRequest(http.MethodPatch, "/tmf-api/serviceActivationAndConfiguration/v4/service/"+mappingID, bytes.NewReader(body))
+	req.SetPathValue("id", mappingID)
+	rec := httptest.NewRecorder()
+	h.patchService(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (missing X-Idempotency-Key); body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPatchServiceStateInactiveDispatchesSuspend(t *testing.T) {
+	acs := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-suspend"})
+	})
+	ctx, h, db := newTMF640TestHandler(t, acs)
+	const accountID, deviceID = "acct-1", "11111111-1111-1111-1111-111111111111"
+	seedTMF640Device(t, ctx, db, accountID, deviceID)
+	var mappingID string
+	if err := db.QueryRowContext(ctx, `SELECT id FROM account_device_mappings WHERE account_id = $1`, accountID).Scan(&mappingID); err != nil {
+		t.Fatalf("read seeded mapping id: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]string{"state": "inactive"})
+	req := httptest.NewRequest(http.MethodPatch, "/tmf-api/serviceActivationAndConfiguration/v4/service/"+mappingID, bytes.NewReader(body))
+	req.Header.Set("X-Idempotency-Key", "idem-1")
+	req.SetPathValue("id", mappingID)
+	rec := httptest.NewRecorder()
+	h.patchService(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body: %s", rec.Code, rec.Body.String())
+	}
+	var mon tmfMonitor
+	if err := json.Unmarshal(rec.Body.Bytes(), &mon); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if mon.ID != "idem-1" {
+		t.Errorf("Monitor.ID = %q, want idem-1 (the X-Idempotency-Key value)", mon.ID)
+	}
+	if mon.SourceHref == "" {
+		t.Error("Monitor.SourceHref is empty, want it set to the Service's href (PATCH has the service id, unlike a bare GET /monitor)")
+	}
+
+	order, err := h.mappings.FindOrder(ctx, "idem-1")
+	if err != nil {
+		t.Fatalf("FindOrder: %v", err)
+	}
+	if order == nil || order.Action != "SUSPEND" {
+		t.Fatalf("order = %+v, want Action=SUSPEND", order)
+	}
+}
+
+func TestPatchServiceRejectsMixedStateAndCharacteristic(t *testing.T) {
+	ctx, h, db := newTMF640TestHandler(t, tmf640ACSHandler(t))
+	const accountID, deviceID = "acct-1", "11111111-1111-1111-1111-111111111111"
+	seedTMF640Device(t, ctx, db, accountID, deviceID)
+	var mappingID string
+	if err := db.QueryRowContext(ctx, `SELECT id FROM account_device_mappings WHERE account_id = $1`, accountID).Scan(&mappingID); err != nil {
+		t.Fatalf("read seeded mapping id: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"state":                 "inactive",
+		"serviceCharacteristic": []map[string]string{{"name": "SSID", "value": "NewName"}},
+	})
+	req := httptest.NewRequest(http.MethodPatch, "/tmf-api/serviceActivationAndConfiguration/v4/service/"+mappingID, bytes.NewReader(body))
+	req.Header.Set("X-Idempotency-Key", "idem-mixed")
+	req.SetPathValue("id", mappingID)
+	rec := httptest.NewRecorder()
+	h.patchService(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (mixed state + serviceCharacteristic rejected); body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPatchServiceRetriedIdempotencyKeyReturnsSameMonitor(t *testing.T) {
+	acs := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	ctx, h, db := newTMF640TestHandler(t, acs)
+	const accountID, deviceID = "acct-1", "11111111-1111-1111-1111-111111111111"
+	seedTMF640Device(t, ctx, db, accountID, deviceID)
+	var mappingID string
+	if err := db.QueryRowContext(ctx, `SELECT id FROM account_device_mappings WHERE account_id = $1`, accountID).Scan(&mappingID); err != nil {
+		t.Fatalf("read seeded mapping id: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]string{"state": "active"})
+	req1 := httptest.NewRequest(http.MethodPatch, "/tmf-api/serviceActivationAndConfiguration/v4/service/"+mappingID, bytes.NewReader(body))
+	req1.Header.Set("X-Idempotency-Key", "idem-retry")
+	req1.SetPathValue("id", mappingID)
+	h.patchService(httptest.NewRecorder(), req1) // dispatch fails, leaves PENDING_DISPATCH
+
+	req2 := httptest.NewRequest(http.MethodPatch, "/tmf-api/serviceActivationAndConfiguration/v4/service/"+mappingID, bytes.NewReader(body))
+	req2.Header.Set("X-Idempotency-Key", "idem-retry")
+	req2.SetPathValue("id", mappingID)
+	rec2 := httptest.NewRecorder()
+	h.patchService(rec2, req2)
+
+	if rec2.Code != http.StatusAccepted {
+		t.Fatalf("retry status = %d, want 202; body: %s", rec2.Code, rec2.Body.String())
+	}
+	var mon tmfMonitor
+	if err := json.Unmarshal(rec2.Body.Bytes(), &mon); err != nil {
+		t.Fatalf("decode retry response: %v", err)
+	}
+	if mon.State != "InProgress" {
+		t.Errorf("retry Monitor.State = %q, want InProgress (no second dispatch attempted)", mon.State)
+	}
+	_ = ctx
 }
