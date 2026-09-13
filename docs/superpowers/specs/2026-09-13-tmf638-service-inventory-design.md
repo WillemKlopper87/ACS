@@ -168,14 +168,33 @@ identified consumer and interacts awkwardly with the pagination cap.
 
 ## 5. The `internal/tmf` package
 
-This is the structural decision C-3 carries for the whole programme, and
-it must land **before C-2's Task 4 runs**, not after.
+This is the structural decision C-3 carries for the whole programme.
 
-C-2's plan (`docs/superpowers/plans/2026-09-13-bss-tmf640.md` Task 4)
-currently writes the `Service` types and serializer into
-`backend/cmd/bssadapter/tmf640.go`. At the time of writing that file does
-not yet exist — Tasks 1–3 are complete and all landed in `internal/bss`.
-So the extraction below is free now and a refactor later.
+**Status correction.** An earlier draft of this section claimed the
+extraction was free because `cmd/bssadapter/tmf640.go` did not yet exist.
+That is no longer true: C-2's Task 4 landed as commit `ba56c4c` while
+this spec was being written, creating `backend/cmd/bssadapter/tmf640.go`
+(156 lines) with `tmfService`, `tmfServiceCharacteristic`,
+`tmfRelatedParty`, the two base-path constants and
+`handler.serviceFromMapping` all inline, exactly as the unamended plan
+specified.
+
+The extraction is therefore a **small retroactive refactor, not a
+placement choice**. It is still worth doing, and still cheapest now:
+
+- Three structs (~20 lines) move to `internal/tmf` and become exported.
+- `serviceFromMapping` splits into a handler-side fetch (`GetDevice`,
+  `adapters.ResolvePath`, `ACSClient.GetParameters` — all of which stay
+  in `cmd/bssadapter`, preserving the process-boundary rule C-2 §4.1
+  establishes) and a pure `tmf.ServiceFromMapping(m, chars, api)`.
+- The two `tmf*BasePath` constants become `tmf.Href(api, resource, id)`
+  arguments.
+
+`tmf640_test.go` (173 lines) already covers the behaviour, so the
+refactor is verifiable rather than speculative. Doing it before C-2's
+Tasks 5 and 6 add `Monitor` and the PATCH handler keeps it at roughly
+60 lines; deferring it past them grows it and adds C-4's and C-5's
+resources on top.
 
 **`backend/internal/tmf`** holds, with no HTTP handler and no direct
 database access:
@@ -207,16 +226,24 @@ Two rules make the deferred `/bss/v1` decision genuinely deferrable:
 
 ### 5.1 Required amendment to C-2
 
-C-2's Task 4 must be amended before it is dispatched: the `Service`
-struct, its `@type`/`href` construction and `serviceFromMapping` move
-into `internal/tmf`; `cmd/bssadapter/tmf640.go` keeps the handlers and
-calls into it. Tasks 5 and 6 (Monitor, PATCH) follow the same split —
-`Monitor` is a `internal/tmf` type, the state derivation and dispatch
-stay in the handler.
+C-2's plan carries an amendment block on Task 4
+(`docs/superpowers/plans/2026-09-13-bss-tmf640.md`) recording this split.
+Because Task 4 has already landed, the amendment now applies as
+**follow-up work on the C-2 branch before Tasks 5 and 6 run**, not as a
+change to how Task 4 is implemented:
 
-This does not change any behaviour C-2 specifies, any route, or any
-response body. It is a file-placement amendment, and C-2's existing tests
-should pass unmodified.
+1. Create `internal/tmf` and move the three structs, `Href` and the pure
+   `ServiceFromMapping` into it.
+2. Rewrite `handler.serviceFromMapping` to fetch characteristics and
+   delegate.
+3. Run `tmf640_test.go` unmodified — it must pass without edits. If it
+   needs edits, the refactor changed behaviour and is wrong.
+4. Then dispatch Tasks 5 and 6 against the split layout: `Monitor` is an
+   `internal/tmf` type; its state derivation and the PATCH dispatch stay
+   in the handler.
+
+This changes no route, no response body and no status code. C-2's
+existing tests passing unmodified is the acceptance criterion.
 
 ## 6. Testing and acceptance
 
