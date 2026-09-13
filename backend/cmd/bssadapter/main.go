@@ -591,6 +591,44 @@ type orderResponse struct {
 	Timestamp       time.Time `json:"timestamp"`
 }
 
+// respondWithExistingOrder answers with an already-recorded order's
+// current status -- the idempotent response createOrder owes a caller
+// that's asking about an order it (or a concurrent request racing it)
+// has already recorded, whether that's an ordinary retried
+// external_order_id (the ordinary FindOrder-at-top-of-function path
+// below) or a genuine InsertPending race the loser learns about via
+// bss.ErrOrderAlreadyExists (final review finding 6) -- both cases boil
+// down to "an order with this external_order_id already exists; report
+// it instead of dispatching a second one," so both share this one
+// response path rather than duplicating it. Returns false only if it
+// could not produce the response (a further failure resolving the
+// order's job status), in which case it has already written the error
+// response itself.
+func (h *handler) respondWithExistingOrder(w http.ResponseWriter, r *http.Request, externalOrderID string, existing *bss.OrderRecord) bool {
+	if existing.Status != bss.OrderStatusDispatched {
+		// Still PENDING_DISPATCH or DEAD_LETTERED -- there is no
+		// command_key to poll cmd/api for yet. Report the order's own
+		// internal status directly instead of trying (and failing) to
+		// look up a job that was never created.
+		writeJSON(w, http.StatusAccepted, orderResponse{
+			OrderTrackingID: externalOrderID, CommandKey: "",
+			Status: existing.Status, Timestamp: time.Now().UTC(),
+		})
+		return true
+	}
+	status, err := h.acs.GetJobStatus(r.Context(), existing.CommandKey)
+	if err != nil {
+		h.logger.Error("failed to fetch status for existing order", "err", err, "command_key", existing.CommandKey)
+		writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
+		return false
+	}
+	writeJSON(w, http.StatusAccepted, orderResponse{
+		OrderTrackingID: externalOrderID, CommandKey: existing.CommandKey,
+		Status: status.Status, Timestamp: time.Now().UTC(),
+	})
+	return true
+}
+
 // createOrder implements Workflow B, idempotently: a retried
 // external_order_id is answered from bss_orders (with the order's
 // *current* status, not a stale "QUEUED") instead of dispatching a
@@ -599,8 +637,14 @@ type orderResponse struct {
 // (design S3's write-ahead outbox), so a crash or failure after that
 // point leaves a durable row order_reconciler.go can retry, rather than
 // nothing being written at all (the gap build plan §5.3 flagged in the
-// reference draft, and bss-integration-guide.md §6 documented as a
-// known limitation until this).
+// reference draft, closed by this outbox and described in
+// bss-integration-guide.md §6). The one residual outbox gap that
+// remains -- a crash between SetParameters succeeding and that success
+// being recorded -- is disclosed there and in design docs/superpowers/
+// specs/2026-09-13-bss-improvements-design.md §3; it is not the same
+// thing this comment used to call a "known limitation," which was the
+// double-dispatch race closed by ClaimDuePendingOrders (internal/bss/
+// order.go) and InsertPending's own last_attempt_at stamp.
 func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 	var req createOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -617,27 +661,7 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	} else if existing != nil {
-		if existing.Status != bss.OrderStatusDispatched {
-			// Still PENDING_DISPATCH or DEAD_LETTERED -- there is no
-			// command_key to poll cmd/api for yet. Report the order's own
-			// internal status directly instead of trying (and failing) to
-			// look up a job that was never created.
-			writeJSON(w, http.StatusAccepted, orderResponse{
-				OrderTrackingID: req.ExternalOrderID, CommandKey: "",
-				Status: existing.Status, Timestamp: time.Now().UTC(),
-			})
-			return
-		}
-		status, err := h.acs.GetJobStatus(r.Context(), existing.CommandKey)
-		if err != nil {
-			h.logger.Error("failed to fetch status for existing order", "err", err, "command_key", existing.CommandKey)
-			writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
-			return
-		}
-		writeJSON(w, http.StatusAccepted, orderResponse{
-			OrderTrackingID: req.ExternalOrderID, CommandKey: existing.CommandKey,
-			Status: status.Status, Timestamp: time.Now().UTC(),
-		})
+		h.respondWithExistingOrder(w, r, req.ExternalOrderID, existing)
 		return
 	}
 
@@ -681,6 +705,21 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 	// Write-ahead: the order's intent, including exactly what dispatch
 	// would send, is durable before dispatch is attempted (design S3).
 	if err := h.mappings.InsertPending(r.Context(), req.ExternalOrderID, req.AccountID, req.Action, mapping.DeviceID, params); err != nil {
+		if errors.Is(err, bss.ErrOrderAlreadyExists) {
+			// A genuine race: another request for the same
+			// external_order_id won InsertPending between our own
+			// FindOrder check above and this call (final review finding
+			// 6). The loser should get the same idempotent answer a
+			// retried external_order_id gets, not a 500.
+			existing, findErr := h.mappings.FindOrder(r.Context(), req.ExternalOrderID)
+			if findErr != nil || existing == nil {
+				h.logger.Error("failed to resolve order after InsertPending race", "err", findErr, "external_order_id", req.ExternalOrderID)
+				writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+				return
+			}
+			h.respondWithExistingOrder(w, r, req.ExternalOrderID, existing)
+			return
+		}
 		h.logger.Error("failed to record pending order", "err", err, "external_order_id", req.ExternalOrderID)
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return

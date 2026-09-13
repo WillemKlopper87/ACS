@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 
 	"acs/internal/bss"
@@ -50,6 +51,21 @@ func newOrderTestHandler(t *testing.T, acsHandler http.Handler) (context.Context
 		auditor:      observability.NewAuditor(db),
 		walledGarden: bss.WalledGardenConfig{Parameter: "Device.X_WALLED_GARDEN.Enable", SuspendValue: "true", ActiveValue: "false"},
 	}, db
+}
+
+// backdateOrderLastAttempt pushes a row's last_attempt_at far enough into
+// the past that it reads as due regardless of attempts count -- used by
+// tests that need a row the reconciler will actually claim right after
+// InsertPending, now that InsertPending itself stamps last_attempt_at =
+// now() at insert time (final review finding 1) rather than leaving it
+// NULL.
+func backdateOrderLastAttempt(t *testing.T, ctx context.Context, db *sql.DB, externalOrderID string) {
+	t.Helper()
+	if _, err := db.ExecContext(ctx,
+		`UPDATE bss_orders SET last_attempt_at = now() - interval '1000 minutes' WHERE external_order_id = $1`,
+		externalOrderID); err != nil {
+		t.Fatalf("backdate last_attempt_at for %s: %v", externalOrderID, err)
+	}
 }
 
 func seedOrderDevice(t *testing.T, ctx context.Context, db *sql.DB, accountID, deviceID string) {
@@ -207,5 +223,76 @@ func TestCreateOrderRetriedExternalOrderIDWhilePending(t *testing.T) {
 	}
 	if resp.CommandKey != "" {
 		t.Errorf("retry CommandKey = %q, want empty (no command_key exists yet)", resp.CommandKey)
+	}
+}
+
+// TestCreateOrderConcurrentRequestsRaceInsertPending is the regression
+// test for final review finding 6: bss.ErrOrderAlreadyExists is defined
+// as "a defensive backstop for a race between two concurrent requests"
+// but was never consumed by createOrder before this fix -- every
+// InsertPending error, including that one, folded into a generic 500.
+// The ONLY way to genuinely reach InsertPending's own
+// ErrOrderAlreadyExists branch (rather than the ordinary top-of-function
+// FindOrder idempotency check) is two requests that both pass that
+// FindOrder check before either's InsertPending runs -- so this fires two
+// goroutines at h.createOrder concurrently for the same external_order_id
+// and asserts neither gets a 500: the InsertPending race's loser must
+// fall back to the same idempotent existing-order response a retried
+// external_order_id gets.
+func TestCreateOrderConcurrentRequestsRaceInsertPending(t *testing.T) {
+	// The race's loser may see the winner's order already DISPATCHED by
+	// the time it re-reads via FindOrder, in which case
+	// respondWithExistingOrder polls GetJobStatus (a GET) rather than
+	// reusing SetParameters' (a PUT) response -- so this handler, unlike
+	// the single-shape handlers other tests in this file use, must answer
+	// both shapes correctly.
+	ctx, h, db := newOrderTestHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-race"})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-race", "status": "QUEUED"})
+	}))
+	const accountID, deviceID = "acct-1", "11111111-1111-1111-1111-111111111111"
+	seedOrderDevice(t, ctx, db, accountID, deviceID)
+
+	if existing, err := h.mappings.FindOrder(ctx, "ord-race"); err != nil {
+		t.Fatalf("FindOrder before race: %v", err)
+	} else if existing != nil {
+		t.Fatalf("FindOrder before race = %+v, want nil", existing)
+	}
+
+	body, _ := json.Marshal(createOrderRequest{ExternalOrderID: "ord-race", AccountID: accountID, Action: "ACTIVATE"})
+
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	bodies := make([]string, 2)
+	for i := range 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/bss/v1/orders", bytes.NewReader(body))
+			rec := httptest.NewRecorder()
+			h.createOrder(rec, req)
+			codes[i] = rec.Code
+			bodies[i] = rec.Body.String()
+		}(i)
+	}
+	wg.Wait()
+
+	for i, code := range codes {
+		if code != http.StatusAccepted {
+			t.Errorf("goroutine %d status = %d, want 202 (an InsertPending race must answer idempotently, not 500); body: %s", i, code, bodies[i])
+		}
+	}
+
+	order, err := h.mappings.FindOrder(ctx, "ord-race")
+	if err != nil {
+		t.Fatalf("FindOrder after race: %v", err)
+	}
+	if order == nil {
+		t.Fatal("FindOrder after race = nil, want exactly one order recorded")
 	}
 }

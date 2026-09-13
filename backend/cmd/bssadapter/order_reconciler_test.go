@@ -19,6 +19,11 @@ func TestReconcilePendingOrdersRetriesAndMarksDispatched(t *testing.T) {
 	if err := h.mappings.InsertPending(ctx, "ord-retry-1", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
+	// InsertPending now stamps last_attempt_at at insert time (final
+	// review finding 1), so a genuinely fresh row isn't immediately due --
+	// simulate enough time having passed since the (simulated) crash that
+	// left this row PENDING_DISPATCH.
+	backdateOrderLastAttempt(t, ctx, db, "ord-retry-1")
 
 	h.reconcilePendingOrders(ctx)
 
@@ -44,6 +49,7 @@ func TestReconcilePendingOrdersLeavesFailedRetriesPending(t *testing.T) {
 	if err := h.mappings.InsertPending(ctx, "ord-retry-fail", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
+	backdateOrderLastAttempt(t, ctx, db, "ord-retry-fail")
 
 	h.reconcilePendingOrders(ctx)
 

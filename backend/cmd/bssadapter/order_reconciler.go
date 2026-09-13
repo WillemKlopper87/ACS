@@ -5,6 +5,13 @@
 // exponential backoff, and dead-lettered once maxDispatchAttempts is
 // exhausted. Same "durable queue + worker" pattern webhook_worker.go
 // already uses for webhook delivery, applied to order dispatch instead.
+//
+// Safe under any number of concurrent bssadapter instances: due orders
+// are claimed via bss.Repository.ClaimDuePendingOrders (FOR UPDATE SKIP
+// LOCKED + an atomic last_attempt_at stamp, the same claim idiom
+// internal/jobs/lease.go uses for CWMP jobs), so two instances polling at
+// the same time can never both claim -- and thus never both dispatch --
+// the same row (final review findings 1 and 3).
 package main
 
 import (
@@ -31,9 +38,9 @@ func (h *handler) runOrderReconcileLoop(ctx context.Context) {
 }
 
 func (h *handler) reconcilePendingOrders(ctx context.Context) {
-	orders, err := h.mappings.DuePendingOrders(ctx, orderReconcileBatch)
+	orders, err := h.mappings.ClaimDuePendingOrders(ctx, orderReconcileBatch)
 	if err != nil {
-		h.logger.Error("failed to list due pending orders", "err", err)
+		h.logger.Error("failed to claim due pending orders", "err", err)
 		return
 	}
 	for _, order := range orders {

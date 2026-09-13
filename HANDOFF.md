@@ -187,7 +187,7 @@ S/M/L. Items marked ★ are the ones that most change day-to-day usefulness for 
 ### BSS
 | # | Capability | Why | Effort |
 |---|---|---|---|
-| 32 | `SUSPEND`/`ACTIVATE` via a per-vendor walled-garden parameter (needs the vendor answer first), webhook delivery finished/documented, outbox for true idempotency, `/bss/v1/*` rate limit reconciled with the guide | Completes the integration contract the guide promises. | M |
+| 32 | `SUSPEND`/`ACTIVATE` via a per-vendor walled-garden parameter (needs the vendor answer first), `/bss/v1/*` rate limit reconciled with the guide | Completes the integration contract the guide promises. Outbox for order-dispatch idempotency shipped (sub-project C-1), including the atomic reconciler claim and concurrent-request race handling closed by C-1's final-review fixes. | M |
 | 33 | Multi-device-per-account mapping (today one primary device per account) | Real subscribers have more than one CPE. | S |
 
 ## 6. Suggested starting order for the next agent

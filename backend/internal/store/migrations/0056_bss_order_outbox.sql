@@ -27,7 +27,9 @@ ALTER TABLE bss_orders
     ADD COLUMN device_id UUID REFERENCES devices(id),
     ADD COLUMN parameters JSONB;
 
--- Partial index: the reconciler's DuePendingOrders query filters on
--- status = 'PENDING_DISPATCH' every poll tick; this is the same pattern
+-- Partial index: the reconciler's ClaimDuePendingOrders query (originally
+-- DuePendingOrders, a plain SELECT; made an atomic claim by the final
+-- review's fix for findings 1 and 3) filters on status =
+-- 'PENDING_DISPATCH' every poll tick; this is the same pattern
 -- webhook_deliveries' own partial PENDING index already uses.
 CREATE INDEX bss_orders_pending_idx ON bss_orders (status) WHERE status = 'PENDING_DISPATCH';
