@@ -400,3 +400,32 @@ Every error response has the shape:
 - **Idempotency now has a durable outbox, with one disclosed narrow residual.** The order's intent (including the exact device and parameters it will dispatch) is recorded *before* dispatch is attempted, and a background reconciler retries a failed dispatch with exponential backoff, dead-lettering it after 8 attempts (visible via the admin panel's order-status stats; dead-lettered orders are not automatically requeued -- that's an operator decision). A retried `external_order_id` while an order is still pending or dead-lettered returns that order's own current status. Two concurrent requests for the same new `external_order_id`, and any number of concurrently-running adapter instances, are both handled safely -- neither can double-dispatch the same order. The one remaining gap is narrower and shaped differently: a crash in the exact window between dispatch succeeding and that success being recorded can still, in principle, cause the reconciler's retry to double-dispatch. This is not a concurrent-timing issue (that's closed); it needs an actual process crash at that one specific point. A fully exactly-once guarantee would need idempotency-key support on the internal ACS API itself, not yet built.
 - **Rate limiting is live**, per-token (or per-IP when auth is disabled): a token-bucket limiter keyed on your bearer token, defaulting to 5 req/s with a burst of 10 (`ACS_BSS_RATE_LIMIT_PER_SECOND`/`ACS_BSS_RATE_LIMIT_BURST`, set server-side). A `429` means you've exceeded your bucket, not an auth problem — back off and retry rather than treating it as a hard failure.
 - **Request bodies are capped at 1 MiB.** An oversized `POST /bss/v1/orders` or `/mappings` body is rejected with `400` before it reaches mapping/order logic.
+
+---
+
+## 7. TMF640 (Service Activation and Configuration)
+
+An additive, TM-Forum-shaped surface alongside the workflows above --
+`/bss/v1/*` is unaffected and stays the primary contract for existing
+integrators. Base path: `/tmf-api/serviceActivationAndConfiguration/v4/`.
+Same auth (OAuth2 client credentials or shared token) and rate limiting
+as `/bss/v1/*`.
+
+- **`GET /service?accountId=<id>`** — lists the account's active
+  services (one per mapped device).
+- **`GET /service/{id}`** — retrieves one service. `id` is the same
+  value a mapping already has.
+- **`PATCH /service/{id}`** — triggers a change. Requires an
+  `X-Idempotency-Key` header (not part of the TMF640 spec itself, layered
+  on top so a retried PATCH cannot double-dispatch). Body is a JSON
+  merge-patch setting *either* `state` (`"active"` or `"inactive"`) *or*
+  `serviceCharacteristic` (`SSID` or `WiFiPassword`) — not both, and no
+  other field. Returns `202` with a `Monitor` resource.
+- **`GET /monitor/{id}`** — polls the async result of a PATCH, `id` =
+  the same value passed as `X-Idempotency-Key`. `state` is one of
+  `InProgress`, `Completed`, `InError`.
+
+Not implemented: `POST`/`DELETE /service` (no corresponding ACS
+operation), `GET /monitor` (list form), TMF640's event-subscription
+endpoints (the existing `/bss/v1/webhooks` subscription mechanism serves
+the same purpose for the primary contract).

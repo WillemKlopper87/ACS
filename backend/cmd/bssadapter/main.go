@@ -180,6 +180,10 @@ func main() {
 	mux.HandleFunc("POST /bss/v1/webhooks", metrics.InstrumentHTTP("POST /bss/v1/webhooks", h.createWebhookSubscription))
 	mux.HandleFunc("GET /bss/v1/webhooks", metrics.InstrumentHTTP("GET /bss/v1/webhooks", h.listWebhookSubscriptions))
 	mux.HandleFunc("DELETE /bss/v1/webhooks/{id}", metrics.InstrumentHTTP("DELETE /bss/v1/webhooks/{id}", h.deleteWebhookSubscription))
+	mux.HandleFunc("GET /tmf-api/serviceActivationAndConfiguration/v4/service", metrics.InstrumentHTTP("GET /tmf-api/serviceActivationAndConfiguration/v4/service", h.listServices))
+	mux.HandleFunc("GET /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", h.getService))
+	mux.HandleFunc("PATCH /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", metrics.InstrumentHTTP("PATCH /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", h.patchService))
+	mux.HandleFunc("GET /tmf-api/serviceActivationAndConfiguration/v4/monitor/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceActivationAndConfiguration/v4/monitor/{id}", h.getMonitor))
 
 	go h.runWebhookNotifyLoop(ctx)
 	go h.runWebhookDeliverLoop(ctx)
