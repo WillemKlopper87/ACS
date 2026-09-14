@@ -1,0 +1,105 @@
+openapi: 3.0.3
+info:
+  title: ACS TMF639 Resource Inventory Management API
+  version: "5.0.0"
+  description: >-
+    Read-only TMF639 v5 northbound projection of ACS-managed CPE resources.
+    The ACS devices inventory remains authoritative; this API does not create
+    a second resource database. Authentication and tenancy use the existing
+    operator API controls, and foreign-tenant resource IDs are deliberately
+    indistinguishable from missing IDs.
+servers:
+  - url: http://localhost:8080
+    description: Local development; production hrefs are configured with ACS_TMF_BASE_URL
+paths:
+  /tmf-api/resourceInventoryManagement/v5/resource:
+    get:
+      tags: [TMF639 Resource Inventory]
+      summary: List tenant-accessible ACS managed resources
+      parameters:
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: fields, in: query, schema: { type: string }, description: "Comma-separated projection fields; unknown fields are rejected" }
+        - { name: X-Correlation-ID, in: header, schema: { type: string, maxLength: 128 }, description: Optional caller correlation identifier echoed in the response }
+      responses:
+        "200":
+          description: Resource inventory window
+          headers:
+            X-Total-Count: { schema: { type: integer } }
+            X-Result-Count: { schema: { type: integer } }
+            X-Correlation-ID: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Resource" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /tmf-api/resourceInventoryManagement/v5/resource/{id}:
+    get:
+      tags: [TMF639 Resource Inventory]
+      summary: Get one tenant-accessible ACS managed resource
+      description: Missing and foreign-tenant resource IDs both return 404.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: fields, in: query, schema: { type: string }, description: "Comma-separated projection fields; unknown fields are rejected" }
+        - { name: X-Correlation-ID, in: header, schema: { type: string, maxLength: 128 } }
+      responses:
+        "200":
+          description: Resource
+          headers:
+            X-Correlation-ID: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Resource" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404":
+          description: Resource not found or not visible in caller tenancy scope
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+components:
+  responses:
+    BadRequest:
+      description: Invalid offset, limit, fields, or correlation identifier
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: Internal inventory error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [code, reason, message]
+      properties:
+        code: { type: string }
+        reason: { type: string }
+        message: { type: string }
+        referenceError: { type: string }
+    ResourceCharacteristic:
+      type: object
+      required: [name, value]
+      properties:
+        name: { type: string }
+        valueType: { type: string }
+        value: {}
+    Resource:
+      type: object
+      required: [id, href]
+      properties:
+        id: { type: string }
+        href: { type: string, format: uri }
+        name: { type: string }
+        description: { type: string }
+        category: { type: string }
+        operationalState: { type: string, enum: [enable, disable, unknown] }
+        lastUpdate: { type: string, format: date-time }
+        resourceCharacteristic:
+          type: array
+          items: { $ref: "#/components/schemas/ResourceCharacteristic" }
+        "@baseType": { type: string }
+        "@type": { type: string }
