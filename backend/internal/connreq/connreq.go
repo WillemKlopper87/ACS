@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -184,10 +185,24 @@ func authSchemeAndRest(challenge string) (scheme, rest string, ok bool) {
 
 // buildAuthorization chooses the strongest challenge this client can
 // answer. Multiple WWW-Authenticate header fields are common; Digest is
-// preferred over Basic regardless of header order.
+// preferred over Basic regardless of header order, and among Digest
+// challenges SHA-256 is preferred over MD5.
+//
+// RFC 7616 §3.7 has the client take the first algorithm it supports from
+// the server's own preference order. We deliberately pick the strongest
+// instead: a CPE that offers both has told us it can verify either, so
+// there is no interop risk in the choice, and MD5 is only still here for
+// devices that offer nothing else.
 func buildAuthorization(challenges []string, username, password, method, targetURL string) (string, bool) {
-	for _, challenge := range challenges {
-		if scheme, _, ok := authSchemeAndRest(challenge); ok && scheme == "digest" {
+	for _, family := range []string{"sha-256", "md5"} {
+		for _, challenge := range challenges {
+			scheme, rest, ok := authSchemeAndRest(challenge)
+			if !ok || scheme != "digest" {
+				continue
+			}
+			if algorithmFamily(parseChallengeParams(rest)["algorithm"]) != family {
+				continue
+			}
 			if header, ok := buildDigestAuthorization(challenge, username, password, method, targetURL); ok {
 				return header, true
 			}
@@ -203,10 +218,20 @@ func buildAuthorization(challenges []string, username, password, method, targetU
 
 // buildDigestAuthorization computes an HTTP Digest Authorization header
 // from a WWW-Authenticate challenge. It accepts legacy RFC-2069 style
-// challenges without qop, qop lists containing auth, and both MD5 and
-// MD5-sess. auth-int is deliberately not selected because Connection
-// Request is a GET with no entity and many embedded HTTP stacks implement
-// only qop=auth correctly.
+// challenges without qop, qop lists containing auth, and the MD5,
+// MD5-sess, SHA-256 and SHA-256-sess algorithms. auth-int is deliberately
+// not selected because Connection Request is a GET with no entity and
+// many embedded HTTP stacks implement only qop=auth correctly.
+//
+// SHA-256 (RFC 7616) is not optional in practice: a Huawei N5368X with
+// "Connection request Authentication: Digest-SHA256" challenges with
+// nothing else, so an MD5-only client could never wake it — every
+// ACS-initiated job would sit QUEUED until the device's next periodic
+// Inform. SHA-512-256 is not implemented: no observed CPE offers it, and
+// guessing at an untested algorithm is worse than falling through to the
+// Basic fallback. The two -sess variants are supported here, unlike in
+// the CWMP server (internal/auth), because this side computes HA1 itself
+// and so can key it per-session without any stored state.
 func buildDigestAuthorization(challenge, username, password, method, targetURL string) (header string, ok bool) {
 	scheme, rest, ok := authSchemeAndRest(challenge)
 	if !ok || scheme != "digest" {
@@ -237,27 +262,24 @@ func buildDigestAuthorization(challenge, username, password, method, targetURL s
 		}
 	}
 
-	algorithm := strings.ToLower(strings.TrimSpace(params["algorithm"]))
-	if algorithm == "" {
-		algorithm = "md5"
-	}
-	if algorithm != "md5" && algorithm != "md5-sess" {
+	hashHex, sess, supported := hashForAlgorithm(params["algorithm"])
+	if !supported {
 		return "", false
 	}
 
 	nc := "00000001"
 	cnonce := newCnonce()
-	ha1 := md5Hex(username + ":" + realm + ":" + password)
-	if algorithm == "md5-sess" {
-		ha1 = md5Hex(ha1 + ":" + nonce + ":" + cnonce)
+	ha1 := hashHex(username + ":" + realm + ":" + password)
+	if sess {
+		ha1 = hashHex(ha1 + ":" + nonce + ":" + cnonce)
 	}
-	ha2 := md5Hex(method + ":" + uri)
+	ha2 := hashHex(method + ":" + uri)
 
 	var response string
 	if qop != "" {
-		response = md5Hex(strings.Join([]string{ha1, nonce, nc, cnonce, qop, ha2}, ":"))
+		response = hashHex(strings.Join([]string{ha1, nonce, nc, cnonce, qop, ha2}, ":"))
 	} else {
-		response = md5Hex(ha1 + ":" + nonce + ":" + ha2)
+		response = hashHex(ha1 + ":" + nonce + ":" + ha2)
 	}
 
 	var sb strings.Builder
@@ -270,9 +292,9 @@ func buildDigestAuthorization(challenge, username, password, method, targetURL s
 		sb.WriteString(`, qop=` + qop)
 		sb.WriteString(`, nc=` + nc)
 		sb.WriteString(`, cnonce="` + cnonce + `"`)
-	} else if algorithm == "md5-sess" {
-		// MD5-sess needs cnonce for HA1 even when the server uses legacy
-		// no-qop digest semantics.
+	} else if sess {
+		// The -sess variants need cnonce for HA1 even when the server uses
+		// legacy no-qop digest semantics.
 		sb.WriteString(`, cnonce="` + cnonce + `"`)
 	}
 	if alg := params["algorithm"]; alg != "" {
@@ -289,8 +311,44 @@ func escapeDigestValue(s string) string {
 	return strings.ReplaceAll(s, `"`, `\"`)
 }
 
+// algorithmFamily reduces a challenge's algorithm token to the hash it
+// selects, ignoring the -sess suffix (which changes how HA1 is derived,
+// not which hash does the deriving). An absent algorithm means MD5
+// (RFC 2617). Unsupported tokens return themselves, so they simply match
+// none of the families buildAuthorization asks for.
+func algorithmFamily(algorithm string) string {
+	normalized := strings.ToLower(strings.TrimSpace(algorithm))
+	if normalized == "" {
+		return "md5"
+	}
+	return strings.TrimSuffix(normalized, "-sess")
+}
+
+// hashForAlgorithm maps a challenge's algorithm token to the hash it
+// asks for and whether it is a -sess variant. ok=false for anything this
+// client cannot answer, so the caller falls through to another challenge
+// (or to Basic) rather than sending a response computed with the wrong
+// hash, which a CPE would reject as a bad password.
+func hashForAlgorithm(algorithm string) (fn func(string) string, sess, ok bool) {
+	normalized := strings.ToLower(strings.TrimSpace(algorithm))
+	sess = strings.HasSuffix(normalized, "-sess")
+	switch algorithmFamily(normalized) {
+	case "md5":
+		return md5Hex, sess, true
+	case "sha-256":
+		return sha256Hex, sess, true
+	default:
+		return nil, false, false
+	}
+}
+
 func md5Hex(s string) string {
 	sum := md5.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
 
