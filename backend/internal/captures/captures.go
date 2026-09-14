@@ -1,0 +1,458 @@
+// Package captures implements on-demand session capture (design
+// docs/superpowers/specs/2026-09-14-session-capture-design.md): a
+// device's, an expected identity's, or a remote address's CWMP/USP
+// session traffic, redacted, recorded to Postgres for operator
+// troubleshooting. No HTTP handler here and no direct dependency on
+// cmd/acs/cmd/uspc/cmd/api -- this is the shared repository all three
+// call into.
+package captures
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"acs/internal/store"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+const (
+	MatchDevice   = "device"
+	MatchIdentity = "identity"
+	MatchRemoteIP = "remote_ip"
+
+	StatusActive  = "ACTIVE"
+	StatusStopped = "STOPPED"
+	StatusExpired = "EXPIRED"
+)
+
+// ErrAlreadyActive is returned by Start when an ACTIVE session already
+// exists for the same (match_type, match_value) -- the partial unique
+// index turning that into a database guarantee, not application
+// discipline.
+var ErrAlreadyActive = errors.New("an active capture already exists for this target")
+
+// ErrNotFound is returned by Get/Stop for an unknown session id.
+var ErrNotFound = errors.New("no capture session with that id")
+
+type Session struct {
+	ID         string
+	DeviceID   *string
+	MatchType  string
+	MatchValue string
+	Protocol   string
+	Status     string
+	StartedBy  string
+	StartedAt  time.Time
+	StoppedAt  *time.Time
+	ExpiresAt  time.Time
+}
+
+// EffectiveStatus reports what the console should display: an ACTIVE
+// row whose expiry has already passed reads as EXPIRED even though no
+// background job has flipped its stored status yet (design §7 -- the
+// per-event check already treats it as inert via expires_at, so no
+// sweep is needed for correctness, only for this display).
+func (s Session) EffectiveStatus(now time.Time) string {
+	if s.Status == StatusActive && now.After(s.ExpiresAt) {
+		return StatusExpired
+	}
+	return s.Status
+}
+
+type Event struct {
+	ID         string
+	SessionID  string
+	Seq        int
+	Direction  string
+	Kind       string
+	OccurredAt time.Time
+	Summary    string
+	Body       *string
+}
+
+type StartParams struct {
+	DeviceID    *string // set only for MatchDevice, where it's already known
+	MatchType   string
+	MatchValue  string
+	Protocol    string
+	StartedBy   string
+	MaxDuration time.Duration
+}
+
+type Repository struct {
+	db *sql.DB
+}
+
+func NewRepository(db *sql.DB) *Repository {
+	return &Repository{db: db}
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+const sessionColumns = `id, device_id, match_type, match_value, protocol, status, started_by, started_at, stopped_at, expires_at`
+
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanSession(s scanner) (*Session, error) {
+	var sess Session
+	var deviceID sql.NullString
+	var stoppedAt sql.NullTime
+	if err := s.Scan(&sess.ID, &deviceID, &sess.MatchType, &sess.MatchValue, &sess.Protocol,
+		&sess.Status, &sess.StartedBy, &sess.StartedAt, &stoppedAt, &sess.ExpiresAt); err != nil {
+		return nil, fmt.Errorf("scan capture session: %w", err)
+	}
+	if deviceID.Valid {
+		sess.DeviceID = &deviceID.String
+	}
+	if stoppedAt.Valid {
+		sess.StoppedAt = &stoppedAt.Time
+	}
+	return &sess, nil
+}
+
+// Start creates a new ACTIVE capture session. Returns ErrAlreadyActive
+// if one already exists for the same (match_type, match_value).
+func (r *Repository) Start(ctx context.Context, p StartParams) (*Session, error) {
+	id := uuid.New().String()
+	now := time.Now().UTC()
+	expiresAt := now.Add(p.MaxDuration)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin capture session: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Expiry is authoritative even before the retention sweep runs. Flip
+	// an elapsed row inside the same transaction as the insert so the
+	// partial ACTIVE uniqueness index does not lock this target out until
+	// retention (or forever when retention is disabled).
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE capture_sessions
+		SET status = 'EXPIRED'
+		WHERE match_type = $1 AND match_value = $2
+		  AND status = 'ACTIVE' AND expires_at <= $3`, p.MatchType, p.MatchValue, now); err != nil {
+		return nil, fmt.Errorf("expire prior capture session: %w", err)
+	}
+
+	row := tx.QueryRowContext(ctx, `
+		INSERT INTO capture_sessions (id, device_id, match_type, match_value, protocol, status, started_by, started_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, 'ACTIVE', $6, $7, $8)
+		RETURNING `+sessionColumns,
+		id, p.DeviceID, p.MatchType, p.MatchValue, p.Protocol, p.StartedBy, now, expiresAt)
+	sess, err := scanSession(row)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrAlreadyActive
+		}
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrAlreadyActive
+		}
+		return nil, fmt.Errorf("commit capture session: %w", err)
+	}
+	return sess, nil
+}
+
+// Stop marks a session STOPPED. A no-op (not an error) if it is already
+// non-ACTIVE.
+func (r *Repository) Stop(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE capture_sessions SET status = 'STOPPED', stopped_at = now() WHERE id = $1 AND status = 'ACTIVE'`, id)
+	return err
+}
+
+// StopAccessible stops and returns a session only when it is visible to the
+// caller. Authorization and mutation share one SQL statement, so device
+// correlation or reassignment cannot move the session across a tenant
+// boundary between a preflight check and the update.
+func (r *Repository) StopAccessible(ctx context.Context, id, startedBy string, customerIDs []string, scoped bool) (*Session, error) {
+	row := r.db.QueryRowContext(ctx, `
+		UPDATE capture_sessions c
+		SET status = CASE WHEN c.status = 'ACTIVE' THEN 'STOPPED' ELSE c.status END,
+		    stopped_at = CASE WHEN c.status = 'ACTIVE' THEN now() ELSE c.stopped_at END
+		WHERE c.id = $1
+		  AND (
+		    NOT $4
+		    OR (c.match_type <> 'remote_ip' AND (
+		      (c.device_id IS NULL AND c.started_by = $2)
+		      OR EXISTS (
+		        SELECT 1 FROM devices d
+		        WHERE d.id = c.device_id AND d.customer_id::text = ANY($3)
+		      )
+		    ))
+		  )
+		RETURNING `+sessionColumns, id, startedBy, store.StringArray(customerIDs), scoped)
+	s, err := scanSession(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return s, err
+}
+
+// Get looks up one session by id.
+func (r *Repository) Get(ctx context.Context, id string) (*Session, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM capture_sessions WHERE id = $1`, id)
+	sess, err := scanSession(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return sess, err
+}
+
+// List returns every capture session, newest first.
+func (r *Repository) List(ctx context.Context) ([]Session, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM capture_sessions ORDER BY started_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list capture sessions: %w", err)
+	}
+	defer rows.Close()
+	var out []Session
+	for rows.Next() {
+		s, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
+// ListAccessible returns the non-IP sessions a scoped operator may inspect:
+// resolved sessions belonging to one of their customers, plus unresolved
+// identity sessions they started themselves. Remote-IP capture is global-only
+// for its whole lifetime because one NAT address may represent many tenants.
+// An empty customerIDs slice remains restrictive.
+func (r *Repository) ListAccessible(ctx context.Context, startedBy string, customerIDs []string) ([]Session, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT c.id, c.device_id, c.match_type, c.match_value, c.protocol, c.status,
+		       c.started_by, c.started_at, c.stopped_at, c.expires_at
+		FROM capture_sessions c
+		LEFT JOIN devices d ON d.id = c.device_id
+		WHERE c.match_type <> 'remote_ip'
+		  AND ((c.device_id IS NULL AND c.started_by = $1)
+		       OR d.customer_id::text = ANY($2))
+		ORDER BY c.started_at DESC`, startedBy, store.StringArray(customerIDs))
+	if err != nil {
+		return nil, fmt.Errorf("list accessible capture sessions: %w", err)
+	}
+	defer rows.Close()
+	var out []Session
+	for rows.Next() {
+		s, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
+// GetWithEventsAccessible returns a session and its events from one
+// repeatable-read snapshot. If an unresolved capture is correlated while
+// this read is in flight, the snapshot cannot observe the newly written
+// foreign transcript after authorizing its creator against the old NULL
+// device_id.
+func (r *Repository) GetWithEventsAccessible(ctx context.Context, id, startedBy string, customerIDs []string, scoped bool) (*Session, []Event, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin capture read: %w", err)
+	}
+	defer tx.Rollback()
+
+	row := tx.QueryRowContext(ctx, `
+		SELECT c.id, c.device_id, c.match_type, c.match_value, c.protocol, c.status,
+		       c.started_by, c.started_at, c.stopped_at, c.expires_at
+		FROM capture_sessions c
+		WHERE c.id = $1
+		  AND (
+		    NOT $4
+		    OR (c.match_type <> 'remote_ip' AND (
+		      (c.device_id IS NULL AND c.started_by = $2)
+		      OR EXISTS (
+		        SELECT 1 FROM devices d
+		        WHERE d.id = c.device_id AND d.customer_id::text = ANY($3)
+		      )
+		    ))
+		  )`, id, startedBy, store.StringArray(customerIDs), scoped)
+	s, err := scanSession(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	events, err := listEvents(ctx, tx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("commit capture read: %w", err)
+	}
+	return s, events, nil
+}
+
+// ActiveMatch returns every ACTIVE, unexpired session matching this
+// request: MatchDevice/MatchIdentity sessions whose match_value equals
+// naturalKey (deliberately the same lookup for both modes -- see the
+// migration's own comment), plus MatchRemoteIP sessions whose
+// match_value equals remoteIP. Either naturalKey or remoteIP may be
+// empty (a caller with no resolved identity yet passes "" for
+// naturalKey; USP's outbound dispatch, always device-scoped, has no
+// remote address to check and passes "" for remoteIP).
+func (r *Repository) ActiveMatch(ctx context.Context, protocol, naturalKey, remoteIP string) ([]Session, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT `+sessionColumns+` FROM capture_sessions
+		WHERE protocol = $1 AND status = 'ACTIVE' AND expires_at > now()
+		AND (
+			(match_type IN ('device','identity') AND match_value = $2 AND $2 <> '')
+			OR (match_type = 'remote_ip' AND match_value = $3 AND $3 <> '')
+		)`, protocol, naturalKey, remoteIP)
+	if err != nil {
+		return nil, fmt.Errorf("active capture match: %w", err)
+	}
+	defer rows.Close()
+	var out []Session
+	for rows.Next() {
+		s, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
+// ResolveDeviceID backfills device_id on an 'identity' (or 'remote_ip')
+// session once the device it belongs to has actually authenticated
+// (design §4) -- a no-op if device_id is already set.
+func (r *Repository) ResolveDeviceID(ctx context.Context, sessionID, deviceID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE capture_sessions SET device_id = $2 WHERE id = $1 AND device_id IS NULL`, sessionID, deviceID)
+	return err
+}
+
+// RecordEvent appends one event to a session, seq auto-assigned as
+// max(seq)+1 for that session (starting at 1). body is nil for an event
+// with nothing worth attaching (e.g. a bare dispatch trigger); callers
+// are responsible for having already redacted it.
+func (r *Repository) RecordEvent(ctx context.Context, sessionID, direction, kind, summary string, body *string) error {
+	return recordEvent(ctx, r.db, sessionID, direction, kind, summary, body)
+}
+
+type queryExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func recordEvent(ctx context.Context, db queryExecer, sessionID, direction, kind, summary string, body *string) error {
+	id := uuid.New().String()
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO capture_events (id, session_id, seq, direction, kind, summary, body)
+		VALUES ($1, $2, COALESCE((SELECT MAX(seq) FROM capture_events WHERE session_id = $2), 0) + 1, $3, $4, $5, $6)`,
+		id, sessionID, direction, kind, summary, body)
+	return err
+}
+
+// RecordEventForDevice atomically correlates an unresolved session and
+// records its first device event. A correlation failure rolls the event
+// back as well, so foreign transcript data can never remain attached to a
+// creator-readable NULL device_id session.
+func (r *Repository) RecordEventForDevice(ctx context.Context, sessionID, deviceID, direction, kind, summary string, body *string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin correlated capture event: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE capture_sessions
+		SET device_id = COALESCE(device_id, $2)
+		WHERE id = $1 AND (device_id IS NULL OR device_id = $2)`, sessionID, deviceID)
+	if err != nil {
+		return fmt.Errorf("correlate capture session: %w", err)
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("read capture correlation result: %w", err)
+	} else if n == 0 {
+		return fmt.Errorf("capture session is missing or correlated to another device")
+	}
+	if err := recordEvent(ctx, tx, sessionID, direction, kind, summary, body); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit correlated capture event: %w", err)
+	}
+	return nil
+}
+
+// RecordEventWhileUnresolved records a pre-correlation event only while the
+// session still has no device_id. The row lock serializes this decision with
+// RecordEventForDevice, preventing an unknown second device behind the same
+// NAT address from appending after the capture has been bound to the first.
+func (r *Repository) RecordEventWhileUnresolved(ctx context.Context, sessionID, direction, kind, summary string, body *string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin unresolved capture event: %w", err)
+	}
+	defer tx.Rollback()
+	var allowed bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT true FROM capture_sessions
+		WHERE id = $1 AND device_id IS NULL
+		FOR UPDATE`, sessionID).Scan(&allowed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lock unresolved capture session: %w", err)
+	}
+	if err := recordEvent(ctx, tx, sessionID, direction, kind, summary, body); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit unresolved capture event: %w", err)
+	}
+	return nil
+}
+
+// ListEvents returns a session's events in seq order.
+func (r *Repository) ListEvents(ctx context.Context, sessionID string) ([]Event, error) {
+	return listEvents(ctx, r.db, sessionID)
+}
+
+type queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func listEvents(ctx context.Context, db queryer, sessionID string) ([]Event, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, session_id, seq, direction, kind, occurred_at, summary, body
+		FROM capture_events WHERE session_id = $1 ORDER BY seq ASC`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list capture events: %w", err)
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var body sql.NullString
+		if err := rows.Scan(&e.ID, &e.SessionID, &e.Seq, &e.Direction, &e.Kind, &e.OccurredAt, &e.Summary, &body); err != nil {
+			return nil, fmt.Errorf("scan capture event: %w", err)
+		}
+		if body.Valid {
+			e.Body = &body.String
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

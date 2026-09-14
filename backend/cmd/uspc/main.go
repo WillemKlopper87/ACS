@@ -41,6 +41,7 @@ import (
 	"syscall"
 	"time"
 
+	"acs/internal/captures"
 	"acs/internal/devices"
 	"acs/internal/jobs"
 	"acs/internal/observability"
@@ -127,7 +128,10 @@ func run(logger *slog.Logger) error {
 	repo := devices.NewRepository(db)
 	registry := mtp.NewRegistry()
 	jobsRepo := jobs.NewRepository(db)
+	capturesRepo := captures.NewRepository(db)
 	disp := newDispatcher(jobsRepo, repo, registry, cfg.ControllerID, logger)
+	disp.captures = capturesRepo
+	disp.devices = repo
 	paramsRepo := parameters.NewRepository(db)
 	subsRepo := subscriptions.NewRepository(db)
 	subsReconciler := newSubscriptionReconciler(subsRepo, cfg.ControllerID, logger)
@@ -142,6 +146,7 @@ func run(logger *slog.Logger) error {
 		subscriptions: subsReconciler,
 		paramsRepo:    paramsRepo,
 		devicesRepo:   repo,
+		captures:      capturesRepo,
 	}
 
 	// dispatchCtx bounds the two dispatch goroutines below independently of

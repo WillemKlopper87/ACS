@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { Credential, Device, FirmwareImage, Job, ParameterCache, ParameterHistoryEntry, UploadedFile } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
@@ -15,6 +16,7 @@ import { useEscape } from "../lib/hotkeys";
 import { toast } from "../lib/toast";
 
 export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void }) {
+  const navigate = useNavigate();
   const { role } = useAuth();
   const writable = canWrite(role);
   const [device, setDevice] = useState<Device | null>(null);
@@ -33,6 +35,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   const [ssidInput, setSsidInput] = useState("");
   const [pingHost, setPingHost] = useState("");
   const [tracerouteHost, setTracerouteHost] = useState("");
+  const [captureProtocol, setCaptureProtocol] = useState<"CWMP" | "USP">("CWMP");
   const [objectPath, setObjectPath] = useState("");
   const [scheduleDelay, setScheduleDelay] = useState(3600);
   const [attrSetPath, setAttrSetPath] = useState("");
@@ -218,6 +221,13 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       if (!tracerouteHost.trim()) throw new ApiError(400, "Host cannot be empty");
       const res = await api.createDiagnosticsTraceroute(id, tracerouteHost.trim());
       return `Traceroute queued: ${res.command_key} — polls to completion, watch Recent jobs`;
+    });
+
+  const handleStartCapture = () =>
+    withBusy(async () => {
+      const session = await api.startDeviceCapture(id, captureProtocol);
+      navigate(`/captures?open=${session.id}`);
+      return `Capture started: ${session.id}`;
     });
 
   const handleRefreshWifiClients = () =>
@@ -663,6 +673,29 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
         </div>
         <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
           Ping/Traceroute poll to completion — watch Recent jobs for the outcome; results land in the parameter cache above under Device.IP.Diagnostics.*.
+        </p>
+      </div>
+
+      <div className="panel">
+        <h3>Session capture</h3>
+        <div className="form-row" style={{ marginTop: 0 }}>
+          <label className="field">
+            <span>Protocol</span>
+            <select
+              value={captureProtocol}
+              onChange={(event) => setCaptureProtocol(event.target.value as "CWMP" | "USP")}
+              disabled={busy || !writable}
+            >
+              <option value="CWMP">CWMP</option>
+              <option value="USP">USP</option>
+            </select>
+          </label>
+          <button className="btn primary capture-start" onClick={handleStartCapture} disabled={busy || !writable}>
+            Start capture
+          </button>
+        </div>
+        <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
+          Records this device's real session traffic for troubleshooting — redacted, capped at 30 minutes, and viewable from Captures.
         </p>
       </div>
 

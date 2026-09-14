@@ -25,9 +25,41 @@ type DeviceID struct {
 	SerialNumber string `xml:"SerialNumber"`
 }
 
+// NormalizeOUI canonicalizes an OUI to uppercase hex with no separators:
+// "00:13:49", "00-13-49" and "001349" (any case) all become "001349".
+// TR-069's DeviceIdStruct.OUI is a bare 6-hex-digit string per spec, and
+// the overwhelming majority of real Informs already send it that way —
+// but some observed CPE firmware varies case or includes separators, and
+// since OUI is the leading segment of NaturalKey below, an unnormalized
+// OUI makes the same physical device look like two different natural
+// keys depending on which form its firmware happened to send on a given
+// Inform.
+func NormalizeOUI(oui string) string {
+	oui = strings.ToUpper(oui)
+	return strings.NewReplacer(":", "", "-", "", " ", "").Replace(oui)
+}
+
+// Normalized returns a copy of d with OUI canonicalized via NormalizeOUI.
+// Call this once, as early as possible after parsing an Inform (before
+// NaturalKey or any storage call uses DeviceId), so every downstream use
+// agrees on the same OUI form for the same physical device.
+func (d DeviceID) Normalized() DeviceID {
+	d.OUI = NormalizeOUI(d.OUI)
+	return d
+}
+
 // NaturalKey is the device identity used across the platform: OUI +
 // SerialNumber, falling back to including ProductClass when OUI+Serial
 // alone is ambiguous for a vendor (v3 design doc §6.1).
+//
+// OUI is normalized (NormalizeOUI) before joining, so this is the single
+// point every caller — the CWMP Inform path, USP onboarding
+// (internal/devices/usp.go's ReconcileFromOnBoard), tests, any future
+// caller — gets that normalization from, without needing to remember to
+// call Normalized() first. Without it, the same physical device could
+// compute two different natural keys depending on which OUI case/
+// separator form its firmware happened to send on a given contact,
+// silently creating a second devices row instead of matching the first.
 //
 // Each component is escaped before joining (audit M-5) so two different
 // claimed identities can never collide onto the same key: without this,
@@ -41,10 +73,11 @@ func (d DeviceID) NaturalKey() string {
 		s = strings.ReplaceAll(s, `\`, `\\`)
 		return strings.ReplaceAll(s, `+`, `\+`)
 	}
+	oui := esc(NormalizeOUI(d.OUI))
 	if d.ProductClass != "" {
-		return esc(d.OUI) + "+" + esc(d.ProductClass) + "+" + esc(d.SerialNumber)
+		return oui + "+" + esc(d.ProductClass) + "+" + esc(d.SerialNumber)
 	}
-	return esc(d.OUI) + "+" + esc(d.SerialNumber)
+	return oui + "+" + esc(d.SerialNumber)
 }
 
 // EventStruct is one entry in Inform's Event list.
