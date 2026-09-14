@@ -17,21 +17,21 @@ func TestProjectDeviceResource(t *testing.T) {
 	updated := lastInform.Add(time.Minute)
 
 	d := devices.Device{
-		ID:           "dev/one",
-		OUISerial:    "AABBCC-ABC123",
-		Manufacturer: "Example Networks",
-		OUI:          "AABBCC",
-		ProductClass: "Gateway-X",
-		SerialNumber: "ABC123",
+		ID:            "dev/one",
+		OUISerial:     "AABBCC-ABC123",
+		Manufacturer:  "Example Networks",
+		OUI:           "AABBCC",
+		ProductClass:  "Gateway-X",
+		SerialNumber:  "ABC123",
 		DataModelRoot: devices.DataModelRootDevice2,
-		OnlineStatus: "ONLINE",
-		LastInformAt: &lastInform,
+		OnlineStatus:  "ONLINE",
+		LastInformAt:  &lastInform,
 		LastUpdatedAt: updated,
-		Tags:         []string{"pilot", "5g"},
-		Label:        &label,
-		Location:     &location,
-		Latitude:     &lat,
-		Longitude:    &lon,
+		Tags:          []string{"pilot", "5g"},
+		Label:         &label,
+		Location:      &location,
+		Latitude:      &lat,
+		Longitude:     &lon,
 		// These values are intentionally populated to prove that the TMF
 		// resource projection never exports management/authentication data.
 		ConnectionRequestURL: func() *string { v := "http://10.0.0.5:7547/secret"; return &v }(),
@@ -77,10 +77,10 @@ func TestProjectDeviceResource(t *testing.T) {
 
 func TestProjectResourceNameFallback(t *testing.T) {
 	d := devices.Device{
-		ID:           "device-id",
-		Manufacturer: "Vendor",
-		ProductClass: "Model",
-		SerialNumber: "SN1",
+		ID:            "device-id",
+		Manufacturer:  "Vendor",
+		ProductClass:  "Model",
+		SerialNumber:  "SN1",
 		LastUpdatedAt: time.Unix(0, 0).UTC(),
 	}
 	got, err := NewProjector("https://acs.example.net").Project(d)
