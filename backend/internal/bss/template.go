@@ -3,6 +3,7 @@ package bss
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"acs/internal/devices/adapters"
 )
@@ -53,6 +54,33 @@ type WalledGardenConfig struct {
 
 func (c WalledGardenConfig) configured() bool {
 	return c.Parameter != "" && c.SuspendValue != "" && c.ActiveValue != ""
+}
+
+// wordFormBooleans is the set of common human-typed boolean spellings an
+// operator might reasonably configure ACS_WALLED_GARDEN_SUSPEND_VALUE/
+// ACS_WALLED_GARDEN_ACTIVE_VALUE with. Some CPE firmware (observed:
+// Huawei's cwmpmng, documented independently by FreeACS's fix for the
+// analogous NextLevel RPC parameter) strictly enforces TR-069's
+// xsd:boolean numeric lexical form ("0"/"1") and silently rejects the
+// word form. This matters here specifically because RenderSetParameterValues
+// (internal/cwmp/rpc.go) tags every value xsi:type="xsd:string"
+// regardless of the parameter's real declared type, so a misconfigured
+// word-form value isn't caught by our own wire encoding — only the CPE's
+// own data-model type coercion would reject it, invisibly, in
+// production.
+var wordFormBooleans = map[string]bool{
+	"true": true, "false": true, "yes": true, "no": true, "on": true, "off": true,
+}
+
+// LooksLikeWordFormBoolean reports whether s is spelled like a boolean
+// word ("true"/"false"/"yes"/"no"/"on"/"off", case-insensitive) rather
+// than TR-069's "0"/"1" numeric lexical form. This is not a validation —
+// a deployment's walled-garden parameter might genuinely be a
+// string-typed one that legitimately takes the word "true" — just a
+// signal worth a startup warning so an operator configuring a
+// boolean-typed parameter notices before a device silently rejects it.
+func LooksLikeWordFormBoolean(s string) bool {
+	return wordFormBooleans[strings.ToLower(strings.TrimSpace(s))]
 }
 
 // actionTranslator turns one BSS action's business parameters into the

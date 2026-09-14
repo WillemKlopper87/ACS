@@ -137,6 +137,17 @@ func main() {
 	if walledGarden.Parameter == "" {
 		logger.Warn("ACS_WALLED_GARDEN_PARAMETER not set — SUSPEND/ACTIVATE orders will be rejected (build plan §5.3: no universal safe parameter across CPE vendors, so this isn't guessed at).")
 	}
+	// A word-form boolean ("true"/"false") against an xsd:boolean-typed
+	// walled-garden parameter is a known real failure class on some CPE
+	// firmware (bss.LooksLikeWordFormBoolean's doc comment) -- this ACS
+	// always sends SetParameterValues as xsi:type="xsd:string", so
+	// nothing else catches it before the device does, silently.
+	if bss.LooksLikeWordFormBoolean(walledGarden.SuspendValue) {
+		logger.Warn("ACS_WALLED_GARDEN_SUSPEND_VALUE looks like a word-form boolean — if the walled-garden parameter is xsd:boolean-typed, some CPE firmware strictly requires \"0\"/\"1\" and rejects \"true\"/\"false\"/\"yes\"/\"no\"/\"on\"/\"off\" outright", "value", walledGarden.SuspendValue)
+	}
+	if bss.LooksLikeWordFormBoolean(walledGarden.ActiveValue) {
+		logger.Warn("ACS_WALLED_GARDEN_ACTIVE_VALUE looks like a word-form boolean — if the walled-garden parameter is xsd:boolean-typed, some CPE firmware strictly requires \"0\"/\"1\" and rejects \"true\"/\"false\"/\"yes\"/\"no\"/\"on\"/\"off\" outright", "value", walledGarden.ActiveValue)
+	}
 
 	// Webhook target_url is BSS-operator-controlled (audit H-7): without a
 	// policy, a subscription could aim signed POSTs at the cloud metadata

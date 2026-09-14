@@ -136,3 +136,19 @@ func TestActionRegistryListsExactlyThreeActions(t *testing.T) {
 		}
 	}
 }
+
+func TestLooksLikeWordFormBoolean(t *testing.T) {
+	wordForms := []string{"true", "false", "True", "FALSE", "yes", "No", "on", "Off", "  true  "}
+	for _, s := range wordForms {
+		if !LooksLikeWordFormBoolean(s) {
+			t.Errorf("LooksLikeWordFormBoolean(%q) = false, want true", s)
+		}
+	}
+
+	notWordForms := []string{"0", "1", "", "Device.X_WALLED_GARDEN.Enable", "truthy", "2"}
+	for _, s := range notWordForms {
+		if LooksLikeWordFormBoolean(s) {
+			t.Errorf("LooksLikeWordFormBoolean(%q) = true, want false", s)
+		}
+	}
+}
