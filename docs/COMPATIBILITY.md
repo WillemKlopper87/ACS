@@ -14,6 +14,7 @@ The CWMP ingress is intentionally tolerant where doing so does not weaken identi
 - both encoded and decompressed CWMP bodies are bounded to prevent compression bombs;
 - the standards-aligned empty end-of-session response is HTTP 204; `ACS_CWMP_EMPTY_RESPONSE_STATUS=200` restores the historical empty-200 behaviour for a vendor that requires it;
 - inbound CPE authentication supports Digest with both MD5 and SHA-256 (RFC 7616 — challenged on separate `WWW-Authenticate` lines, MD5 first, so an MD5-only CPE is unaffected and a SHA-256-only one can answer), optional Basic fallback (`ACS_AUTH_ALLOW_BASIC=1`), per-device credentials, and optional mTLS;
+- the 401 challenge is kept small for embedded HTTP stacks: a 38-character nonce (several CPE clients allocate a fixed 64-byte nonce buffer and silently stop authenticating when it overflows) and `ACS_DIGEST_ALGORITHMS` to reduce a multi-line challenge to one line for a CPE that cannot parse several;
 - TLS can be lowered as far as TLS 1.0 (`ACS_TLS_MIN_VERSION=1.0`) for legacy CPEs; production should use the highest floor supported by the deployed fleet;
 - Connection Request treats any HTTP 2xx as accepted, prefers Digest authentication, accepts Digest qop lists/legacy no-qop/opaque and the MD5, MD5-sess, SHA-256 and SHA-256-sess algorithms (preferring SHA-256 when a CPE offers both), and falls back to Basic when Digest is unusable or Basic is the only challenge offered;
 - direct IPv4/IPv6 Connection Request, STUN-learned addressing, and Annex G UDP Connection Request are available;
@@ -29,6 +30,7 @@ Compatibility must not become a reason to disable authentication globally. Prefe
 | `ACS_AUTH_ALLOW_BASIC` | off | A legacy CPE cannot perform HTTP Digest. Use only over TLS or an isolated management network. |
 | `ACS_TLS_MIN_VERSION` | compatibility-oriented; supports `1.0` through modern TLS | A legacy CPE cannot negotiate the production TLS floor. Raise the floor whenever the fleet permits it. |
 | `ACS_CWMP_EMPTY_RESPONSE_STATUS` | `204` | Set to `200` only for a CPE firmware that incorrectly requires an empty 200 response at session close. |
+| `ACS_DIGEST_ALGORITHMS` | unset — challenges `MD5` then `SHA-256` | A CPE mishandles a multi-line 401. Set to one algorithm (e.g. `MD5`) to emit a single challenge line. Narrows what is *offered*, never what is verified. |
 | `ACS_MTLS_CA_CERT` | unset | Enable certificate-authenticated CPEs while retaining Digest fallback for the remainder of the fleet. |
 | `ACS_DIGEST_USERNAME` / `ACS_DIGEST_PASSWORD` | deployment supplied | Shared bootstrap credentials; migrate devices to unique per-device credentials. |
 | `ACS_STUN_ADDR` | `:3478` in the standard service configuration | Enable Annex G/NAT traversal workflows. |

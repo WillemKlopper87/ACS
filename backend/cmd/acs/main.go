@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -146,6 +147,20 @@ func main() {
 	if authr.Password == "" {
 		// Per-device-only (or mTLS) fleets: nonces still need a key.
 		authr.NonceSecret = []byte(os.Getenv("ACS_CREDENTIAL_ENCRYPTION_KEY"))
+	}
+	// Which algorithms the 401 challenges for, one WWW-Authenticate line
+	// each (see auth.DigestAuthenticator.Algorithms). Empty means the
+	// default MD5 + SHA-256 pair; naming a subset is a per-fleet
+	// compatibility measure for a CPE that mishandles a multi-line
+	// challenge, not a way to weaken the credential check — every listed
+	// algorithm is still verified exactly as before.
+	if list := strings.TrimSpace(os.Getenv("ACS_DIGEST_ALGORITHMS")); list != "" {
+		for _, algorithm := range strings.Split(list, ",") {
+			if algorithm = strings.TrimSpace(algorithm); algorithm != "" {
+				authr.Algorithms = append(authr.Algorithms, algorithm)
+			}
+		}
+		logger.Info("CWMP Digest challenge narrowed by ACS_DIGEST_ALGORITHMS", "algorithms", authr.Algorithms)
 	}
 	if !authr.Enabled() {
 		logger.Warn("ACS_DIGEST_USERNAME/ACS_DIGEST_PASSWORD not set — CWMP endpoint is running WITHOUT authentication (design doc v3 §11.1/§11.2).")

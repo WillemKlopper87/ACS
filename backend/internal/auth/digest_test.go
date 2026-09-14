@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -387,5 +388,137 @@ func TestDigest_BasicChallengeStillOfferedAlongsideBoth(t *testing.T) {
 	}
 	if !strings.HasPrefix(lines[2], "Basic ") {
 		t.Errorf("last challenge line = %q, want the Basic challenge", lines[2])
+	}
+}
+
+// --- CPE-compatibility shape of the challenge ---------------------------
+
+// A nonce has to survive the CPE's HTTP stack, and several embedded
+// clients allocate a fixed 64-byte buffer for it. One that doesn't fit
+// can't be echoed back, so the CPE never authenticates at all.
+func TestDigest_NonceFitsEmbeddedBuffers(t *testing.T) {
+	nonce := testAuthr.newNonce(time.Now())
+	if len(nonce) > 64 {
+		t.Errorf("nonce is %d characters (%q), want <= 64 — longer than the buffer common CPE HTTP stacks allocate", len(nonce), nonce)
+	}
+	if strings.Count(nonce, ".") != 2 {
+		t.Errorf("nonce = %q, want the three-field <ts>.<random>.<mac> form", nonce)
+	}
+}
+
+func TestDigest_CompactNonceStillRoundTrips(t *testing.T) {
+	issuedAt := time.Unix(1789392137, 0)
+	nonce := testAuthr.newNonce(issuedAt)
+
+	got, valid := testAuthr.parseNonce(nonce)
+	if !valid {
+		t.Fatalf("parseNonce(%q) rejected a nonce we just issued", nonce)
+	}
+	if !got.Equal(issuedAt) {
+		t.Errorf("parseNonce() issue time = %v, want %v — expiry would be computed from the wrong instant", got, issuedAt)
+	}
+
+	// Still unforgeable, and still tamper-evident in the timestamp: a
+	// shortened MAC is the only thing that changed.
+	other := DigestAuthenticator{Username: "cpe-device", Password: "different"}
+	if _, valid := other.parseNonce(nonce); valid {
+		t.Error("a nonce verified under a different credential's key")
+	}
+	parts := strings.SplitN(nonce, ".", 3)
+	forged := strconv.FormatInt(issuedAt.Add(time.Hour).Unix(), 16) + "." + parts[1] + "." + parts[2]
+	if _, valid := testAuthr.parseNonce(forged); valid {
+		t.Error("a nonce with a rewritten timestamp verified; expiry could be bypassed")
+	}
+}
+
+func TestDigest_CompactNoncesAreUnique(t *testing.T) {
+	at := time.Unix(1789392137, 0)
+	seen := map[string]bool{}
+	for i := 0; i < 1000; i++ {
+		nonce := testAuthr.newNonce(at)
+		if seen[nonce] {
+			t.Fatalf("newNonce() repeated %q within the same second", nonce)
+		}
+		seen[nonce] = true
+	}
+}
+
+// A CPE that mishandles a multi-line challenge can be given exactly one.
+func TestDigest_ChallengeAlgorithmsNarrowsTheChallenge(t *testing.T) {
+	d := DigestAuthenticator{Username: "cpe-device", Password: "s3cret", Algorithms: []string{"MD5"}}
+	rec := httptest.NewRecorder()
+	d.Challenge(rec)
+
+	lines := rec.Header().Values("WWW-Authenticate")
+	if len(lines) != 1 {
+		t.Fatalf("Challenge() sent %d lines, want exactly 1: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "algorithm=MD5") {
+		t.Errorf("challenge line = %q, want algorithm=MD5", lines[0])
+	}
+
+	// Narrowing the challenge must not narrow what verifies: a device
+	// answering the offered algorithm still authenticates normally.
+	params := parseDigestParams(strings.TrimPrefix(lines[0], "Digest "))
+	if ok, _, _ := d.Verify(digestRequest(params["nonce"], "00000001", "s3cret")); !ok {
+		t.Error("a valid MD5 response against the narrowed challenge did not verify")
+	}
+}
+
+func TestDigest_ChallengeAlgorithmsSHA256Only(t *testing.T) {
+	d := DigestAuthenticator{Username: "cpe-device", Password: "s3cret", Algorithms: []string{"SHA-256"}}
+	rec := httptest.NewRecorder()
+	d.Challenge(rec)
+
+	lines := rec.Header().Values("WWW-Authenticate")
+	if len(lines) != 1 || !strings.Contains(lines[0], "algorithm=SHA-256") {
+		t.Fatalf("Challenge() lines = %q, want a single SHA-256 line", lines)
+	}
+	params := parseDigestParams(strings.TrimPrefix(lines[0], "Digest "))
+	if ok, _, _ := d.Verify(algRequest(params["nonce"], "00000001", "s3cret", "SHA-256", sha256hex)); !ok {
+		t.Error("a valid SHA-256 response against the narrowed challenge did not verify")
+	}
+}
+
+// An algorithm we cannot verify must never be advertised — a CPE that
+// picked it would waste every retry on a response we always reject.
+func TestDigest_ChallengeAlgorithmsDropsUnverifiable(t *testing.T) {
+	d := DigestAuthenticator{Username: "u", Password: "p", Algorithms: []string{"SHA-512-256", "SHA-256", "bogus"}}
+	rec := httptest.NewRecorder()
+	d.Challenge(rec)
+
+	lines := rec.Header().Values("WWW-Authenticate")
+	if len(lines) != 1 || !strings.Contains(lines[0], "algorithm=SHA-256") {
+		t.Fatalf("Challenge() lines = %q, want only the verifiable SHA-256 line", lines)
+	}
+}
+
+func TestDigest_ChallengeAlgorithmsFallsBackToBoth(t *testing.T) {
+	for _, configured := range [][]string{nil, {}, {"SHA-512-256"}, {""}} {
+		d := DigestAuthenticator{Username: "u", Password: "p", Algorithms: configured}
+		rec := httptest.NewRecorder()
+		d.Challenge(rec)
+		lines := rec.Header().Values("WWW-Authenticate")
+		if len(lines) != 2 {
+			t.Errorf("Algorithms=%q gave %d challenge lines, want the default 2: %q", configured, len(lines), lines)
+			continue
+		}
+		if !strings.Contains(lines[0], "algorithm=MD5") || !strings.Contains(lines[1], "algorithm=SHA-256") {
+			t.Errorf("Algorithms=%q gave %q, want the default MD5-then-SHA-256 pair", configured, lines)
+		}
+	}
+}
+
+// The whole 401 is what a CPE has to parse, so keep an eye on its size.
+func TestDigest_ChallengeResponseStaysSmall(t *testing.T) {
+	rec := httptest.NewRecorder()
+	testAuthr.Challenge(rec)
+
+	total := 0
+	for _, line := range rec.Header().Values("WWW-Authenticate") {
+		total += len("WWW-Authenticate: ") + len(line) + 2
+	}
+	if total > 300 {
+		t.Errorf("challenge headers total %d bytes, want <= 300 — embedded CPE header buffers are small", total)
 	}
 }
