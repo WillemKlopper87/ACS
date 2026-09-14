@@ -1476,7 +1476,7 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        /** @description Free-text label */
+                        /** @description Free-text label, e.g. "Rack 4, POP-West" */
                         location?: string;
                         /** Format: double */
                         latitude?: number | null;
