@@ -23,14 +23,69 @@ sleep 1
 
 echo "=== Starting Postgres ==="
 # Docker Compose interpolates the entire file before service selection, so
-# Grafana's mandatory variables must resolve even when starting only Postgres.
-# These values are unused in this context (Grafana is not being started);
-# they exist only to satisfy interpolation and must never be treated as real
-# Grafana credentials.
-(cd "$ROOT/infra" && GRAFANA_ADMIN_PASSWORD=unused-postgres-only ACS_GRAFANA_DB_PASSWORD=unused-postgres-only docker compose up -d postgres)
+# Grafana's mandatory variables must resolve even when starting only
+# Postgres. gen-env.sh (sourced above) has just written real values for
+# them to infra/.env, which compose reads automatically — so the
+# `unused-postgres-only` placeholders this command used to pass inline are
+# no longer needed, and Grafana below gets the same credentials.
+(cd "$ROOT/infra" && docker compose up -d postgres)
 echo "Waiting for Postgres to accept connections..."
 until docker exec infra-postgres-1 pg_isready -U acs >/dev/null 2>&1; do sleep 1; done
 echo "Postgres is up."
+
+# --- Monitoring stack -------------------------------------------------
+# Prometheus, Alertmanager and Grafana come up with the rest of the stack
+# rather than being a separate thing to remember: the images are pulled on
+# first run, and Grafana's datasources and dashboards are provisioned from
+# infra/grafana/, so a fresh instance ends up with working dashboards and
+# no click-through setup.
+#
+# Grafana publishes on 127.0.0.1 only (audit P1.5) — reach it over an SSH
+# tunnel. ACS_GRAFANA_PUBLIC=1 publishes it on all interfaces instead,
+# which puts a login page on the public internet: only do that behind a
+# security group that restricts port 3000 to your own address.
+if [ "$ACS_GRAFANA_PUBLIC" = "1" ]; then
+  GRAFANA_BIND="0.0.0.0"
+else
+  GRAFANA_BIND="127.0.0.1"
+fi
+# The bind address is the one value that is a per-run choice rather than a
+# persisted credential, so it is rewritten here rather than in gen-env.sh.
+sed -i "s#^GRAFANA_BIND=.*#GRAFANA_BIND=$GRAFANA_BIND#" "$ROOT/infra/.env"
+
+echo "=== Grafana's read-only database role ==="
+# The Postgres-backed dashboards (tenancy, BSS, per-device) query through
+# a SELECT-only role, never the application's own credentials. Creating it
+# is idempotent, and has to happen after Postgres is up but before Grafana
+# provisions its datasource against it.
+if command -v psql >/dev/null; then
+  "$ROOT/scripts/grafana-db-role.sh" || echo "WARNING: grafana-db-role.sh failed — the Postgres-backed dashboards will show auth errors."
+else
+  echo "WARNING: psql not found, skipping the grafana_ro role."
+  echo "         The Prometheus dashboards still work; the Postgres-backed ones"
+  echo "         won't until you 'sudo apt-get install -y postgresql-client' and rerun."
+fi
+
+echo "=== Starting monitoring stack (Prometheus, Alertmanager, Grafana) ==="
+(cd "$ROOT/infra" && docker compose up -d prometheus alertmanager grafana)
+
+echo "Waiting for Grafana to become healthy..."
+GRAFANA_UP=""
+for _ in $(seq 1 60); do
+  if curl -fsS -m 2 http://127.0.0.1:3000/api/health 2>/dev/null | grep -q '"database": *"ok"'; then
+    GRAFANA_UP=1
+    break
+  fi
+  sleep 2
+done
+if [ -n "$GRAFANA_UP" ]; then
+  echo "Grafana is up."
+else
+  # Not fatal: the ACS itself does not depend on dashboards, and failing
+  # the whole deployment over Grafana would be the wrong trade.
+  echo "WARNING: Grafana did not report healthy within 120s."
+  echo "         Check: cd infra && docker compose logs grafana"
+fi
 
 echo "=== Building backend binaries ==="
 cd "$ROOT/backend"
@@ -102,10 +157,15 @@ npm install --silent
 npm run build
 
 echo "=== Starting frontend static server (:5173) ==="
-# Plain python3 http.server — no npm global-install/sudo dance, and
-# python3 is already on every stock Ubuntu image.
+# scripts/spa-server.py, not `python3 -m http.server`: the console routes
+# by URL, so reloading or deep-linking /dashboard asked plain http.server
+# for a file that doesn't exist and got "Error code: 404 — File not
+# found". spa-server.py adds the same /index.html fallback, /assets/
+# carve-out and security headers the containerized nginx has
+# (frontend/nginx.conf.template), while staying pure-stdlib python3 — no
+# npm global install, no sudo.
 cd "$ROOT/frontend/dist"
-nohup python3 -m http.server 5173 > "$LOG_DIR/frontend.log" 2>&1 &
+nohup python3 "$ROOT/scripts/spa-server.py" 5173 "$ROOT/frontend/dist" "http://$PUBLIC_IP:8080" > "$LOG_DIR/frontend.log" 2>&1 &
 echo $! > "$LOG_DIR/frontend.pid"
 sleep 1
 if ! kill -0 "$(cat "$LOG_DIR/frontend.pid")" 2>/dev/null; then
@@ -124,8 +184,19 @@ echo "Console:   http://$PUBLIC_IP:5173"
 echo "API:       http://$PUBLIC_IP:8080"
 echo "CWMP URL:  $CWMP_SCHEME://$PUBLIC_IP:7547/cwmp"
 echo "STUN:      $PUBLIC_IP:3478 (UDP)"
+if [ "$ACS_GRAFANA_PUBLIC" = "1" ]; then
+  echo "Grafana:   http://$PUBLIC_IP:3000  (published on ALL interfaces — restrict"
+  echo "           port 3000 in the security group to your own address)"
+else
+  echo "Grafana:   http://127.0.0.1:3000 on the instance (not published publicly)."
+  echo "           From your machine:  ssh -L 3000:127.0.0.1:3000 ubuntu@$PUBLIC_IP"
+  echo "           then open http://localhost:3000 — or rerun with"
+  echo "           ACS_GRAFANA_PUBLIC=1 ./scripts/start.sh to publish it."
+fi
+echo "Prometheus: http://127.0.0.1:9090 on the instance (tunnel it the same way)"
 echo ""
 echo "Login: $ACS_BOOTSTRAP_ADMIN_USERNAME / $ACS_BOOTSTRAP_ADMIN_PASSWORD"
+echo "Grafana login: admin / $GRAFANA_ADMIN_PASSWORD"
 echo "(credentials are also saved in ~/.acs-secrets.env)"
 echo ""
 echo "Logs:   $LOG_DIR/{acs,api,frontend}.log"

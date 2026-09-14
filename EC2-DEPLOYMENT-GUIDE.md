@@ -347,18 +347,39 @@ restarting the static server alone won't fix it.
 ### 6.2 Serve the frontend (simple option)
 
 **If you're using `scripts/start.sh`, this is already running.** It uses
-Python's built-in server:
+`scripts/spa-server.py`, a small stdlib-only Python server:
 
 ```bash
-cd ~/ACS/frontend/dist
-python3 -m http.server 5173
+python3 ~/ACS/scripts/spa-server.py 5173 ~/ACS/frontend/dist http://<ec2-public-ip>:8080
 ```
 
-deliberately instead of `npm install -g http-server` — the global npm
-install needs `sudo` on a stock Ubuntu instance (npm's default global
+Python deliberately instead of `npm install -g http-server` — the global
+npm install needs `sudo` on a stock Ubuntu instance (npm's default global
 prefix is root-owned), which is one more permission hurdle for no real
-benefit here. `python3` is already on every stock Ubuntu AMI, needs no
-install, and is entirely sufficient for serving a static build.
+benefit here. `python3` is already on every stock Ubuntu AMI and needs no
+install.
+
+**Why not plain `python3 -m http.server 5173`** (what this used to be):
+the console routes by URL, so a reload or a deep link on any path other
+than `/` — `http://<ip>:5173/dashboard` — asks the server for a file that
+doesn't exist, and `http.server` answers:
+
+```
+Error response
+Error code: 404
+Message: File not found.
+```
+
+`spa-server.py` adds the `/index.html` fallback that makes those routes
+work — the same `try_files $uri $uri/ /index.html` the Nginx option below
+and the container image use — along with the same `/assets/` carve-out
+(a stale content-hashed bundle must get a real 404, not HTML, so the app
+can detect it and reload), the same security headers, and `no-store` on
+`index.html` so a rebuild isn't shadowed by a cached page.
+
+The third argument is the API origin; it goes into the page's CSP
+`connect-src`, so it must match the `VITE_API_BASE_URL` the bundle was
+built with (`start.sh` passes both from the same detected public IP).
 
 Then open `http://<ec2-public-ip>:5173` in your browser and log in with
 the admin username/password `scripts/gen-env.sh` printed.
@@ -396,6 +417,48 @@ EOF
 sudo ln -sf /etc/nginx/sites-available/acs /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl restart nginx
+```
+
+### 6.3 Grafana and Prometheus (started automatically)
+
+`scripts/start.sh` brings up Prometheus, Alertmanager and Grafana from
+`infra/docker-compose.yml` along with Postgres — the images are pulled on
+first run, and Grafana's two datasources and its dashboards (fleet
+health, CPE fleet, BSS integration, tenancy/site locator) are provisioned
+from `infra/grafana/`, so there is no click-through setup.
+
+`scripts/gen-env.sh` generates both passwords Grafana needs — the admin
+login and the SELECT-only `grafana_ro` database role — stores them in
+`~/.acs-secrets.env`, and writes them to `infra/.env` where compose picks
+them up. `start.sh` then runs `scripts/grafana-db-role.sh` to create that
+role before Grafana starts. The admin password is printed at the end of
+`start.sh`.
+
+Grafana publishes on `127.0.0.1:3000` only, so **no security group change
+is needed** — tunnel to it:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 ubuntu@<ec2-public-ip>
+# then open http://localhost:3000  (admin / the generated password)
+```
+
+To publish it on the instance's public IP instead:
+
+```bash
+ACS_GRAFANA_PUBLIC=1 ./scripts/start.sh
+```
+
+That puts a login page on the public internet — open `3000/tcp` to your
+own address only, never `0.0.0.0/0`.
+
+Useful checks:
+
+```bash
+cd ~/ACS/infra
+docker compose ps                      # grafana/prometheus/alertmanager state
+docker compose logs --tail=50 grafana
+curl -s http://127.0.0.1:3000/api/health
+curl -s http://127.0.0.1:9090/api/v1/targets | head   # are the Go services 'up'?
 ```
 
 ## 7. Verify the Deployment
@@ -591,6 +654,40 @@ The gateway also (as of this revision) echoes the CPE's `cwmp:ID` header and CWM
 - Check `cmd/api` is running: `curl http://localhost:8080/metrics`
 - Check frontend build: `ls ~/ACS/frontend/dist/index.html`
 - Check Nginx (if using it): `sudo nginx -t` and `sudo systemctl status nginx`
+
+### Grafana shows the login page but rejects the password
+
+Grafana's session cookie is `secure`-flagged by default, and a browser
+never stores such a cookie over plain HTTP — the login silently returns
+to the login page. `scripts/gen-env.sh` writes
+`GRAFANA_COOKIE_SECURE=false` to `infra/.env` for this HTTP-only
+deployment; if you edited that file, or a proxy in front sets it back to
+`true` over HTTP, that's the cause. The password itself is `admin` plus
+the value `scripts/start.sh` printed (also in `~/.acs-secrets.env`).
+
+### Grafana loads but the tenancy/BSS panels show a database error
+
+Those panels query Postgres through the `grafana_ro` role. Create it and
+restart Grafana:
+
+```bash
+cd ~/ACS
+source scripts/gen-env.sh
+scripts/grafana-db-role.sh
+cd infra && docker compose restart grafana
+```
+
+`start.sh` does this for you, but skips it with a warning when `psql`
+isn't installed (`sudo apt-get install -y postgresql-client`).
+
+### "Error code: 404 — File not found" when reloading a page
+
+Only `/` works, but `http://<ip>:5173/dashboard` 404s on refresh: the
+frontend is being served by plain `python3 -m http.server`, which has no
+SPA fallback. Rerun `./scripts/start.sh` — it serves the console with
+`scripts/spa-server.py` (§6.2), which falls back to `index.html`. If the
+old server is still running from a previous deploy, `./scripts/stop.sh`
+kills it.
 
 ## 11. Updating from GitHub
 

@@ -24,5 +24,12 @@ pkill -f "backend/bin/acs" 2>/dev/null && echo "Killed a stray bin/acs process" 
 pkill -f "backend/bin/api" 2>/dev/null && echo "Killed a stray bin/api process" || true
 pkill -f "go run ./cmd/acs" 2>/dev/null && echo "Killed a stray 'go run ./cmd/acs' process" || true
 pkill -f "go run ./cmd/api" 2>/dev/null && echo "Killed a stray 'go run ./cmd/api' process" || true
+pkill -f "scripts/spa-server.py" 2>/dev/null && echo "Killed a stray frontend server" || true
+pkill -f "http.server 5173" 2>/dev/null && echo "Killed a stray old-style frontend server" || true
 
-echo "Done."
+# Postgres and the monitoring containers (Prometheus, Alertmanager,
+# Grafana) are deliberately left running — they hold the fleet's data and
+# metrics history, and start.sh is safe to rerun against them. To stop
+# those too: cd infra && docker compose stop
+echo "Done. (Postgres + Prometheus/Alertmanager/Grafana containers left running;"
+echo " 'cd infra && docker compose stop' stops those as well.)"

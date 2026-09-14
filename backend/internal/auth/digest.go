@@ -32,6 +32,12 @@ const realm = "acs"
 // with stale=true so a well-behaved CPE silently re-authenticates.
 const nonceTTL = 10 * time.Minute
 
+// Nonce field sizes. See newNonce for why they are this small.
+const (
+	nonceRandomBytes = 6 // 12 hex characters
+	nonceMACBytes    = 8 // 16 hex characters
+)
+
 // nonceState tracks replay for one issued nonce.
 type nonceState struct {
 	expires time.Time
@@ -90,6 +96,20 @@ type DigestAuthenticator struct {
 	// OnAuthenticated is invoked after a per-device credential verifies —
 	// the hook that auto-activates a PENDING rotation.
 	OnAuthenticated func(username string)
+	// Algorithms lists the Digest algorithms to challenge for, in the
+	// order offered (one WWW-Authenticate line each). Empty means the
+	// default, {"MD5", "SHA-256"} — MD5 first so an RFC 2617 CPE takes
+	// the first line it understands.
+	//
+	// It exists because some embedded CPE HTTP stacks parse the 401
+	// poorly: a Huawei N5368X (HW_ATP_HTTP) re-POSTs its Inform
+	// unauthenticated rather than answering a challenge it cannot make
+	// sense of, and a multi-line challenge is one of the things that can
+	// provoke that. ACS_DIGEST_ALGORITHMS=MD5 narrows the 401 to a
+	// single, minimal line for such a device without giving up SHA-256
+	// for the rest of the fleet.
+	Algorithms []string
+
 	// NonceSecret keys the nonce HMAC. When empty the shared Password is
 	// used, which is fine for the common single-credential fleet; set it
 	// explicitly when the shared credential is absent (per-device only)
@@ -166,13 +186,51 @@ func (d DigestAuthenticator) ChallengeStale(w http.ResponseWriter) {
 	d.challenge(w, true)
 }
 
-func (d DigestAuthenticator) challenge(w http.ResponseWriter, stale bool) {
-	nonce := d.newNonce(time.Now())
-	hdr := fmt.Sprintf(`Digest realm="%s", qop="auth", nonce="%s", algorithm=MD5`, realm, nonce)
-	if stale {
-		hdr += `, stale=true`
+// defaultChallengeAlgorithms is what a CPE is offered when Algorithms is
+// unset: MD5 first (RFC 2617 CPEs take the first line they understand),
+// then SHA-256.
+var defaultChallengeAlgorithms = []string{"MD5", "SHA-256"}
+
+// challengeAlgorithms is Algorithms filtered to what verifyDigest can
+// actually verify — a challenge we could not answer ourselves would just
+// waste a CPE's retry — falling back to the default when that leaves
+// nothing.
+func (d DigestAuthenticator) challengeAlgorithms() []string {
+	if len(d.Algorithms) == 0 {
+		return defaultChallengeAlgorithms
 	}
-	w.Header().Set("WWW-Authenticate", hdr)
+	out := make([]string, 0, len(d.Algorithms))
+	for _, algorithm := range d.Algorithms {
+		if _, ok := hashFuncFor(algorithm); ok && algorithm != "" {
+			out = append(out, algorithm)
+		}
+	}
+	if len(out) == 0 {
+		return defaultChallengeAlgorithms
+	}
+	return out
+}
+
+func (d DigestAuthenticator) challenge(w http.ResponseWriter, stale bool) {
+	// Same nonce is safe to reuse across both challenge lines: nonceMAC
+	// is independent of the algorithm the CPE eventually picks, and
+	// verifyDigest re-derives the algorithm from the Authorization
+	// header it gets back, not from which challenge line matched.
+	nonce := d.newNonce(time.Now())
+	staleSuffix := ""
+	if stale {
+		staleSuffix = `, stale=true`
+	}
+	// One Digest challenge line per algorithm (RFC 7616 §3.3): a CPE that
+	// only implements SHA-256 (observed: Huawei cwmpmng logs "Digest
+	// challenge can't find all element" against an MD5-only challenge and
+	// silently gives up rather than falling back) picks the line it
+	// understands; MD5-only CPEs keep working unchanged. See Algorithms
+	// for narrowing this to one line for a CPE that cannot cope.
+	w.Header().Del("WWW-Authenticate")
+	for _, algorithm := range d.challengeAlgorithms() {
+		w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Digest realm="%s", qop="auth", nonce="%s", algorithm=%s%s`, realm, nonce, algorithm, staleSuffix))
+	}
 	if d.AllowBasic {
 		w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
 	}
@@ -235,8 +293,16 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 		return false, false, Identity{}
 	}
 
-	ha1 := md5Hex(username + ":" + realm + ":" + password)
-	ha2 := md5Hex(r.Method + ":" + params["uri"])
+	// RFC 7616: algorithm defaults to MD5 when absent (RFC 2617 CPEs
+	// never send it). "-sess" variants aren't supported — no observed
+	// CPE here has needed them, and they'd need ha1 keyed per-session.
+	hashHex, algOK := hashFuncFor(params["algorithm"])
+	if !algOK {
+		return false, false, Identity{}
+	}
+
+	ha1 := hashHex(username + ":" + realm + ":" + password)
+	ha2 := hashHex(r.Method + ":" + params["uri"])
 
 	var expected string
 	qop := params["qop"]
@@ -244,11 +310,11 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 		if qop != "auth" {
 			return false, false, Identity{}
 		}
-		expected = md5Hex(strings.Join([]string{
+		expected = hashHex(strings.Join([]string{
 			ha1, nonce, params["nc"], params["cnonce"], qop, ha2,
 		}, ":"))
 	} else {
-		expected = md5Hex(ha1 + ":" + nonce + ":" + ha2)
+		expected = hashHex(ha1 + ":" + nonce + ":" + ha2)
 	}
 	if subtle.ConstantTimeCompare([]byte(expected), []byte(params["response"])) != 1 {
 		return false, false, Identity{}
@@ -335,16 +401,33 @@ func (d DigestAuthenticator) nonceKey() []byte {
 func (d DigestAuthenticator) nonceMAC(ts, random string) string {
 	mac := hmac.New(sha256.New, d.nonceKey())
 	mac.Write([]byte(ts + "." + random))
-	return hex.EncodeToString(mac.Sum(nil)[:16])
+	return hex.EncodeToString(mac.Sum(nil)[:nonceMACBytes])
 }
 
-// newNonce issues "<unix-ts>.<random>.<hmac>": the random part keeps
+// newNonce issues "<hex-unix-ts>.<random>.<hmac>": the random part keeps
 // nonces unique, the HMAC proves this ACS issued it and that the
 // timestamp is untampered.
+//
+// Every field is kept as short as it can be while still doing its job,
+// because CPE HTTP stacks are where this string has to survive. The
+// earlier decimal-timestamp/12-byte-random/16-byte-MAC form was 68
+// characters, past the 64-byte nonce buffer several embedded clients
+// allocate, and a client that cannot store the nonce cannot answer the
+// challenge at all — it just retries unauthenticated, which is exactly
+// what a Huawei N5368X was observed doing. 38 characters clears that
+// comfortably. What is given up is margin, not security: 48 bits of
+// randomness inside a 10-minute window with a 64-bit MAC binding the
+// timestamp still leaves forgery and collision far out of reach, and the
+// MAC is what actually makes a nonce unforgeable.
+//
+// Nonces issued by an older build stop verifying across this change, so
+// any challenge outstanding at the moment of a restart is answered with
+// stale=true and the CPE simply retries. That is the same path an
+// expired nonce already takes.
 func (d DigestAuthenticator) newNonce(now time.Time) string {
-	b := make([]byte, 12)
+	b := make([]byte, nonceRandomBytes)
 	_, _ = rand.Read(b)
-	ts := strconv.FormatInt(now.Unix(), 10)
+	ts := strconv.FormatInt(now.Unix(), 16)
 	random := hex.EncodeToString(b)
 	return ts + "." + random + "." + d.nonceMAC(ts, random)
 }
@@ -358,7 +441,7 @@ func (d DigestAuthenticator) parseNonce(nonce string) (issued time.Time, valid b
 	if !hmac.Equal([]byte(parts[2]), []byte(d.nonceMAC(parts[0], parts[1]))) {
 		return time.Time{}, false
 	}
-	sec, err := strconv.ParseInt(parts[0], 10, 64)
+	sec, err := strconv.ParseInt(parts[0], 16, 64)
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -390,6 +473,27 @@ func (d DigestAuthenticator) verifyBasic(encoded string) (bool, Identity) {
 func md5Hex(s string) string {
 	sum := md5.Sum([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// hashFuncFor maps a Digest response's algorithm field to the hash it
+// asserts was used, matching one of the two challenge lines challenge()
+// sends. Empty (RFC 2617, no field sent) and explicit "MD5" both mean
+// MD5. ok=false for anything else — including "-sess" variants — so the
+// caller rejects rather than silently verifying against the wrong hash.
+func hashFuncFor(algorithm string) (fn func(string) string, ok bool) {
+	switch strings.ToUpper(algorithm) {
+	case "", "MD5":
+		return md5Hex, true
+	case "SHA-256":
+		return sha256Hex, true
+	default:
+		return nil, false
+	}
 }
 
 var digestParamRE = regexp.MustCompile(`(\w+)=("([^"]*)"|[^,]*)`)

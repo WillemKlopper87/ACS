@@ -13,9 +13,10 @@ The CWMP ingress is intentionally tolerant where doing so does not weaken identi
 - request bodies accept identity, gzip, `x-gzip`, zlib-wrapped deflate and legacy raw-deflate; unsupported encodings receive HTTP 415 so a capable CPE can retry without compression;
 - both encoded and decompressed CWMP bodies are bounded to prevent compression bombs;
 - the standards-aligned empty end-of-session response is HTTP 204; `ACS_CWMP_EMPTY_RESPONSE_STATUS=200` restores the historical empty-200 behaviour for a vendor that requires it;
-- inbound CPE authentication supports Digest, optional Basic fallback (`ACS_AUTH_ALLOW_BASIC=1`), per-device credentials, and optional mTLS;
+- inbound CPE authentication supports Digest with both MD5 and SHA-256 (RFC 7616 — challenged on separate `WWW-Authenticate` lines, MD5 first, so an MD5-only CPE is unaffected and a SHA-256-only one can answer), optional Basic fallback (`ACS_AUTH_ALLOW_BASIC=1`), per-device credentials, and optional mTLS;
+- the 401 challenge is kept small for embedded HTTP stacks: a 38-character nonce (several CPE clients allocate a fixed 64-byte nonce buffer and silently stop authenticating when it overflows) and `ACS_DIGEST_ALGORITHMS` to reduce a multi-line challenge to one line for a CPE that cannot parse several;
 - TLS can be lowered as far as TLS 1.0 (`ACS_TLS_MIN_VERSION=1.0`) for legacy CPEs; production should use the highest floor supported by the deployed fleet;
-- Connection Request treats any HTTP 2xx as accepted, prefers Digest authentication, accepts Digest qop lists/legacy no-qop/MD5-sess/opaque, and falls back to Basic when that is the only challenge offered;
+- Connection Request treats any HTTP 2xx as accepted, prefers Digest authentication, accepts Digest qop lists/legacy no-qop/opaque and the MD5, MD5-sess, SHA-256 and SHA-256-sess algorithms (preferring SHA-256 when a CPE offers both), and falls back to Basic when Digest is unusable or Basic is the only challenge offered;
 - direct IPv4/IPv6 Connection Request, STUN-learned addressing, and Annex G UDP Connection Request are available;
 - both `Device.` (TR-181) and `InternetGatewayDevice.` (TR-098) management roots are recognized where the ACS needs to discover Connection Request/STUN state;
 - the HTTP server timeouts are deliberately long enough for slow embedded CPE stacks and large Inform payloads.
@@ -29,6 +30,7 @@ Compatibility must not become a reason to disable authentication globally. Prefe
 | `ACS_AUTH_ALLOW_BASIC` | off | A legacy CPE cannot perform HTTP Digest. Use only over TLS or an isolated management network. |
 | `ACS_TLS_MIN_VERSION` | compatibility-oriented; supports `1.0` through modern TLS | A legacy CPE cannot negotiate the production TLS floor. Raise the floor whenever the fleet permits it. |
 | `ACS_CWMP_EMPTY_RESPONSE_STATUS` | `204` | Set to `200` only for a CPE firmware that incorrectly requires an empty 200 response at session close. |
+| `ACS_DIGEST_ALGORITHMS` | unset — challenges `MD5` then `SHA-256` | A CPE mishandles a multi-line 401. Set to one algorithm (e.g. `MD5`) to emit a single challenge line. Narrows what is *offered*, never what is verified. |
 | `ACS_MTLS_CA_CERT` | unset | Enable certificate-authenticated CPEs while retaining Digest fallback for the remainder of the fleet. |
 | `ACS_DIGEST_USERNAME` / `ACS_DIGEST_PASSWORD` | deployment supplied | Shared bootstrap credentials; migrate devices to unique per-device credentials. |
 | `ACS_STUN_ADDR` | `:3478` in the standard service configuration | Enable Annex G/NAT traversal workflows. |
@@ -37,7 +39,7 @@ Compatibility must not become a reason to disable authentication globally. Prefe
 
 | Vendor | Model (catalog) | Data model | Mock: Inform/session | Mock: SPV / fault | Mock: Download / TransferComplete | Real device | Firmware tested | Notes |
 |---|---|---|---|---|---|---|---|---|
-| Huawei | 5G CPE Pro | TR-181 (expected) | ✅ | ✅ (shared path) | ✅ (shared path) | not yet | — | Some firmwares may require Basic fallback or an older TLS floor; record exact firmware behaviour rather than enabling either fleet-wide. Bare `WLANConfiguration.{i}.KeyPassphrase` is advertised but non-writable on EchoLife ONTs (HG8546M, HG8145V5, HG8245H, EG8141A5); writes must target `PreSharedKey.1.KeyPassphrase`, which is now the preferred TR-098 candidate. A TR-098 device implementing only the bare form is a known unqualified case until writability-aware candidate selection lands. |
+| Huawei | 5G CPE Pro, N5368X 5G Outdoor CPE | TR-181 (expected) | ✅ | ✅ (shared path) | ✅ (shared path) | not yet | — | The N5368X (V200R001C00SPC340T) offers a `Connection request Authentication: Digest-SHA256` setting; both auth directions now implement SHA-256, so it needs no weakening of that setting. Some firmwares may require Basic fallback or an older TLS floor; record exact firmware behaviour rather than enabling either fleet-wide. Bare `WLANConfiguration.{i}.KeyPassphrase` is advertised but non-writable on EchoLife ONTs (HG8546M, HG8145V5, HG8245H, EG8141A5); writes must target `PreSharedKey.1.KeyPassphrase`, which is now the preferred TR-098 candidate. A TR-098 device implementing only the bare form is a known unqualified case until writability-aware candidate selection lands. |
 | Nokia | FastMile 5G | TR-181 | ✅ | ✅ | ✅ | not yet | — | |
 | Teltonika | RUTX50 | TR-181 | ✅ | ✅ | ✅ | not yet | — | |
 | Zyxel | NR7101 / NR5103 | TR-181 | ✅ (primary mock profile) | ✅ | ✅ | not yet | — | |
@@ -50,7 +52,7 @@ Compatibility must not become a reason to disable authentication globally. Prefe
 | CWMP 1.x namespace detection/echo + session persistence | `internal/cwmp`, `internal/sessions`, migration `0045` | namespace and renderer regression tests | not yet |
 | Identity/gzip/x-gzip/zlib-deflate/raw-deflate CWMP bodies | `cmd/acs/session.go` | HTTP compatibility unit tests | not yet |
 | Empty session POST / session close | `cmd/acs/session.go` | whitespace empty body + 204/legacy-200 tests | not yet |
-| Digest auth (qop=auth, nonce expiry, replay rejection — Postgres-backed, cross-replica, audit P1.6), Basic fallback | `internal/auth/digest.go`, `internal/auth/replay_postgres.go` | ✅ incl. cross-replica replay | not yet |
+| Digest auth (qop=auth, MD5 + SHA-256, nonce expiry, replay rejection — Postgres-backed, cross-replica, audit P1.6), Basic fallback | `internal/auth/digest.go`, `internal/auth/replay_postgres.go` | ✅ incl. cross-replica replay, algorithm mismatch rejection | not yet |
 | Per-device Digest credentials (`CWMP_DIGEST` rotation, self-activating) | `internal/credentials`, `cmd/acs/main.go` | unit | not yet |
 | mTLS client certificates | `ACS_MTLS_CA_CERT` | — | not yet |
 | SetParameterValues / GetParameterValues / GetParameterNames | `cmd/acs/dispatch.go` | ✅ SPV success + 9005 fault | not yet |
@@ -58,7 +60,7 @@ Compatibility must not become a reason to disable authentication globally. Prefe
 | Download + TransferComplete (delayed, duplicate, stale fault) | `cmd/acs/session.go` | ✅ | not yet |
 | Upload + receipt endpoint (signed URL, size cap, single use) | `cmd/api/upload_handlers.go` | ✅ (API suite) | not yet |
 | IPPing / TraceRoute diagnostics (trigger + poll) | `cmd/acs/dispatch.go` | — | not yet |
-| Connection Request HTTP success variants + Digest/Basic auth | `internal/connreq` | unit incl. 200/204/202, Digest qop list and Basic | not yet |
+| Connection Request HTTP success variants + Digest (MD5/SHA-256, both `-sess`)/Basic auth | `internal/connreq` | unit incl. 200/204/202, Digest qop list, SHA-256 preference, unsupported-algorithm fallback, Basic | not yet |
 | Connection Request over UDP (Annex G, STUN-learned address) | `internal/connreq/annexg.go` | unit (datagram shape, HMAC) | **not validated — implemented from the spec text** |
 | STUN server (RFC 5389 binding) | `internal/stun` | unit | not yet |
 | XMPP connection requests | — | — | not implemented |
