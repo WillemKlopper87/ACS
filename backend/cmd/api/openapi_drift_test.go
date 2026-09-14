@@ -8,19 +8,12 @@ import (
 	"testing"
 )
 
-// TestOpenAPIMatchesRegisteredRoutes is the drift gate between
-// backend/openapi.yaml and the routes main.go actually registers (audit
-// P2.5). It reads both as text — the route table is registered inline
-// in main() via route()/routePerm()/mux.HandleFunc, and the spec is
-// scanned for "  /path:" and "    method:" lines — so no YAML library
-// or refactor of main() is needed. Every registered (method, path) must
-// appear in the spec and vice versa.
+// TestOpenAPIMatchesRegisteredRoutes is the drift gate between the registered
+// operator/northbound routes and their OpenAPI contracts. The operator API and
+// each TMF surface keep separate specs, but all registered routes must still be
+// documented exactly once and every documented operation must be live.
 func TestOpenAPIMatchesRegisteredRoutes(t *testing.T) {
 	src, err := os.ReadFile("routes.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec, err := os.ReadFile("../../openapi.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,25 +32,16 @@ func TestOpenAPIMatchesRegisteredRoutes(t *testing.T) {
 			registered["GET "+normalize(m[5])] = true
 		}
 	}
-	// The metrics scrape endpoint is operational, not part of the
-	// operator API contract.
+	// The metrics scrape endpoint is operational, not part of the API contract.
 	delete(registered, "GET /metrics")
 
 	documented := map[string]bool{}
-	var path string
-	for _, line := range strings.Split(string(spec), "\n") {
-		line = strings.TrimRight(line, "\r")
-		if strings.HasPrefix(line, "  /") && strings.HasSuffix(line, ":") {
-			path = strings.TrimSuffix(strings.TrimSpace(line), ":")
-			continue
+	for _, specPath := range []string{"../../openapi.yaml", "../../openapi-tmf639.yaml"} {
+		spec, err := os.ReadFile(specPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", specPath, err)
 		}
-		if path != "" && strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "     ") {
-			method := strings.ToUpper(strings.TrimSuffix(strings.TrimSpace(line), ":"))
-			switch method {
-			case "GET", "POST", "PUT", "DELETE", "PATCH":
-				documented[method+" "+normalize(path)] = true
-			}
-		}
+		collectDocumentedOperations(t, specPath, string(spec), documented)
 	}
 
 	var missing, stale []string
@@ -74,13 +58,37 @@ func TestOpenAPIMatchesRegisteredRoutes(t *testing.T) {
 	sort.Strings(missing)
 	sort.Strings(stale)
 	if len(missing) > 0 {
-		t.Errorf("routes registered in routes.go but absent from openapi.yaml:\n  %s", strings.Join(missing, "\n  "))
+		t.Errorf("routes registered in routes.go but absent from OpenAPI contracts:\n  %s", strings.Join(missing, "\n  "))
 	}
 	if len(stale) > 0 {
-		t.Errorf("operations in openapi.yaml with no registered route:\n  %s", strings.Join(stale, "\n  "))
+		t.Errorf("operations in OpenAPI contracts with no registered route:\n  %s", strings.Join(stale, "\n  "))
 	}
 	if len(registered) < 50 {
 		t.Fatalf("only %d routes extracted from routes.go — the extraction regex is probably broken", len(registered))
+	}
+}
+
+func collectDocumentedOperations(t *testing.T, specPath, spec string, documented map[string]bool) {
+	t.Helper()
+	var path string
+	for _, line := range strings.Split(spec, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.HasPrefix(line, "  /") && strings.HasSuffix(line, ":") {
+			path = strings.TrimSuffix(strings.TrimSpace(line), ":")
+			continue
+		}
+		if path == "" || !strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "     ") {
+			continue
+		}
+		method := strings.ToUpper(strings.TrimSuffix(strings.TrimSpace(line), ":"))
+		switch method {
+		case "GET", "POST", "PUT", "DELETE", "PATCH":
+			key := method + " " + normalize(path)
+			if documented[key] {
+				t.Fatalf("operation %s is documented more than once; duplicate includes %s", key, specPath)
+			}
+			documented[key] = true
+		}
 	}
 }
 
