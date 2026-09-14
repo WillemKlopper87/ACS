@@ -582,7 +582,7 @@ paths:
             schema:
               type: object
               properties:
-                location: { type: string, description: Free-text label, e.g. "Rack 4, POP-West" }
+                location: { type: string, description: 'Free-text label, e.g. "Rack 4, POP-West"' }
                 latitude: { type: number, format: double, minimum: -90, maximum: 90, nullable: true }
                 longitude: { type: number, format: double, minimum: -180, maximum: 180, nullable: true }
               description: >-
