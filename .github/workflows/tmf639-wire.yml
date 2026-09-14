@@ -1,0 +1,153 @@
+name: Wire TMF639 slice
+
+on:
+  push:
+    branches:
+      - feat/tmf639-resource-inventory
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feat/tmf639-resource-inventory
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: backend/go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Wire routes and OpenAPI
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          routes = Path('backend/cmd/api/routes.go')
+          text = routes.read_text()
+          route_marker = '\troute("GET", "/api/v1/devices/{id}", ro, h.getDevice)\n'
+          route_block = '''\t// TMF639 Resource Inventory is a northbound projection of the same\n\t// tenant-scoped device inventory; it does not introduce a second store.\n\troute("GET", "/tmf-api/resourceInventoryManagement/v5/resource", ro, h.listTMF639Resources)\n\troute("GET", "/tmf-api/resourceInventoryManagement/v5/resource/{id}", ro, h.getTMF639Resource)\n'''
+          if '/tmf-api/resourceInventoryManagement/v5/resource' not in text:
+              if route_marker not in text:
+                  raise SystemExit('route insertion marker not found')
+              text = text.replace(route_marker, route_marker + route_block, 1)
+              routes.write_text(text)
+
+          spec = Path('backend/openapi.yaml')
+          text = spec.read_text()
+          if '  /tmf-api/resourceInventoryManagement/v5/resource:' not in text:
+              marker = '\ncomponents:\n'
+              if marker not in text:
+                  raise SystemExit('OpenAPI components marker not found')
+              block = r'''
+  /tmf-api/resourceInventoryManagement/v5/resource:
+    get:
+      tags: [TMF639 Resource Inventory]
+      summary: List tenant-accessible ACS managed resources using the TMF639 v5 resource collection
+      parameters:
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: fields, in: query, schema: { type: string }, description: Comma-separated projection fields; unknown fields are rejected }
+        - { name: X-Correlation-ID, in: header, schema: { type: string, maxLength: 128 }, description: Optional caller correlation identifier echoed in the response }
+      responses:
+        "200":
+          description: Resource inventory window
+          headers:
+            X-Total-Count: { schema: { type: integer } }
+            X-Result-Count: { schema: { type: integer } }
+            X-Correlation-ID: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [id, href]
+                  properties:
+                    id: { type: string }
+                    href: { type: string, format: uri }
+                    name: { type: string }
+                    description: { type: string }
+                    category: { type: string }
+                    operationalState: { type: string, enum: [enable, disable, unknown] }
+                    lastUpdate: { type: string, format: date-time }
+                    resourceCharacteristic:
+                      type: array
+                      items:
+                        type: object
+                        required: [name, value]
+                        properties:
+                          name: { type: string }
+                          valueType: { type: string }
+                          value: {}
+                    "@baseType": { type: string }
+                    "@type": { type: string }
+        "400": { description: Invalid offset, limit, fields, or correlation identifier }
+        "500": { description: Internal inventory error }
+  /tmf-api/resourceInventoryManagement/v5/resource/{id}:
+    get:
+      tags: [TMF639 Resource Inventory]
+      summary: Get one tenant-accessible ACS managed resource; missing and foreign-tenant IDs both return 404
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: fields, in: query, schema: { type: string }, description: Comma-separated projection fields; unknown fields are rejected }
+        - { name: X-Correlation-ID, in: header, schema: { type: string, maxLength: 128 } }
+      responses:
+        "200":
+          description: Resource
+          headers:
+            X-Correlation-ID: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, href]
+                properties:
+                  id: { type: string }
+                  href: { type: string, format: uri }
+                  name: { type: string }
+                  description: { type: string }
+                  category: { type: string }
+                  operationalState: { type: string, enum: [enable, disable, unknown] }
+                  lastUpdate: { type: string, format: date-time }
+                  resourceCharacteristic:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, value]
+                      properties:
+                        name: { type: string }
+                        valueType: { type: string }
+                        value: {}
+                  "@baseType": { type: string }
+                  "@type": { type: string }
+        "400": { description: Invalid fields or correlation identifier }
+        "404": { description: Resource not found or not visible in caller tenancy scope }
+        "500": { description: Internal inventory error }
+'''
+              text = text.replace(marker, block + marker, 1)
+              spec.write_text(text)
+          PY
+          gofmt -w backend/internal/tmf/resourceinventory/*.go backend/internal/devices/window.go backend/cmd/api/tmf639_handlers.go backend/cmd/api/routes.go
+      - name: Regenerate committed frontend API types
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run generate:api
+      - name: Run focused Go tests
+        working-directory: backend
+        run: go test ./internal/tmf/... ./internal/devices ./cmd/api
+      - name: Commit wired slice and remove helper
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/tmf639-wire.yml
+          git add backend/cmd/api/routes.go backend/cmd/api/tmf639_handlers.go backend/internal/devices/window.go backend/internal/tmf/resourceinventory backend/openapi.yaml frontend/src/api/generated.ts
+          git commit -m "feat(tmf639): wire read-only resource inventory"
+          git push origin HEAD:feat/tmf639-resource-inventory
