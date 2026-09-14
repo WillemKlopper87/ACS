@@ -372,7 +372,7 @@ func (h *handler) captureInbound(ctx context.Context, naturalKey, remoteIP, devi
 			if err := h.captures.RecordEventForDevice(ctx, s.ID, deviceID, "inbound", kind, summary, redactedBody); err != nil {
 				h.logger.Error("failed to correlate and record capture event", "err", err, "session_id", s.ID)
 			}
-		} else if err := h.captures.RecordEvent(ctx, s.ID, "inbound", kind, summary, redactedBody); err != nil {
+		} else if err := h.captures.RecordEventWhileUnresolved(ctx, s.ID, "inbound", kind, summary, redactedBody); err != nil {
 			h.logger.Error("failed to record capture event", "err", err, "session_id", s.ID)
 		}
 	}

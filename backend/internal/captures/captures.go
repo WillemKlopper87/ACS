@@ -395,6 +395,36 @@ func (r *Repository) RecordEventForDevice(ctx context.Context, sessionID, device
 	return nil
 }
 
+// RecordEventWhileUnresolved records a pre-correlation event only while the
+// session still has no device_id. The row lock serializes this decision with
+// RecordEventForDevice, preventing an unknown second device behind the same
+// NAT address from appending after the capture has been bound to the first.
+func (r *Repository) RecordEventWhileUnresolved(ctx context.Context, sessionID, direction, kind, summary string, body *string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin unresolved capture event: %w", err)
+	}
+	defer tx.Rollback()
+	var allowed bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT true FROM capture_sessions
+		WHERE id = $1 AND device_id IS NULL
+		FOR UPDATE`, sessionID).Scan(&allowed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lock unresolved capture session: %w", err)
+	}
+	if err := recordEvent(ctx, tx, sessionID, direction, kind, summary, body); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit unresolved capture event: %w", err)
+	}
+	return nil
+}
+
 // ListEvents returns a session's events in seq order.
 func (r *Repository) ListEvents(ctx context.Context, sessionID string) ([]Event, error) {
 	return listEvents(ctx, r.db, sessionID)

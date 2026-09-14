@@ -300,6 +300,9 @@ func TestAccessibleOperationsHideForeignAndRemoteIPCaptures(t *testing.T) {
 	if err := r.RecordEventForDevice(ctx, remote.ID, deviceA, "inbound", "Inform", "device A behind same NAT", nil); err == nil {
 		t.Fatal("second device behind shared IP was recorded into an already-correlated remote capture")
 	}
+	if err := r.RecordEventWhileUnresolved(ctx, remote.ID, "inbound", "Notify", "unknown device behind same NAT", nil); err != nil {
+		t.Fatalf("skip unresolved event after correlation: %v", err)
+	}
 	if _, _, err := r.GetWithEventsAccessible(ctx, remote.ID, "bob", []string{customerB}, true); err != ErrNotFound {
 		t.Errorf("tenant read of global remote capture = %v, want ErrNotFound", err)
 	}
