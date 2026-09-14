@@ -385,20 +385,11 @@ jobs:
           # the refusal via assert-allowlist.sh strictly before the identity
           # is registered -- runs it as a pre-insert hook, passing the
           # computed oui_serial as assert-allowlist.sh's final argument.
-          # Once both pass, pre-register the real identity and force a
-          # fresh connection attempt so the rest of this step (which all
-          # assume a successfully reconciled device) can proceed. See
-          # task-5-report.md for why this supersedes the original plan's
-          # second, deliberately-unregistered obuspa instance, and for why
-          # this extraction/pre-registration logic now lives in one shared
-          # script rather than copy-pasted per step.
+          # Once both pass, preregister.sh cycles the live controller MTP,
+          # which forces the fresh connection attempt without destroying the
+          # agent process/database that produced the refusal evidence.
           ci/usp/preregister.sh obuspa-ws "$ACS_USP_POSTGRES_DSN" \
             ci/usp/assert-allowlist.sh /tmp/uspc-ws.log "$ACS_USP_POSTGRES_DSN" "$AGENT_ENDPOINT_ID" || rc=$?
-
-          if [ "$rc" -eq 0 ]; then
-            echo "forcing a fresh connection attempt against the now-registered identity (docker restart obuspa-ws)"
-            docker restart obuspa-ws >/dev/null || rc=$?
-          fi
 
           if [ "$rc" -ne 0 ]; then
             kill "$logs_pid" 2>/dev/null || true
@@ -473,19 +464,11 @@ jobs:
           # as the WebSocket step above (ci/usp/preregister.sh) -- obuspa-
           # mqtt5's identity is only known once extracted via its own "-c
           # get" CLI, so its first connection attempt(s) above were refused
-          # by cmd/uspc's identity gate. The gate's refusal itself is
-          # already proven once by the WebSocket step's assert-allowlist.sh
-          # call (the gate is MTP-agnostic Go logic, not re-proven per
-          # transport); this step only needs the same pre-register-and-
-          # reconnect workaround (no pre-insert hook) so its own GetResp
-          # assertion below runs against a fully-reconciled agent rather
-          # than one stuck in a refusal/retry loop for the rest of the
-          # step's duration.
+          # by cmd/uspc's identity gate. preregister.sh now inserts that
+          # identity and cycles the live controller MTP itself; do not restart
+          # the container here or the reference agent loses the working live
+          # transport state before the acceptance assertion below.
           ci/usp/preregister.sh obuspa-mqtt5 "$ACS_USP_POSTGRES_DSN" || rc=$?
-          if [ "$rc" -eq 0 ]; then
-            echo "forcing a fresh connection attempt against the now-registered identity (docker restart obuspa-mqtt5)"
-            docker restart obuspa-mqtt5 >/dev/null || rc=$?
-          fi
 
           # assert-getresp.sh below matches a probe log line that is
           # emitted BEFORE the identity gate's refusal/acceptance decision
@@ -558,14 +541,10 @@ jobs:
           rc=0
 
           # USP agent allowlist (Task 5): same pre-registration workaround
-          # as the WebSocket/mqtt-v5 steps above (ci/usp/preregister.sh) --
-          # see the mqtt-v5 step's own comment for why this doesn't also
-          # re-run assert-allowlist.sh.
+          # as the WebSocket/mqtt-v5 steps above. preregister.sh inserts the
+          # identity and cycles the live controller MTP itself; preserve that
+          # connection for the acceptance check instead of restarting here.
           ci/usp/preregister.sh obuspa-mqtt311 "$ACS_USP_POSTGRES_DSN" || rc=$?
-          if [ "$rc" -eq 0 ]; then
-            echo "forcing a fresh connection attempt against the now-registered identity (docker restart obuspa-mqtt311)"
-            docker restart obuspa-mqtt311 >/dev/null || rc=$?
-          fi
 
           # assert-getresp.sh below matches a probe log line that is
           # emitted BEFORE the identity gate's refusal/acceptance decision
