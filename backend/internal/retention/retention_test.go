@@ -50,15 +50,26 @@ func TestRun_PrunesOldStoppedCaptureSessions(t *testing.T) {
 		t.Fatalf("insert stopped session: %v", err)
 	}
 
-	// Insert a capture_sessions row with status='ACTIVE' and expires_at = now() - 2 days.
-	// This should NOT be pruned -- ACTIVE rows are never pruned regardless of age.
-	activeID := uuid.New()
-	activeExpiresAt := time.Now().UTC().Add(-2 * 24 * time.Hour)
+	// Insert an ACTIVE capture_sessions row with expires_at = now() - 2 days (past retention window).
+	// This SHOULD be pruned by the new OR branch of the retention rule.
+	activeExpiredID := uuid.New()
+	activeExpiredAt := time.Now().UTC().Add(-2 * 24 * time.Hour)
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO capture_sessions (id, match_type, match_value, protocol, status, started_by, started_at, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, activeID, "device", "device-key-2", "CWMP", "ACTIVE", "test-user", time.Now().UTC(), activeExpiresAt); err != nil {
-		t.Fatalf("insert active session: %v", err)
+	`, activeExpiredID, "device", "device-key-2", "CWMP", "ACTIVE", "test-user", time.Now().UTC(), activeExpiredAt); err != nil {
+		t.Fatalf("insert active expired session: %v", err)
+	}
+
+	// Insert an ACTIVE capture_sessions row with expires_at still in the future.
+	// This should NOT be pruned -- a genuinely live session must be protected.
+	activeLiveID := uuid.New()
+	activeLiveAt := time.Now().UTC().Add(24 * time.Hour)
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO capture_sessions (id, match_type, match_value, protocol, status, started_by, started_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, activeLiveID, "device", "device-key-3", "CWMP", "ACTIVE", "test-user", time.Now().UTC(), activeLiveAt); err != nil {
+		t.Fatalf("insert active live session: %v", err)
 	}
 
 	// Run retention with 1-day policy.
@@ -76,17 +87,26 @@ func TestRun_PrunesOldStoppedCaptureSessions(t *testing.T) {
 		t.Errorf("stopped session still exists; want 0, got %d", stoppedCount)
 	}
 
-	// Verify that the ACTIVE session was NOT deleted.
-	var activeCount int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM capture_sessions WHERE id = $1`, activeID).Scan(&activeCount); err != nil {
-		t.Fatalf("query active session count: %v", err)
+	// Verify that the ACTIVE expired session was deleted.
+	var activeExpiredCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM capture_sessions WHERE id = $1`, activeExpiredID).Scan(&activeExpiredCount); err != nil {
+		t.Fatalf("query active expired session count: %v", err)
 	}
-	if activeCount != 1 {
-		t.Errorf("active session was deleted; want 1, got %d", activeCount)
+	if activeExpiredCount != 0 {
+		t.Errorf("active expired session still exists; want 0, got %d", activeExpiredCount)
 	}
 
-	// Verify the result reports the deletion.
-	if result["capture_sessions"] != 1 {
-		t.Errorf("result[\"capture_sessions\"] = %d, want 1", result["capture_sessions"])
+	// Verify that the ACTIVE live session was NOT deleted.
+	var activeLiveCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM capture_sessions WHERE id = $1`, activeLiveID).Scan(&activeLiveCount); err != nil {
+		t.Fatalf("query active live session count: %v", err)
+	}
+	if activeLiveCount != 1 {
+		t.Errorf("active live session was deleted; want 1, got %d", activeLiveCount)
+	}
+
+	// Verify the result reports the deletions (2 rows deleted: stopped + active expired).
+	if result["capture_sessions"] != 2 {
+		t.Errorf("result[\"capture_sessions\"] = %d, want 2", result["capture_sessions"])
 	}
 }

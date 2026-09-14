@@ -101,7 +101,7 @@ var rules = []rule{
 	{"password_reset_tokens", func(p Policy) int { return p.ResetTokensDays },
 		"(used_at IS NOT NULL OR expires_at < now()) AND expires_at < $1", "id"},
 	{"capture_sessions", func(p Policy) int { return p.CaptureSessionsDays },
-		"status <> 'ACTIVE' AND COALESCE(stopped_at, expires_at) < $1", "id"},
+		"(status <> 'ACTIVE' AND COALESCE(stopped_at, expires_at) < $1) OR (status = 'ACTIVE' AND expires_at < $1)", "id"},
 }
 
 // Result is per-table rows deleted in one Run.
