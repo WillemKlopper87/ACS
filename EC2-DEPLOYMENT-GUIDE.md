@@ -347,18 +347,39 @@ restarting the static server alone won't fix it.
 ### 6.2 Serve the frontend (simple option)
 
 **If you're using `scripts/start.sh`, this is already running.** It uses
-Python's built-in server:
+`scripts/spa-server.py`, a small stdlib-only Python server:
 
 ```bash
-cd ~/ACS/frontend/dist
-python3 -m http.server 5173
+python3 ~/ACS/scripts/spa-server.py 5173 ~/ACS/frontend/dist http://<ec2-public-ip>:8080
 ```
 
-deliberately instead of `npm install -g http-server` — the global npm
-install needs `sudo` on a stock Ubuntu instance (npm's default global
+Python deliberately instead of `npm install -g http-server` — the global
+npm install needs `sudo` on a stock Ubuntu instance (npm's default global
 prefix is root-owned), which is one more permission hurdle for no real
-benefit here. `python3` is already on every stock Ubuntu AMI, needs no
-install, and is entirely sufficient for serving a static build.
+benefit here. `python3` is already on every stock Ubuntu AMI and needs no
+install.
+
+**Why not plain `python3 -m http.server 5173`** (what this used to be):
+the console routes by URL, so a reload or a deep link on any path other
+than `/` — `http://<ip>:5173/dashboard` — asks the server for a file that
+doesn't exist, and `http.server` answers:
+
+```
+Error response
+Error code: 404
+Message: File not found.
+```
+
+`spa-server.py` adds the `/index.html` fallback that makes those routes
+work — the same `try_files $uri $uri/ /index.html` the Nginx option below
+and the container image use — along with the same `/assets/` carve-out
+(a stale content-hashed bundle must get a real 404, not HTML, so the app
+can detect it and reload), the same security headers, and `no-store` on
+`index.html` so a rebuild isn't shadowed by a cached page.
+
+The third argument is the API origin; it goes into the page's CSP
+`connect-src`, so it must match the `VITE_API_BASE_URL` the bundle was
+built with (`start.sh` passes both from the same detected public IP).
 
 Then open `http://<ec2-public-ip>:5173` in your browser and log in with
 the admin username/password `scripts/gen-env.sh` printed.
@@ -591,6 +612,15 @@ The gateway also (as of this revision) echoes the CPE's `cwmp:ID` header and CWM
 - Check `cmd/api` is running: `curl http://localhost:8080/metrics`
 - Check frontend build: `ls ~/ACS/frontend/dist/index.html`
 - Check Nginx (if using it): `sudo nginx -t` and `sudo systemctl status nginx`
+
+### "Error code: 404 — File not found" when reloading a page
+
+Only `/` works, but `http://<ip>:5173/dashboard` 404s on refresh: the
+frontend is being served by plain `python3 -m http.server`, which has no
+SPA fallback. Rerun `./scripts/start.sh` — it serves the console with
+`scripts/spa-server.py` (§6.2), which falls back to `index.html`. If the
+old server is still running from a previous deploy, `./scripts/stop.sh`
+kills it.
 
 ## 11. Updating from GitHub
 

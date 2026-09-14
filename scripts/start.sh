@@ -102,10 +102,15 @@ npm install --silent
 npm run build
 
 echo "=== Starting frontend static server (:5173) ==="
-# Plain python3 http.server — no npm global-install/sudo dance, and
-# python3 is already on every stock Ubuntu image.
+# scripts/spa-server.py, not `python3 -m http.server`: the console routes
+# by URL, so reloading or deep-linking /dashboard asked plain http.server
+# for a file that doesn't exist and got "Error code: 404 — File not
+# found". spa-server.py adds the same /index.html fallback, /assets/
+# carve-out and security headers the containerized nginx has
+# (frontend/nginx.conf.template), while staying pure-stdlib python3 — no
+# npm global install, no sudo.
 cd "$ROOT/frontend/dist"
-nohup python3 -m http.server 5173 > "$LOG_DIR/frontend.log" 2>&1 &
+nohup python3 "$ROOT/scripts/spa-server.py" 5173 "$ROOT/frontend/dist" "http://$PUBLIC_IP:8080" > "$LOG_DIR/frontend.log" 2>&1 &
 echo $! > "$LOG_DIR/frontend.pid"
 sleep 1
 if ! kill -0 "$(cat "$LOG_DIR/frontend.pid")" 2>/dev/null; then
