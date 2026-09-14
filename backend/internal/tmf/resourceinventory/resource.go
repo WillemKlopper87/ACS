@@ -6,25 +6,30 @@ package resourceinventory
 // and route registration cannot drift independently.
 const CollectionPath = "tmf-api/resourceInventoryManagement/v5/resource"
 
-// Characteristic is the small TMF characteristic shape needed by the ACS
-// inventory projection. Value deliberately remains any: device facts include
-// strings, booleans, numbers and string arrays.
+// Characteristic is the TMF v5 characteristic envelope used by the ACS
+// projection. @type identifies the concrete strongly-typed characteristic
+// family (for example StringCharacteristic or NumberCharacteristic).
 type Characteristic struct {
 	Name      string `json:"name"`
 	ValueType string `json:"valueType,omitempty"`
 	Value     any    `json:"value"`
+	Type      string `json:"@type"`
 }
 
-// Resource is the read model projected from an ACS-managed device. It is not a
-// second resource database: the devices table remains authoritative and this
-// shape is rebuilt on every read.
+// Resource is the read model projected from an ACS-managed physical CPE. It is
+// not a second resource database: the devices table remains authoritative and
+// this shape is rebuilt on every read.
 type Resource struct {
 	ID                     string           `json:"id"`
 	Href                   string           `json:"href"`
 	Name                   string           `json:"name,omitempty"`
 	Description            string           `json:"description,omitempty"`
 	Category               string           `json:"category,omitempty"`
+	SerialNumber           string           `json:"serialNumber,omitempty"`
+	ModelNumber            string           `json:"modelNumber,omitempty"`
 	OperationalState       string           `json:"operationalState,omitempty"`
+	LifecycleState         string           `json:"lifecycleState,omitempty"`
+	AvailabilityStatus     string           `json:"availabilityStatus,omitempty"`
 	LastUpdate             string           `json:"lastUpdate,omitempty"`
 	ResourceCharacteristic []Characteristic `json:"resourceCharacteristic,omitempty"`
 	BaseType               string           `json:"@baseType,omitempty"`
@@ -40,7 +45,11 @@ var AllowedFields = []string{
 	"name",
 	"description",
 	"category",
+	"serialNumber",
+	"modelNumber",
 	"operationalState",
+	"lifecycleState",
+	"availabilityStatus",
 	"lastUpdate",
 	"resourceCharacteristic",
 	"@baseType",
