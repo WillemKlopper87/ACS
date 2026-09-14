@@ -19,8 +19,20 @@ func ProjectFields(resource Resource, fields common.Fields) map[string]any {
 	if fields.Includes("category") && resource.Category != "" {
 		out["category"] = resource.Category
 	}
+	if fields.Includes("serialNumber") && resource.SerialNumber != "" {
+		out["serialNumber"] = resource.SerialNumber
+	}
+	if fields.Includes("modelNumber") && resource.ModelNumber != "" {
+		out["modelNumber"] = resource.ModelNumber
+	}
 	if fields.Includes("operationalState") && resource.OperationalState != "" {
 		out["operationalState"] = resource.OperationalState
+	}
+	if fields.Includes("lifecycleState") && resource.LifecycleState != "" {
+		out["lifecycleState"] = resource.LifecycleState
+	}
+	if fields.Includes("availabilityStatus") && resource.AvailabilityStatus != "" {
+		out["availabilityStatus"] = resource.AvailabilityStatus
 	}
 	if fields.Includes("lastUpdate") && resource.LastUpdate != "" {
 		out["lastUpdate"] = resource.LastUpdate
