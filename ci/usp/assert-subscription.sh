@@ -22,7 +22,10 @@
 #     between runs or the factory-reset file is ignored") -- exactly the
 #     "subscription reconciliation across an agent restart" coverage S9 asks
 #     for, and it preserves the already-established controller trust config
-#     from the first connect.
+#     from the first connect. The pinned OB-USP-Agent build keeps the MTP's
+#     persisted Enable=true value but can leave its runtime WebSocket client
+#     disabled after process restart, so this CI proof explicitly cycles that
+#     same persisted MTP after each restart before waiting for reconciliation.
 #
 #     Evidence: cmd/uspc's own log line "subscription reconciler: Add
 #     succeeded" (cmd/uspc/subscriptions.go's logAddResult), which only
@@ -75,6 +78,40 @@ add_succeeded_count() {
   n=$(grep 'msg="uspc: subscription reconciler: Add succeeded"' "$uspc_log" 2>/dev/null \
     | grep -c "subscription_id=$sub_id" || true)
   echo "${n:-0}"
+}
+
+# Preserve the genuine process-restart/database-persistence proof, but re-arm
+# OB-USP-Agent's controller MTP once its persisted database and CLI are live.
+# The MTP remains configured Enable=true in the database; cycling it false ->
+# true restarts the transport state machine without deleting/recreating the
+# database or reapplying the factory-reset file.
+restart_and_rearm_controller_mtp() {
+  echo "restarting $container and re-arming its persisted controller MTP"
+  docker restart "$container" >/dev/null
+
+  local ready=0 out=""
+  for _ in $(seq 1 20); do
+    out=$(docker exec "$container" obuspa -c get 'Device.LocalAgent.Controller.1.MTP.1.Enable' 2>&1 || true)
+    if echo "$out" | grep -q '=>'; then
+      ready=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "$ready" -ne 1 ]; then
+    fail "obuspa CLI did not become responsive after restart -- last output:
+$out"
+  fi
+
+  docker exec "$container" obuspa -c set 'Device.LocalAgent.Controller.1.MTP.1.Enable' 'false' >/dev/null
+  docker exec "$container" obuspa -c set 'Device.LocalAgent.Controller.1.MTP.1.Enable' 'true' >/dev/null
+
+  out=$(docker exec "$container" obuspa -c get 'Device.LocalAgent.Controller.1.MTP.1.Enable' 2>&1 || true)
+  if ! echo "$out" | grep -qi '=> true'; then
+    fail "controller MTP was not persisted enabled after restart re-arm -- output:
+$out"
+  fi
+  echo "OK: restarted agent retained its database and controller MTP was re-armed"
 }
 
 echo "looking up device_id for endpoint $agent via usp_agents (B-3a identity reconciliation)"
@@ -134,8 +171,8 @@ if [ -z "$sub_id" ]; then
 fi
 echo "OK: usp_subscriptions row inserted (id=$sub_id)"
 
-echo "forcing a genuine reconnect (docker restart $container) -- reconcile() only ever runs from resolveAndMarkReconciled, the on-connect hook (task-6); there is no manual-trigger path, so a fresh connection is the only real way to exercise it against a row inserted after the first connect"
-docker restart "$container" >/dev/null
+echo "forcing a genuine reconnect -- reconcile() only ever runs from resolveAndMarkReconciled, the on-connect hook (task-6); there is no manual-trigger path, so a fresh connection is the only real way to exercise it against a row inserted after the first connect"
+restart_and_rearm_controller_mtp
 
 echo "waiting for reconciliation to Add the new subscription (uspc log: 'subscription reconciler: Add succeeded', subscription_id=$sub_id)"
 added=0
@@ -193,8 +230,8 @@ echo "$cli_out" | grep -E '\.(ID|NotifType|ReferenceList) => '
 add_count_before=$(add_succeeded_count)
 echo "OK: baseline Add-succeeded count for subscription_id=$sub_id = $add_count_before"
 
-echo "forcing a second reconnect (docker restart $container) to exercise the decode path against a real non-empty GetResp"
-docker restart "$container" >/dev/null
+echo "forcing a second reconnect to exercise the decode path against a real non-empty GetResp"
+restart_and_rearm_controller_mtp
 
 echo "waiting for the second reconcile pass to settle, then asserting exactly ONE Device.LocalAgent.Subscription. instance survives (not zero: not deleted-then-recreated; not two: not duplicated)"
 settled=0
