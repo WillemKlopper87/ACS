@@ -51,11 +51,17 @@ func TestProjectDeviceResource(t *testing.T) {
 	if got.Name != label {
 		t.Fatalf("Name = %q, want %q", got.Name, label)
 	}
-	if got.OperationalState != "enable" {
-		t.Fatalf("OperationalState = %q, want enable", got.OperationalState)
+	if got.OperationalState != "enabled" {
+		t.Fatalf("OperationalState = %q, want enabled", got.OperationalState)
 	}
-	if got.Type != "CustomerPremisesEquipment" || got.BaseType != "Resource" {
+	if got.AvailabilityStatus != "online" || got.LifecycleState != "installed" {
+		t.Fatalf("unexpected TMF lifecycle state: %#v", got)
+	}
+	if got.Type != "PhysicalResource" || got.BaseType != "Resource" {
 		t.Fatalf("unexpected TMF type metadata: %#v", got)
+	}
+	if got.SerialNumber != "ABC123" || got.ModelNumber != "Gateway-X" {
+		t.Fatalf("unexpected physical identifiers: %#v", got)
 	}
 
 	encoded, err := json.Marshal(got)
@@ -68,7 +74,7 @@ func TestProjectDeviceResource(t *testing.T) {
 			t.Fatalf("projection leaked %q: %s", secretOrInternal, body)
 		}
 	}
-	for _, expected := range []string{"acsOuiSerial", "serialNumber", "location", "lastInformAt"} {
+	for _, expected := range []string{"acsOuiSerial", "serialNumber", "location", "lastInformAt", "StringCharacteristic", "NumberCharacteristic"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("projection missing %q: %s", expected, body)
 		}
@@ -90,16 +96,19 @@ func TestProjectResourceNameFallback(t *testing.T) {
 	if got.Name != "Vendor Model SN1" {
 		t.Fatalf("Name = %q", got.Name)
 	}
+	if got.AvailabilityStatus != "" {
+		t.Fatalf("unknown availability was invented: %q", got.AvailabilityStatus)
+	}
 }
 
 func TestOperationalState(t *testing.T) {
 	for _, tc := range []struct {
 		in, want string
 	}{
-		{"ONLINE", "enable"},
-		{"offline", "disable"},
-		{"UNREACHABLE", "disable"},
-		{"", "unknown"},
+		{"ONLINE", "enabled"},
+		{"offline", "disabled"},
+		{"UNREACHABLE", "disabled"},
+		{"", ""},
 	} {
 		if got := operationalState(tc.in); got != tc.want {
 			t.Errorf("operationalState(%q) = %q, want %q", tc.in, got, tc.want)
