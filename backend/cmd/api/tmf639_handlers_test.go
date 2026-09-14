@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"testing"
 
@@ -13,6 +12,7 @@ import (
 )
 
 func TestTMF639Handlers(t *testing.T) {
+	t.Setenv("ACS_TMF_BASE_URL", "https://northbound.example")
 	e := newTestEnv(t)
 	custA, custB := e.customer("Customer A"), e.customer("Customer B")
 	devA := e.device("A001", &custA)
@@ -23,7 +23,7 @@ func TestTMF639Handlers(t *testing.T) {
 
 	base := "/tmf-api/resourceInventoryManagement/v5/resource"
 
-	t.Run("list is tenant scoped", func(t *testing.T) {
+	t.Run("list is tenant scoped and emits v5 physical resources", func(t *testing.T) {
 		r := e.call("alice", http.MethodGet, base, nil)
 		if r.code != http.StatusOK {
 			t.Fatalf("list -> %d %s", r.code, r.body)
@@ -37,6 +37,19 @@ func TestTMF639Handlers(t *testing.T) {
 		var items []map[string]any
 		if err := json.Unmarshal([]byte(r.body), &items); err != nil {
 			t.Fatalf("list is not a JSON array: %v (%s)", err, r.body)
+		}
+		if len(items) != 1 {
+			t.Fatalf("list returned %d items, want 1: %s", len(items), r.body)
+		}
+		if got := items[0]["@type"]; got != "PhysicalResource" {
+			t.Errorf("@type = %#v, want PhysicalResource", got)
+		}
+		if got := items[0]["operationalState"]; got != "disabled" {
+			t.Errorf("operationalState = %#v, want TMF639 v5 disabled", got)
+		}
+		href, _ := items[0]["href"].(string)
+		if !strings.HasPrefix(href, "https://northbound.example/tmf-api/resourceInventoryManagement/v5/resource/") {
+			t.Errorf("href does not use configured northbound base URL: %q", href)
 		}
 	})
 
@@ -57,7 +70,7 @@ func TestTMF639Handlers(t *testing.T) {
 		}
 	})
 
-	t.Run("fields projection is strict", func(t *testing.T) {
+	t.Run("fields projection is strict but preserves identity metadata", func(t *testing.T) {
 		r := e.call("alice", http.MethodGet, base+"/"+devA+"?fields=name", nil)
 		if r.code != http.StatusOK {
 			t.Fatalf("fields=name -> %d %s", r.code, r.body)
@@ -66,12 +79,15 @@ func TestTMF639Handlers(t *testing.T) {
 		if err := json.Unmarshal([]byte(r.body), &got); err != nil {
 			t.Fatalf("unmarshal projection: %v", err)
 		}
-		for _, required := range []string{"id", "href", "name"} {
+		for _, required := range []string{"id", "href", "name", "@type"} {
 			if _, ok := got[required]; !ok {
 				t.Errorf("projection missing %q: %#v", required, got)
 			}
 		}
-		for _, omitted := range []string{"resourceCharacteristic", "operationalState", "@type"} {
+		if got["@type"] != "PhysicalResource" {
+			t.Errorf("projected @type = %#v, want PhysicalResource", got["@type"])
+		}
+		for _, omitted := range []string{"resourceCharacteristic", "operationalState", "description", "category"} {
 			if _, ok := got[omitted]; ok {
 				t.Errorf("projection unexpectedly contains %q: %#v", omitted, got)
 			}
@@ -123,10 +139,6 @@ func TestTMF639Handlers(t *testing.T) {
 			t.Fatal(err)
 		}
 		req.Header.Set("Authorization", "Bearer "+e.tokens["alice"])
-		req.Header.Set("X-Correlation-ID", "bad\ncorrelation")
-		// net/http rejects literal control bytes before transport, so use a
-		// percent-decoded value through a legal header-shaped string that the
-		// common validator must still reject for being too long instead.
 		req.Header.Set("X-Correlation-ID", strings.Repeat("x", 129))
 		res, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -138,10 +150,4 @@ func TestTMF639Handlers(t *testing.T) {
 			t.Fatalf("bad correlation -> %d, want 400 (%s)", res.StatusCode, body)
 		}
 	})
-
-	// Keep url imported deliberately: verify device IDs are safely encoded in
-	// the resource href rather than concatenated raw by the adapter.
-	if _, err := url.Parse(base + "/" + url.PathEscape(devA)); err != nil {
-		t.Fatalf("resource path parse: %v", err)
-	}
 }
