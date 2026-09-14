@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"acs/internal/bss"
+	"acs/internal/captures"
 	"acs/internal/cliaccess"
 	"acs/internal/config"
 	"acs/internal/credentials"
@@ -146,6 +147,19 @@ func main() {
 		logger.Warn("ACS_VPN_SERVER_PUBLIC_KEY/ACS_VPN_SERVER_ENDPOINT not set — VPN peers can still be enrolled (keypair + overlay IP allocation both work), but the generated client config will have an empty [Peer] section until a real concentrator host's public key/endpoint are configured. Deliberately last item in the admin-platform backlog — see internal/vpn's doc comment for the full scope.")
 	}
 
+	captureRepo := captures.NewRepository(db)
+	// captureMaxDuration bounds how long an on-demand capture session
+	// stays ACTIVE (design §4/§7) — same env var and default as
+	// cmd/acs, since this is the process that actually starts a
+	// session; cmd/acs's own per-event checks only ever treat
+	// expires_at as authoritative, never re-derive it.
+	captureMaxDuration := 30 * time.Minute
+	if v := os.Getenv("ACS_CAPTURE_MAX_DURATION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			captureMaxDuration = d
+		}
+	}
+
 	metrics := observability.NewMetrics("api")
 	metrics.ObserveDB(db)
 
@@ -255,6 +269,9 @@ func main() {
 
 		vpnPeers:        vpnRepo,
 		vpnConcentrator: vpnConcentrator,
+
+		captures:           captureRepo,
+		captureMaxDuration: captureMaxDuration,
 	}
 	if h.bssToken == "" {
 		logger.Warn("ACS_BSS_API_TOKEN not set — BSS admin-panel troubleshooting calls will hit the adapter unauthenticated (fine only if cmd/bssadapter also has no ACS_BSS_API_TOKEN set)")
@@ -437,4 +454,9 @@ type handler struct {
 
 	vpnPeers        *vpn.Repository
 	vpnConcentrator vpn.ConcentratorConfig
+
+	captures *captures.Repository
+	// captureMaxDuration bounds how long an on-demand capture session
+	// this process starts stays ACTIVE — see ACS_CAPTURE_MAX_DURATION.
+	captureMaxDuration time.Duration
 }

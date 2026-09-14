@@ -15,7 +15,7 @@ import { useTheme, type Theme } from "./theme/useTheme";
 // is worse than no badge at all. Set VITE_ENV_LABEL at build time.
 const ENV_LABEL = import.meta.env.VITE_ENV_LABEL as string | undefined;
 
-type Screen = "dashboard" | "fleet" | "control" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help";
+type Screen = "dashboard" | "fleet" | "control" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help";
 
 const THEME_LABEL: Record<Theme, string> = { dark: "Dark", light: "Light", unfold: "Unfold", fluent: "Fluent 2" };
 
@@ -47,6 +47,7 @@ const NAV: { id: Screen; label: string; adminOnly?: boolean; group: string }[] =
   { group: "Administration", id: "bss", label: "BSS Integration", adminOnly: true },
 
   { group: "Records", id: "audit", label: "Audit Log" },
+  { group: "Records", id: "captures", label: "Captures" },
   { group: "Records", id: "reports", label: "Reports" },
   { group: "Records", id: "help", label: "Help" },
 ];
@@ -111,6 +112,7 @@ const SCREEN_COMPONENT: Record<Screen, ComponentType> = {
   rollouts: screen(() => import("./screens/FirmwareRollouts"), "FirmwareRollouts"),
   policies: screen(() => import("./screens/Policies"), "Policies"),
   audit: screen(() => import("./screens/AuditLog"), "AuditLog"),
+  captures: screen(() => import("./screens/CaptureSessions"), "CaptureSessions"),
   operators: screen(() => import("./screens/Operators"), "Operators"),
   tenancy: screen(() => import("./screens/Tenancy"), "Tenancy"),
   reports: screen(() => import("./screens/Reports"), "Reports"),

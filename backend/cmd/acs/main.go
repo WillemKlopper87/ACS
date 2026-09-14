@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"acs/internal/auth"
+	"acs/internal/captures"
 	"acs/internal/config"
 	"acs/internal/credentials"
 	"acs/internal/devices"
@@ -177,6 +178,18 @@ func main() {
 	deviceRate := envOrFloat("ACS_RATE_LIMIT_DEVICE_PER_SECOND", defaultDeviceRateLimitPerSecond)
 	deviceBurst := envOrInt("ACS_RATE_LIMIT_DEVICE_BURST", defaultDeviceRateLimitBurst)
 
+	captureRepo := captures.NewRepository(db)
+	// captureMaxDuration bounds how long an on-demand capture session
+	// stays ACTIVE (design §4/§7) — cmd/api needs this SAME default when
+	// it starts a session (Task 6), since cmd/acs's own per-event checks
+	// only ever treat expires_at as authoritative, never re-derive it.
+	captureMaxDuration := 30 * time.Minute
+	if v := os.Getenv("ACS_CAPTURE_MAX_DURATION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			captureMaxDuration = d
+		}
+	}
+
 	h := &handler{
 		logger:             logger,
 		auth:               authr,
@@ -188,6 +201,8 @@ func main() {
 		metrics:            metrics,
 		policies:           policy.NewRepository(db),
 		templates:          templates.NewRepository(db),
+		captures:           captureRepo,
+		captureMaxDuration: captureMaxDuration,
 		ipLimiter:          ratelimit.New(ipRate, ipBurst, rateLimitIdleTTL),
 		deviceLimiter:      ratelimit.New(deviceRate, deviceBurst, rateLimitIdleTTL),
 		onboardingListener: newOnboardingListener(envOr("ACS_ONBOARDING_LISTENER", "off"), logger),
@@ -388,6 +403,9 @@ type handler struct {
 	metrics   *observability.Metrics
 	policies  *policy.Repository
 	templates *templates.Repository
+	captures  *captures.Repository
+
+	captureMaxDuration time.Duration
 
 	ipLimiter          *ratelimit.Limiter
 	deviceLimiter      *ratelimit.Limiter

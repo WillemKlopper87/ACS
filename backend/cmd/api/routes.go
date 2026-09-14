@@ -188,5 +188,15 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("GET", "/api/v1/uploads/{id}/file", ro, h.serveUploadedFile)
 	mux.HandleFunc("PUT /api/v1/uploads/{id}/receive", metrics.InstrumentHTTP("PUT /api/v1/uploads/{id}/receive", h.receiveUpload)) // CPE traffic — see isPublicRoute
 
+	// On-demand session capture (design docs/superpowers/specs/2026-09-14-session-capture-design.md
+	// §4/§7): start/stop gated on the same troubleshooting-action
+	// permission as ping/traceroute, reads plain readonly.
+	routePerm("POST", "/api/v1/devices/{id}/captures", operators.PermDiagnosticsRun, h.createDeviceCapture)
+	routePerm("POST", "/api/v1/captures", operators.PermDiagnosticsRun, h.createCapture)
+	routePerm("POST", "/api/v1/captures/{id}/stop", operators.PermDiagnosticsRun, h.stopCapture)
+	route("GET", "/api/v1/captures", ro, h.listCaptures)
+	route("GET", "/api/v1/captures/{id}/events", ro, h.getCaptureEvents)
+	route("GET", "/api/v1/captures/{id}/export", ro, h.exportCapture)
+
 	return mux
 }

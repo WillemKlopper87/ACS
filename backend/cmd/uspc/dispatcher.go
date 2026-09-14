@@ -24,12 +24,26 @@ import (
 	"sync"
 	"time"
 
+	"acs/internal/captures"
 	"acs/internal/devices"
 	"acs/internal/jobs"
 	"acs/internal/usp"
 	"acs/internal/usp/mtp"
 	"acs/internal/usp/uspproto"
 )
+
+// deviceOUIResolver is the narrow slice of *devices.Repository
+// captureOutbound needs to resolve a device's natural key (OUISerial)
+// for captures.Repository.ActiveMatch -- deliberately its own interface
+// rather than an addition to identityStore (identity.go/identity_test.go
+// are outside this task's file boundary; identityStore's existing
+// GetUspAgentByDeviceID/GetUspAgentByEndpointID answers usp_agents
+// questions, not devices.Device's own OUISerial). *devices.Repository
+// already implements this via its existing Get method, so main.go can
+// wire it in directly with no changes to internal/devices.
+type deviceOUIResolver interface {
+	Get(ctx context.Context, id string) (*devices.Device, error)
+}
 
 // uspDispatchableTypes are the job types dispatch.go's buildUSPRequest can
 // actually render as a USP request today -- nine of internal/jobs'
@@ -98,6 +112,18 @@ type dispatcher struct {
 	registry     *mtp.Registry
 	controllerID usp.EndpointID
 	log          *slog.Logger
+
+	// captures and devices are session-capture's own dependencies
+	// (design S5), deliberately separate from jobsRepo/devicesRepo/
+	// registry above: neither newDispatcher's signature nor
+	// dispatcher_test.go's existing calls are touched by this task (out
+	// of file boundary), so both are left nil by every pre-existing call
+	// site and set directly by main.go after construction instead (same
+	// package, unexported fields) -- captureOutbound's own nil guard
+	// treats an unwired dispatcher exactly like cmd/acs's handler treats
+	// a nil h.captures: a quiet no-op, not a panic.
+	captures *captures.Repository
+	devices  deviceOUIResolver
 
 	mu      sync.Mutex
 	pending map[string]pendingDispatch
@@ -223,6 +249,8 @@ func (d *dispatcher) tryDispatch(ctx context.Context, deviceID string) error {
 		return nil
 	}
 
+	d.captureOutbound(ctx, deviceID, job)
+
 	record, err := usp.EncodeRecord(d.controllerID, conn.Endpoint(), msgBytes)
 	if err != nil {
 		return fmt.Errorf("dispatcher: encode record for job %s: %w", job.ID, err)
@@ -241,6 +269,51 @@ func (d *dispatcher) tryDispatch(ctx context.Context, deviceID string) error {
 		return fmt.Errorf("dispatcher: send job %s: %w", job.ID, err)
 	}
 	return nil
+}
+
+// captureOutbound is tryDispatch's capture checkpoint for a dispatch
+// this process itself is sending, mirroring cmd/acs/session.go's
+// captureOutbound exactly: resolve deviceID's own natural key
+// (OUISerial) via d.devices, then check for any active capture session
+// matching it (protocol "USP", no remote-IP ambiguity for an outbound
+// RPC, same reasoning as CWMP's own outbound hook). A no-op if
+// d.captures or d.devices is nil (every pre-existing dispatcher_test.go
+// call site leaves both unwired -- see the dispatcher struct's own doc
+// comment on why that's fine).
+//
+// Unlike cmd/acs's outbound hook, this does not attempt to capture a
+// redacted rendering of the dispatched request's own body:
+// buildUSPRequest's output is Msg-encoded protobuf, not CWMP's rendered
+// wire-XML that captureDispatchBody's <Name>/<Value>+<Password> regex
+// passes depend on, and per-USP-message-type body redaction is out of
+// this task's first cut (handler.go's captureInbound carries the same
+// scope decision for the inbound side; see this task's report). Only a
+// summary line -- the job's type and command key, no parameter names or
+// values -- is recorded, so there is no per-message-type redaction gap
+// to have here: nothing sensitive from the job's own payload (e.g. a
+// SET_PARAMETER job's parameter values, the one USP job type whose
+// payload can carry a security-sensitive value analogous to CWMP's
+// SetParameterValues) is ever rendered into what gets stored.
+func (d *dispatcher) captureOutbound(ctx context.Context, deviceID string, job *jobs.Job) {
+	if d.captures == nil || d.devices == nil {
+		return
+	}
+	device, err := d.devices.Get(ctx, deviceID)
+	if err != nil {
+		d.log.Error("uspc: dispatcher: failed to resolve device for outbound capture check", "err", err, "device_id", deviceID)
+		return
+	}
+	sessions, err := d.captures.ActiveMatch(ctx, "USP", device.OUISerial, "")
+	if err != nil {
+		d.log.Error("uspc: dispatcher: failed to check active captures", "err", err, "device_id", deviceID)
+		return
+	}
+	summary := fmt.Sprintf("dispatching %s (command_key=%s)", job.Type, job.CommandKey)
+	for _, s := range sessions {
+		if err := d.captures.RecordEvent(ctx, s.ID, "outbound", job.Type, summary, nil); err != nil {
+			d.log.Error("uspc: dispatcher: failed to record capture event", "err", err, "session_id", s.ID)
+		}
+	}
 }
 
 // dispatchResultDetail is the JSON-serializable shape stored in

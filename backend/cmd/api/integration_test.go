@@ -20,6 +20,7 @@ import (
 
 	"acs/internal/auth"
 	"acs/internal/bss"
+	"acs/internal/captures"
 	"acs/internal/cliaccess"
 	"acs/internal/credentials"
 	"acs/internal/dashboard"
@@ -131,6 +132,9 @@ func newTestEnv(t *testing.T) *testEnv {
 		bssOAuthClients:  bss.NewOAuthRepository(db),
 		bssHTTPClient:    &http.Client{Timeout: time.Second},
 		vpnPeers:         vpnRepo,
+
+		captures:           captures.NewRepository(db),
+		captureMaxDuration: 30 * time.Minute,
 	}
 	mux := h.registerRoutes(metrics, db)
 	srv := httptest.NewServer(withJWTAuth(testJWTSecret, testServiceToken, h.tokenCurrent, withBodyLimit(mux)))

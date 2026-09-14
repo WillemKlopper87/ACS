@@ -503,6 +503,40 @@ td.ellipsis { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; }
 .form-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
 .form-row input { flex: 1; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.4rem 0.6rem; color: var(--ink); font-family: var(--font-mono); font-size: 0.82rem; }
 
+/* Session capture is a protocol workbench: the session list remains dense,
+   while the transcript keeps enough width for long RPC names and payloads. */
+.capture-workbench { display: grid; grid-template-columns: minmax(0, 5fr) minmax(24rem, 4fr); gap: 1.1rem; align-items: start; }
+.capture-master, .capture-inspector { min-width: 0; }
+.capture-inspector { position: sticky; top: 1rem; }
+.capture-launcher { margin-bottom: 0.8rem; }
+.capture-guidance { max-width: 70ch; margin: 0; font-size: 0.82rem; }
+.capture-target-field { flex: 2; }
+.capture-start { align-self: end; }
+.capture-list-toolbar { margin-top: 0; }
+.capture-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.8rem; margin-bottom: 0.75rem; }
+.capture-detail-heading h3 { margin-bottom: 0.2rem; }
+.capture-id { max-width: 20rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-faint); font: 0.72rem var(--font-mono); }
+.capture-actions { margin-bottom: 0.9rem; }
+.capture-meta { grid-template-columns: 5rem minmax(0, 1fr); padding-bottom: 0.9rem; }
+.capture-events { max-height: 54vh; border-radius: var(--radius-md); box-shadow: none; }
+.capture-events td { white-space: normal; }
+.capture-events th:nth-child(1), .capture-events td:nth-child(1) { width: 2.5rem; }
+.capture-events th:nth-child(2), .capture-events td:nth-child(2) { width: 7rem; }
+.capture-direction { display: inline-block; min-width: 4.7rem; font-size: 0.7rem; color: var(--ink-dim); }
+.capture-direction.inbound { border-left: 3px solid var(--accent); padding-left: 0.45rem; }
+.capture-direction.outbound { border-right: 3px solid var(--pending); padding-right: 0.45rem; text-align: right; }
+.capture-event-toggle { all: unset; cursor: pointer; color: var(--ink); }
+.capture-event-toggle:hover { color: var(--accent); }
+.capture-event-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.capture-body-row td { background: var(--surface-2); padding: 0; }
+.capture-body-row pre { margin: 0; padding: 0.8rem; max-height: 24rem; overflow: auto; white-space: pre-wrap; word-break: break-word; color: var(--ink-dim); font: 0.76rem/1.55 var(--font-mono); }
+.capture-empty { min-height: 12rem; display: grid; align-content: center; text-align: center; color: var(--ink-faint); }
+.capture-empty p { margin: 0; }
+@media (max-width: 1100px) {
+  .capture-workbench { grid-template-columns: 1fr; }
+  .capture-inspector { position: static; }
+}
+
 /* A field with a real, visible <label>. The auth forms already did this
    by hand; promoted here so the rest of the app can stop using
    placeholders as labels — a placeholder gives no accessible name and
