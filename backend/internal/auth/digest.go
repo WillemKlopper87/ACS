@@ -167,12 +167,22 @@ func (d DigestAuthenticator) ChallengeStale(w http.ResponseWriter) {
 }
 
 func (d DigestAuthenticator) challenge(w http.ResponseWriter, stale bool) {
+	// Same nonce is safe to reuse across both challenge lines: nonceMAC
+	// is independent of the algorithm the CPE eventually picks, and
+	// verifyDigest re-derives the algorithm from the Authorization
+	// header it gets back, not from which challenge line matched.
 	nonce := d.newNonce(time.Now())
-	hdr := fmt.Sprintf(`Digest realm="%s", qop="auth", nonce="%s", algorithm=MD5`, realm, nonce)
+	staleSuffix := ""
 	if stale {
-		hdr += `, stale=true`
+		staleSuffix = `, stale=true`
 	}
-	w.Header().Set("WWW-Authenticate", hdr)
+	// Two Digest challenge lines, one per algorithm (RFC 7616 §3.3): a
+	// CPE that only implements SHA-256 (observed: Huawei cwmpmng logs
+	// "Digest challenge can't find all element" against an MD5-only
+	// challenge and silently gives up rather than falling back) picks
+	// the line it understands; MD5-only CPEs keep working unchanged.
+	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Digest realm="%s", qop="auth", nonce="%s", algorithm=MD5%s`, realm, nonce, staleSuffix))
+	w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Digest realm="%s", qop="auth", nonce="%s", algorithm=SHA-256%s`, realm, nonce, staleSuffix))
 	if d.AllowBasic {
 		w.Header().Add("WWW-Authenticate", fmt.Sprintf(`Basic realm="%s"`, realm))
 	}
@@ -235,8 +245,16 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 		return false, false, Identity{}
 	}
 
-	ha1 := md5Hex(username + ":" + realm + ":" + password)
-	ha2 := md5Hex(r.Method + ":" + params["uri"])
+	// RFC 7616: algorithm defaults to MD5 when absent (RFC 2617 CPEs
+	// never send it). "-sess" variants aren't supported — no observed
+	// CPE here has needed them, and they'd need ha1 keyed per-session.
+	hashHex, algOK := hashFuncFor(params["algorithm"])
+	if !algOK {
+		return false, false, Identity{}
+	}
+
+	ha1 := hashHex(username + ":" + realm + ":" + password)
+	ha2 := hashHex(r.Method + ":" + params["uri"])
 
 	var expected string
 	qop := params["qop"]
@@ -244,11 +262,11 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 		if qop != "auth" {
 			return false, false, Identity{}
 		}
-		expected = md5Hex(strings.Join([]string{
+		expected = hashHex(strings.Join([]string{
 			ha1, nonce, params["nc"], params["cnonce"], qop, ha2,
 		}, ":"))
 	} else {
-		expected = md5Hex(ha1 + ":" + nonce + ":" + ha2)
+		expected = hashHex(ha1 + ":" + nonce + ":" + ha2)
 	}
 	if subtle.ConstantTimeCompare([]byte(expected), []byte(params["response"])) != 1 {
 		return false, false, Identity{}
@@ -390,6 +408,27 @@ func (d DigestAuthenticator) verifyBasic(encoded string) (bool, Identity) {
 func md5Hex(s string) string {
 	sum := md5.Sum([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// hashFuncFor maps a Digest response's algorithm field to the hash it
+// asserts was used, matching one of the two challenge lines challenge()
+// sends. Empty (RFC 2617, no field sent) and explicit "MD5" both mean
+// MD5. ok=false for anything else — including "-sess" variants — so the
+// caller rejects rather than silently verifying against the wrong hash.
+func hashFuncFor(algorithm string) (fn func(string) string, ok bool) {
+	switch strings.ToUpper(algorithm) {
+	case "", "MD5":
+		return md5Hex, true
+	case "SHA-256":
+		return sha256Hex, true
+	default:
+		return nil, false
+	}
 }
 
 var digestParamRE = regexp.MustCompile(`(\w+)=("([^"]*)"|[^,]*)`)
