@@ -1,11 +1,11 @@
 # Network exposure (audit P1.5): only the two ports a CPE or an operator
-# must reach from outside are published on all interfaces (CWMP 7547 and
-# STUN 3478 on the acs service). Postgres, Prometheus, Grafana, the API,
-# the BSS adapter, and the frontend bind to 127.0.0.1 — reach them via a
-# TLS-terminating reverse proxy on the host, an SSH tunnel, or by editing
-# the bind address deliberately. Set ACS_POSTGRES_PASSWORD and
-# GRAFANA_ADMIN_PASSWORD in the shell/.env before `docker compose up`;
-# the Postgres default only exists so a throwaway local stack still works.
+# must reach from outside are published on all interfaces by default (CWMP
+# 7547 and STUN 3478 on the acs service). Postgres, Prometheus, Grafana,
+# the API, the BSS adapter, and the frontend otherwise bind to 127.0.0.1.
+# For the host-based dev quickstart, scripts/start.sh can deliberately set
+# GRAFANA_BIND/PROMETHEUS_BIND to 0.0.0.0 so those UIs are reachable on
+# the same public IP at :3000 and :9090. Do not use that exposure model as
+# the production hardening target.
 services:
   postgres:
     image: postgres:18-alpine
@@ -31,7 +31,9 @@ services:
   prometheus:
     image: prom/prometheus:v2.55.1
     ports:
-      - "127.0.0.1:9090:9090"
+      # Localhost by default. scripts/start.sh sets PROMETHEUS_BIND=0.0.0.0
+      # only when ACS_PROMETHEUS_PUBLIC=1 (the dev quickstart does this).
+      - "${PROMETHEUS_BIND:-127.0.0.1}:9090:9090"
     volumes:
       # ACS_PROMETHEUS_CONFIG selects the target set: prometheus.yml (the
       # default `go run` workflow) or prometheus.containerized.yml (the
