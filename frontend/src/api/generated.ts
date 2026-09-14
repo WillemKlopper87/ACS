@@ -2012,6 +2012,284 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/captures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start an on-demand capture for a device's next CWMP/USP session -- match_value is resolved from the device's own identity (diagnostics.run permission) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        protocol: "CWMP" | "USP";
+                    };
+                };
+            };
+            responses: {
+                /** @description Capture session started */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CaptureSession"];
+                    };
+                };
+                /** @description An active capture already exists for this device */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List every capture session, newest first, with effective_status computed at read time */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items?: components["schemas"]["CaptureSession"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Start an on-demand capture by expected identity or remote IP -- no devices row correlated yet (diagnostics.run permission) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        match_type: "identity" | "remote_ip";
+                        match_value: string;
+                        /** @enum {string} */
+                        protocol: "CWMP" | "USP";
+                    };
+                };
+            };
+            responses: {
+                /** @description Capture session started */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CaptureSession"];
+                    };
+                };
+                /** @description Invalid match_type/match_value/protocol */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description An active capture already exists for this target */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures/{id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop an active capture session (diagnostics.run permission) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Capture session UUID */
+                    id: components["parameters"]["CaptureId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CaptureSession"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a capture session's redacted events in order */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Capture session UUID */
+                    id: components["parameters"]["CaptureId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items?: components["schemas"]["CaptureEvent"][];
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures/{id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download the full redacted transcript (session + events) as JSON */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Capture session UUID */
+                    id: components["parameters"]["CaptureId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            session?: components["schemas"]["CaptureSession"];
+                            events?: components["schemas"]["CaptureEvent"][];
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/objects": {
         parameters: {
             query?: never;
@@ -5149,6 +5427,46 @@ export interface components {
             command_key?: string;
             status?: string;
         };
+        /** @description Mirrors cmd/api's captureSessionResponse (design §4/§7). */
+        CaptureSession: {
+            id?: string;
+            /** @description Set once a device is correlated -- always set for match_type=device, backfilled later for identity/remote_ip. */
+            device_id?: string | null;
+            /** @enum {string} */
+            match_type?: "device" | "identity" | "remote_ip";
+            match_value?: string;
+            /** @enum {string} */
+            protocol?: "CWMP" | "USP";
+            /**
+             * @description The raw stored status.
+             * @enum {string}
+             */
+            status?: "ACTIVE" | "STOPPED" | "EXPIRED";
+            /**
+             * @description What the console should display -- an ACTIVE row past its expires_at reads as EXPIRED even before any background sweep.
+             * @enum {string}
+             */
+            effective_status?: "ACTIVE" | "STOPPED" | "EXPIRED";
+            started_by?: string;
+            /** Format: date-time */
+            started_at?: string;
+            /** Format: date-time */
+            stopped_at?: string | null;
+            /** Format: date-time */
+            expires_at?: string;
+        };
+        /** @description Mirrors cmd/api's captureEventResponse -- one redacted request/response/notification in a capture session's transcript. */
+        CaptureEvent: {
+            id?: string;
+            seq?: number;
+            /** @enum {string} */
+            direction?: "inbound" | "outbound";
+            kind?: string;
+            /** Format: date-time */
+            occurred_at?: string;
+            summary?: string;
+            body?: string | null;
+        };
         BulkActionResponse: {
             action?: string;
             requested?: number;
@@ -5536,6 +5854,8 @@ export interface components {
         /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
         DeviceId: string;
         OperatorId: string;
+        /** @description Capture session UUID */
+        CaptureId: string;
     };
     requestBodies: never;
     headers: never;

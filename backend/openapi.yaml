@@ -55,6 +55,8 @@ tags:
     description: Parameter cache reads, live GET_PARAMETER/SET_PARAMETER, history, attributes
   - name: Diagnostics
     description: Ping/Traceroute, cellular/WiFi refresh, parameter discovery
+  - name: Captures
+    description: On-demand CWMP/USP session capture for troubleshooting — start/stop, list, event transcript, redacted export (design docs/superpowers/specs/2026-09-14-session-capture-design.md)
   - name: Objects
     description: AddObject/DeleteObject — provisioning new instances
   - name: Jobs
@@ -808,6 +810,93 @@ paths:
                 max_hop_count: { type: integer }
       responses:
         "202": { $ref: "#/components/responses/QueueResponse" }
+
+  # --- Captures ---
+  /api/v1/devices/{id}/captures:
+    post:
+      tags: [Captures]
+      summary: Start an on-demand capture for a device's next CWMP/USP session -- match_value is resolved from the device's own identity (diagnostics.run permission)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [protocol]
+              properties:
+                protocol: { type: string, enum: [CWMP, USP] }
+      responses:
+        "202":
+          description: Capture session started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CaptureSession" }
+        "409": { description: An active capture already exists for this device }
+
+  /api/v1/captures:
+    post:
+      tags: [Captures]
+      summary: Start an on-demand capture by expected identity or remote IP -- no devices row correlated yet (diagnostics.run permission)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [match_type, match_value, protocol]
+              properties:
+                match_type: { type: string, enum: [identity, remote_ip] }
+                match_value: { type: string }
+                protocol: { type: string, enum: [CWMP, USP] }
+      responses:
+        "202":
+          description: Capture session started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CaptureSession" }
+        "400": { description: Invalid match_type/match_value/protocol }
+        "409": { description: An active capture already exists for this target }
+    get:
+      tags: [Captures]
+      summary: List every capture session, newest first, with effective_status computed at read time
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/CaptureSession" } } } } } } }
+
+  /api/v1/captures/{id}/stop:
+    post:
+      tags: [Captures]
+      summary: Stop an active capture session (diagnostics.run permission)
+      parameters: [{ $ref: "#/components/parameters/CaptureId" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CaptureSession" } } } }
+        "404": { description: Not found }
+
+  /api/v1/captures/{id}/events:
+    get:
+      tags: [Captures]
+      summary: List a capture session's redacted events in order
+      parameters: [{ $ref: "#/components/parameters/CaptureId" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/CaptureEvent" } } } } } } }
+        "404": { description: Not found }
+
+  /api/v1/captures/{id}/export:
+    get:
+      tags: [Captures]
+      summary: Download the full redacted transcript (session + events) as JSON
+      parameters: [{ $ref: "#/components/parameters/CaptureId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { $ref: "#/components/schemas/CaptureSession" }
+                  events: { type: array, items: { $ref: "#/components/schemas/CaptureEvent" } }
+        "404": { description: Not found }
 
   # --- Objects ---
   /api/v1/devices/{id}/objects:
@@ -1710,6 +1799,12 @@ components:
       in: path
       required: true
       schema: { type: string }
+    CaptureId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: Capture session UUID
 
   responses:
     QueueResponse:
@@ -1860,6 +1955,34 @@ components:
       properties:
         command_key: { type: string }
         status: { type: string }
+
+    CaptureSession:
+      type: object
+      description: Mirrors cmd/api's captureSessionResponse (design §4/§7).
+      properties:
+        id: { type: string }
+        device_id: { type: string, nullable: true, description: "Set once a device is correlated -- always set for match_type=device, backfilled later for identity/remote_ip." }
+        match_type: { type: string, enum: [device, identity, remote_ip] }
+        match_value: { type: string }
+        protocol: { type: string, enum: [CWMP, USP] }
+        status: { type: string, enum: [ACTIVE, STOPPED, EXPIRED], description: The raw stored status. }
+        effective_status: { type: string, enum: [ACTIVE, STOPPED, EXPIRED], description: "What the console should display -- an ACTIVE row past its expires_at reads as EXPIRED even before any background sweep." }
+        started_by: { type: string }
+        started_at: { type: string, format: date-time }
+        stopped_at: { type: string, format: date-time, nullable: true }
+        expires_at: { type: string, format: date-time }
+
+    CaptureEvent:
+      type: object
+      description: Mirrors cmd/api's captureEventResponse -- one redacted request/response/notification in a capture session's transcript.
+      properties:
+        id: { type: string }
+        seq: { type: integer }
+        direction: { type: string, enum: [inbound, outbound] }
+        kind: { type: string }
+        occurred_at: { type: string, format: date-time }
+        summary: { type: string }
+        body: { type: string, nullable: true }
 
     BulkActionResponse:
       type: object
