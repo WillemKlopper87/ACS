@@ -4,6 +4,14 @@
 # except the AWS-console steps (launching the instance, opening security
 # group ports) — those can't be done from inside the instance.
 #
+# Dev quickstart publishes the monitoring UIs directly on the same public
+# IP as ACS, using their normal ports:
+#   http://<public-ip>:3000  Grafana
+#   http://<public-ip>:9090  Prometheus
+# Set ACS_MONITORING_PUBLIC=0 before invoking this script to keep both on
+# localhost instead. Prometheus has no login in this direct dev mode, so
+# restrict 9090/tcp to your own test IP/CIDR in the EC2 security group.
+#
 # Usage (on a fresh instance, logged in as the `ubuntu` user):
 #   curl -fsSL https://raw.githubusercontent.com/WillemKlopper87/ACS/main/scripts/quickstart.sh | bash
 # or, if you've already cloned:
@@ -24,8 +32,9 @@
 #   INSTALL_DIR  where to clone/find the repo (default: ~/ACS)
 #   GO_VERSION   Go toolchain to install (default: matches backend/go.mod)
 #   ACS_PUBLIC_IP  passed through to scripts/start.sh — set this if the
-#                instance isn't on EC2 or IMDS is blocked (start.sh will
-#                tell you if it can't auto-detect one)
+#                instance isn't on EC2 or IMDS is blocked
+#   ACS_MONITORING_PUBLIC  1 (default) publishes Grafana :3000 and
+#                Prometheus :9090; 0 keeps them localhost-only
 set -e
 
 if [ "$(id -u)" -eq 0 ]; then
@@ -37,9 +46,8 @@ fi
 REPO_URL="${REPO_URL:-https://github.com/WillemKlopper87/ACS.git}"
 GIT_REF="${GIT_REF:-main}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/ACS}"
-# Must match the `go` line in backend/go.mod. Step 5 re-checks this
-# against the cloned tree and says so if they have drifted.
 GO_VERSION="${GO_VERSION:-1.26.6}"
+ACS_MONITORING_PUBLIC="${ACS_MONITORING_PUBLIC:-1}"
 
 case "$(uname -m)" in
   x86_64) GO_ARCH=amd64 ;;
@@ -66,13 +74,6 @@ sudo apt-get install -y \
 
 echo ""
 echo "=== 2/6: Go $GO_VERSION ==="
-# go.mod pins a specific version — install that exact
-# toolchain rather than an older "1.22+" minimum. Go's automatic toolchain
-# switching (GOTOOLCHAIN=auto, the default since 1.21) *would* fetch the
-# right version on first build even if this installed an older one, but
-# that means the first `go build` silently downloads a second toolchain
-# over the network — installing the pinned version up front avoids that
-# surprise and matches exactly what the repo was built/tested against.
 CURRENT_GO="$(/usr/local/go/bin/go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')"
 if [ "$CURRENT_GO" = "$GO_VERSION" ]; then
   echo "Go $GO_VERSION already installed, skipping."
@@ -86,9 +87,6 @@ grep -q '/usr/local/go/bin' ~/.bashrc || echo 'export PATH=$PATH:/usr/local/go/b
 export PATH="$PATH:/usr/local/go/bin"
 
 echo ""
-# 22, matching .github/workflows/ci.yml and frontend/Dockerfile — a
-# local build on a different major than CI is a needless source of
-# "works here, fails there".
 echo "=== 3/6: Node.js 22 LTS ==="
 if command -v node >/dev/null && [ "$(node --version | cut -d. -f1)" = "v22" ]; then
   echo "Node 22 already installed, skipping."
@@ -123,10 +121,6 @@ else
 fi
 chmod +x "$INSTALL_DIR"/scripts/*.sh
 
-# GO_VERSION above is a literal, because Go has to be installed before the
-# repo is cloned. Now that go.mod is on disk, say so if it has moved on —
-# this pin had silently drifted from go.mod once already, and the symptom
-# (a second toolchain downloaded on first build) is easy to miss.
 GOMOD_GO="$(awk '/^go /{print $2; exit}' "$INSTALL_DIR/backend/go.mod" 2>/dev/null || true)"
 if [ -n "$GOMOD_GO" ] && [ "$GOMOD_GO" != "$GO_VERSION" ]; then
   echo ""
@@ -139,21 +133,23 @@ fi
 echo ""
 echo "=== 6/6: Build and start the stack ==="
 # The docker group membership added in step 4 doesn't apply to this
-# already-running shell (that normally needs a fresh login) — `sg`
-# runs start.sh as if that login already happened, so a freshly
-# provisioned instance can go from zero to running in one pass with no
-# manual re-login step in between.
-sg docker -c "cd '$INSTALL_DIR' && ACS_PUBLIC_IP='$ACS_PUBLIC_IP' ./scripts/start.sh"
+# already-running shell. `sg` starts the stack with that group active.
+sg docker -c "cd '$INSTALL_DIR' && ACS_PUBLIC_IP='$ACS_PUBLIC_IP' ACS_GRAFANA_PUBLIC='$ACS_MONITORING_PUBLIC' ACS_PROMETHEUS_PUBLIC='$ACS_MONITORING_PUBLIC' ./scripts/start.sh"
 
 echo ""
 echo "=================================================="
 echo "  Quick start complete."
 echo "=================================================="
-echo "Grafana (dashboards) starts with the stack, on 127.0.0.1:3000 — reach it"
-echo "with:  ssh -L 3000:127.0.0.1:3000 ubuntu@<instance-ip>"
-echo "No security group change is needed for that. To publish it instead,"
-echo "rerun with ACS_GRAFANA_PUBLIC=1 and open 3000/tcp to your own IP only."
+if [ "$ACS_MONITORING_PUBLIC" = "1" ]; then
+  echo "Grafana and Prometheus were published directly on the ACS public IP:"
+  echo "  Grafana:    http://<public-ip>:3000"
+  echo "  Prometheus: http://<public-ip>:9090"
+  echo "The exact detected URLs and Grafana credentials were printed above."
+else
+  echo "Grafana and Prometheus were kept on localhost only."
+fi
 echo ""
 echo "Reminder — this script cannot open EC2 security group ports for you."
-echo "Make sure inbound 7547/tcp, 3478/udp, 8080/tcp, 5173/tcp are open"
-echo "(see EC2-DEPLOYMENT-GUIDE.md §1.2) or devices/console/API won't be reachable."
+echo "For the dev quickstart, allow inbound 7547/tcp, 3478/udp, 8080/tcp,"
+echo "5173/tcp, 3000/tcp and 9090/tcp. Restrict 3000/9090 to your test"
+echo "IP/CIDR where possible; Prometheus :9090 is unauthenticated in this mode."
