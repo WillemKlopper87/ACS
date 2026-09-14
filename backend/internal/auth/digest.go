@@ -283,7 +283,15 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 	if rl, present := params["realm"]; present && rl != realm {
 		return false, false, Identity{}
 	}
-	if params["uri"] != r.URL.RequestURI() {
+	// RFC 2617/7616 says uri should equal the full Request-URI, but some
+	// CPE HTTP stacks echo back only the path, dropping the query string
+	// they were challenged on. Accepting either is a no-op today — the
+	// CWMP endpoint (/cwmp) never carries a query string, so
+	// RequestURI() and Path are already identical on every real
+	// request — and only matters if that changes, or against a CPE that
+	// mangles the uri some other way a strict compare would reject
+	// outright.
+	if claimed := params["uri"]; claimed != r.URL.RequestURI() && claimed != r.URL.Path {
 		return false, false, Identity{}
 	}
 

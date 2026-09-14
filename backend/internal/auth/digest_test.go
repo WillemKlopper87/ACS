@@ -151,6 +151,32 @@ func TestDigest_URIMismatchRejected(t *testing.T) {
 	}
 }
 
+// A CPE that echoes back only the path, dropping a query string it was
+// challenged on, must still authenticate — RFC 2617/7616 expect the full
+// Request-URI, but some embedded HTTP stacks don't preserve it.
+func TestDigest_URIMatchesPathWithoutQueryString(t *testing.T) {
+	nonce := issuedNonce(t, testAuthr, time.Now())
+	req := httptest.NewRequest(http.MethodPost, "/cwmp?sessionID=1", nil)
+	// Signed over the bare path, not the full "/cwmp?sessionID=1" the
+	// request line actually carries.
+	req.Header.Set("Authorization", buildAuthHeader("cpe-device", "s3cret", http.MethodPost, "/cwmp", nonce, "00000001", "c"))
+	if ok, _, _ := testAuthr.Verify(req); !ok {
+		t.Error("Verify() = false for a uri matching the request's path (query string dropped), want true")
+	}
+}
+
+// The leniency above must not become "any uri is fine" -- a genuinely
+// different path is still rejected even when the real request happens to
+// carry a query string.
+func TestDigest_URIMismatchStillRejectedWithQueryString(t *testing.T) {
+	nonce := issuedNonce(t, testAuthr, time.Now())
+	req := httptest.NewRequest(http.MethodPost, "/cwmp?sessionID=1", nil)
+	req.Header.Set("Authorization", buildAuthHeader("cpe-device", "s3cret", http.MethodPost, "/other", nonce, "00000001", "c"))
+	if ok, _, _ := testAuthr.Verify(req); ok {
+		t.Error("Verify() = true for a uri matching neither RequestURI nor Path, want false")
+	}
+}
+
 func TestDigest_WrongRealmRejected(t *testing.T) {
 	nonce := issuedNonce(t, testAuthr, time.Now())
 	req := httptest.NewRequest(http.MethodPost, "/cwmp", nil)
