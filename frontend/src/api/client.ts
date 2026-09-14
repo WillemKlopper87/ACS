@@ -13,6 +13,9 @@ import type {
   BSSOAuthClientCreateResult,
   BSSWebhookSubscription,
   BulkActionResponse,
+  CaptureEvent,
+  CaptureProtocol,
+  CaptureSession,
   CLICredential,
   VPNConcentrator,
   VPNEnrollResult,
@@ -195,6 +198,33 @@ export const api = {
     }),
 
   getDevice: (id: string) => request<Device>(`/api/v1/devices/${id}`),
+
+  startDeviceCapture: (deviceId: string, protocol: CaptureProtocol) =>
+    request<CaptureSession>(`/api/v1/devices/${deviceId}/captures`, {
+      method: "POST",
+      body: JSON.stringify({ protocol }),
+    }),
+
+  startCapture: (
+    matchType: "identity" | "remote_ip",
+    matchValue: string,
+    protocol: CaptureProtocol,
+  ) =>
+    request<CaptureSession>("/api/v1/captures", {
+      method: "POST",
+      body: JSON.stringify({ match_type: matchType, match_value: matchValue, protocol }),
+    }),
+
+  stopCapture: (id: string) =>
+    request<CaptureSession>(`/api/v1/captures/${id}/stop`, { method: "POST" }),
+
+  listCaptures: () => request<{ items: CaptureSession[] }>("/api/v1/captures"),
+
+  getCaptureEvents: (id: string) =>
+    request<{ items: CaptureEvent[] }>(`/api/v1/captures/${id}/events`),
+
+  downloadCaptureExport: (id: string) =>
+    download(`/api/v1/captures/${id}/export`, `capture-${id}.json`),
 
   updateDeviceTags: (id: string, tags: string[]) =>
     request<{ device_id: string; tags: string[] }>(`/api/v1/devices/${id}/tags`, { method: "PUT", body: JSON.stringify({ tags }) }),

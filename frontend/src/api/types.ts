@@ -30,6 +30,34 @@ export interface Device {
   longitude?: number | null;
 }
 
+export type CaptureMatchType = "device" | "identity" | "remote_ip";
+export type CaptureStatus = "ACTIVE" | "STOPPED" | "EXPIRED";
+export type CaptureProtocol = "CWMP" | "USP";
+
+export interface CaptureSession {
+  id: string;
+  device_id?: string;
+  match_type: CaptureMatchType;
+  match_value: string;
+  protocol: CaptureProtocol;
+  status: CaptureStatus;
+  effective_status: CaptureStatus;
+  started_by: string;
+  started_at: string;
+  stopped_at?: string;
+  expires_at: string;
+}
+
+export interface CaptureEvent {
+  id: string;
+  seq: number;
+  direction: "inbound" | "outbound";
+  kind: string;
+  occurred_at: string;
+  summary: string;
+  body?: string;
+}
+
 export interface Job {
   command_key: string;
   device_id: string;
