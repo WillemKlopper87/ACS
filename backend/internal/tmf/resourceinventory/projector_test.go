@@ -38,9 +38,14 @@ func TestProjectDeviceResource(t *testing.T) {
 		CWMPAuthMode:         "DIGEST",
 	}
 
-	got, err := NewProjector("https://acs.example.net/").Project(d)
+	got, err := NewProjector("https://acs.example.net/").ProjectWithEnrichment(d, Enrichment{
+		ManagementProtocols: []string{"CWMP", "USP", "USP"},
+		AssignmentRoles:     []string{"gateway"},
+		SoftwareVersion:     "1.2.3",
+		HardwareVersion:     "rev-b",
+	})
 	if err != nil {
-		t.Fatalf("Project() error = %v", err)
+		t.Fatalf("ProjectWithEnrichment() error = %v", err)
 	}
 	if got.ID != d.ID {
 		t.Fatalf("ID = %q, want %q", got.ID, d.ID)
@@ -74,10 +79,32 @@ func TestProjectDeviceResource(t *testing.T) {
 			t.Fatalf("projection leaked %q: %s", secretOrInternal, body)
 		}
 	}
-	for _, expected := range []string{"acsOuiSerial", "serialNumber", "location", "lastInformAt", "StringCharacteristic", "NumberCharacteristic"} {
+	for _, expected := range []string{
+		"acsOuiSerial", "serialNumber", "location", "lastInformAt",
+		"StringCharacteristic", "NumberCharacteristic", "StringArrayCharacteristic",
+		"managementProtocols", "CWMP", "USP", "assignmentRole", "gateway",
+		"softwareVersion", "1.2.3", "hardwareVersion", "rev-b",
+	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("projection missing %q: %s", expected, body)
 		}
+	}
+	if strings.Count(body, `"USP"`) != 1 {
+		t.Fatalf("duplicate management protocol was not removed: %s", body)
+	}
+}
+
+func TestProjectMultipleAssignmentRolesRemainTruthful(t *testing.T) {
+	d := devices.Device{ID: "device-id", LastUpdatedAt: time.Unix(0, 0).UTC()}
+	got, err := NewProjector("https://acs.example.net").ProjectWithEnrichment(d, Enrichment{
+		AssignmentRoles: []string{"gateway", "extender", "gateway"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(got)
+	if !strings.Contains(string(body), `"assignmentRoles"`) || !strings.Contains(string(body), `"extender"`) {
+		t.Fatalf("multi-account assignment roles were collapsed: %s", body)
 	}
 }
 
