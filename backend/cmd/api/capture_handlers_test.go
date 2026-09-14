@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"acs/internal/operators"
@@ -15,9 +16,13 @@ import (
 // not a bare httptest.NewRecorder against the handler method directly.
 func TestCaptureHandlers(t *testing.T) {
 	e := newTestEnv(t)
-	custA := e.customer("Customer A")
+	custA, custB := e.customer("Customer A"), e.customer("Customer B")
 	devA := e.device("A001", &custA)
+	devA2 := e.device("A002", &custA)
+	e.device("B001", &custB)
 	e.operator("op", operators.RoleNOC, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custA})
+	e.operator("other", operators.RoleNOC, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custB})
+	e.operator("root", operators.RoleSuperAdmin)
 	e.grant(operators.RoleNOC, operators.PermDiagnosticsRun)
 
 	t.Run("create by device", func(t *testing.T) {
@@ -91,6 +96,61 @@ func TestCaptureHandlers(t *testing.T) {
 		r := e.call("op", "POST", "/api/v1/captures/00000000-0000-0000-0000-000000000000/stop", nil)
 		if r.code != 404 {
 			t.Errorf("stop unknown id → %d, want 404 (%s)", r.code, r.body)
+		}
+	})
+
+	t.Run("malformed ids are not internal errors", func(t *testing.T) {
+		for _, path := range []string{
+			"/api/v1/captures/not-a-uuid/stop",
+			"/api/v1/captures/not-a-uuid/events",
+			"/api/v1/captures/not-a-uuid/export",
+		} {
+			method := "GET"
+			if strings.HasSuffix(path, "/stop") {
+				method = "POST"
+			}
+			if r := e.call("op", method, path, nil); r.code != 404 {
+				t.Errorf("%s %s → %d, want 404 (%s)", method, path, r.code, r.body)
+			}
+		}
+	})
+
+	t.Run("tenant scope protects sessions and transcripts", func(t *testing.T) {
+		created := e.call("op", "POST", "/api/v1/devices/"+devA2+"/captures", map[string]string{"protocol": "USP"})
+		if created.code != 202 {
+			t.Fatalf("create scoped capture → %d %s", created.code, created.body)
+		}
+		var session struct {
+			ID string `json:"id"`
+		}
+		_ = json.Unmarshal([]byte(created.body), &session)
+
+		if r := e.call("other", "GET", "/api/v1/captures/"+session.ID+"/events", nil); r.code != 404 {
+			t.Errorf("cross-tenant events → %d, want 404 (%s)", r.code, r.body)
+		}
+		if r := e.call("other", "GET", "/api/v1/captures/"+session.ID+"/export", nil); r.code != 404 {
+			t.Errorf("cross-tenant export → %d, want 404 (%s)", r.code, r.body)
+		}
+		if r := e.call("other", "POST", "/api/v1/captures/"+session.ID+"/stop", nil); r.code != 404 {
+			t.Errorf("cross-tenant stop → %d, want 404 (%s)", r.code, r.body)
+		}
+		if r := e.call("other", "GET", "/api/v1/captures", nil); strings.Contains(r.body, session.ID) {
+			t.Errorf("cross-tenant list leaked %s: %s", session.ID, r.body)
+		}
+		if r := e.call("root", "GET", "/api/v1/captures/"+session.ID+"/events", nil); r.code != 200 {
+			t.Errorf("superadmin events → %d, want 200 (%s)", r.code, r.body)
+		}
+
+		knownOther := e.call("op", "POST", "/api/v1/captures", map[string]string{
+			"match_type": "identity", "match_value": "ABCDEF-B001", "protocol": "CWMP",
+		})
+		if knownOther.code != 404 {
+			t.Errorf("cross-tenant known identity capture → %d, want 404 (%s)", knownOther.code, knownOther.body)
+		}
+		if r := e.call("op", "POST", "/api/v1/captures", map[string]string{
+			"match_type": "remote_ip", "match_value": "192.0.2.10", "protocol": "CWMP",
+		}); r.code != 403 {
+			t.Errorf("scoped remote-IP capture → %d, want 403 (%s)", r.code, r.body)
 		}
 	})
 

@@ -2072,7 +2072,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List every capture session, newest first, with effective_status computed at read time */
+        /** List tenancy-accessible capture sessions, newest first, with effective_status computed at read time */
         get: {
             parameters: {
                 query?: never;
@@ -2096,7 +2096,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** Start an on-demand capture by expected identity or remote IP -- no devices row correlated yet (diagnostics.run permission) */
+        /** Start an on-demand capture by expected identity or remote IP -- remote-IP mode requires global access (diagnostics.run permission) */
         post: {
             parameters: {
                 query?: never;
@@ -2127,6 +2127,13 @@ export interface paths {
                 };
                 /** @description Invalid match_type/match_value/protocol */
                 400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Remote-IP capture requested by a tenant-scoped operator */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -5429,8 +5436,12 @@ export interface components {
         };
         /** @description Mirrors cmd/api's captureSessionResponse (design §4/§7). */
         CaptureSession: {
+            /** Format: uuid */
             id?: string;
-            /** @description Set once a device is correlated -- always set for match_type=device, backfilled later for identity/remote_ip. */
+            /**
+             * Format: uuid
+             * @description Set once a device is correlated -- always set for match_type=device, backfilled later for identity/remote_ip.
+             */
             device_id?: string | null;
             /** @enum {string} */
             match_type?: "device" | "identity" | "remote_ip";
@@ -5457,6 +5468,7 @@ export interface components {
         };
         /** @description Mirrors cmd/api's captureEventResponse -- one redacted request/response/notification in a capture session's transcript. */
         CaptureEvent: {
+            /** Format: uuid */
             id?: string;
             seq?: number;
             /** @enum {string} */

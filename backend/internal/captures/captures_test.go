@@ -85,6 +85,29 @@ func TestStartAllowsSameMatchValueAfterStop(t *testing.T) {
 	}
 }
 
+func TestStartAllowsSameMatchValueAfterExpiry(t *testing.T) {
+	ctx, db := newTestDB(t)
+	r := NewRepository(db)
+
+	params := StartParams{MatchType: MatchIdentity, MatchValue: "001349+EXPIRED", Protocol: "CWMP", StartedBy: "op", MaxDuration: -time.Minute}
+	first, err := r.Start(ctx, params)
+	if err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	params.MaxDuration = time.Minute
+	if _, err := r.Start(ctx, params); err != nil {
+		t.Fatalf("Start after expiry = %v, want success", err)
+	}
+
+	got, err := r.Get(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("Get expired session: %v", err)
+	}
+	if got.Status != StatusExpired {
+		t.Errorf("expired session status = %q, want EXPIRED", got.Status)
+	}
+}
+
 func TestActiveMatchFindsRunningSessionOnly(t *testing.T) {
 	ctx, db := newTestDB(t)
 	r := NewRepository(db)

@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"time"
 
+	"acs/internal/store"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -124,7 +126,25 @@ func (r *Repository) Start(ctx context.Context, p StartParams) (*Session, error)
 	id := uuid.New().String()
 	now := time.Now().UTC()
 	expiresAt := now.Add(p.MaxDuration)
-	row := r.db.QueryRowContext(ctx, `
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin capture session: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Expiry is authoritative even before the retention sweep runs. Flip
+	// an elapsed row inside the same transaction as the insert so the
+	// partial ACTIVE uniqueness index does not lock this target out until
+	// retention (or forever when retention is disabled).
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE capture_sessions
+		SET status = 'EXPIRED'
+		WHERE match_type = $1 AND match_value = $2
+		  AND status = 'ACTIVE' AND expires_at <= $3`, p.MatchType, p.MatchValue, now); err != nil {
+		return nil, fmt.Errorf("expire prior capture session: %w", err)
+	}
+
+	row := tx.QueryRowContext(ctx, `
 		INSERT INTO capture_sessions (id, device_id, match_type, match_value, protocol, status, started_by, started_at, expires_at)
 		VALUES ($1, $2, $3, $4, $5, 'ACTIVE', $6, $7, $8)
 		RETURNING `+sessionColumns,
@@ -135,6 +155,12 @@ func (r *Repository) Start(ctx context.Context, p StartParams) (*Session, error)
 			return nil, ErrAlreadyActive
 		}
 		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrAlreadyActive
+		}
+		return nil, fmt.Errorf("commit capture session: %w", err)
 	}
 	return sess, nil
 }
@@ -162,6 +188,34 @@ func (r *Repository) List(ctx context.Context) ([]Session, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+sessionColumns+` FROM capture_sessions ORDER BY started_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list capture sessions: %w", err)
+	}
+	defer rows.Close()
+	var out []Session
+	for rows.Next() {
+		s, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
+// ListAccessible returns the sessions a scoped operator may inspect:
+// resolved sessions belonging to one of their customers, plus unresolved
+// sessions they started themselves. An empty customerIDs slice remains
+// restrictive. Callers with global access should use List instead.
+func (r *Repository) ListAccessible(ctx context.Context, startedBy string, customerIDs []string) ([]Session, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT c.id, c.device_id, c.match_type, c.match_value, c.protocol, c.status,
+		       c.started_by, c.started_at, c.stopped_at, c.expires_at
+		FROM capture_sessions c
+		LEFT JOIN devices d ON d.id = c.device_id
+		WHERE (c.device_id IS NULL AND c.started_by = $1)
+		   OR d.customer_id::text = ANY($2)
+		ORDER BY c.started_at DESC`, startedBy, store.StringArray(customerIDs))
+	if err != nil {
+		return nil, fmt.Errorf("list accessible capture sessions: %w", err)
 	}
 	defer rows.Close()
 	var out []Session
