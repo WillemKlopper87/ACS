@@ -32,13 +32,22 @@ opt-out is `ACS_INSECURE_DEV_MODE=true`, for isolated local development.
 Bare-metal (Postgres from compose, services via `go run`):
 
 ```bash
-GRAFANA_ADMIN_PASSWORD=unused-postgres-only ACS_GRAFANA_DB_PASSWORD=unused-postgres-only \
-  docker compose -f infra/docker-compose.yml up -d postgres
 source scripts/gen-env.sh            # generates and persists real secrets in ~/.acs-secrets.env
-scripts/start.sh
+scripts/start.sh                     # Postgres + Prometheus/Alertmanager/Grafana + the Go
+                                     # services + the console, in one pass
 ```
 
-Note: `docker compose` interpolates the entire file before selecting services, so the Grafana service's mandatory password variables must resolve even when starting only Postgres. `unused-postgres-only` is not a placeholder secret — Grafana isn't started in this command, so the value only needs to satisfy interpolation, and keeping it unexported (a single-command prefix, not `export`) keeps it out of any later `docker compose up` in the same shell. A real deployment must set real passwords via `ACS_POSTGRES_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, and `ACS_GRAFANA_DB_PASSWORD` before starting Grafana itself.
+Run `gen-env.sh` first: it generates `GRAFANA_ADMIN_PASSWORD` and
+`ACS_GRAFANA_DB_PASSWORD` and writes them to `infra/.env`, which is what
+lets `docker compose` interpolate the whole file (it does that before
+selecting services, so Grafana's mandatory variables must resolve even
+for `up -d postgres`). Starting compose by hand without that file still
+needs both variables set. `start.sh` then creates the `grafana_ro`
+database role, brings Grafana up on `127.0.0.1:3000` with its datasources
+and dashboards already provisioned, and prints the generated admin
+password. Reach it with `ssh -L 3000:127.0.0.1:3000 …`, or rerun with
+`ACS_GRAFANA_PUBLIC=1` to publish it (restrict port 3000 to your own
+address if you do).
 
 Fully containerized:
 

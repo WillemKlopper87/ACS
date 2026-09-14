@@ -18,7 +18,8 @@ frontend:
 | STUN server | `cmd/acs` (same process) | `:3478` (UDP) | RFC 5389 STUN | the CPE's STUN client, if enabled |
 | REST API | `cmd/api` | `:8080` | HTTP/JSON (put a TLS proxy in front) | the console (frontend), and operator tooling |
 | BSS adapter | `cmd/bssadapter` | `ACS_BSS_ADDR` | HTTP/JSON | your external BSS, if wired up — not required for device testing |
-| Console | `frontend` (Vite) | `:5173` dev / static build | HTTP (put a TLS proxy in front) | you, in a browser |
+| Console | `frontend` (Vite) | `:5173` dev / `scripts/spa-server.py` static | HTTP (put a TLS proxy in front) | you, in a browser |
+| Dashboards | Grafana (compose) | `:3000` (127.0.0.1) | HTTP | you, over an SSH tunnel |
 | Database | Postgres 18 | `:5432` | — | `cmd/acs`, `cmd/api` |
 
 By default only Postgres/Prometheus/Grafana run in Docker
@@ -67,15 +68,24 @@ URL field — everything below calls it `<ACS_URL>` (e.g.
 ## 3. Backend deployment
 
 ```bash
-cd ACS/infra
-GRAFANA_ADMIN_PASSWORD=unused-postgres-only ACS_GRAFANA_DB_PASSWORD=unused-postgres-only \
-  docker compose up -d postgres
+cd ACS
+source scripts/gen-env.sh            # generates the Grafana passwords, writes infra/.env
+
+cd infra
+docker compose up -d postgres prometheus alertmanager grafana
 
 cd ../backend
 export ACS_POSTGRES_DSN="postgres://acs:acs@localhost:5432/acs?sslmode=disable"
 ```
 
-Note: `docker compose` interpolates the entire file before selecting services, so the Grafana service's mandatory password variables must be set even when starting only Postgres. `unused-postgres-only` is not exported and only satisfies interpolation for this one command — it is never a real Grafana credential, and it must never be typed into a later `docker compose up` that actually starts Grafana. If you want metrics dashboards, start `prometheus`/`grafana` separately with real passwords (`GRAFANA_ADMIN_PASSWORD` and `ACS_GRAFANA_DB_PASSWORD` set to generated secrets, not placeholders).
+Run `gen-env.sh` first: `docker compose` interpolates the entire file
+before it selects services, so Grafana's mandatory `GRAFANA_ADMIN_PASSWORD`
+and `ACS_GRAFANA_DB_PASSWORD` have to resolve even for `up -d postgres`.
+gen-env.sh generates both and writes them to `infra/.env`, which compose
+reads automatically — replacing the `unused-postgres-only` placeholder
+this step used to need. `scripts/start.sh` does all of it in one pass,
+including `scripts/grafana-db-role.sh` for the dashboards' read-only
+Postgres role.
 
 Set these before starting `cmd/acs` and `cmd/api` — this is the realistic
 minimum for a device test, not the full production list (see §7 for
@@ -312,7 +322,14 @@ ACS_RETENTION_RESET_TOKENS_DAYS (cmd/api — pruning windows, 0 disables;
 ACS_API_CORS_ORIGIN now defaults to ACS_FRONTEND_BASE_URL rather than "*"
 
 # docker compose (infra/docker-compose.yml) — shell/.env, not the app env file
-GRAFANA_ADMIN_PASSWORD (required), ACS_POSTGRES_PASSWORD (default acs),
+GRAFANA_ADMIN_PASSWORD, ACS_GRAFANA_DB_PASSWORD (both required — scripts/gen-env.sh
+  generates them and writes them, with the knobs below, to infra/.env),
+GRAFANA_BIND (default 127.0.0.1; start.sh sets 0.0.0.0 when ACS_GRAFANA_PUBLIC=1),
+GRAFANA_COOKIE_SECURE (default true; gen-env.sh sets false for the plain-HTTP
+  scripted deployment, where a secure cookie makes login impossible — set it
+  back to true behind TLS),
+GRAFANA_ROOT_URL (default http://localhost:3000),
+ACS_POSTGRES_PASSWORD (default acs),
 ACS_ALERT_WEBHOOK_URL (Alertmanager receiver)
 ```
 
