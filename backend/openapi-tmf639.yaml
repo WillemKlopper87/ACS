@@ -96,19 +96,22 @@ components:
         name: { type: string }
         valueType: { type: string }
         value: {}
+        "@type":
+          type: string
+          enum: [StringCharacteristic, StringArrayCharacteristic, NumberCharacteristic]
     Resource:
       type: object
-      required: [id, href]
+      required: [id, href, "@type"]
       properties:
         id: { type: string }
         href: { type: string, format: uri }
         name: { type: string }
         description: { type: string }
         category: { type: string }
-        operationalState: { type: string, enum: [enable, disable, unknown] }
+        operationalState: { type: string, enum: [enabled, disabled] }
         lastUpdate: { type: string, format: date-time }
         resourceCharacteristic:
           type: array
           items: { $ref: "#/components/schemas/ResourceCharacteristic" }
-        "@baseType": { type: string }
-        "@type": { type: string }
+        "@baseType": { type: string, enum: [Resource] }
+        "@type": { type: string, enum: [PhysicalResource] }
