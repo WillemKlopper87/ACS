@@ -368,7 +368,7 @@ func (h *handler) captureInbound(ctx context.Context, naturalKey, remoteIP, devi
 	}
 	redactedBody := captureInformBody(inform, authHeader)
 	for _, s := range sessions {
-		if s.DeviceID == nil && deviceID != "" {
+		if deviceID != "" {
 			if err := h.captures.RecordEventForDevice(ctx, s.ID, deviceID, "inbound", kind, summary, redactedBody); err != nil {
 				h.logger.Error("failed to correlate and record capture event", "err", err, "session_id", s.ID)
 			}

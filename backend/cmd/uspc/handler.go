@@ -756,7 +756,7 @@ func (h *handler) captureInbound(ctx context.Context, c mtp.Conn, naturalKey, de
 		return
 	}
 	for _, s := range sessions {
-		if s.DeviceID == nil && deviceID != "" {
+		if deviceID != "" {
 			if err := h.captures.RecordEventForDevice(ctx, s.ID, deviceID, "inbound", kind, summary, redactedBody); err != nil {
 				h.log.Error("uspc: failed to correlate and record capture event", "err", err, "session_id", s.ID)
 			}

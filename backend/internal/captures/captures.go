@@ -185,11 +185,13 @@ func (r *Repository) StopAccessible(ctx context.Context, id, startedBy string, c
 		WHERE c.id = $1
 		  AND (
 		    NOT $4
-		    OR (c.device_id IS NULL AND c.started_by = $2)
-		    OR EXISTS (
-		      SELECT 1 FROM devices d
-		      WHERE d.id = c.device_id AND d.customer_id::text = ANY($3)
-		    )
+		    OR (c.match_type <> 'remote_ip' AND (
+		      (c.device_id IS NULL AND c.started_by = $2)
+		      OR EXISTS (
+		        SELECT 1 FROM devices d
+		        WHERE d.id = c.device_id AND d.customer_id::text = ANY($3)
+		      )
+		    ))
 		  )
 		RETURNING `+sessionColumns, id, startedBy, store.StringArray(customerIDs), scoped)
 	s, err := scanSession(row)
@@ -227,18 +229,20 @@ func (r *Repository) List(ctx context.Context) ([]Session, error) {
 	return out, rows.Err()
 }
 
-// ListAccessible returns the sessions a scoped operator may inspect:
+// ListAccessible returns the non-IP sessions a scoped operator may inspect:
 // resolved sessions belonging to one of their customers, plus unresolved
-// sessions they started themselves. An empty customerIDs slice remains
-// restrictive. Callers with global access should use List instead.
+// identity sessions they started themselves. Remote-IP capture is global-only
+// for its whole lifetime because one NAT address may represent many tenants.
+// An empty customerIDs slice remains restrictive.
 func (r *Repository) ListAccessible(ctx context.Context, startedBy string, customerIDs []string) ([]Session, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT c.id, c.device_id, c.match_type, c.match_value, c.protocol, c.status,
 		       c.started_by, c.started_at, c.stopped_at, c.expires_at
 		FROM capture_sessions c
 		LEFT JOIN devices d ON d.id = c.device_id
-		WHERE (c.device_id IS NULL AND c.started_by = $1)
-		   OR d.customer_id::text = ANY($2)
+		WHERE c.match_type <> 'remote_ip'
+		  AND ((c.device_id IS NULL AND c.started_by = $1)
+		       OR d.customer_id::text = ANY($2))
 		ORDER BY c.started_at DESC`, startedBy, store.StringArray(customerIDs))
 	if err != nil {
 		return nil, fmt.Errorf("list accessible capture sessions: %w", err)
@@ -274,11 +278,13 @@ func (r *Repository) GetWithEventsAccessible(ctx context.Context, id, startedBy 
 		WHERE c.id = $1
 		  AND (
 		    NOT $4
-		    OR (c.device_id IS NULL AND c.started_by = $2)
-		    OR EXISTS (
-		      SELECT 1 FROM devices d
-		      WHERE d.id = c.device_id AND d.customer_id::text = ANY($3)
-		    )
+		    OR (c.match_type <> 'remote_ip' AND (
+		      (c.device_id IS NULL AND c.started_by = $2)
+		      OR EXISTS (
+		        SELECT 1 FROM devices d
+		        WHERE d.id = c.device_id AND d.customer_id::text = ANY($3)
+		      )
+		    ))
 		  )`, id, startedBy, store.StringArray(customerIDs), scoped)
 	s, err := scanSession(row)
 	if errors.Is(err, sql.ErrNoRows) {

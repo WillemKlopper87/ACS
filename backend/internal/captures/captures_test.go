@@ -245,16 +245,22 @@ func TestRecordEventForDeviceCorrelatesAtomically(t *testing.T) {
 	}
 }
 
-func TestAccessibleOperationsHideForeignCapture(t *testing.T) {
+func TestAccessibleOperationsHideForeignAndRemoteIPCaptures(t *testing.T) {
 	ctx, db := newTestDB(t)
 	r := NewRepository(db)
 
-	var customerA, customerB, deviceB string
+	var customerA, customerB, deviceA, deviceB string
 	if err := db.QueryRowContext(ctx, `INSERT INTO customers (id, name) VALUES (gen_random_uuid(), 'A') RETURNING id`).Scan(&customerA); err != nil {
 		t.Fatalf("insert customer A: %v", err)
 	}
 	if err := db.QueryRowContext(ctx, `INSERT INTO customers (id, name) VALUES (gen_random_uuid(), 'B') RETURNING id`).Scan(&customerB); err != nil {
 		t.Fatalf("insert customer B: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO devices (id, oui_serial, manufacturer, oui, product_class, serial_number, customer_id)
+		VALUES (gen_random_uuid(), '001349+LOCAL', 'Vendor', '001349', 'CPE', 'LOCAL', $1)
+		RETURNING id`, customerA).Scan(&deviceA); err != nil {
+		t.Fatalf("insert device A: %v", err)
 	}
 	if err := db.QueryRowContext(ctx, `
 		INSERT INTO devices (id, oui_serial, manufacturer, oui, product_class, serial_number, customer_id)
@@ -282,6 +288,39 @@ func TestAccessibleOperationsHideForeignCapture(t *testing.T) {
 	}
 	if len(visible) != 0 {
 		t.Errorf("ListAccessible leaked %+v", visible)
+	}
+
+	remote, err := r.Start(ctx, StartParams{MatchType: MatchRemoteIP, MatchValue: "192.0.2.25", Protocol: "CWMP", StartedBy: "root", MaxDuration: time.Minute})
+	if err != nil {
+		t.Fatalf("Start remote capture: %v", err)
+	}
+	if err := r.RecordEventForDevice(ctx, remote.ID, deviceB, "inbound", "Inform", "device B", nil); err != nil {
+		t.Fatalf("correlate remote capture: %v", err)
+	}
+	if err := r.RecordEventForDevice(ctx, remote.ID, deviceA, "inbound", "Inform", "device A behind same NAT", nil); err == nil {
+		t.Fatal("second device behind shared IP was recorded into an already-correlated remote capture")
+	}
+	if _, _, err := r.GetWithEventsAccessible(ctx, remote.ID, "bob", []string{customerB}, true); err != ErrNotFound {
+		t.Errorf("tenant read of global remote capture = %v, want ErrNotFound", err)
+	}
+	if _, err := r.StopAccessible(ctx, remote.ID, "bob", []string{customerB}, true); err != ErrNotFound {
+		t.Errorf("tenant stop of global remote capture = %v, want ErrNotFound", err)
+	}
+	visible, err = r.ListAccessible(ctx, "bob", []string{customerB})
+	if err != nil {
+		t.Fatalf("ListAccessible for device B tenant: %v", err)
+	}
+	for _, item := range visible {
+		if item.ID == remote.ID {
+			t.Errorf("tenant list leaked global remote capture %+v", item)
+		}
+	}
+	_, events, err := r.GetWithEventsAccessible(ctx, remote.ID, "root", nil, false)
+	if err != nil {
+		t.Fatalf("global read of remote capture: %v", err)
+	}
+	if len(events) != 1 || events[0].Summary != "device B" {
+		t.Errorf("remote capture events = %+v, want only device B", events)
 	}
 }
 
