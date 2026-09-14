@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -48,10 +49,16 @@ func (h *handler) listTMF639Resources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	enrichment, err := h.tmf639Enrichment(r.Context(), result.Items)
+	if err != nil {
+		h.logger.Error("failed to enrich TMF639 resources", "err", err)
+		writeTMFInternalError(w)
+		return
+	}
 	projector := resourceinventory.NewProjector(tmfNorthboundBaseURL())
 	items := make([]map[string]any, 0, len(result.Items))
 	for _, device := range result.Items {
-		resource, err := projector.Project(device)
+		resource, err := projector.ProjectWithEnrichment(device, enrichment[device.ID])
 		if err != nil {
 			h.logger.Error("failed to project TMF639 resource", "err", err, "device_id", device.ID)
 			writeTMFInternalError(w)
@@ -99,13 +106,53 @@ func (h *handler) getTMF639Resource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resource, err := resourceinventory.NewProjector(tmfNorthboundBaseURL()).Project(*device)
+	enrichment, err := h.tmf639Enrichment(r.Context(), []devices.Device{*device})
+	if err != nil {
+		h.logger.Error("failed to enrich TMF639 resource", "err", err, "device_id", device.ID)
+		writeTMFInternalError(w)
+		return
+	}
+	resource, err := resourceinventory.NewProjector(tmfNorthboundBaseURL()).ProjectWithEnrichment(*device, enrichment[device.ID])
 	if err != nil {
 		h.logger.Error("failed to project TMF639 resource", "err", err, "device_id", device.ID)
 		writeTMFInternalError(w)
 		return
 	}
 	writeJSON(w, http.StatusOK, resourceinventory.ProjectFields(resource, fields))
+}
+
+func (h *handler) tmf639Enrichment(ctx context.Context, page []devices.Device) (map[string]resourceinventory.Enrichment, error) {
+	out := make(map[string]resourceinventory.Enrichment, len(page))
+	if len(page) == 0 {
+		return out, nil
+	}
+	ids := make([]string, 0, len(page))
+	for _, device := range page {
+		ids = append(ids, device.ID)
+	}
+
+	protocols, err := h.devices.ManagementProtocolsFor(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	roles, err := h.bssMappings.ActiveRolesForDevices(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	versions, err := h.params.InventoryFactsForDevices(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		facts := versions[id]
+		out[id] = resourceinventory.Enrichment{
+			ManagementProtocols: protocols[id],
+			AssignmentRoles:     roles[id],
+			SoftwareVersion:     facts.SoftwareVersion,
+			HardwareVersion:     facts.HardwareVersion,
+		}
+	}
+	return out, nil
 }
 
 func (h *handler) prepareTMFRequest(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
