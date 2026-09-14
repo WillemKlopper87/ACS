@@ -28,6 +28,7 @@ type Policy struct {
 	FinishedJobsDays      int
 	StaleUploadSlotsDays  int
 	ResetTokensDays       int
+	CaptureSessionsDays   int
 }
 
 // DefaultPolicy is deliberately conservative: long enough that an
@@ -42,6 +43,7 @@ var DefaultPolicy = Policy{
 	FinishedJobsDays:      90,
 	StaleUploadSlotsDays:  7,
 	ResetTokensDays:       1,
+	CaptureSessionsDays:   1,
 }
 
 func envDays(key string, fallback int) int {
@@ -64,6 +66,7 @@ func PolicyFromEnv() Policy {
 		FinishedJobsDays:      envDays("ACS_RETENTION_FINISHED_JOBS_DAYS", d.FinishedJobsDays),
 		StaleUploadSlotsDays:  envDays("ACS_RETENTION_STALE_UPLOAD_SLOTS_DAYS", d.StaleUploadSlotsDays),
 		ResetTokensDays:       envDays("ACS_RETENTION_RESET_TOKENS_DAYS", d.ResetTokensDays),
+		CaptureSessionsDays:   envDays("ACS_RETENTION_CAPTURE_SESSIONS_DAYS", d.CaptureSessionsDays),
 	}
 }
 
@@ -97,6 +100,8 @@ var rules = []rule{
 		"status = 'PENDING' AND created_at < $1", "id"},
 	{"password_reset_tokens", func(p Policy) int { return p.ResetTokensDays },
 		"(used_at IS NOT NULL OR expires_at < now()) AND expires_at < $1", "id"},
+	{"capture_sessions", func(p Policy) int { return p.CaptureSessionsDays },
+		"status <> 'ACTIVE' AND COALESCE(stopped_at, expires_at) < $1", "id"},
 }
 
 // Result is per-table rows deleted in one Run.
