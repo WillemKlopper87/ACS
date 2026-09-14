@@ -1,0 +1,38 @@
+name: Wire reproducible OBUSPA fixture
+
+on:
+  push:
+    branches:
+      - fix/tmf-programme-baseline
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fix/tmf-programme-baseline
+      - name: Replace floating upstream transport build
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/ci.yml')
+          text = p.read_text()
+          old = '''      - name: build obuspa's ci/Dockerfile, unmodified (CoAP compiled in but never configured -- harmless here)\n        run: docker build -f obuspa-src/ci/Dockerfile -t obuspa:ci obuspa-src\n'''
+          new = '''      - name: build pinned obuspa with reproducible distro transport libraries\n        run: docker build -f ci/usp/obuspa.Dockerfile -t obuspa:ci obuspa-src\n'''
+          if old not in text:
+              raise SystemExit('OBUSPA build step marker not found')
+          p.write_text(text.replace(old, new, 1))
+          PY
+      - name: Commit fixture wiring and remove helper
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/baseline-interop-fixture.yml
+          git add .github/workflows/ci.yml ci/usp/obuspa.Dockerfile
+          git commit -m "fix(ci): stabilize OBUSPA interoperability fixture"
+          git push origin HEAD:fix/tmf-programme-baseline
