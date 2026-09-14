@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 	"time"
 
@@ -31,10 +32,17 @@ const dbCallTimeout = 5 * time.Second
 // fallback) and, if so, which device it resolved to -- needed so
 // OnDisconnect knows whether/what to mark disconnected, and so the
 // probe-fallback path can stay quiet once OnBoardRequest already did the
-// job (Correction 4, task-5 brief).
+// job (Correction 4, task-5 brief). naturalKey is the resolved device's
+// oui_serial, set once by resolveAndMarkReconciled alongside deviceID
+// (task-4 fix round 1) so captureInbound's ActiveMatch check can match a
+// 'device'/'identity'-mode capture session -- deliberately a separate
+// field/setter from deviceID/reconciled rather than folded into
+// markReconciled itself, so markReconciled's existing signature (10+
+// call sites in handler_test.go) stays untouched.
 type connIdentity struct {
 	deviceID   string
 	reconciled bool
+	naturalKey string
 }
 
 // handler implements mtp.Handler, wiring transport lifecycle events to
@@ -120,6 +128,31 @@ func (h *handler) markReconciled(c mtp.Conn, deviceID string) {
 	h.identities[c] = &connIdentity{deviceID: deviceID, reconciled: true}
 }
 
+// setNaturalKey records c's resolved natural key (oui_serial) for
+// capture matching, once resolveAndMarkReconciled has it. A no-op if c
+// has no connIdentity yet (e.g. already disconnected) or isn't
+// reconciled -- matches markReconciled's own tolerance. Deliberately a
+// separate call from markReconciled (task-4 fix round 1) rather than an
+// added parameter on it, so markReconciled's existing signature stays
+// untouched for its own 10+ call sites.
+func (h *handler) setNaturalKey(c mtp.Conn, naturalKey string) {
+	h.identMu.Lock()
+	defer h.identMu.Unlock()
+	if ci := h.identities[c]; ci != nil {
+		ci.naturalKey = naturalKey
+	}
+}
+
+// reconciledNaturalKey returns c's natural key, or "" if unset/unreconciled.
+func (h *handler) reconciledNaturalKey(c mtp.Conn) string {
+	h.identMu.Lock()
+	defer h.identMu.Unlock()
+	if ci := h.identities[c]; ci != nil {
+		return ci.naturalKey
+	}
+	return ""
+}
+
 // forgetIdentity drops c's per-connection identity state, mirroring the
 // memory-leak discipline probe.forget/mtp.Registry.Remove already follow
 // for their own per-connection state.
@@ -171,11 +204,11 @@ func (h *handler) OnRecord(in mtp.Inbound) {
 	}
 	h.metrics.records.WithLabelValues(kind, "in", "ok").Inc()
 
-	if deviceID, ok := h.reconciledDeviceID(in.Conn); ok {
-		h.captureInbound(context.Background(), in.Conn, "", deviceID, "USP message", uspMessageSummary(msg), nil)
-	} else {
-		h.captureInbound(context.Background(), in.Conn, "", "", "USP message", uspMessageSummary(msg), nil)
-	}
+	captureCtx, captureCancel := context.WithTimeout(context.Background(), dbCallTimeout)
+	defer captureCancel()
+	deviceID, _ := h.reconciledDeviceID(in.Conn)
+	naturalKey := h.reconciledNaturalKey(in.Conn)
+	h.captureInbound(captureCtx, in.Conn, naturalKey, deviceID, "USP message", uspMessageSummary(msg), nil)
 
 	// An OnBoardRequest Notify and an OperationComplete Notify are both
 	// Notify-shaped messages, structurally distinct from the probe's
@@ -626,6 +659,28 @@ func (h *handler) resolveAndMarkReconciled(c mtp.Conn) {
 	}
 	h.markReconciled(c, agentRow.DeviceID)
 
+	// Resolve and record this device's natural key (oui_serial) once per
+	// reconciliation, not per-message (task-4 fix round 1): captureInbound
+	// needs it to match a 'device'/'identity'-mode capture session, but
+	// OnRecord itself must stay a pure in-memory lookup on its own hot
+	// path (dbCallTimeout's own doc comment). h.devicesRepo is nil in some
+	// test-construction paths (newTestHandler does not set it), matching
+	// h.subscriptions' own nil-guard convention just below. A lookup
+	// failure here is logged and otherwise ignored -- the reconciliation
+	// itself already succeeded, and captureInbound already treats a ""
+	// natural key as "no device/identity-mode match yet", exactly the
+	// pre-fix-round-1 behavior for this one connection.
+	if h.devicesRepo != nil {
+		natKeyCtx, natKeyCancel := context.WithTimeout(context.Background(), dbCallTimeout)
+		dev, err := h.devicesRepo.Get(natKeyCtx, agentRow.DeviceID)
+		natKeyCancel()
+		if err != nil {
+			h.log.Warn("uspc: reconciled connection but failed to resolve its natural key for capture matching", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", agentRow.DeviceID, "error", err)
+		} else {
+			h.setNaturalKey(c, dev.OUISerial)
+		}
+	}
+
 	dispatchCtx, dispatchCancel := context.WithTimeout(context.Background(), dbCallTimeout)
 	defer dispatchCancel()
 	if err := h.dispatcher.tryDispatch(dispatchCtx, agentRow.DeviceID); err != nil {
@@ -681,19 +736,23 @@ func deviceInfoFromGetResp(msg *uspproto.Msg) (oui, productClass, serialNumber s
 // every inbound USP message kind (Notify variants, GetResp, SetResp,
 // ...), called once per decoded message before it's dispatched to any
 // type-specific handler. deviceID is empty for a not-yet-reconciled
-// connection; naturalKey, when the caller has one (e.g. from an
-// OnBoardRequest's own claimed identity), covers 'identity'-mode
-// capture the same way cmd/acs's does. Also a no-op if h.captures is
-// nil (test-construction paths that don't wire one -- newTestHandler
-// doesn't set it -- mirror cmd/acs's own "nil captures = no-op"
-// convention).
+// connection; naturalKey, once resolveAndMarkReconciled has resolved and
+// recorded one via setNaturalKey (task-4 fix round 1), covers
+// 'device'/'identity'-mode capture the same way cmd/acs's does -- ""
+// before that (an unreconciled connection, or a reconciled one whose
+// natural-key lookup itself failed). Also a no-op if h.captures is nil
+// (test-construction paths that don't wire one -- newTestHandler doesn't
+// set it -- mirror cmd/acs's own "nil captures = no-op" convention).
 func (h *handler) captureInbound(ctx context.Context, c mtp.Conn, naturalKey, deviceID, kind, summary string, redactedBody *string) {
 	if h.captures == nil {
 		return
 	}
-	sessions, err := h.captures.ActiveMatch(ctx, "USP", naturalKey, c.RemoteAddr())
+	sessions, err := h.captures.ActiveMatch(ctx, "USP", naturalKey, remoteIP(c))
 	if err != nil {
 		h.log.Error("uspc: failed to check active captures", "err", err, "natural_key", naturalKey)
+		return
+	}
+	if len(sessions) == 0 {
 		return
 	}
 	for _, s := range sessions {
@@ -706,6 +765,21 @@ func (h *handler) captureInbound(ctx context.Context, c mtp.Conn, naturalKey, de
 			h.log.Error("uspc: failed to record capture event", "err", err, "session_id", s.ID)
 		}
 	}
+}
+
+// remoteIP strips the port from c.RemoteAddr() so 'remote_ip'-mode
+// capture matches a bare IP address, mirroring cmd/acs's own
+// remoteIP(r *http.Request) helper (session.go) for the same reason --
+// c.RemoteAddr() returns host:port (both wsConn and mqttConn), but the
+// design and schema require a bare IP for remote_ip-mode matching.
+// Falls back to the original string unchanged if it doesn't parse as
+// host:port (e.g. a test double's bare literal with no colon at all).
+func remoteIP(c mtp.Conn) string {
+	host, _, err := net.SplitHostPort(c.RemoteAddr())
+	if err != nil {
+		return c.RemoteAddr()
+	}
+	return host
 }
 
 // uspMessageSummary renders a one-line summary of msg for capture

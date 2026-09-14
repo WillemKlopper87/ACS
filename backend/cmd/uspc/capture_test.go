@@ -82,18 +82,14 @@ func newCaptureTestHandler(t *testing.T) (h *handler, deviceID, ouiSerial string
 // kind/summary, and that the session's device_id is backfilled by the
 // same call (captureInbound's ResolveDeviceID branch).
 //
-// This uses 'remote_ip' mode, not 'device'/'identity' mode, deliberately:
-// OnRecord's own captureInbound call site (handler.go, task-4 brief
-// Step 3) always passes naturalKey="" -- the generic per-message
-// checkpoint fires before any message-specific identity is decoded, so
-// it has no natural key to offer yet, matching the brief's own scope
-// note that per-message-type identity plumbing is a follow-up increment.
-// captures.Repository.ActiveMatch only matches a 'device'/'identity'
-// session against a non-empty natural key (see its own doc comment and
-// SQL), so with naturalKey always "" here, only 'remote_ip' sessions can
-// ever match through this checkpoint today -- see
-// TestCaptureInboundDeviceModeDoesNotMatchViaOnRecord below, which pins
-// down that gap explicitly rather than leaving it undiscovered.
+// 'remote_ip' mode matches on c's own remote address (port-stripped via
+// the remoteIP helper -- captureConn.RemoteAddr() returns a bare literal
+// with no port, so remoteIP's no-op fallback applies here, but the
+// stripping matters for a real wsConn/mqttConn whose RemoteAddr() is
+// host:port). See TestCaptureInboundDeviceModeRecordsEvent below for the
+// 'device'-mode counterpart, which matches on the reconciled connection's
+// own natural key instead (set by resolveAndMarkReconciled in
+// production, fix round 1).
 func TestCaptureInboundRemoteIPRecordsEventAndBackfillsDeviceID(t *testing.T) {
 	h, deviceID, _ := newCaptureTestHandler(t)
 	ctx := context.Background()
@@ -101,7 +97,7 @@ func TestCaptureInboundRemoteIPRecordsEventAndBackfillsDeviceID(t *testing.T) {
 	c := &captureConn{id: agent}
 	session, err := h.captures.Start(ctx, captures.StartParams{
 		MatchType:   captures.MatchRemoteIP,
-		MatchValue:  c.RemoteAddr(),
+		MatchValue:  remoteIP(c),
 		Protocol:    "USP",
 		StartedBy:   "test-operator",
 		MaxDuration: 30 * time.Minute,
@@ -116,7 +112,10 @@ func TestCaptureInboundRemoteIPRecordsEventAndBackfillsDeviceID(t *testing.T) {
 	// c is reconciled to deviceID as if an earlier OnBoardRequest had
 	// already run -- same shortcut TestHandlerOperationCompleteSendsResp
 	// (handler_test.go) uses, since reconciliation itself is exercised
-	// elsewhere.
+	// elsewhere. Deliberately does NOT call h.setNaturalKey here (unlike
+	// TestCaptureInboundDeviceModeRecordsEvent) -- this test's whole point
+	// is that remote_ip-mode matching works via remote address alone, with
+	// no natural key involved at all.
 	h.markReconciled(c, deviceID)
 
 	msg := valueChangeMsg("sub-cap-1", false, "Device.DeviceInfo.SoftwareVersion", "2.3.1")
@@ -158,20 +157,24 @@ func TestCaptureInboundRemoteIPRecordsEventAndBackfillsDeviceID(t *testing.T) {
 	}
 }
 
-// TestCaptureInboundDeviceModeDoesNotMatchViaOnRecord pins down a real
-// scope gap this task's report discloses explicitly: a 'device'-mode (or
-// 'identity'-mode) capture session started for an already-known,
-// already-reconciled device does NOT receive any event from OnRecord's
-// captureInbound checkpoint, because that call site always passes
-// naturalKey="" (handler.go, task-4 brief Step 3's own specified code) --
-// and ActiveMatch's SQL only matches 'device'/'identity' sessions against
-// a non-empty natural key, never against remote address or device id
-// directly. This is a deliberate regression pin, not a desired behavior:
-// it documents the current first-cut's real limit so a future increment
-// (e.g. resolving the reconciled device's own natural key before calling
-// captureInbound) can flip this test's expectation once that lands,
-// rather than the gap staying silently undiscovered.
-func TestCaptureInboundDeviceModeDoesNotMatchViaOnRecord(t *testing.T) {
+// TestCaptureInboundDeviceModeRecordsEvent is the brief's own Step 5
+// acceptance case: a 'device'-mode capture session started for an
+// already-known device, driving a real (mock) USP message through
+// OnRecord, must produce exactly one capture_events row with the
+// expected kind/summary.
+//
+// 'device'-mode matching needs a real natural key (ActiveMatch only
+// matches 'device'/'identity' sessions against a non-empty one), which
+// in production is resolved and recorded once per reconciliation by
+// resolveAndMarkReconciled (handler.go, fix round 1) via
+// h.setNaturalKey, not by markReconciled itself (a separate call, kept
+// deliberately independent of markReconciled's own signature/call
+// sites). This test bypasses resolveAndMarkReconciled the same way the
+// rest of this package's tests bypass it for markReconciled alone
+// (e.g. TestHandlerOperationCompleteSendsResp), so it calls both
+// h.markReconciled and h.setNaturalKey directly to simulate what a real
+// reconciliation would have already done.
+func TestCaptureInboundDeviceModeRecordsEvent(t *testing.T) {
 	h, deviceID, ouiSerial := newCaptureTestHandler(t)
 	ctx := context.Background()
 
@@ -189,6 +192,7 @@ func TestCaptureInboundDeviceModeDoesNotMatchViaOnRecord(t *testing.T) {
 
 	c := &captureConn{id: agent}
 	h.markReconciled(c, deviceID)
+	h.setNaturalKey(c, ouiSerial)
 
 	msg := valueChangeMsg("sub-cap-2", false, "Device.DeviceInfo.SoftwareVersion", "2.3.1")
 	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg)})
@@ -197,8 +201,21 @@ func TestCaptureInboundDeviceModeDoesNotMatchViaOnRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListEvents: %v", err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("capture_events for a device-mode session via OnRecord = %d, want 0 (see this test's own doc comment): %+v", len(events), events)
+	if len(events) != 1 {
+		t.Fatalf("capture_events for session = %d, want exactly 1: %+v", len(events), events)
+	}
+	ev := events[0]
+	if ev.Kind != "USP message" {
+		t.Errorf("event kind = %q, want %q", ev.Kind, "USP message")
+	}
+	if ev.Direction != "inbound" {
+		t.Errorf("event direction = %q, want %q", ev.Direction, "inbound")
+	}
+	if !strings.Contains(ev.Summary, "NOTIFY") {
+		t.Errorf("event summary = %q, want it to mention the NOTIFY msg type", ev.Summary)
+	}
+	if !strings.Contains(ev.Summary, "msg_id=") {
+		t.Errorf("event summary = %q, want it to carry the msg_id", ev.Summary)
 	}
 }
 
