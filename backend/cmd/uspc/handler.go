@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"acs/internal/captures"
 	"acs/internal/devices"
 	"acs/internal/parameters"
 	"acs/internal/usp"
@@ -52,6 +54,7 @@ type handler struct {
 	subscriptions *subscriptionReconciler
 	paramsRepo    *parameters.Repository
 	devicesRepo   *devices.Repository
+	captures      *captures.Repository
 
 	// identMu guards identities. This is handler's own lock, deliberately
 	// separate from mtp.Registry's internal one -- that lock guards
@@ -167,6 +170,12 @@ func (h *handler) OnRecord(in mtp.Inbound) {
 		return
 	}
 	h.metrics.records.WithLabelValues(kind, "in", "ok").Inc()
+
+	if deviceID, ok := h.reconciledDeviceID(in.Conn); ok {
+		h.captureInbound(context.Background(), in.Conn, "", deviceID, "USP message", uspMessageSummary(msg), nil)
+	} else {
+		h.captureInbound(context.Background(), in.Conn, "", "", "USP message", uspMessageSummary(msg), nil)
+	}
 
 	// An OnBoardRequest Notify and an OperationComplete Notify are both
 	// Notify-shaped messages, structurally distinct from the probe's
@@ -666,6 +675,48 @@ func deviceInfoFromGetResp(msg *uspproto.Msg) (oui, productClass, serialNumber s
 		}
 	}
 	return oui, productClass, serialNumber, haveOUI && haveProductClass && haveSerialNumber
+}
+
+// captureInbound is OnRecord's capture checkpoint -- one hook covering
+// every inbound USP message kind (Notify variants, GetResp, SetResp,
+// ...), called once per decoded message before it's dispatched to any
+// type-specific handler. deviceID is empty for a not-yet-reconciled
+// connection; naturalKey, when the caller has one (e.g. from an
+// OnBoardRequest's own claimed identity), covers 'identity'-mode
+// capture the same way cmd/acs's does. Also a no-op if h.captures is
+// nil (test-construction paths that don't wire one -- newTestHandler
+// doesn't set it -- mirror cmd/acs's own "nil captures = no-op"
+// convention).
+func (h *handler) captureInbound(ctx context.Context, c mtp.Conn, naturalKey, deviceID, kind, summary string, redactedBody *string) {
+	if h.captures == nil {
+		return
+	}
+	sessions, err := h.captures.ActiveMatch(ctx, "USP", naturalKey, c.RemoteAddr())
+	if err != nil {
+		h.log.Error("uspc: failed to check active captures", "err", err, "natural_key", naturalKey)
+		return
+	}
+	for _, s := range sessions {
+		if s.DeviceID == nil && deviceID != "" {
+			if err := h.captures.ResolveDeviceID(ctx, s.ID, deviceID); err != nil {
+				h.log.Error("uspc: failed to backfill capture session device_id", "err", err, "session_id", s.ID)
+			}
+		}
+		if err := h.captures.RecordEvent(ctx, s.ID, "inbound", kind, summary, redactedBody); err != nil {
+			h.log.Error("uspc: failed to record capture event", "err", err, "session_id", s.ID)
+		}
+	}
+}
+
+// uspMessageSummary renders a one-line summary of msg for capture
+// storage: its message type and msg_id. Redacting the body of a
+// specific inbound USP message type (Notify's ValueChange/
+// parameter-carrying variants) is deliberately left for a follow-up
+// increment -- this summary line is the acceptance bar this task's
+// first cut must clear (task-4 brief, Step 3's own scope note); see
+// this task's report for the disclosed scope decision.
+func uspMessageSummary(msg *uspproto.Msg) string {
+	return fmt.Sprintf("%s (msg_id=%s)", msg.GetHeader().GetMsgType(), msg.GetHeader().GetMsgId())
 }
 
 // OnDisconnect removes c from the registry and drops any of its
