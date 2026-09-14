@@ -9,6 +9,17 @@ import (
 	"acs/internal/tmf/common"
 )
 
+// Enrichment carries authoritative inventory facts owned by adjacent ACS
+// domains. It keeps the projector database-free while allowing TMF639 to expose
+// observed management protocols, current assignment roles, and allow-listed
+// version evidence without creating a duplicate resource store.
+type Enrichment struct {
+	ManagementProtocols []string
+	AssignmentRoles     []string
+	SoftwareVersion     string
+	HardwareVersion     string
+}
+
 // Projector converts the existing ACS device inventory into the canonical
 // resource read model. It intentionally has no database dependency so the
 // source-of-truth boundary is explicit and easy to test.
@@ -21,6 +32,10 @@ func NewProjector(baseURL string) *Projector {
 }
 
 func (p *Projector) Project(d devices.Device) (Resource, error) {
+	return p.ProjectWithEnrichment(d, Enrichment{})
+}
+
+func (p *Projector) ProjectWithEnrichment(d devices.Device, enrichment Enrichment) (Resource, error) {
 	href, err := common.BuildHref(p.baseURL, CollectionPath, d.ID)
 	if err != nil {
 		return Resource{}, fmt.Errorf("build TMF639 resource href: %w", err)
@@ -35,9 +50,21 @@ func (p *Projector) Project(d devices.Device) (Resource, error) {
 		stringCharacteristic("acsOnlineStatus", d.OnlineStatus),
 	}
 	if len(d.Tags) > 0 {
-		characteristics = append(characteristics, Characteristic{
-			Name: "tags", ValueType: "StringArray", Value: append([]string(nil), d.Tags...), Type: "StringArrayCharacteristic",
-		})
+		characteristics = append(characteristics, stringArrayCharacteristic("tags", d.Tags))
+	}
+	if protocols := normalizedStrings(enrichment.ManagementProtocols); len(protocols) > 0 {
+		characteristics = append(characteristics, stringArrayCharacteristic("managementProtocols", protocols))
+	}
+	if roles := normalizedStrings(enrichment.AssignmentRoles); len(roles) == 1 {
+		characteristics = append(characteristics, stringCharacteristic("assignmentRole", roles[0]))
+	} else if len(roles) > 1 {
+		characteristics = append(characteristics, stringArrayCharacteristic("assignmentRoles", roles))
+	}
+	if version := strings.TrimSpace(enrichment.SoftwareVersion); version != "" {
+		characteristics = append(characteristics, stringCharacteristic("softwareVersion", version))
+	}
+	if version := strings.TrimSpace(enrichment.HardwareVersion); version != "" {
+		characteristics = append(characteristics, stringCharacteristic("hardwareVersion", version))
 	}
 	if d.Location != nil && strings.TrimSpace(*d.Location) != "" {
 		characteristics = append(characteristics, stringCharacteristic("location", *d.Location))
@@ -79,8 +106,29 @@ func stringCharacteristic(name, value string) Characteristic {
 	return Characteristic{Name: name, ValueType: "String", Value: value, Type: "StringCharacteristic"}
 }
 
+func stringArrayCharacteristic(name string, value []string) Characteristic {
+	return Characteristic{Name: name, ValueType: "StringArray", Value: append([]string(nil), value...), Type: "StringArrayCharacteristic"}
+}
+
 func numberCharacteristic(name string, value float64) Characteristic {
 	return Characteristic{Name: name, ValueType: "Number", Value: value, Type: "NumberCharacteristic"}
+}
+
+func normalizedStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func resourceName(d devices.Device) string {
