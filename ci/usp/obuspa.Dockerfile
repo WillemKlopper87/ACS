@@ -7,8 +7,12 @@
 # interoperability with the pinned Broadband Forum agent, not testing the
 # latest libwebsockets development branch, so use Debian's packaged transport
 # libraries instead.
+#
+# This intentionally stays single-stage. It is a CI-only image and keeping the
+# build/runtime packages together avoids coupling the gate to Debian's changing
+# runtime-package names while still pinning the actual reference-agent source.
 
-FROM debian:stable AS build-stage
+FROM debian:stable
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential autoconf automake libtool pkg-config \
@@ -23,14 +27,8 @@ RUN autoreconf --force --install \
     && make -j"$(nproc)" \
     && make install
 
-FROM debian:stable-slim AS exec-stage
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    libssl3t64 libsqlite3-0 libcurl4t64 libmosquitto1 libwebsockets19t64 \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=build-stage /usr/local/bin/obuspa /bin/obuspa
 COPY ci/configs /etc/obuspa/configs
 COPY ci/certs /etc/obuspa/certs
 
-ENTRYPOINT ["/bin/obuspa"]
+ENTRYPOINT ["/usr/local/bin/obuspa"]
 CMD ["-p", "-v4", "-r", "/etc/obuspa/configs/STOMP.txt", "-t", "/etc/obuspa/certs", "-f", "/tmp/usp.db"]
