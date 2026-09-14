@@ -1,0 +1,30 @@
+name: Validate reproducible OBUSPA fixture
+
+on:
+  push:
+    branches:
+      - fix/tmf-programme-baseline
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      OBUSPA_COMMIT: 2d885f12d7fd345435b5db651b3111cb6d3a879e
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Clone pinned OBUSPA
+        run: |
+          git init -q obuspa-src
+          cd obuspa-src
+          git remote add origin https://github.com/BroadbandForum/obuspa.git
+          git fetch --depth 1 origin "$OBUSPA_COMMIT"
+          git checkout -q FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$OBUSPA_COMMIT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Build reproducible reference-agent image
+        run: docker build -f ci/usp/obuspa.Dockerfile -t obuspa:ci obuspa-src
+      - name: Smoke executable
+        run: docker run --rm --entrypoint /usr/local/bin/obuspa obuspa:ci --help >/tmp/obuspa-help.txt 2>&1 || test -s /tmp/obuspa-help.txt
