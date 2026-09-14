@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"log/slog"
 	"net/http"
@@ -40,7 +41,7 @@ func TestCaptureDispatchBodyRedactsKeyPassphrase(t *testing.T) {
 		{Name: "Device.ManagementServer.PeriodicInformInterval", Value: "300"},
 	}, "job-command-key")
 
-	got := captureDispatchBody(requestBody)
+	got := captureDispatchBody(jobs.TypeSetParameter, requestBody)
 	if got == nil {
 		t.Fatal("captureDispatchBody returned nil")
 	}
@@ -66,9 +67,55 @@ func TestCaptureDispatchBodyRedactsKeyPassphrase(t *testing.T) {
 // nothing in it for captureDispatchBody to find or redact.
 func TestCaptureDispatchBodyPassesThroughNonValueRPC(t *testing.T) {
 	requestBody := cwmp.RenderGetParameterValues("1", []string{"Device.DeviceInfo.SoftwareVersion"})
-	got := captureDispatchBody(requestBody)
+	got := captureDispatchBody(jobs.TypeGetParameter, requestBody)
 	if got == nil || *got != string(requestBody) {
 		t.Fatalf("captureDispatchBody changed a non-value-carrying RPC body:\n got:  %s\n want: %s", stringOrNil(got), requestBody)
+	}
+}
+
+// TestCaptureDispatchBodyRedactsDownloadPassword is Finding 1's fix: a
+// Download RPC's <Password> (internal/cwmp/download.go's RenderDownload)
+// is a live file-server credential, not diagnostic data, and must never
+// reach capture storage -- captureDispatchBody's original implementation
+// only matched SetParameterValues' <Name>/<Value> shape and left this
+// leaking verbatim.
+func TestCaptureDispatchBodyRedactsDownloadPassword(t *testing.T) {
+	const secret = "fw-secret"
+	requestBody := cwmp.RenderDownload("1", "cmd-key", "1 Firmware Upgrade Image",
+		"http://fileserver.test/fw.bin", "fw-user", secret, 1234, "fw.bin", 0)
+
+	got := captureDispatchBody(jobs.TypeFirmwareDownload, requestBody)
+	if got == nil {
+		t.Fatal("captureDispatchBody returned nil")
+	}
+	if strings.Contains(*got, secret) {
+		t.Fatalf("captureDispatchBody leaked the Download RPC's Password: %s", *got)
+	}
+	if !strings.Contains(*got, "***REDACTED***") {
+		t.Fatalf("captureDispatchBody output missing the redaction marker: %s", *got)
+	}
+	if !strings.Contains(*got, "fw-user") {
+		t.Errorf("captureDispatchBody should not touch Username, only Password: %s", *got)
+	}
+}
+
+// TestCaptureDispatchBodyRedactsUploadPassword is Upload's mirror of
+// TestCaptureDispatchBodyRedactsDownloadPassword (internal/cwmp/upload.go's
+// RenderUpload emits the same <Username>/<Password> shape as Download).
+func TestCaptureDispatchBodyRedactsUploadPassword(t *testing.T) {
+	const secret = "upload-secret"
+	requestBody := cwmp.RenderUpload("1", "cmd-key", "1 Vendor Configuration File",
+		"http://fileserver.test/upload", "up-user", secret, 0)
+
+	got := captureDispatchBody(jobs.TypeUpload, requestBody)
+	if got == nil {
+		t.Fatal("captureDispatchBody returned nil")
+	}
+	if strings.Contains(*got, secret) {
+		t.Fatalf("captureDispatchBody leaked the Upload RPC's Password: %s", *got)
+	}
+	if !strings.Contains(*got, "***REDACTED***") {
+		t.Fatalf("captureDispatchBody output missing the redaction marker: %s", *got)
 	}
 }
 
@@ -191,5 +238,87 @@ func TestIntegration_CaptureIdentityInformBackfillsDeviceID(t *testing.T) {
 	}
 	if events[0].Body == nil || !strings.Contains(*events[0].Body, "Device.DeviceInfo.SoftwareVersion") {
 		t.Errorf("event body missing expected Inform parameter content: %v", events[0].Body)
+	}
+}
+
+// TestIntegration_CaptureInboundRedactsInformSecrets is Finding 5's
+// coverage gap: nothing previously tested that the inbound hook
+// (captureInbound -> captureInformBody) actually calls
+// captures.RedactParamValue/RedactAuthHeader on a real Inform driven
+// through handleInform -- only the redaction helpers themselves (Task 2)
+// and the outbound dispatch body-builder (this task) were tested. This
+// seeds an Inform whose ParameterList carries a KeyPassphrase-named
+// parameter and whose Authorization header is a Basic credential, drives
+// it through handleInform with an active capture session watching, and
+// asserts the resulting capture_events row's body redacts both: the
+// parameter's real value never appears (replaced by ***REDACTED***), and
+// neither the raw Basic credential string nor its base64 form appears
+// (RedactAuthHeader keeps only the username).
+func TestIntegration_CaptureInboundRedactsInformSecrets(t *testing.T) {
+	h, _, ctx := newCaptureTestGateway(t)
+
+	naturalKey := cwmp.DeviceID{OUI: "001349", ProductClass: "NR5103", SerialNumber: "S230Q99999999"}.NaturalKey()
+	session, err := h.captures.Start(ctx, captures.StartParams{
+		MatchType:   captures.MatchIdentity,
+		MatchValue:  naturalKey,
+		Protocol:    "CWMP",
+		StartedBy:   "test-operator",
+		MaxDuration: h.captureMaxDuration,
+	})
+	if err != nil {
+		t.Fatalf("Start capture: %v", err)
+	}
+
+	const wifiSecret = "wifi-passphrase-xyz"
+	const basicUser, basicPass = "someuser", "basic-credential-secret"
+	basicHeader := "Basic " + base64.StdEncoding.EncodeToString([]byte(basicUser+":"+basicPass))
+
+	inform := &cwmp.Inform{
+		DeviceId: cwmp.DeviceID{OUI: "001349", ProductClass: "NR5103", SerialNumber: "S230Q99999999"},
+		Event:    []cwmp.EventStruct{{EventCode: "2 PERIODIC"}},
+		ParameterList: []cwmp.ParameterValueStruct{
+			{Name: "Device.WiFi.AccessPoint.1.Security.KeyPassphrase", Value: wifiSecret},
+			{Name: "Device.DeviceInfo.SoftwareVersion", Value: "2.3.1"},
+		},
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/cwmp", nil)
+	r.Header.Set("Authorization", basicHeader)
+	w := httptest.NewRecorder()
+	h.handleInform(ctx, w, r, inform, devices.AuthModeNone, inboundIdentity{}, "test-id", cwmp.DefaultCWMPNamespace)
+	if w.Code != http.StatusOK {
+		t.Fatalf("handleInform -> %d %s", w.Code, w.Body.String())
+	}
+
+	if _, err := h.devices.GetByOUIserial(ctx, naturalKey); err != nil {
+		t.Fatalf("device not onboarded from Inform: %v", err)
+	}
+
+	events, err := h.captures.ListEvents(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) != 1 || events[0].Body == nil {
+		t.Fatalf("capture_events for session = %+v, want exactly 1 event with a body", events)
+	}
+	body := *events[0].Body
+
+	if strings.Contains(body, wifiSecret) {
+		t.Fatalf("captured Inform body leaked the KeyPassphrase value: %s", body)
+	}
+	if !strings.Contains(body, "***REDACTED***") {
+		t.Fatalf("captured Inform body missing the redaction marker for KeyPassphrase: %s", body)
+	}
+	if strings.Contains(body, basicPass) {
+		t.Fatalf("captured Inform body leaked the raw Basic auth password: %s", body)
+	}
+	if strings.Contains(body, base64.StdEncoding.EncodeToString([]byte(basicUser+":"+basicPass))) {
+		t.Fatalf("captured Inform body leaked the base64-encoded Basic credential: %s", body)
+	}
+	if !strings.Contains(body, "username="+basicUser) {
+		t.Errorf("captured Inform body should keep the Basic username visible: %s", body)
+	}
+	if !strings.Contains(body, "Device.DeviceInfo.SoftwareVersion") {
+		t.Errorf("captured Inform body should keep non-sensitive parameters visible: %s", body)
 	}
 }

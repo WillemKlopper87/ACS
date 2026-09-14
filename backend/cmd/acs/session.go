@@ -265,7 +265,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 
 	h.captureInbound(ctx, naturalKey, remoteIP(r), device.ID, "Inform",
-		fmt.Sprintf("Inform (events: %v)", events), captureInformBody(inform, r.Header.Get("Authorization")))
+		fmt.Sprintf("Inform (events: %v)", events), inform, r.Header.Get("Authorization"))
 
 	if err := h.devices.UpdateAuthMode(ctx, device.ID, authMode); err != nil {
 		h.logger.Error("failed to record device auth mode", "err", err, "device_id", device.ID)
@@ -347,10 +347,14 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 // (design §4: "once the device does authenticate for real, the
 // session's device_id is backfilled"). No-op (not an error) if nothing
 // is capturing right now -- the common case, so this must stay a cheap
-// single indexed query. Also a no-op if h.captures itself is nil, which
-// only happens in tests/handlers assembled without a captures
-// repository (production's main.go always sets one).
-func (h *handler) captureInbound(ctx context.Context, naturalKey, remoteIP, deviceID, kind, summary string, redactedBody *string) {
+// single indexed query: the redacted body is only built (captureInformBody,
+// a string-builder pass plus two redaction calls per parameter) once
+// ActiveMatch has confirmed there is at least one session to write it to,
+// not for every Inform in the fleet regardless of whether anything is
+// watching. Also a no-op if h.captures itself is nil, which only happens
+// in tests/handlers assembled without a captures repository (production's
+// main.go always sets one).
+func (h *handler) captureInbound(ctx context.Context, naturalKey, remoteIP, deviceID, kind, summary string, inform *cwmp.Inform, authHeader string) {
 	if h.captures == nil {
 		return
 	}
@@ -359,6 +363,10 @@ func (h *handler) captureInbound(ctx context.Context, naturalKey, remoteIP, devi
 		h.logger.Error("failed to check active captures", "err", err, "natural_key", naturalKey)
 		return
 	}
+	if len(sessions) == 0 {
+		return
+	}
+	redactedBody := captureInformBody(inform, authHeader)
 	for _, s := range sessions {
 		if s.DeviceID == nil && deviceID != "" {
 			if err := h.captures.ResolveDeviceID(ctx, s.ID, deviceID); err != nil {
@@ -452,7 +460,7 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 		"type", job.Type, "device_id", session.DeviceID, "session_id", session.ID,
 		"cwmp_namespace", session.CWMPNamespace)
 
-	h.captureOutbound(ctx, session.DeviceID, job.Type, fmt.Sprintf("dispatching %s (command_key=%s)", job.Type, job.CommandKey), captureDispatchBody(requestBody))
+	h.captureOutbound(ctx, session.DeviceID, job.Type, fmt.Sprintf("dispatching %s (command_key=%s)", job.Type, job.CommandKey), requestBody)
 
 	w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
 	w.WriteHeader(http.StatusOK)
@@ -463,8 +471,11 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 // process itself is sending, always device-scoped (no remote-address
 // ambiguity for an outbound RPC) -- so it only ever needs the device's
 // own natural key resolved via deviceID, not a separate remote-IP path.
-// Also a no-op if h.captures is nil (see captureInbound).
-func (h *handler) captureOutbound(ctx context.Context, deviceID, kind, summary string, redactedBody *string) {
+// Also a no-op if h.captures is nil (see captureInbound). Like
+// captureInbound, the redacted body (captureDispatchBody, a regex pass
+// over the rendered RPC) is only built once ActiveMatch confirms a
+// session is actually watching, not for every dispatched RPC fleet-wide.
+func (h *handler) captureOutbound(ctx context.Context, deviceID, kind, summary string, requestBody []byte) {
 	if h.captures == nil {
 		return
 	}
@@ -478,6 +489,10 @@ func (h *handler) captureOutbound(ctx context.Context, deviceID, kind, summary s
 		h.logger.Error("failed to check active captures", "err", err, "device_id", deviceID)
 		return
 	}
+	if len(sessions) == 0 {
+		return
+	}
+	redactedBody := captureDispatchBody(kind, requestBody)
 	for _, s := range sessions {
 		if err := h.captures.RecordEvent(ctx, s.ID, "outbound", kind, summary, redactedBody); err != nil {
 			h.logger.Error("failed to record capture event", "err", err, "session_id", s.ID)
@@ -497,18 +512,36 @@ func (h *handler) captureOutbound(ctx context.Context, deviceID, kind, summary s
 // pass through captureDispatchBody unchanged.
 var paramValueStructPattern = regexp.MustCompile(`(?s)<Name>(.*?)</Name>(\s*<Value[^>]*>)(.*?)(</Value>)`)
 
+// passwordElementPattern matches a <Password>...</Password> element's
+// content -- the shape internal/cwmp/download.go's RenderDownload and
+// upload.go's RenderUpload emit for the file-server credential a
+// Download/Upload RPC carries:
+//
+//	<Password>SECRET</Password>
+//
+// Unlike a SetParameterValues value (which an operator troubleshooting
+// a session genuinely needs to see to confirm what was sent), this
+// file-server password has no diagnostic value and is always a live
+// credential for these two RPC types -- so it is masked unconditionally,
+// not name-pattern-matched like RedactParamValue.
+var passwordElementPattern = regexp.MustCompile(`(?s)(<Password>)(.*?)(</Password>)`)
+
 // captureDispatchBody redacts an outbound CWMP RPC's raw XML body for
 // capture storage: it finds every <Name>/<Value> pair the body carries
 // (SetParameterValues is the only RPC type with redaction-relevant
-// content) and masks any value whose parameter name looks sensitive via
-// captures.RedactParamValue, leaving everything else in the body --
-// envelope, namespaces, attributes, whitespace -- exactly as rendered.
-// This is a second, capture-only parse of the already-rendered body
-// purely for display; its output is never fed back into the live CWMP
-// session, so it deliberately does a narrow text-level substitution
-// rather than a full XML decode/re-encode round trip (which risks
-// mangling the envelope's namespace prefixes for no benefit here).
-func captureDispatchBody(requestBody []byte) *string {
+// parameter content) and masks any value whose parameter name looks
+// sensitive via captures.RedactParamValue, then -- for Download/Upload
+// jobType specifically -- also masks the <Password> element's content
+// unconditionally, since that is always a live file-server credential
+// for those two RPC types, never diagnostic data. Everything else in
+// the body -- envelope, namespaces, attributes, whitespace -- is left
+// exactly as rendered. This is a second, capture-only parse of the
+// already-rendered body purely for display; its output is never fed
+// back into the live CWMP session, so it deliberately does a narrow
+// text-level substitution rather than a full XML decode/re-encode round
+// trip (which risks mangling the envelope's namespace prefixes for no
+// benefit here).
+func captureDispatchBody(jobType string, requestBody []byte) *string {
 	out := paramValueStructPattern.ReplaceAllStringFunc(string(requestBody), func(m string) string {
 		parts := paramValueStructPattern.FindStringSubmatch(m)
 		name, valueOpenTag, value, valueCloseTag := parts[1], parts[2], parts[3], parts[4]
@@ -518,6 +551,10 @@ func captureDispatchBody(requestBody []byte) *string {
 		}
 		return "<Name>" + name + "</Name>" + valueOpenTag + redacted + valueCloseTag
 	})
+	if jobType == jobs.TypeFirmwareDownload || jobType == jobs.TypeUpload {
+		marker := captures.RedactParamValue("Password", "")
+		out = passwordElementPattern.ReplaceAllString(out, "${1}"+marker+"${3}")
+	}
 	return &out
 }
 
