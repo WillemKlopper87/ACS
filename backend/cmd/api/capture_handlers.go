@@ -53,52 +53,12 @@ func validProtocol(p string) bool {
 	return p == "CWMP" || p == "USP"
 }
 
-// scopedCapture applies the same tenant boundary as every device-facing
-// handler. Resolved captures follow their device's customer; an unresolved
-// identity capture is visible only to its creator until correlation. A 404
-// is used for malformed, missing, and out-of-scope IDs so the endpoint never
-// confirms another tenant's session exists.
-func (h *handler) scopedCapture(w http.ResponseWriter, r *http.Request, id string) (*captures.Session, bool) {
+func validCaptureID(w http.ResponseWriter, id string) bool {
 	if _, err := uuid.Parse(id); err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
-		return nil, false
+		return false
 	}
-	s, err := h.captures.Get(r.Context(), id)
-	if errors.Is(err, captures.ErrNotFound) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return nil, false
-	}
-	if err != nil {
-		h.logger.Error("failed to look up capture session", "err", err, "id", id)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return nil, false
-	}
-	customerIDs, scoped, err := h.deviceScope(r)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return nil, false
-	}
-	if !scoped {
-		return s, true
-	}
-	if s.DeviceID == nil {
-		if s.StartedBy == operatorFromRequest(r) {
-			return s, true
-		}
-		http.Error(w, "not found", http.StatusNotFound)
-		return nil, false
-	}
-	d, err := h.devices.Get(r.Context(), *s.DeviceID)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !deviceInScope(d.CustomerID, customerIDs)) {
-		http.Error(w, "not found", http.StatusNotFound)
-		return nil, false
-	}
-	if err != nil {
-		h.logger.Error("failed to resolve capture device", "err", err, "device_id", *s.DeviceID)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return nil, false
-	}
-	return s, true
+	return true
 }
 
 // createDeviceCapture implements POST /api/v1/devices/{id}/captures --
@@ -213,17 +173,21 @@ func (h *handler) createCapture(w http.ResponseWriter, r *http.Request) {
 // stopCapture implements POST /api/v1/captures/{id}/stop.
 func (h *handler) stopCapture(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := h.scopedCapture(w, r, id); !ok {
+	if !validCaptureID(w, id) {
 		return
 	}
-	if err := h.captures.Stop(r.Context(), id); err != nil {
-		h.logger.Error("failed to stop capture session", "err", err, "id", id)
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s, err := h.captures.Get(r.Context(), id)
+	s, err := h.captures.StopAccessible(r.Context(), id, operatorFromRequest(r), customerIDs, scoped)
+	if errors.Is(err, captures.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	if err != nil {
-		h.logger.Error("failed to re-read capture session after stop", "err", err, "id", id)
+		h.logger.Error("failed to stop capture session", "err", err, "id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -268,10 +232,19 @@ type captureEventResponse struct {
 // getCaptureEvents implements GET /api/v1/captures/{id}/events.
 func (h *handler) getCaptureEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := h.scopedCapture(w, r, id); !ok {
+	if !validCaptureID(w, id) {
 		return
 	}
-	events, err := h.captures.ListEvents(r.Context(), id)
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	_, events, err := h.captures.GetWithEventsAccessible(r.Context(), id, operatorFromRequest(r), customerIDs, scoped)
+	if errors.Is(err, captures.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	if err != nil {
 		h.logger.Error("failed to list capture events", "err", err, "id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -291,11 +264,19 @@ func (h *handler) getCaptureEvents(w http.ResponseWriter, r *http.Request) {
 // redacted transcript as a downloadable JSON file (design §7).
 func (h *handler) exportCapture(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	s, ok := h.scopedCapture(w, r, id)
-	if !ok {
+	if !validCaptureID(w, id) {
 		return
 	}
-	events, err := h.captures.ListEvents(r.Context(), id)
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	s, events, err := h.captures.GetWithEventsAccessible(r.Context(), id, operatorFromRequest(r), customerIDs, scoped)
+	if errors.Is(err, captures.ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	if err != nil {
 		h.logger.Error("failed to list capture events for export", "err", err, "id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)

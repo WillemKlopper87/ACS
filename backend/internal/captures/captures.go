@@ -173,6 +173,32 @@ func (r *Repository) Stop(ctx context.Context, id string) error {
 	return err
 }
 
+// StopAccessible stops and returns a session only when it is visible to the
+// caller. Authorization and mutation share one SQL statement, so device
+// correlation or reassignment cannot move the session across a tenant
+// boundary between a preflight check and the update.
+func (r *Repository) StopAccessible(ctx context.Context, id, startedBy string, customerIDs []string, scoped bool) (*Session, error) {
+	row := r.db.QueryRowContext(ctx, `
+		UPDATE capture_sessions c
+		SET status = CASE WHEN c.status = 'ACTIVE' THEN 'STOPPED' ELSE c.status END,
+		    stopped_at = CASE WHEN c.status = 'ACTIVE' THEN now() ELSE c.stopped_at END
+		WHERE c.id = $1
+		  AND (
+		    NOT $4
+		    OR (c.device_id IS NULL AND c.started_by = $2)
+		    OR EXISTS (
+		      SELECT 1 FROM devices d
+		      WHERE d.id = c.device_id AND d.customer_id::text = ANY($3)
+		    )
+		  )
+		RETURNING `+sessionColumns, id, startedBy, store.StringArray(customerIDs), scoped)
+	s, err := scanSession(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return s, err
+}
+
 // Get looks up one session by id.
 func (r *Repository) Get(ctx context.Context, id string) (*Session, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT `+sessionColumns+` FROM capture_sessions WHERE id = $1`, id)
@@ -229,6 +255,48 @@ func (r *Repository) ListAccessible(ctx context.Context, startedBy string, custo
 	return out, rows.Err()
 }
 
+// GetWithEventsAccessible returns a session and its events from one
+// repeatable-read snapshot. If an unresolved capture is correlated while
+// this read is in flight, the snapshot cannot observe the newly written
+// foreign transcript after authorizing its creator against the old NULL
+// device_id.
+func (r *Repository) GetWithEventsAccessible(ctx context.Context, id, startedBy string, customerIDs []string, scoped bool) (*Session, []Event, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin capture read: %w", err)
+	}
+	defer tx.Rollback()
+
+	row := tx.QueryRowContext(ctx, `
+		SELECT c.id, c.device_id, c.match_type, c.match_value, c.protocol, c.status,
+		       c.started_by, c.started_at, c.stopped_at, c.expires_at
+		FROM capture_sessions c
+		WHERE c.id = $1
+		  AND (
+		    NOT $4
+		    OR (c.device_id IS NULL AND c.started_by = $2)
+		    OR EXISTS (
+		      SELECT 1 FROM devices d
+		      WHERE d.id = c.device_id AND d.customer_id::text = ANY($3)
+		    )
+		  )`, id, startedBy, store.StringArray(customerIDs), scoped)
+	s, err := scanSession(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	events, err := listEvents(ctx, tx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("commit capture read: %w", err)
+	}
+	return s, events, nil
+}
+
 // ActiveMatch returns every ACTIVE, unexpired session matching this
 // request: MatchDevice/MatchIdentity sessions whose match_value equals
 // naturalKey (deliberately the same lookup for both modes -- see the
@@ -274,17 +342,64 @@ func (r *Repository) ResolveDeviceID(ctx context.Context, sessionID, deviceID st
 // with nothing worth attaching (e.g. a bare dispatch trigger); callers
 // are responsible for having already redacted it.
 func (r *Repository) RecordEvent(ctx context.Context, sessionID, direction, kind, summary string, body *string) error {
+	return recordEvent(ctx, r.db, sessionID, direction, kind, summary, body)
+}
+
+type queryExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func recordEvent(ctx context.Context, db queryExecer, sessionID, direction, kind, summary string, body *string) error {
 	id := uuid.New().String()
-	_, err := r.db.ExecContext(ctx, `
+	_, err := db.ExecContext(ctx, `
 		INSERT INTO capture_events (id, session_id, seq, direction, kind, summary, body)
 		VALUES ($1, $2, COALESCE((SELECT MAX(seq) FROM capture_events WHERE session_id = $2), 0) + 1, $3, $4, $5, $6)`,
 		id, sessionID, direction, kind, summary, body)
 	return err
 }
 
+// RecordEventForDevice atomically correlates an unresolved session and
+// records its first device event. A correlation failure rolls the event
+// back as well, so foreign transcript data can never remain attached to a
+// creator-readable NULL device_id session.
+func (r *Repository) RecordEventForDevice(ctx context.Context, sessionID, deviceID, direction, kind, summary string, body *string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin correlated capture event: %w", err)
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE capture_sessions
+		SET device_id = COALESCE(device_id, $2)
+		WHERE id = $1 AND (device_id IS NULL OR device_id = $2)`, sessionID, deviceID)
+	if err != nil {
+		return fmt.Errorf("correlate capture session: %w", err)
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("read capture correlation result: %w", err)
+	} else if n == 0 {
+		return fmt.Errorf("capture session is missing or correlated to another device")
+	}
+	if err := recordEvent(ctx, tx, sessionID, direction, kind, summary, body); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit correlated capture event: %w", err)
+	}
+	return nil
+}
+
 // ListEvents returns a session's events in seq order.
 func (r *Repository) ListEvents(ctx context.Context, sessionID string) ([]Event, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	return listEvents(ctx, r.db, sessionID)
+}
+
+type queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func listEvents(ctx context.Context, db queryer, sessionID string) ([]Event, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT id, session_id, seq, direction, kind, occurred_at, summary, body
 		FROM capture_events WHERE session_id = $1 ORDER BY seq ASC`, sessionID)
 	if err != nil {

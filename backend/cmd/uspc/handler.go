@@ -757,11 +757,10 @@ func (h *handler) captureInbound(ctx context.Context, c mtp.Conn, naturalKey, de
 	}
 	for _, s := range sessions {
 		if s.DeviceID == nil && deviceID != "" {
-			if err := h.captures.ResolveDeviceID(ctx, s.ID, deviceID); err != nil {
-				h.log.Error("uspc: failed to backfill capture session device_id", "err", err, "session_id", s.ID)
+			if err := h.captures.RecordEventForDevice(ctx, s.ID, deviceID, "inbound", kind, summary, redactedBody); err != nil {
+				h.log.Error("uspc: failed to correlate and record capture event", "err", err, "session_id", s.ID)
 			}
-		}
-		if err := h.captures.RecordEvent(ctx, s.ID, "inbound", kind, summary, redactedBody); err != nil {
+		} else if err := h.captures.RecordEvent(ctx, s.ID, "inbound", kind, summary, redactedBody); err != nil {
 			h.log.Error("uspc: failed to record capture event", "err", err, "session_id", s.ID)
 		}
 	}

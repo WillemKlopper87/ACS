@@ -213,6 +213,78 @@ func TestRecordEventAndListEventsOrdered(t *testing.T) {
 	}
 }
 
+func TestRecordEventForDeviceCorrelatesAtomically(t *testing.T) {
+	ctx, db := newTestDB(t)
+	r := NewRepository(db)
+
+	var deviceID string
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO devices (id, oui_serial, manufacturer, oui, product_class, serial_number)
+		VALUES (gen_random_uuid(), '001349+CORRELATED', 'Vendor', '001349', 'CPE', 'CORRELATED')
+		RETURNING id`).Scan(&deviceID); err != nil {
+		t.Fatalf("insert device: %v", err)
+	}
+	s, err := r.Start(ctx, StartParams{MatchType: MatchIdentity, MatchValue: "001349+CORRELATED", Protocol: "CWMP", StartedBy: "op", MaxDuration: time.Minute})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	body := "redacted transcript"
+	if err := r.RecordEventForDevice(ctx, s.ID, deviceID, "inbound", "Inform", "correlated", &body); err != nil {
+		t.Fatalf("RecordEventForDevice: %v", err)
+	}
+
+	got, events, err := r.GetWithEventsAccessible(ctx, s.ID, "op", nil, false)
+	if err != nil {
+		t.Fatalf("GetWithEventsAccessible: %v", err)
+	}
+	if got.DeviceID == nil || *got.DeviceID != deviceID {
+		t.Fatalf("device_id = %v, want %s", got.DeviceID, deviceID)
+	}
+	if len(events) != 1 || events[0].Summary != "correlated" {
+		t.Fatalf("events = %+v, want correlated event", events)
+	}
+}
+
+func TestAccessibleOperationsHideForeignCapture(t *testing.T) {
+	ctx, db := newTestDB(t)
+	r := NewRepository(db)
+
+	var customerA, customerB, deviceB string
+	if err := db.QueryRowContext(ctx, `INSERT INTO customers (id, name) VALUES (gen_random_uuid(), 'A') RETURNING id`).Scan(&customerA); err != nil {
+		t.Fatalf("insert customer A: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `INSERT INTO customers (id, name) VALUES (gen_random_uuid(), 'B') RETURNING id`).Scan(&customerB); err != nil {
+		t.Fatalf("insert customer B: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO devices (id, oui_serial, manufacturer, oui, product_class, serial_number, customer_id)
+		VALUES (gen_random_uuid(), '001349+FOREIGN', 'Vendor', '001349', 'CPE', 'FOREIGN', $1)
+		RETURNING id`, customerB).Scan(&deviceB); err != nil {
+		t.Fatalf("insert device B: %v", err)
+	}
+	s, err := r.Start(ctx, StartParams{DeviceID: &deviceB, MatchType: MatchDevice, MatchValue: "001349+FOREIGN", Protocol: "CWMP", StartedBy: "bob", MaxDuration: time.Minute})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := r.RecordEvent(ctx, s.ID, "inbound", "Inform", "secret", nil); err != nil {
+		t.Fatalf("RecordEvent: %v", err)
+	}
+
+	if _, _, err := r.GetWithEventsAccessible(ctx, s.ID, "alice", []string{customerA}, true); err != ErrNotFound {
+		t.Errorf("foreign read = %v, want ErrNotFound", err)
+	}
+	if _, err := r.StopAccessible(ctx, s.ID, "alice", []string{customerA}, true); err != ErrNotFound {
+		t.Errorf("foreign stop = %v, want ErrNotFound", err)
+	}
+	visible, err := r.ListAccessible(ctx, "alice", []string{customerA})
+	if err != nil {
+		t.Fatalf("ListAccessible: %v", err)
+	}
+	if len(visible) != 0 {
+		t.Errorf("ListAccessible leaked %+v", visible)
+	}
+}
+
 func TestListReturnsNewestFirst(t *testing.T) {
 	ctx, db := newTestDB(t)
 	r := NewRepository(db)
