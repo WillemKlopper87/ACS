@@ -1,11 +1,11 @@
-# Network exposure (audit P1.5): only the two ports a CPE or an operator
-# must reach from outside are published on all interfaces (CWMP 7547 and
-# STUN 3478 on the acs service). Postgres, Prometheus, Grafana, the API,
-# the BSS adapter, and the frontend bind to 127.0.0.1 — reach them via a
-# TLS-terminating reverse proxy on the host, an SSH tunnel, or by editing
-# the bind address deliberately. Set ACS_POSTGRES_PASSWORD and
-# GRAFANA_ADMIN_PASSWORD in the shell/.env before `docker compose up`;
-# the Postgres default only exists so a throwaway local stack still works.
+# Network exposure (audit P1.5): only the two ports a CPE must reach from
+# outside are published on all interfaces here (CWMP 7547 and STUN 3478
+# on the acs service). Postgres, Prometheus, Grafana, the API, the BSS
+# adapter, and the frontend bind to 127.0.0.1 in the containerized path or
+# are expected to sit behind the host Nginx ingress used by quickstart.
+# Set ACS_POSTGRES_PASSWORD and GRAFANA_ADMIN_PASSWORD in the shell/.env
+# before `docker compose up`; the Postgres default only exists so a
+# throwaway local stack still works.
 services:
   postgres:
     image: postgres:18-alpine
@@ -32,6 +32,14 @@ services:
     image: prom/prometheus:v2.55.1
     ports:
       - "127.0.0.1:9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.path=/prometheus"
+      # quickstart rewrites these two values in infra/.env after it knows
+      # the instance public IP. The path prefix is required so links,
+      # assets and API calls keep working behind Nginx at /prometheus/.
+      - "--web.external-url=${PROMETHEUS_EXTERNAL_URL:-http://localhost:9090/prometheus/}"
+      - "--web.route-prefix=${PROMETHEUS_ROUTE_PREFIX:-/prometheus/}"
     volumes:
       # ACS_PROMETHEUS_CONFIG selects the target set: prometheus.yml (the
       # default `go run` workflow) or prometheus.containerized.yml (the
@@ -70,27 +78,24 @@ services:
   grafana:
     image: grafana/grafana:11.3.1
     ports:
-      # 127.0.0.1 unless deliberately overridden (audit P1.5):
-      # scripts/start.sh sets GRAFANA_BIND=0.0.0.0 only when
-      # ACS_GRAFANA_PUBLIC=1, and says what that exposes.
+      # Grafana stays loopback-only in the normal deployment. The public
+      # quickstart path is Nginx /grafana/, not an open port 3000.
+      # ACS_GRAFANA_PUBLIC=1 remains as an explicit legacy escape hatch.
       - "${GRAFANA_BIND:-127.0.0.1}:3000:3000"
     environment:
       # Anonymous access is off and the admin password must be supplied
       # (audit P1.5) — `${VAR:?}` makes compose refuse to start without it.
       # scripts/gen-env.sh generates both passwords and writes them to
       # infra/.env, so the scripted deployment satisfies these without a
-      # manual pre-step (and without the `unused-postgres-only`
-      # interpolation placeholder start.sh used to need).
+      # manual pre-step.
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD (or run scripts/gen-env.sh)}
       # Secure by default: the session cookie is https-only. The scripted
-      # EC2 deployment serves everything over plain HTTP, where that makes
-      # login silently impossible — the browser never stores the cookie,
-      # so a correct password just returns to the login page. gen-env.sh
-      # sets this false for that deployment; behind a TLS-terminating
-      # proxy, drop the override to get the secure behaviour back.
+      # EC2 deployment currently serves plain HTTP through Nginx, so
+      # gen-env.sh writes false. When TLS terminates at Nginx, set true.
       GF_SECURITY_COOKIE_SECURE: "${GRAFANA_COOKIE_SECURE:-true}"
       GF_SERVER_ROOT_URL: "${GRAFANA_ROOT_URL:-http://localhost:3000}"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "${GRAFANA_SERVE_FROM_SUB_PATH:-false}"
       GF_USERS_ALLOW_SIGN_UP: "false"
       # Read-only Postgres role for the tenancy/BSS/per-device panels
       # (scripts/grafana-db-role.sh creates it). Interpolated into
