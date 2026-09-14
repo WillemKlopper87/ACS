@@ -215,6 +215,13 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	h.metrics.InformsTotal.Inc()
 	events := inform.EventCodes()
 
+	// Normalized once, here, before anything (NaturalKey, storage) reads
+	// DeviceId — some CPE firmware varies OUI case/separators between
+	// Informs, and an unnormalized OUI would make the same physical
+	// device look like a different identity depending on which form it
+	// happened to send (cwmp.DeviceID.NormalizeOUI's doc comment).
+	inform.DeviceId = inform.DeviceId.Normalized()
+
 	if inform.DeviceId.OUI == "" || inform.DeviceId.SerialNumber == "" {
 		h.logger.Warn("Inform rejected: OUI and SerialNumber are required for a device identity", "remote", r.RemoteAddr)
 		http.Error(w, "Inform DeviceId requires OUI and SerialNumber", http.StatusBadRequest)
