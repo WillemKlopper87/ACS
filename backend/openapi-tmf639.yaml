@@ -11,9 +11,12 @@ info:
 servers:
   - url: http://localhost:8080
     description: Local development; production hrefs are configured with ACS_TMF_BASE_URL
+security:
+  - bearerAuth: []
 paths:
   /tmf-api/resourceInventoryManagement/v5/resource:
     get:
+      operationId: listResources
       tags: [TMF639 Resource Inventory]
       summary: List tenant-accessible ACS managed resources
       parameters:
@@ -37,6 +40,7 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
   /tmf-api/resourceInventoryManagement/v5/resource/{id}:
     get:
+      operationId: retrieveResource
       tags: [TMF639 Resource Inventory]
       summary: Get one tenant-accessible ACS managed resource
       description: Missing and foreign-tenant resource IDs both return 404.
@@ -60,6 +64,11 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "500": { $ref: "#/components/responses/InternalError" }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   responses:
     BadRequest:
       description: Invalid offset, limit, fields, or correlation identifier
