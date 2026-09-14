@@ -4,16 +4,9 @@
 # session is enough, and closing the terminal or losing the connection
 # doesn't kill anything. Rerun freely: stops any previous run first.
 #
-# The host quickstart deployment uses Nginx as one public operator ingress:
-#   http://<public-ip>/             console
-#   http://<public-ip>/api/...      REST API
-#   http://<public-ip>/grafana/     Grafana
-#   http://<public-ip>/prometheus/  Prometheus (Basic Auth)
-# Grafana and Prometheus themselves remain bound to 127.0.0.1.
-#
 # Uses BUILT binaries (not `go run`) deliberately — `go run` wraps the
-# real binary in a subprocess, and killing the wrapper can leave the real
-# binary running and still holding its port.
+# real binary in a subprocess, and killing the wrapper can leave the
+# actual binary running and still holding its port.
 set -e
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,9 +17,6 @@ echo "=== Loading/generating credentials ==="
 source "$ROOT/scripts/gen-env.sh"
 
 echo "=== Detecting public IP ==="
-# Needed before the monitoring containers and the frontend build: both
-# Grafana/Prometheus external URLs and VITE_API_BASE_URL must describe the
-# address the operator's browser actually uses.
 detect_public_ip() {
   if [ -n "$ACS_PUBLIC_IP" ]; then
     echo "$ACS_PUBLIC_IP"
@@ -48,27 +38,10 @@ if [ -z "$PUBLIC_IP" ]; then
   echo "  ACS_PUBLIC_IP=13.245.18.190 ./scripts/start.sh"
   exit 1
 fi
-echo "Public IP/host: $PUBLIC_IP"
+echo "Public IP: $PUBLIC_IP"
 
-# Nginx is installed by quickstart. Preserve a functional legacy path for
-# people who run start.sh on an older/manual host without Nginx: the
-# console/API keep their historical :5173/:8080 public URLs and monitoring
-# remains local/tunnel-only in that case.
-INGRESS_AVAILABLE=""
-if command -v nginx >/dev/null 2>&1; then
-  INGRESS_AVAILABLE=1
-  PUBLIC_ORIGIN="http://$PUBLIC_IP"
-  FRONTEND_API_ORIGIN="$PUBLIC_ORIGIN"
-else
-  PUBLIC_ORIGIN="http://$PUBLIC_IP"
-  FRONTEND_API_ORIGIN="http://$PUBLIC_IP:8080"
-  echo "WARNING: nginx is not installed; unified /grafana and /prometheus URLs will not be configured."
-  echo "         Run scripts/quickstart.sh (recommended) or install nginx and rerun."
-fi
-
-# docker compose reads infra/.env. gen-env.sh creates it before we know the
-# public IP, so update deployment-specific values now. Values here contain
-# no literal '|' characters, making it a safe sed delimiter.
+# docker compose reads infra/.env. gen-env.sh creates it before the public
+# IP is known, so update run-specific bind/root values here.
 set_compose_env() {
   local key="$1" value="$2" file="$ROOT/infra/.env"
   if grep -q "^${key}=" "$file"; then
@@ -78,24 +51,21 @@ set_compose_env() {
   fi
 }
 
-if [ "$ACS_GRAFANA_PUBLIC" = "1" ]; then
+if [ "${ACS_GRAFANA_PUBLIC:-}" = "1" ]; then
   GRAFANA_BIND="0.0.0.0"
+  set_compose_env GRAFANA_ROOT_URL "http://$PUBLIC_IP:3000"
 else
   GRAFANA_BIND="127.0.0.1"
+  set_compose_env GRAFANA_ROOT_URL "http://localhost:3000"
 fi
 set_compose_env GRAFANA_BIND "$GRAFANA_BIND"
 
-if [ -n "$INGRESS_AVAILABLE" ]; then
-  set_compose_env GRAFANA_ROOT_URL "$PUBLIC_ORIGIN/grafana/"
-  set_compose_env GRAFANA_SERVE_FROM_SUB_PATH "true"
-  set_compose_env PROMETHEUS_EXTERNAL_URL "$PUBLIC_ORIGIN/prometheus/"
-  set_compose_env PROMETHEUS_ROUTE_PREFIX "/prometheus/"
+if [ "${ACS_PROMETHEUS_PUBLIC:-}" = "1" ]; then
+  PROMETHEUS_BIND="0.0.0.0"
 else
-  set_compose_env GRAFANA_ROOT_URL "http://localhost:3000"
-  set_compose_env GRAFANA_SERVE_FROM_SUB_PATH "false"
-  set_compose_env PROMETHEUS_EXTERNAL_URL "http://localhost:9090"
-  set_compose_env PROMETHEUS_ROUTE_PREFIX "/"
+  PROMETHEUS_BIND="127.0.0.1"
 fi
+set_compose_env PROMETHEUS_BIND "$PROMETHEUS_BIND"
 
 echo "=== Stopping any previous ACS processes ==="
 "$ROOT/scripts/stop.sh" || true
@@ -109,8 +79,6 @@ echo "Postgres is up."
 
 # --- Monitoring stack -------------------------------------------------
 echo "=== Grafana's read-only database role ==="
-# The Postgres-backed dashboards query through a SELECT-only role, never
-# the application's own credentials. Creating it is idempotent.
 if command -v psql >/dev/null; then
   "$ROOT/scripts/grafana-db-role.sh" || echo "WARNING: grafana-db-role.sh failed — the Postgres-backed dashboards will show auth errors."
 else
@@ -124,12 +92,8 @@ echo "=== Starting monitoring stack (Prometheus, Alertmanager, Grafana) ==="
 
 echo "Waiting for Prometheus to become ready..."
 PROMETHEUS_UP=""
-PROM_READY_PATH="/-/ready"
-if [ -n "$INGRESS_AVAILABLE" ]; then
-  PROM_READY_PATH="/prometheus/-/ready"
-fi
 for _ in $(seq 1 60); do
-  if curl -fsS -m 2 "http://127.0.0.1:9090${PROM_READY_PATH}" >/dev/null 2>&1; then
+  if curl -fsS -m 2 http://127.0.0.1:9090/-/ready >/dev/null 2>&1; then
     PROMETHEUS_UP=1
     break
   fi
@@ -144,12 +108,8 @@ fi
 
 echo "Waiting for Grafana to become healthy..."
 GRAFANA_UP=""
-GRAFANA_HEALTH_PATH="/api/health"
-if [ -n "$INGRESS_AVAILABLE" ]; then
-  GRAFANA_HEALTH_PATH="/grafana/api/health"
-fi
 for _ in $(seq 1 60); do
-  if curl -fsS -m 2 "http://127.0.0.1:3000${GRAFANA_HEALTH_PATH}" 2>/dev/null | grep -q '"database": *"ok"'; then
+  if curl -fsS -m 2 http://127.0.0.1:3000/api/health 2>/dev/null | grep -q '"database": *"ok"'; then
     GRAFANA_UP=1
     break
   fi
@@ -158,7 +118,6 @@ done
 if [ -n "$GRAFANA_UP" ]; then
   echo "Grafana is up."
 else
-  # Not fatal: the ACS itself does not depend on dashboards.
   echo "WARNING: Grafana did not report healthy within 120s."
   echo "         Check: cd infra && docker compose logs grafana"
 fi
@@ -187,40 +146,17 @@ fi
 
 echo "=== Building frontend ==="
 cd "$ROOT/frontend"
-# With Nginx the browser talks to the same origin for both UI and API.
-# On the legacy no-Nginx path retain the historical direct :8080 API.
-echo "VITE_API_BASE_URL=$FRONTEND_API_ORIGIN" > .env.local
+echo "VITE_API_BASE_URL=http://$PUBLIC_IP:8080" > .env.local
 npm install --silent
 npm run build
 
 echo "=== Starting frontend static server (:5173) ==="
 cd "$ROOT/frontend/dist"
-nohup python3 "$ROOT/scripts/spa-server.py" 5173 "$ROOT/frontend/dist" "$FRONTEND_API_ORIGIN" > "$LOG_DIR/frontend.log" 2>&1 &
+nohup python3 "$ROOT/scripts/spa-server.py" 5173 "$ROOT/frontend/dist" "http://$PUBLIC_IP:8080" > "$LOG_DIR/frontend.log" 2>&1 &
 echo $! > "$LOG_DIR/frontend.pid"
 sleep 1
 if ! kill -0 "$(cat "$LOG_DIR/frontend.pid")" 2>/dev/null; then
   echo "frontend server failed to start — check $LOG_DIR/frontend.log"; tail -20 "$LOG_DIR/frontend.log"; exit 1
-fi
-
-INGRESS_UP=""
-if [ -n "$INGRESS_AVAILABLE" ]; then
-  echo "=== Configuring public Nginx ingress (:80) ==="
-  # Use bash explicitly because a file created through GitHub's contents
-  # API may not carry an executable bit until quickstart's chmod step.
-  if bash "$ROOT/scripts/configure-web-ingress.sh"; then
-    INGRESS_UP=1
-    if ! curl -fsS -m 5 "http://127.0.0.1/" >/dev/null 2>&1; then
-      echo "WARNING: Nginx reloaded, but the console did not answer through port 80."
-    fi
-    if ! curl -fsS -m 5 "http://127.0.0.1/grafana/api/health" >/dev/null 2>&1; then
-      echo "WARNING: Grafana did not answer through the /grafana/ ingress path."
-    fi
-    if ! curl -fsS -m 5 -u "admin:$GRAFANA_ADMIN_PASSWORD" "http://127.0.0.1/prometheus/-/ready" >/dev/null 2>&1; then
-      echo "WARNING: Prometheus did not answer through the authenticated /prometheus/ ingress path."
-    fi
-  else
-    echo "WARNING: Nginx ingress configuration failed. ACS processes are running, but use the legacy direct URLs below."
-  fi
 fi
 
 echo ""
@@ -231,34 +167,32 @@ CWMP_SCHEME="http"
 if [ -n "$ACS_TLS_CERT" ] && [ -n "$ACS_TLS_KEY" ]; then
   CWMP_SCHEME="https"
 fi
+echo "Console:    http://$PUBLIC_IP:5173"
+echo "API:        http://$PUBLIC_IP:8080"
+echo "CWMP URL:   $CWMP_SCHEME://$PUBLIC_IP:7547/cwmp"
+echo "STUN:       $PUBLIC_IP:3478 (UDP)"
 
-if [ -n "$INGRESS_UP" ]; then
-  echo "Console:     $PUBLIC_ORIGIN/"
-  echo "API:         $PUBLIC_ORIGIN/api/v1/..."
-  echo "Grafana:     $PUBLIC_ORIGIN/grafana/"
-  echo "Prometheus:  $PUBLIC_ORIGIN/prometheus/"
-  echo ""
-  echo "Grafana login:    admin / $GRAFANA_ADMIN_PASSWORD"
-  echo "Prometheus login: admin / $GRAFANA_ADMIN_PASSWORD"
-  echo "Only port 80 is needed for these operator web surfaces; 3000 and 9090"
-  echo "remain bound to localhost and should stay closed in the security group."
+if [ "${ACS_GRAFANA_PUBLIC:-}" = "1" ]; then
+  echo "Grafana:    http://$PUBLIC_IP:3000"
 else
-  echo "Console:     http://$PUBLIC_IP:5173"
-  echo "API:         http://$PUBLIC_IP:8080"
-  if [ "$ACS_GRAFANA_PUBLIC" = "1" ]; then
-    echo "Grafana:     http://$PUBLIC_IP:3000 (direct-public legacy mode)"
-  else
-    echo "Grafana:     http://127.0.0.1:3000 on the instance (SSH tunnel required)"
-  fi
-  echo "Prometheus:  http://127.0.0.1:9090 on the instance (SSH tunnel required)"
-  echo "Grafana login: admin / $GRAFANA_ADMIN_PASSWORD"
+  echo "Grafana:    http://127.0.0.1:3000 on the instance (SSH tunnel required)"
+fi
+if [ "${ACS_PROMETHEUS_PUBLIC:-}" = "1" ]; then
+  echo "Prometheus: http://$PUBLIC_IP:9090"
+else
+  echo "Prometheus: http://127.0.0.1:9090 on the instance (SSH tunnel required)"
 fi
 
-echo "CWMP URL:    $CWMP_SCHEME://$PUBLIC_IP:7547/cwmp"
-echo "STUN:        $PUBLIC_IP:3478 (UDP)"
 echo ""
-echo "ACS login: $ACS_BOOTSTRAP_ADMIN_USERNAME / $ACS_BOOTSTRAP_ADMIN_PASSWORD"
+echo "Login: $ACS_BOOTSTRAP_ADMIN_USERNAME / $ACS_BOOTSTRAP_ADMIN_PASSWORD"
+echo "Grafana login: admin / $GRAFANA_ADMIN_PASSWORD"
 echo "(credentials are also saved in ~/.acs-secrets.env)"
+if [ "${ACS_PROMETHEUS_PUBLIC:-}" = "1" ]; then
+  echo ""
+  echo "WARNING: Prometheus has no login in this dev mode. Restrict 9090/tcp"
+  echo "         in the security group to your test IP/CIDR; do not expose it"
+  echo "         broadly for a production deployment."
+fi
 echo ""
 echo "Logs:   $LOG_DIR/{acs,api,frontend}.log"
 echo "Watch:  scripts/logs.sh"
