@@ -41,7 +41,8 @@ func RedactAuthHeader(header string) string {
 	if header == "" {
 		return ""
 	}
-	if rest, ok := strings.CutPrefix(header, "Basic "); ok {
+	if len(header) >= 6 && strings.EqualFold(header[:6], "Basic ") {
+		rest := header[6:]
 		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(rest))
 		if err != nil {
 			return "Basic auth (undecodable)"

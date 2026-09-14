@@ -40,6 +40,16 @@ func TestRedactAuthHeader(t *testing.T) {
 		t.Errorf("RedactAuthHeader(Basic) = %q, want %q", got, "Basic auth, username=dev1")
 	}
 
+	// Test case-insensitive scheme token (RFC 7235 S2.1): lowercase "basic" must also be redacted
+	basicLower := "basic ZGV2MTpzM2NyZXQ="
+	got = RedactAuthHeader(basicLower)
+	if got == basicLower {
+		t.Error("RedactAuthHeader(basic) returned the header verbatim, want it redacted")
+	}
+	if got != "Basic auth, username=dev1" {
+		t.Errorf("RedactAuthHeader(basic) = %q, want %q", got, "Basic auth, username=dev1")
+	}
+
 	if got := RedactAuthHeader(""); got != "" {
 		t.Errorf("RedactAuthHeader(\"\") = %q, want empty", got)
 	}
