@@ -10,9 +10,12 @@ import (
 )
 
 type tmf641ItemRequest struct {
-	ID     string `json:"id"`
-	Action string `json:"action"`
-	Role   string `json:"role"`
+	ID             string `json:"id"`
+	Action         string `json:"action"`
+	Role           string `json:"role"`
+	OUISerial      string `json:"ouiSerial"`
+	ServicePlan    string `json:"servicePlan"`
+	UnassignReason string `json:"unassignReason"`
 }
 type tmf641OrderRequest struct {
 	ExternalID string              `json:"externalId"`
@@ -45,6 +48,14 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items[i] = bss.ServiceOrderItem{Seq: i, Action: it.Action, Role: it.Role, Status: "PENDING"}
+		if it.Action == "add" && strings.TrimSpace(it.OUISerial) == "" {
+			writeError(w, 400, "ErrInvalidRequest", "ouiSerial is required for add items")
+			return
+		}
+		if it.Action == "delete" && strings.TrimSpace(it.Role) == "" {
+			writeError(w, 400, "ErrInvalidRequest", "role is required for delete items")
+			return
+		}
 	}
 	order, err := h.mappings.CreateServiceOrder(r.Context(), req.ExternalID, req.AccountID, raw, items)
 	if err != nil {
@@ -58,6 +69,31 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			items[i].Status = "COMPLETED"
+		}
+	}
+	for i, item := range req.OrderItem {
+		if item.Action == "add" {
+			mapping, execErr := h.mappings.AssignDevice(r.Context(), req.AccountID, item.OUISerial, roleOrDefault(item.Role), item.ServicePlan)
+			if execErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", execErr.Error())
+				writeError(w, 400, "ErrExecution", "could not assign device")
+				return
+			}
+			items[i].MappingID = mapping.ID
+			items[i].Status = "COMPLETED"
+			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "COMPLETED", "")
+		} else if item.Action == "delete" {
+			reason := strings.TrimSpace(item.UnassignReason)
+			if reason == "" {
+				reason = "TMF641 service order"
+			}
+			if execErr := h.mappings.UnassignDevice(r.Context(), req.AccountID, roleOrDefault(item.Role), reason); execErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", execErr.Error())
+				writeError(w, 400, "ErrExecution", "could not unassign device")
+				return
+			}
+			items[i].Status = "COMPLETED"
+			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "COMPLETED", "")
 		}
 	}
 	writeJSON(w, 201, tmf641OrderResponse(order, items))
