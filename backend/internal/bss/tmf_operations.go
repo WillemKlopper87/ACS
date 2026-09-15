@@ -56,6 +56,30 @@ func (r *Repository) CreateAlarm(ctx context.Context, sourceKey, accountID, devi
 	return &a, nil
 }
 
+func (r *Repository) FindEvent(ctx context.Context, id string) (*EventRecord, error) {
+	var e EventRecord
+	err := r.db.QueryRowContext(ctx, `SELECT id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),event_type,event_time,payload FROM tmf_events WHERE id::text=$1 OR source_key=$1`, id).Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find TMF event: %w", err)
+	}
+	return &e, nil
+}
+
+func (r *Repository) FindAlarm(ctx context.Context, id string) (*AlarmRecord, error) {
+	var a AlarmRecord
+	err := r.db.QueryRowContext(ctx, `SELECT id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),alarm_type,perceived_severity,state,COALESCE(probable_cause,''),COALESCE(specific_problem,''),raised_at,cleared_at,details FROM tmf_alarms WHERE id::text=$1 OR source_key=$1`, id).Scan(&a.ID, &a.SourceKey, &a.AccountID, &a.DeviceID, &a.ServiceID, &a.AlarmType, &a.Severity, &a.State, &a.ProbableCause, &a.SpecificProblem, &a.RaisedAt, &a.ClearedAt, &a.Details)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find TMF alarm: %w", err)
+	}
+	return &a, nil
+}
+
 func (r *Repository) CreateServiceProblem(ctx context.Context, externalID, accountID, serviceID, problemType, description, priority, alarmID string) (*ServiceProblemRecord, error) {
 	id := uuid.New().String()
 	var p ServiceProblemRecord
