@@ -85,4 +85,24 @@ psql "$POSTGRES_DSN" -c "
   ON CONFLICT (oui_serial) DO NOTHING;
 "
 
+# A controller-side allowlist refusal closes the first transport session. Keep
+# the same OB-USP-Agent process, identity and database, but explicitly cycle the
+# configured controller MTP through the agent's supported live CLI. This is
+# stronger than deleting the database/factory-resetting: the second connection
+# must come from the same agent state that was actually refused, while forcing
+# the MTP state machine to establish a fresh session after registration.
+echo "reactivating $CONTAINER controller MTP after allowlist registration"
+docker exec "$CONTAINER" obuspa -c set 'Device.LocalAgent.Controller.1.MTP.1.Enable' 'false'
+docker exec "$CONTAINER" obuspa -c set 'Device.LocalAgent.Controller.1.MTP.1.Enable' 'true'
+
+# Verify the persisted value is true as well. The CI workflow deliberately
+# restarts this same container after preregistration; factory-reset input is not
+# reapplied when the DB already exists, so this assertion prevents a restart
+# from silently returning to a disabled persisted MTP.
+mtp_enable=$(get_param "Device.LocalAgent.Controller.1.MTP.1.Enable")
+if [ "$(printf '%s' "$mtp_enable" | tr '[:upper:]' '[:lower:]')" != "true" ]; then
+  echo "FAIL: controller MTP Enable=$mtp_enable after reactivation, want true" >&2
+  exit 1
+fi
+
 echo "preregister.sh: PASS"

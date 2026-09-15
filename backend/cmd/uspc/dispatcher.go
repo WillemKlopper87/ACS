@@ -413,7 +413,7 @@ func classifyGetResp(msgType string, resp *uspproto.GetResp) responseOutcome {
 		}
 		for _, resolved := range reqResult.GetResolvedPathResults() {
 			for name, value := range resolved.GetResultParams() {
-				params[resolved.GetResolvedPath()+name] = value
+				params[resolvedParameterPath(resolved.GetResolvedPath(), name)] = value
 			}
 		}
 	}
@@ -422,6 +422,17 @@ func classifyGetResp(msgType string, resp *uspproto.GetResp) responseOutcome {
 		return responseOutcome{uspErr: firstErr, detail: detail}
 	}
 	return responseOutcome{detail: detail}
+}
+
+// resolvedParameterPath accepts both forms emitted by USP agents: the
+// parameter map is normally relative to ResolvedPath, but some agents emit
+// an already-qualified parameter path. Avoid duplicating the resolved prefix
+// so persisted job results remain queryable by their canonical path.
+func resolvedParameterPath(resolvedPath, name string) string {
+	if strings.HasPrefix(name, resolvedPath) {
+		return name
+	}
+	return resolvedPath + name
 }
 
 // classifyAddResp inspects an AddResp's per-created-object results
