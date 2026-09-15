@@ -54,15 +54,15 @@ func validateAlertPolicy(p alerting.Policy) error {
 			return fmt.Errorf("tenant policy requires only tenant_id")
 		}
 	case alerting.ScopeGroup:
-		if p.GroupID == "" || p.TenantID == "" || p.DeviceID != "" {
-			return fmt.Errorf("group policy requires tenant_id and group_id")
+		if p.GroupID == "" || p.TenantID != "" || p.DeviceID != "" {
+			return fmt.Errorf("group policy requires only group_id")
 		}
 		if _, err := uuid.Parse(p.GroupID); err != nil {
 			return fmt.Errorf("group_id must be a UUID")
 		}
 	case alerting.ScopeDevice:
-		if p.DeviceID == "" || p.TenantID == "" || p.GroupID != "" {
-			return fmt.Errorf("device policy requires tenant_id and device_id")
+		if p.DeviceID == "" || p.TenantID != "" || p.GroupID != "" {
+			return fmt.Errorf("device policy requires only device_id")
 		}
 		if _, err := uuid.Parse(p.DeviceID); err != nil {
 			return fmt.Errorf("device_id must be a UUID")
