@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -33,7 +34,7 @@ func (h *handler) getTMF638Service(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	service.Href = tmf638ServiceBasePath + service.ID
-	writeJSON(w, http.StatusOK, service)
+	writeJSON(w, http.StatusOK, tmf638SelectFields(service, r.URL.Query().Get("fields")))
 }
 
 // listTMF638Services lists the currently assigned services for one account.
@@ -93,9 +94,31 @@ func (h *handler) listTMF638Services(w http.ResponseWriter, r *http.Request) {
 		end = total
 	}
 	page := services[offset:end]
+	selected := make([]any, 0, len(page))
+	for _, service := range page {
+		selected = append(selected, tmf638SelectFields(service, r.URL.Query().Get("fields")))
+	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	w.Header().Set("X-Result-Count", strconv.Itoa(len(page)))
-	writeJSON(w, http.StatusOK, page)
+	writeJSON(w, http.StatusOK, selected)
+}
+
+func tmf638SelectFields(service tmfService, raw string) any {
+	if strings.TrimSpace(raw) == "" {
+		return service
+	}
+	allowed := map[string]bool{"id": true, "href": true, "category": true, "state": true, "serviceCharacteristic": true, "relatedParty": true}
+	data, _ := json.Marshal(service)
+	var all map[string]any
+	_ = json.Unmarshal(data, &all)
+	selected := map[string]any{}
+	for _, field := range strings.Split(raw, ",") {
+		field = strings.TrimSpace(field)
+		if allowed[field] {
+			selected[field] = all[field]
+		}
+	}
+	return selected
 }
 
 func tmf638State(status string) string {
