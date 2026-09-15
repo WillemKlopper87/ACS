@@ -47,9 +47,9 @@ export ACS_BSS_ADAPTER_URL="http://127.0.0.1:8090"
 
 # USP controller identity must be stable across restarts because agents
 # retain it as the controller endpoint ID. The quickstart explicitly opts
-# into plaintext WebSocket/MQTT for lab/field-test compatibility; replace
-# this with ACS_USP_TLS_CERT/KEY and set ALLOW_PLAINTEXT=false for a
-# production-facing deployment.
+# into plaintext WebSocket/MQTT for lab/field-test compatibility. Production
+# requires ACS_USP_TLS_CERT/KEY, ACS_USP_CLIENT_CA_CERT, a restrictive CIDR
+# allowlist, and a pre-provisioned per-agent certificate principal.
 export ACS_USP_CONTROLLER_ID="acs-controller-$(openssl rand -hex 8)"
 export ACS_USP_POSTGRES_DSN="\$ACS_POSTGRES_DSN"
 export ACS_USP_WS_ADDR=":9877"
@@ -58,6 +58,7 @@ export ACS_USP_HTTP_ADDR="127.0.0.1:8092"
 export ACS_USP_ALLOW_PLAINTEXT="true"
 export ACS_USP_TLS_CERT=""
 export ACS_USP_TLS_KEY=""
+export ACS_USP_CLIENT_CA_CERT=""
 export ACS_USP_ALLOWED_CIDRS=""
 
 export ACS_DEBUG=""
@@ -144,7 +145,7 @@ else
   if ! grep -q '^export ACS_USP_ALLOW_PLAINTEXT=' "$SECRETS_FILE"; then
     echo 'export ACS_USP_ALLOW_PLAINTEXT="true"' >> "$SECRETS_FILE"
   fi
-  for var in ACS_USP_TLS_CERT ACS_USP_TLS_KEY ACS_USP_ALLOWED_CIDRS; do
+  for var in ACS_USP_TLS_CERT ACS_USP_TLS_KEY ACS_USP_CLIENT_CA_CERT ACS_USP_ALLOWED_CIDRS; do
     if ! grep -q "^export $var=" "$SECRETS_FILE"; then
       echo "export $var=\"\"" >> "$SECRETS_FILE"
     fi
@@ -199,6 +200,7 @@ chmod 600 "$COMPOSE_ENV"
   echo "ACS_USP_ALLOW_PLAINTEXT=$ACS_USP_ALLOW_PLAINTEXT"
   echo "ACS_USP_TLS_CERT=$ACS_USP_TLS_CERT"
   echo "ACS_USP_TLS_KEY=$ACS_USP_TLS_KEY"
+  echo "ACS_USP_CLIENT_CA_CERT=$ACS_USP_CLIENT_CA_CERT"
   echo "ACS_USP_ALLOWED_CIDRS=$ACS_USP_ALLOWED_CIDRS"
   echo "ACS_AUTH_ALLOW_BASIC=$ACS_AUTH_ALLOW_BASIC"
   echo "ACS_TLS_MIN_VERSION=$ACS_TLS_MIN_VERSION"
