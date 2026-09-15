@@ -44,6 +44,7 @@ import (
 	"acs/internal/subscriptions"
 	"acs/internal/usp/mtp"
 	"acs/internal/usp/principal"
+	"acs/internal/uspprincipal"
 )
 
 func main() {
@@ -114,7 +115,7 @@ func run(logger *slog.Logger) error {
 	p := newProbe(cfg.ControllerID, logger)
 	p.setMetrics(uspm)
 	repo := devices.NewRepository(db)
-	principalRepo := principal.NewRepository(db)
+	principalRepo := uspprincipal.NewRepository(db)
 	registry := mtp.NewRegistry()
 	jobsRepo := jobs.NewRepository(db)
 	capturesRepo := captures.NewRepository(db)
@@ -149,6 +150,7 @@ func run(logger *slog.Logger) error {
 	var principalAuth principal.CertificateAuthenticator
 	if cfg.DeploymentProfile == deploymentProfileProduction {
 		principalAuth = principalRepo
+		h.reconciler.usePrincipalStore(principalRepo)
 	}
 	ws, mq, err := newTransports(cfg, tlsConfig, principalAuth, logger)
 	if err != nil {
