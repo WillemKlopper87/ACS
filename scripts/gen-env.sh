@@ -64,6 +64,29 @@ EOF
   chmod 600 "$SECRETS_FILE"
 else
   echo "Using existing credentials from $SECRETS_FILE (delete this file and rerun to regenerate)"
+  # Repair early quickstart files that declared the CWMP credentials but
+  # left them empty. Existing non-empty values are preserved so rerunning
+  # this script cannot silently strand an already-provisioned fleet.
+  if grep -q '^export ACS_DIGEST_USERNAME=""$' "$SECRETS_FILE"; then
+    sed -i 's/^export ACS_DIGEST_USERNAME=""$/export ACS_DIGEST_USERNAME="acs-device"/' "$SECRETS_FILE"
+  elif ! grep -q '^export ACS_DIGEST_USERNAME=' "$SECRETS_FILE"; then
+    echo 'export ACS_DIGEST_USERNAME="acs-device"' >> "$SECRETS_FILE"
+  fi
+  if grep -q '^export ACS_DIGEST_PASSWORD=""$' "$SECRETS_FILE"; then
+    sed -i "s|^export ACS_DIGEST_PASSWORD=\"\"$|export ACS_DIGEST_PASSWORD=\"$(openssl rand -base64 16)\"|" "$SECRETS_FILE"
+  elif ! grep -q '^export ACS_DIGEST_PASSWORD=' "$SECRETS_FILE"; then
+    echo "export ACS_DIGEST_PASSWORD=\"$(openssl rand -base64 16)\"" >> "$SECRETS_FILE"
+  fi
+  if grep -q '^export ACS_CONNECTION_REQUEST_USERNAME=""$' "$SECRETS_FILE"; then
+    sed -i 's/^export ACS_CONNECTION_REQUEST_USERNAME=""$/export ACS_CONNECTION_REQUEST_USERNAME="acs-connreq"/' "$SECRETS_FILE"
+  elif ! grep -q '^export ACS_CONNECTION_REQUEST_USERNAME=' "$SECRETS_FILE"; then
+    echo 'export ACS_CONNECTION_REQUEST_USERNAME="acs-connreq"' >> "$SECRETS_FILE"
+  fi
+  if grep -q '^export ACS_CONNECTION_REQUEST_PASSWORD=""$' "$SECRETS_FILE"; then
+    sed -i "s|^export ACS_CONNECTION_REQUEST_PASSWORD=\"\"$|export ACS_CONNECTION_REQUEST_PASSWORD=\"$(openssl rand -base64 16)\"|" "$SECRETS_FILE"
+  elif ! grep -q '^export ACS_CONNECTION_REQUEST_PASSWORD=' "$SECRETS_FILE"; then
+    echo "export ACS_CONNECTION_REQUEST_PASSWORD=\"$(openssl rand -base64 16)\"" >> "$SECRETS_FILE"
+  fi
   # Backfill secrets added after this file was first generated — the
   # services fail closed without them since the P0.1 hardening.
   for var in ACS_INTERNAL_SERVICE_TOKEN ACS_BSS_OAUTH_SIGNING_SECRET              GRAFANA_ADMIN_PASSWORD ACS_GRAFANA_DB_PASSWORD; do

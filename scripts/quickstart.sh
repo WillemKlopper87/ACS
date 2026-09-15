@@ -120,6 +120,9 @@ else
   git clone --branch "$GIT_REF" "$REPO_URL" "$INSTALL_DIR"
 fi
 chmod +x "$INSTALL_DIR"/scripts/*.sh
+# Load the persisted credentials in this shell as well as in start.sh so the
+# final quickstart summary can show the exact values used by the services.
+source "$INSTALL_DIR/scripts/gen-env.sh"
 
 GOMOD_GO="$(awk '/^go /{print $2; exit}' "$INSTALL_DIR/backend/go.mod" 2>/dev/null || true)"
 if [ -n "$GOMOD_GO" ] && [ "$GOMOD_GO" != "$GO_VERSION" ]; then
@@ -148,6 +151,14 @@ if [ "$ACS_MONITORING_PUBLIC" = "1" ]; then
 else
   echo "Grafana and Prometheus were kept on localhost only."
 fi
+echo ""
+echo "CPE CWMP configuration:"
+echo "  ACS URL:      http://<public-ip>:7547"
+echo "  CWMP username: $ACS_DIGEST_USERNAME"
+echo "  CWMP password: $ACS_DIGEST_PASSWORD"
+echo "  Connection-request username: $ACS_CONNECTION_REQUEST_USERNAME"
+echo "  Connection-request password: $ACS_CONNECTION_REQUEST_PASSWORD"
+echo "  Credentials file: ~/.acs-secrets.env"
 echo ""
 echo "Reminder — this script cannot open EC2 security group ports for you."
 echo "For the dev quickstart, allow inbound 7547/tcp, 3478/udp, 8080/tcp,"
