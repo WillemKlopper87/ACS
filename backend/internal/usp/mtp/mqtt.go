@@ -409,10 +409,11 @@ func (h *allowlistHook) OnConnectAuthenticate(cl *mqttserver.Client, _ packets.P
 }
 
 // OnACLCheck enforces the authenticated principal's topic namespace in
-// production. The broker's own inline client is trusted because it is an
-// in-process controller component, not a network peer.
+// production. Only mochi-mqtt's actual in-process inline client is trusted;
+// MQTT ClientIdentifier is network-controlled and therefore cannot grant
+// controller privileges merely by containing the reserved literal "inline".
 func (h *allowlistHook) OnACLCheck(cl *mqttserver.Client, topic string, write bool) bool {
-	if cl != nil && cl.ID == mqttserver.InlineClientId {
+	if cl != nil && cl.Net.Inline {
 		return true
 	}
 	if h.auth == nil {
