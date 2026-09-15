@@ -66,7 +66,7 @@ Compatibility must not become a reason to disable authentication globally. Prefe
 | XMPP connection requests | — | — | not implemented |
 | Full TR-098 write catalog | partial root compatibility | partial | not qualified |
 | Malformed XML / oversized or invalidly compressed body handling | `cmd/acs/session.go` | unit | n/a |
-| USP (TR-369) Get/GetResp over WebSocket + MQTT 5 + MQTT 3.1.1 | `cmd/uspc`, `internal/usp`, `internal/usp/mtp` | ✅ unit + pinned obuspa reference-agent interop over WebSocket, MQTT 5 and MQTT 3.1.1, including Get/GetResp, job dispatch, allowlist and subscription/restart checks (`usp-interop`) | not yet — reference-agent CI is not physical-CPE qualification |
+| USP (TR-369) Get/GetResp over WebSocket + MQTT 5 + MQTT 3.1.1 | `cmd/uspc`, `internal/usp`, `internal/usp/mtp` | ✅ unit + pinned obuspa reference-agent interop over WebSocket, MQTT 5 and MQTT 3.1.1, including Get/GetResp, job dispatch, allowlist and subscription/restart checks (`usp-interop`) | physical-CPE qualification deferred; reference-agent qualification is the current software acceptance gate |
 
 ## Real-device qualification matrix
 
