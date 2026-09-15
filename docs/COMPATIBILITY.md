@@ -97,7 +97,7 @@ runs N concurrent mock CPEs (one Inform + close each) against a real Postgres an
 
 | Date | Environment (CPU / RAM / Postgres) | Devices | Sessions/s | Notes |
 |---|---|---|---|---|
-| — | — | — | — | no recorded run yet |
+| 2026-09-15 | Windows development host / Docker PostgreSQL 18 test container | 100 mock CPE sessions | 637.8 | `TestIntegration_CPELoad`; 0 failures, 100 registered; emulator/load-harness evidence, not physical-device qualification |
 
 ## How to record a real-device result
 
