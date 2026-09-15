@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"acs/internal/alerting"
 	"acs/internal/bss"
 	"acs/internal/captures"
 	"acs/internal/cliaccess"
@@ -241,6 +242,7 @@ func main() {
 		bssWebhookNetPolicy: bssWebhookNetPolicy,
 		metrics:             metrics,
 		groups:              devices.NewGroupRepository(db),
+		alertPolicies:       alerting.NewRepository(db),
 		credentials:         credentialsRepo,
 		schedules:           scheduler.NewRepository(db),
 		rollouts:            rollout.NewRepository(db),
@@ -426,12 +428,13 @@ type handler struct {
 	versionMu    sync.Mutex
 	versionCache map[string]versionEntry
 
-	metrics     *observability.Metrics
-	groups      *devices.GroupRepository
-	credentials *credentials.Repository
-	schedules   *scheduler.Repository
-	rollouts    *rollout.Repository
-	policies    *policy.Repository
+	metrics       *observability.Metrics
+	groups        *devices.GroupRepository
+	alertPolicies *alerting.Repository
+	credentials   *credentials.Repository
+	schedules     *scheduler.Repository
+	rollouts      *rollout.Repository
+	policies      *policy.Repository
 
 	uploads     *uploads.Repository
 	uploadsFS   uploads.Storage

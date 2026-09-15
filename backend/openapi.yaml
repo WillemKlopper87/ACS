@@ -1173,6 +1173,24 @@ paths:
       responses:
         "204": { description: Disabled }
 
+  # --- Alert escalation policies ---
+  /api/v1/alert-policies:
+    get:
+      tags: [Alerting]
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [Alerting]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AlertPolicy" } } } }
+      responses:
+        "201": { description: Created }
+  /api/v1/alert-policies/{id}:
+    delete:
+      tags: [Alerting]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: Deleted }
+
   # --- Policies ---
   /api/v1/policies:
     post:
@@ -2055,6 +2073,22 @@ components:
         enabled: { type: boolean }
         customer_id: { type: string, nullable: true, description: "Tenant owner (audit P0.5) — null means platform-global." }
         created_at: { type: string, format: date-time }
+
+    AlertPolicy:
+      type: object
+      required: [name, scope]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        scope: { type: string, enum: [fleet, tenant, group, device] }
+        tenant_id: { type: string }
+        group_id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        customer_tier: { type: string }
+        enabled: { type: boolean }
+        fault_priorities: { type: object, additionalProperties: { type: string, enum: [P1, P2, P3, P4] } }
+        offline_after: { type: string, description: "Go duration encoded by the API" }
+        steps: { type: array, items: { type: object } }
 
     TemplateParameter:
       type: object
