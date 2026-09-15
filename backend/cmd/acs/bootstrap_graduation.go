@@ -31,15 +31,15 @@ type bootstrapCredentialByID func(context.Context, string) (*credentials.Credent
 type bootstrapDeviceByID func(context.Context, string) (*devices.Device, error)
 
 type bootstrapGraduationDeps struct {
-	bootstrapAuth auth.DigestAuthenticator
-	metrics       *observability.Metrics
-	ipLimiter     *ratelimit.Limiter
-	deviceLimiter *ratelimit.Limiter
-	lookup        bootstrapDeviceLookup
-	ensureDevice  bootstrapEnsureDevice
-	ensurePending bootstrapEnsurePendingCredential
+	bootstrapAuth  auth.DigestAuthenticator
+	metrics        *observability.Metrics
+	ipLimiter      *ratelimit.Limiter
+	deviceLimiter  *ratelimit.Limiter
+	lookup         bootstrapDeviceLookup
+	ensureDevice   bootstrapEnsureDevice
+	ensurePending  bootstrapEnsurePendingCredential
 	credentialByID bootstrapCredentialByID
-	deviceByID    bootstrapDeviceByID
+	deviceByID     bootstrapDeviceByID
 }
 
 // bootstrapCWMPGraduationGuard owns the production bootstrap->unique-credential
@@ -66,15 +66,15 @@ func bootstrapCWMPGraduationGuard(next http.HandlerFunc, metrics *observability.
 	}
 
 	return bootstrapCWMPGraduationGuardWithDeps(next, bootstrapGraduationDeps{
-		bootstrapAuth: bootstrapAuth,
-		metrics:       metrics,
-		ipLimiter:     ratelimit.New(envOrFloat("ACS_RATE_LIMIT_IP_PER_SECOND", defaultIPRateLimitPerSecond), envOrInt("ACS_RATE_LIMIT_IP_BURST", defaultIPRateLimitBurst), rateLimitIdleTTL),
-		deviceLimiter: ratelimit.New(envOrFloat("ACS_RATE_LIMIT_DEVICE_PER_SECOND", defaultDeviceRateLimitPerSecond), envOrInt("ACS_RATE_LIMIT_DEVICE_BURST", defaultDeviceRateLimitBurst), rateLimitIdleTTL),
-		lookup:        deviceRepo.GetByOUIserial,
-		ensureDevice: deviceRepo.EnsureBootstrapRegistration,
-		ensurePending: credentialRepo.EnsurePendingCWMPDigest,
+		bootstrapAuth:  bootstrapAuth,
+		metrics:        metrics,
+		ipLimiter:      ratelimit.New(envOrFloat("ACS_RATE_LIMIT_IP_PER_SECOND", defaultIPRateLimitPerSecond), envOrInt("ACS_RATE_LIMIT_IP_BURST", defaultIPRateLimitBurst), rateLimitIdleTTL),
+		deviceLimiter:  ratelimit.New(envOrFloat("ACS_RATE_LIMIT_DEVICE_PER_SECOND", defaultDeviceRateLimitPerSecond), envOrInt("ACS_RATE_LIMIT_DEVICE_BURST", defaultDeviceRateLimitBurst), rateLimitIdleTTL),
+		lookup:         deviceRepo.GetByOUIserial,
+		ensureDevice:   deviceRepo.EnsureBootstrapRegistration,
+		ensurePending:  credentialRepo.EnsurePendingCWMPDigest,
 		credentialByID: credentialRepo.ByID,
-		deviceByID:    deviceRepo.Get,
+		deviceByID:     deviceRepo.Get,
 	})
 }
 
@@ -170,7 +170,7 @@ func bootstrapCWMPGraduationGuardWithDeps(next http.HandlerFunc, deps bootstrapG
 	}
 }
 
-func handleBootstrapGraduationInform(w http.ResponseWriter, r *http.Request, raw []byte, env *cwmp.Envelope, deps bootstrapGraduationDeps) {
+func handleBootstrapGraduationInform(w http.ResponseWriter, r *http.Request, raw []byte, env *cwmp.InboundEnvelope, deps bootstrapGraduationDeps) {
 	inform := env.Body.Inform
 	inform.DeviceId = inform.DeviceId.Normalized()
 	if inform.DeviceId.OUI == "" || inform.DeviceId.SerialNumber == "" {
