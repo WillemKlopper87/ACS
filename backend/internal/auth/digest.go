@@ -93,8 +93,11 @@ type DigestAuthenticator struct {
 	// — no per-device binding to enforce. Returning ok=false rejects the
 	// request.
 	Lookup func(username string) (password, deviceID string, ok bool)
-	// OnAuthenticated is invoked after a per-device credential verifies —
-	// the hook that auto-activates a PENDING rotation.
+	// OnAuthenticated is a caller-owned lifecycle hook for a verified
+	// per-device credential. Verify deliberately does NOT invoke it: HTTP
+	// proof alone is insufficient to activate a PENDING device credential.
+	// cmd/acs invokes the hook only after the Inform's claimed natural
+	// identity resolves to the same BoundDeviceID returned by Verify.
 	OnAuthenticated func(username string)
 	// Algorithms lists the Digest algorithms to challenge for, in the
 	// order offered (one WWW-Authenticate line each). Empty means the
@@ -276,7 +279,7 @@ func (d DigestAuthenticator) Verify(r *http.Request) (ok bool, stale bool, ident
 func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time.Time) (ok bool, stale bool, identity Identity) {
 	params := parseDigestParams(rest)
 	username := params["username"]
-	password, deviceID, perDevice, found := d.passwordFor(username)
+	password, deviceID, _, found := d.passwordFor(username)
 	if !found {
 		return false, false, Identity{}
 	}
@@ -327,9 +330,6 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 	}
 	if !d.checkReplay(r.Context(), nonce, qop, params["nc"], issued.Add(nonceTTL), now) {
 		return false, false, Identity{}
-	}
-	if perDevice && d.OnAuthenticated != nil {
-		d.OnAuthenticated(username)
 	}
 	return true, false, Identity{Username: username, BoundDeviceID: deviceID}
 }
@@ -457,15 +457,12 @@ func (d DigestAuthenticator) verifyBasic(encoded string) (bool, Identity) {
 	if !ok {
 		return false, Identity{}
 	}
-	expected, deviceID, perDevice, found := d.passwordFor(user)
+	expected, deviceID, _, found := d.passwordFor(user)
 	if !found {
 		return false, Identity{}
 	}
 	if subtle.ConstantTimeCompare([]byte(pass), []byte(expected)) != 1 {
 		return false, Identity{}
-	}
-	if perDevice && d.OnAuthenticated != nil {
-		d.OnAuthenticated(user)
 	}
 	return true, Identity{Username: user, BoundDeviceID: deviceID}
 }
