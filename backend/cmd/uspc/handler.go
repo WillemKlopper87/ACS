@@ -12,6 +12,7 @@ import (
 	"acs/internal/captures"
 	"acs/internal/devices"
 	"acs/internal/parameters"
+	"acs/internal/tmf/telemetry"
 	"acs/internal/usp"
 	"acs/internal/usp/mtp"
 	"acs/internal/usp/uspproto"
@@ -63,6 +64,7 @@ type handler struct {
 	paramsRepo    *parameters.Repository
 	devicesRepo   *devices.Repository
 	captures      *captures.Repository
+	tmfEvents     telemetry.Sink
 
 	// identMu guards identities. This is handler's own lock, deliberately
 	// separate from mtp.Registry's internal one -- that lock guards
@@ -568,6 +570,24 @@ func (h *handler) handleEvent(c mtp.Conn, ev *usp.Event, msgID string) {
 		}
 	} else {
 		h.log.Warn("uspc: devicesRepo not wired, dropping Event", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "obj_path", ev.ObjPath, "event_name", ev.EventName)
+	}
+
+	if h.tmfEvents != nil && telemetry.QualifyingUSPEvent(ev.EventName) {
+		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+		if d, err := h.devicesRepo.Get(ctx, deviceID); err == nil {
+			account := ""
+			if d.CustomerID != nil {
+				account = *d.CustomerID
+			}
+			msg := ev.EventName
+			if ev.ObjPath != "" {
+				msg += " at " + ev.ObjPath
+			}
+			if err := telemetry.PublishFault(ctx, h.tmfEvents, telemetry.Fault{AccountID: account, DeviceID: deviceID, JobID: msgID, Protocol: "USP", Code: ev.EventName, Message: msg}); err != nil {
+				h.log.Warn("uspc: failed to publish TMF fault", "error", err, "device_id", deviceID)
+			}
+		}
+		cancel()
 	}
 
 	if !ev.SendResp {

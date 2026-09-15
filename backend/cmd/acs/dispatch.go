@@ -8,6 +8,7 @@ import (
 	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
 	"acs/internal/parameters"
+	"acs/internal/tmf/telemetry"
 	"context"
 	"encoding/json"
 	"strconv"
@@ -237,6 +238,7 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 			h.logger.Error("failed to mark job failed", "err", err, "job_id", job.ID)
 		}
 		h.auditFailure(ctx, deviceID, job, code, msg)
+		h.publishTMFFault(ctx, deviceID, job.ID, "CWMP", code, msg)
 		return
 	}
 
@@ -532,4 +534,22 @@ func (h *handler) auditFailure(ctx context.Context, deviceID string, job *jobs.J
 	}
 	h.logger.Warn("job failed", "job_id", job.ID, "command_key", job.CommandKey, "type", job.Type,
 		"device_id", deviceID, "fault_code", code, "fault_string", msg)
+}
+
+func (h *handler) publishTMFFault(ctx context.Context, deviceID, jobID, protocol, code, message string) {
+	if h.tmfEvents == nil {
+		return
+	}
+	d, err := h.devices.Get(ctx, deviceID)
+	if err != nil {
+		h.logger.Warn("failed to load device for TMF fault", "error", err)
+		return
+	}
+	account := ""
+	if d.CustomerID != nil {
+		account = *d.CustomerID
+	}
+	if err := telemetry.PublishFault(ctx, h.tmfEvents, telemetry.Fault{AccountID: account, DeviceID: deviceID, JobID: jobID, Protocol: protocol, Code: code, Message: message}); err != nil {
+		h.logger.Warn("failed to publish TMF fault", "error", err, "device_id", deviceID)
+	}
 }

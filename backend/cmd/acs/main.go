@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"acs/internal/auth"
+	"acs/internal/bss"
 	"acs/internal/captures"
 	"acs/internal/config"
 	"acs/internal/credentials"
@@ -35,6 +36,7 @@ import (
 	"acs/internal/store"
 	"acs/internal/stun"
 	"acs/internal/templates"
+	"acs/internal/tmf/telemetry"
 )
 
 // maxBodyBytes guards against the "oversized XML" chaos scenario (design
@@ -202,6 +204,7 @@ func main() {
 		policies:           policy.NewRepository(db),
 		templates:          templates.NewRepository(db),
 		captures:           captureRepo,
+		tmfEvents:          bss.NewRepository(db),
 		captureMaxDuration: captureMaxDuration,
 		ipLimiter:          ratelimit.New(ipRate, ipBurst, rateLimitIdleTTL),
 		deviceLimiter:      ratelimit.New(deviceRate, deviceBurst, rateLimitIdleTTL),
@@ -404,6 +407,7 @@ type handler struct {
 	policies  *policy.Repository
 	templates *templates.Repository
 	captures  *captures.Repository
+	tmfEvents telemetry.Sink
 
 	captureMaxDuration time.Duration
 

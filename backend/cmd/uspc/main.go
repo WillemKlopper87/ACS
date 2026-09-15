@@ -41,6 +41,7 @@ import (
 	"syscall"
 	"time"
 
+	"acs/internal/bss"
 	"acs/internal/captures"
 	"acs/internal/devices"
 	"acs/internal/jobs"
@@ -147,6 +148,7 @@ func run(logger *slog.Logger) error {
 		paramsRepo:    paramsRepo,
 		devicesRepo:   repo,
 		captures:      capturesRepo,
+		tmfEvents:     bss.NewRepository(db),
 	}
 
 	// dispatchCtx bounds the two dispatch goroutines below independently of
