@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"acs/internal/cwmp"
 	"acs/internal/devices"
 	"acs/internal/store"
 	"acs/internal/usp"
@@ -82,10 +83,8 @@ func newPrincipalTestRepo(t *testing.T) (context.Context, *Repository, *devices.
 
 func seedPrincipalDevice(t *testing.T, ctx context.Context, r *devices.Repository, serial string) string {
 	t.Helper()
-	oui := "001122"
-	productClass := "Router"
-	naturalKey := oui + "-" + productClass + "-" + serial
-	d, err := r.PreRegister(ctx, naturalKey, "", oui, productClass, serial, nil, nil)
+	identity := cwmp.DeviceID{OUI: "001122", ProductClass: "Router", SerialNumber: serial}
+	d, err := r.PreRegister(ctx, identity.NaturalKey(), "", identity.OUI, identity.ProductClass, identity.SerialNumber, nil, nil)
 	if err != nil {
 		t.Fatalf("PreRegister: %v", err)
 	}
