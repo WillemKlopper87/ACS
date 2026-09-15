@@ -125,3 +125,18 @@ func (r *Repository) ListServiceOrders(ctx context.Context, accountID string, li
 	}
 	return out, rows.Err()
 }
+
+func (r *Repository) UpdateServiceOrderItem(ctx context.Context, itemID, status, lastError string) error {
+	var completed any
+	if status == "COMPLETED" || status == "FAILED" || status == "SKIPPED" {
+		completed = time.Now().UTC()
+	}
+	res, err := r.db.ExecContext(ctx, `UPDATE service_order_items SET status=$2,last_error=NULLIF($3,''),completed_at=$4 WHERE id=$1`, itemID, status, lastError, completed)
+	if err != nil {
+		return fmt.Errorf("update service order item: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
