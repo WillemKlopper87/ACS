@@ -47,6 +47,8 @@ jobs:
       ACS_USP_MQTT_ADDR: 127.0.0.1:11883
       ACS_USP_HTTP_ADDR: 127.0.0.1:18092
       ACS_USP_ALLOW_PLAINTEXT: "true"
+      ACS_FIELD_TEST_ACK: "1"
+      ACS_ONBOARDING_LISTENER: once
       ACS_HEALTH_ACS_URL: http://127.0.0.1:17547/readyz
       ACS_HEALTH_API_URL: http://127.0.0.1:18080/readyz
       ACS_HEALTH_BSS_URL: http://127.0.0.1:18090/readyz
@@ -60,7 +62,7 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
       - name: deployment scripts parse
-        run: bash -n scripts/start.sh scripts/stop.sh scripts/gen-env.sh scripts/healthcheck.sh scripts/backup.sh scripts/restore.sh
+        run: bash -n scripts/start.sh scripts/stop.sh scripts/gen-env.sh scripts/healthcheck.sh scripts/field-preflight.sh scripts/backup.sh scripts/restore.sh
       - name: migrate and build complete host control plane
         working-directory: backend
         run: |
@@ -70,7 +72,7 @@ jobs:
           go build -o /tmp/api ./cmd/api
           go build -o /tmp/bssadapter ./cmd/bssadapter
           go build -o /tmp/uspc ./cmd/uspc
-      - name: start and verify all backend services
+      - name: start and verify all backend services plus field preflight
         run: |
           set -euo pipefail
           cleanup() {
@@ -83,7 +85,10 @@ jobs:
           /tmp/bssadapter >/tmp/bssadapter.log 2>&1 & PIDS="$PIDS $!"
           /tmp/uspc >/tmp/uspc.log 2>&1 & PIDS="$PIDS $!"
           for _ in $(seq 1 60); do
-            if bash scripts/healthcheck.sh; then exit 0; fi
+            if bash scripts/healthcheck.sh; then
+              bash scripts/field-preflight.sh
+              exit 0
+            fi
             sleep 2
           done
           echo "field-RC service readiness failed" >&2
