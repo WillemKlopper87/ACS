@@ -13,6 +13,65 @@ echo "=== Loading/generating credentials ==="
 # shellcheck disable=SC1091
 source "$ROOT/scripts/gen-env.sh"
 
+PROFILE="${ACS_DEPLOYMENT_PROFILE:-lab}"
+case "$PROFILE" in
+  lab|production) ;;
+  *)
+    echo "ERROR: ACS_DEPLOYMENT_PROFILE must be 'lab' or 'production' (got '$PROFILE')." >&2
+    exit 1
+    ;;
+esac
+
+# Production never publishes the operator console or bearer-token API from
+# their plain-HTTP development listeners. The externally visible origins are
+# HTTPS endpoints owned by a real reverse proxy/load balancer; the processes
+# started below are loopback-only upstreams. Keeping this logic here (rather
+# than only in start-production.sh) means `ACS_DEPLOYMENT_PROFILE=production
+# ./scripts/start.sh` is fail-closed too.
+validate_https_origin() {
+  local name="$1" value="${!1:-}"
+  if ! python3 - "$value" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+raw = sys.argv[1]
+u = urlsplit(raw)
+valid = (
+    u.scheme == "https"
+    and bool(u.netloc)
+    and u.path in ("", "/")
+    and not u.query
+    and not u.fragment
+    and not u.username
+    and not u.password
+)
+raise SystemExit(0 if valid else 1)
+PY
+  then
+    echo "ERROR: $name must be an HTTPS origin with no path/query/fragment, e.g. https://acs.example.com (got '${value:-<unset>}')." >&2
+    exit 1
+  fi
+}
+
+if [ "$PROFILE" = "production" ]; then
+  validate_https_origin ACS_FRONTEND_BASE_URL
+  validate_https_origin ACS_API_PUBLIC_URL
+  FRONTEND_PUBLIC_URL="${ACS_FRONTEND_BASE_URL%/}"
+  API_PUBLIC_URL="${ACS_API_PUBLIC_URL%/}"
+
+  # The TLS ingress is the only public operator surface. These two listeners
+  # stay private even when the host itself has a public address.
+  export ACS_API_ADDR="127.0.0.1:8080"
+  export ACS_FRONTEND_BIND="127.0.0.1"
+  # Do not inherit a wildcard/stale CORS setting into production; the browser
+  # may call the API only from the configured HTTPS console origin.
+  export ACS_API_CORS_ORIGIN="$FRONTEND_PUBLIC_URL"
+else
+  FRONTEND_PUBLIC_URL=""
+  API_PUBLIC_URL=""
+  export ACS_FRONTEND_BIND="${ACS_FRONTEND_BIND:-0.0.0.0}"
+fi
+
 echo "=== Detecting public IP ==="
 detect_public_ip() {
   if [ -n "${ACS_PUBLIC_IP:-}" ]; then
@@ -36,7 +95,12 @@ if [ -z "$PUBLIC_IP" ]; then
   exit 1
 fi
 echo "Public IP: $PUBLIC_IP"
-export ACS_FRONTEND_BASE_URL="http://$PUBLIC_IP:5173"
+
+if [ "$PROFILE" = "lab" ]; then
+  FRONTEND_PUBLIC_URL="http://$PUBLIC_IP:5173"
+  API_PUBLIC_URL="http://$PUBLIC_IP:8080"
+  export ACS_FRONTEND_BASE_URL="$FRONTEND_PUBLIC_URL"
+fi
 
 set_compose_env() {
   local key="$1" value="$2" file="$ROOT/infra/.env"
@@ -150,13 +214,13 @@ wait_url "cmd/uspc" "${ACS_HEALTH_USPC_URL:-http://127.0.0.1:8092/readyz}" "$LOG
 
 echo "=== Building frontend ==="
 cd "$ROOT/frontend"
-echo "VITE_API_BASE_URL=http://$PUBLIC_IP:8080" > .env.local
+echo "VITE_API_BASE_URL=$API_PUBLIC_URL" > .env.local
 npm install --silent
 npm run build
 
 echo "=== Starting frontend static server (:5173) ==="
 cd "$ROOT/frontend/dist"
-nohup python3 "$ROOT/scripts/spa-server.py" 5173 "$ROOT/frontend/dist" "http://$PUBLIC_IP:8080" > "$LOG_DIR/frontend.log" 2>&1 &
+nohup python3 "$ROOT/scripts/spa-server.py" 5173 "$ROOT/frontend/dist" "$API_PUBLIC_URL" > "$LOG_DIR/frontend.log" 2>&1 &
 echo $! > "$LOG_DIR/frontend.pid"
 wait_url "frontend" "${ACS_HEALTH_FRONTEND_URL:-http://127.0.0.1:5173/}" "$LOG_DIR/frontend.pid"
 
@@ -175,8 +239,13 @@ USP_SCHEME="ws"
 if [ -n "${ACS_USP_TLS_CERT:-}" ] && [ -n "${ACS_USP_TLS_KEY:-}" ]; then
   USP_SCHEME="wss"
 fi
-echo "Console:     http://$PUBLIC_IP:5173"
-echo "API:         http://$PUBLIC_IP:8080"
+if [ "$PROFILE" = "production" ]; then
+  echo "Console:     $FRONTEND_PUBLIC_URL (HTTPS ingress -> http://127.0.0.1:5173)"
+  echo "API:         $API_PUBLIC_URL (HTTPS ingress -> http://127.0.0.1:8080)"
+else
+  echo "Console:     $FRONTEND_PUBLIC_URL"
+  echo "API:         $API_PUBLIC_URL"
+fi
 echo "CWMP URL:    $CWMP_SCHEME://$PUBLIC_IP:7547/cwmp"
 echo "STUN:        $PUBLIC_IP:3478 (UDP)"
 echo "USP WS:      $USP_SCHEME://$PUBLIC_IP:9877/usp"
