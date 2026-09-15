@@ -19,7 +19,7 @@ $body = @{
   callback = "https://nms.example.net/acs/tmf-events"
   secret = $env:ACS_NMS_WEBHOOK_SECRET
   accountId = "tenant-001"
-  eventTypes = @("DeviceFault", "DeviceRecovered", "JOB_COMPLETED")
+  eventTypes = @("DeviceFault", "JOB_COMPLETED")
 } | ConvertTo-Json
 
 Invoke-RestMethod -Method Post -Uri http://localhost:8090/tmf-api/eventManagement/v4/hub `
@@ -35,7 +35,7 @@ Device faults are persisted in TMF688 and the corresponding alarm is persisted i
 {"protocol":"CWMP","jobId":"job-123","faultCode":"9002","message":"Download failed"}
 ```
 
-Use the TMF representation's `accountId`, `deviceId`, `sourceKey`, alarm severity, state, `raisedAt`, and `clearedAt` to create and close an NMS incident. Do not use the body alone as a deduplication key.
+Use the TMF representation's `accountId`, `deviceId`, `sourceKey`, alarm severity, state, `raisedAt`, and `clearedAt` to create and close an NMS incident. Recovery currently closes the durable TMF642 alarm; the receiver should reconcile alarm state through TMF642 when clearing incidents. Do not use the body alone as a deduplication key.
 
 ## Alertmanager integration
 
@@ -53,4 +53,3 @@ Alertmanager sends `send_resolved: true`. The receiver should inspect `status` (
 Targets are checked against `ACS_BSS_WEBHOOK_ALLOWED_CIDRS` when saved and immediately before delivery. Redirects are not followed. Use HTTPS in production and restrict the allowlist to the NMS or relay network.
 
 Deliveries are durable in Postgres, retried with exponential backoff, and marked `FAILED` after eight attempts. Monitor `webhook_deliveries` for failed or growing pending rows. For rollout, first verify signatures in a receiver without opening tickets, then trigger a lab CWMP/USP fault, confirm one event/alarm/delivery, test deduplication, verify recovery closes the NMS incident, and verify Alertmanager firing and resolved notifications.
-
