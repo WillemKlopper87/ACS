@@ -6,7 +6,7 @@
 # server-side process to read a runtime env var from — this is a static
 # SPA served by nginx below). A deployment pointing at a non-default API
 # host must pass --build-arg VITE_API_BASE_URL=... at image build time.
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /src
 # .npmrc carries legacy-peer-deps (TypeScript 6 vs openapi-typescript's ^5 peer)
 COPY package.json package-lock.json .npmrc ./
