@@ -51,6 +51,15 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
 	}
+	for i := range items {
+		if items[i].Action == "noChange" {
+			if err := h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "COMPLETED", ""); err != nil {
+				writeError(w, 500, "ErrInternal", "internal error")
+				return
+			}
+			items[i].Status = "COMPLETED"
+		}
+	}
 	writeJSON(w, 201, tmf641OrderResponse(order, items))
 }
 
