@@ -77,6 +77,9 @@ func TestPlaintextRequiresOptIn(t *testing.T) {
 	if !cfg.AllowPlaintext {
 		t.Error("cfg.AllowPlaintext = false, want true")
 	}
+	if cfg.DeploymentProfile != deploymentProfileLab {
+		t.Errorf("DeploymentProfile = %q, want %q", cfg.DeploymentProfile, deploymentProfileLab)
+	}
 }
 
 // validUspcConfigEnv returns a fresh map with every required
@@ -89,6 +92,17 @@ func validUspcConfigEnv() map[string]string {
 		"ACS_USP_CONTROLLER_ID":   "ci-controller",
 		"ACS_USP_ALLOW_PLAINTEXT": "true",
 		"ACS_USP_POSTGRES_DSN":    "postgres://localhost/acs_test",
+	}
+}
+
+func validProductionUspcConfigEnv() map[string]string {
+	return map[string]string{
+		"ACS_DEPLOYMENT_PROFILE": "production",
+		"ACS_USP_CONTROLLER_ID":  "ci-controller",
+		"ACS_USP_TLS_CERT":       "/tmp/cert.pem",
+		"ACS_USP_TLS_KEY":        "/tmp/key.pem",
+		"ACS_USP_POSTGRES_DSN":   "postgres://localhost/acs_test",
+		"ACS_USP_ALLOWED_CIDRS":  "10.0.0.0/8",
 	}
 }
 
@@ -120,6 +134,61 @@ func TestLoadConfigRejectsInvalidCIDR(t *testing.T) {
 	env["ACS_USP_ALLOWED_CIDRS"] = "not-a-cidr"
 	if _, err := loadConfig(mapGetenv(env), slog.Default()); err == nil {
 		t.Error("loadConfig with an invalid CIDR succeeded, want an error")
+	}
+}
+
+func TestProductionProfileRequiresTLSAndRestrictiveCIDRs(t *testing.T) {
+	cfg, err := loadConfig(mapGetenv(validProductionUspcConfigEnv()), slog.Default())
+	if err != nil {
+		t.Fatalf("valid production config: %v", err)
+	}
+	if cfg.DeploymentProfile != deploymentProfileProduction {
+		t.Errorf("DeploymentProfile = %q, want production", cfg.DeploymentProfile)
+	}
+	if cfg.AllowPlaintext {
+		t.Error("production config unexpectedly allows plaintext")
+	}
+
+	t.Run("plaintext forbidden", func(t *testing.T) {
+		env := validProductionUspcConfigEnv()
+		delete(env, "ACS_USP_TLS_CERT")
+		delete(env, "ACS_USP_TLS_KEY")
+		env["ACS_USP_ALLOW_PLAINTEXT"] = "true"
+		if _, err := loadConfig(mapGetenv(env), slog.Default()); err == nil {
+			t.Fatal("production plaintext config succeeded, want error")
+		}
+	})
+
+	t.Run("cidr required", func(t *testing.T) {
+		env := validProductionUspcConfigEnv()
+		delete(env, "ACS_USP_ALLOWED_CIDRS")
+		if _, err := loadConfig(mapGetenv(env), slog.Default()); err == nil {
+			t.Fatal("production config without CIDR allowlist succeeded, want error")
+		}
+	})
+
+	t.Run("universal ipv4 rejected", func(t *testing.T) {
+		env := validProductionUspcConfigEnv()
+		env["ACS_USP_ALLOWED_CIDRS"] = "0.0.0.0/0"
+		if _, err := loadConfig(mapGetenv(env), slog.Default()); err == nil {
+			t.Fatal("production config with 0.0.0.0/0 succeeded, want error")
+		}
+	})
+
+	t.Run("universal ipv6 rejected", func(t *testing.T) {
+		env := validProductionUspcConfigEnv()
+		env["ACS_USP_ALLOWED_CIDRS"] = "::/0"
+		if _, err := loadConfig(mapGetenv(env), slog.Default()); err == nil {
+			t.Fatal("production config with ::/0 succeeded, want error")
+		}
+	})
+}
+
+func TestLoadConfigRejectsUnknownDeploymentProfile(t *testing.T) {
+	env := validUspcConfigEnv()
+	env["ACS_DEPLOYMENT_PROFILE"] = "prod-ish"
+	if _, err := loadConfig(mapGetenv(env), slog.Default()); err == nil {
+		t.Fatal("unknown deployment profile succeeded, want error")
 	}
 }
 
