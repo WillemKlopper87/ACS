@@ -207,6 +207,7 @@ func main() {
 	go h.runWebhookDeliverLoop(ctx)
 	go h.runTMFEventDispatchLoop(ctx)
 	go h.runIncidentIngestLoop(ctx)
+	go h.runOfflineIncidentLoop(ctx)
 	go h.runEscalationLoop(ctx)
 	go h.runOrderReconcileLoop(ctx)
 
