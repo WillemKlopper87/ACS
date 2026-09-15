@@ -91,7 +91,7 @@ jobs:
           exit 1
 
   upgrade-recovery:
-    name: field RC upgrade + backup/restore rehearsal
+    name: field RC late-migration upgrade + backup/restore rehearsal
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -118,32 +118,41 @@ jobs:
       - name: build migration runner
         working-directory: backend
         run: go build -o /tmp/migrate ./cmd/migrate
-      - name: prove immediately-previous schema upgrades to current
+      - name: prove late 0062 migration upgrades an already-newer schema
         run: |
           set -euo pipefail
           cid=$(docker ps --filter 'label=com.docker.compose.service=postgres' --format '{{.ID}}' | head -n1)
+          target='backend/internal/store/migrations/0062_bss_oauth_policy.sql'
+          test -f "$target"
           docker exec "$cid" psql -U acs -d acs -v ON_ERROR_STOP=1 -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public; CREATE TABLE schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now(), checksum TEXT);'
           mapfile -t files < <(find backend/internal/store/migrations -maxdepth 1 -name '*.sql' -type f | sort)
           test "${#files[@]}" -gt 1
-          latest="${files[${#files[@]}-1]}"
-          for f in "${files[@]:0:${#files[@]}-1}"; do
+          for f in "${files[@]}"; do
+            if [ "$f" = "$target" ]; then
+              continue
+            fi
             docker exec -i "$cid" psql -U acs -d acs -v ON_ERROR_STOP=1 < "$f"
             name=$(basename "$f")
             sum=$(sha256sum "$f" | awk '{print $1}')
             docker exec "$cid" psql -U acs -d acs -v ON_ERROR_STOP=1 -c "INSERT INTO schema_migrations(filename, checksum) VALUES ('$name', '$sum');" >/dev/null
           done
+          test "$(docker exec "$cid" psql -U acs -d acs -tA -c "SELECT count(*) FROM schema_migrations WHERE filename='0062_bss_oauth_policy.sql'")" = "0"
+          for later in 0063_tmf_webhook_dispatch.sql 0064_alerting_policies.sql 0065_alert_incidents.sql 0066_alert_policy_steps.sql; do
+            test "$(docker exec "$cid" psql -U acs -d acs -tA -c "SELECT count(*) FROM schema_migrations WHERE filename='$later'")" = "1"
+          done
           /tmp/migrate
-          latest_name=$(basename "$latest")
-          applied=$(docker exec "$cid" psql -U acs -d acs -tA -c "SELECT count(*) FROM schema_migrations WHERE filename='$latest_name'")
-          test "$applied" = "1"
-          echo "upgrade applied current migration: $latest_name"
+          test "$(docker exec "$cid" psql -U acs -d acs -tA -c "SELECT count(*) FROM schema_migrations WHERE filename='0062_bss_oauth_policy.sql'")" = "1"
+          test "$(docker exec "$cid" psql -U acs -d acs -tA -c "SELECT count(*) FROM information_schema.columns WHERE table_name='bss_oauth_clients' AND column_name IN ('scopes','account_ids','global_access')")" = "3"
+          applied=$(docker exec "$cid" psql -U acs -d acs -tA -c 'SELECT count(*) FROM schema_migrations')
+          test "$applied" = "${#files[@]}"
+          echo "late migration 0062 applied successfully after 0063-0066 were already recorded"
       - name: rehearse backup and destructive restore with file stores
         run: |
           set -euo pipefail
           cid=$(docker ps --filter 'label=com.docker.compose.service=postgres' --format '{{.ID}}' | head -n1)
           ROOT=/tmp/field-rc
-          export ACS_FIRMWARE_STORAGE_ROOT="$ROOT/firmware-storage"
-          export ACS_UPLOAD_STORAGE_ROOT="$ROOT/upload-storage"
+          export ACS_FIRMWARE_STORAGE_ROOT="$ROOT/custom-firmware-root"
+          export ACS_UPLOAD_STORAGE_ROOT="$ROOT/custom-upload-root"
           mkdir -p "$ACS_FIRMWARE_STORAGE_ROOT" "$ACS_UPLOAD_STORAGE_ROOT" "$ROOT/backups"
           printf 'firmware-canary\n' > "$ACS_FIRMWARE_STORAGE_ROOT/canary.bin"
           printf 'upload-canary\n' > "$ACS_UPLOAD_STORAGE_ROOT/canary.txt"
