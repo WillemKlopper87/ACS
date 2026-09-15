@@ -56,7 +56,7 @@ jobs:
       ACS_HEALTH_SKIP_FRONTEND: "1"
       ACS_HEALTH_SKIP_MONITORING: "1"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: backend/go.mod
@@ -103,7 +103,7 @@ jobs:
       ACS_POSTGRES_DSN: postgres://acs:acs@127.0.0.1:5432/acs?sslmode=disable
       ACS_DB_CLIENT_MODE: compose
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: backend/go.mod
@@ -184,7 +184,7 @@ jobs:
     name: USP image build + SBOM + vulnerability scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: build uspc image
         run: docker build -f backend/Dockerfile.uspc -t acs-uspc:ci backend
       - name: generate USP image SBOM
