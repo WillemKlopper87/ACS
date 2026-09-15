@@ -62,9 +62,11 @@ func (h *handler) ingestOfflineDevices(ctx context.Context) {
 		}
 		priority := alerting.Classify(p, "offline", true)
 		next := now.Add(firstEscalationDelay(p))
-		_, err = h.alertIncidents.Open(ctx, d.TenantID, d.DeviceID, "acs-offline", priority, "CPE has not checked in", &next, map[string]any{"last_inform_at": d.LastInformAt, "trigger": "liveness"})
+		incident, created, err := h.alertIncidents.OpenWithCreated(ctx, d.TenantID, d.DeviceID, "acs-offline", priority, "CPE has not checked in", &next, map[string]any{"last_inform_at": d.LastInformAt, "trigger": "liveness"})
 		if err != nil {
 			h.logger.Error("failed to open offline CPE incident", "err", err, "device_id", d.DeviceID)
+		} else if created {
+			h.notifyIncident(ctx, "ALERT_OPENED", incident)
 		}
 	}
 }
@@ -93,7 +95,15 @@ func (h *handler) processEscalations(ctx context.Context) {
 		return
 	}
 	for _, i := range incidents {
-		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: i.TenantID, DeviceID: i.DeviceID})
+		groupIDs, groupErr := h.alertPolicies.GroupIDsForDevice(ctx, i.DeviceID)
+		if groupErr != nil {
+			continue
+		}
+		tier, tierErr := h.alertPolicies.CustomerTier(ctx, i.TenantID, i.DeviceID)
+		if tierErr != nil {
+			continue
+		}
+		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: i.TenantID, DeviceID: i.DeviceID, GroupIDs: groupIDs, CustomerTier: tier})
 		if !ok {
 			continue
 		}
@@ -155,9 +165,28 @@ func (h *handler) ingestTMFFaults(ctx context.Context) {
 		}
 		priority := alerting.Classify(p, body.FaultCode, false)
 		next := event.EventTime.Add(firstEscalationDelay(p))
-		_, err = h.alertIncidents.Open(ctx, event.AccountID, event.DeviceID, telemetry.ConditionKey(body.Protocol, event.DeviceID, body.FaultCode), priority, body.Message, &next, map[string]any{"event_id": event.ID, "fault_code": body.FaultCode, "protocol": body.Protocol, "job_id": body.JobID})
+		incident, created, err := h.alertIncidents.OpenWithCreated(ctx, event.AccountID, event.DeviceID, telemetry.ConditionKey(body.Protocol, event.DeviceID, body.FaultCode), priority, body.Message, &next, map[string]any{"event_id": event.ID, "fault_code": body.FaultCode, "protocol": body.Protocol, "job_id": body.JobID})
 		if err != nil {
 			h.logger.Error("failed to open CPE incident", "err", err, "event_id", event.ID)
+		} else if created {
+			h.notifyIncident(ctx, "ALERT_OPENED", incident)
+		}
+	}
+}
+
+func (h *handler) notifyIncident(ctx context.Context, eventType string, incident *alerting.Incident) {
+	if incident == nil {
+		return
+	}
+	subs, err := h.webhooks.MatchingSubscriptions(ctx, incident.TenantID, eventType)
+	if err != nil {
+		h.logger.Error("failed to match incident notifications", "err", err)
+		return
+	}
+	payload := map[string]any{"event_type": eventType, "incident_id": incident.ID, "tenant_id": incident.TenantID, "device_id": incident.DeviceID, "priority": incident.Priority, "summary": incident.Summary, "state": incident.State, "opened_at": incident.FirstSeenAt}
+	for _, s := range subs {
+		if err := h.webhooks.EnqueueDelivery(ctx, s.ID, eventType, payload); err != nil {
+			h.logger.Error("failed to enqueue incident notification", "err", err, "subscription_id", s.ID)
 		}
 	}
 }

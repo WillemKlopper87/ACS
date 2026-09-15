@@ -41,21 +41,27 @@ type IncidentRepository struct{ db *sql.DB }
 func NewIncidentRepository(db *sql.DB) *IncidentRepository { return &IncidentRepository{db: db} }
 
 func (r *IncidentRepository) Open(ctx context.Context, tenantID, deviceID, conditionKey string, priority Priority, summary string, next *time.Time, details map[string]any) (*Incident, error) {
+	out, _, err := r.OpenWithCreated(ctx, tenantID, deviceID, conditionKey, priority, summary, next, details)
+	return out, err
+}
+
+func (r *IncidentRepository) OpenWithCreated(ctx context.Context, tenantID, deviceID, conditionKey string, priority Priority, summary string, next *time.Time, details map[string]any) (*Incident, bool, error) {
 	raw, err := json.Marshal(details)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	id := uuid.New().String()
 	var out Incident
 	var detailRaw []byte
-	err = r.db.QueryRowContext(ctx, `INSERT INTO alert_incidents (id,tenant_id,device_id,condition_key,priority,summary,next_escalation_at,details) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (tenant_id,device_id,condition_key) DO UPDATE SET priority=EXCLUDED.priority,summary=EXCLUDED.summary,last_seen_at=now(),next_escalation_at=COALESCE(alert_incidents.next_escalation_at,EXCLUDED.next_escalation_at),details=EXCLUDED.details RETURNING id,tenant_id,device_id::text,condition_key,priority,summary,state,escalation_stage,first_seen_at,last_seen_at,next_escalation_at,acknowledged_at,COALESCE(acknowledged_by,''),recovered_at,details`, id, tenantID, deviceID, conditionKey, priority, summary, next, raw).Scan(&out.ID, &out.TenantID, &out.DeviceID, &out.ConditionKey, &out.Priority, &out.Summary, &out.State, &out.EscalationStage, &out.FirstSeenAt, &out.LastSeenAt, &out.NextEscalationAt, &out.AcknowledgedAt, &out.AcknowledgedBy, &out.RecoveredAt, &detailRaw)
+	var created bool
+	err = r.db.QueryRowContext(ctx, `INSERT INTO alert_incidents (id,tenant_id,device_id,condition_key,priority,summary,next_escalation_at,details) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (tenant_id,device_id,condition_key) DO UPDATE SET priority=EXCLUDED.priority,summary=EXCLUDED.summary,last_seen_at=now(),next_escalation_at=CASE WHEN alert_incidents.state IN ('recovered','closed') THEN EXCLUDED.next_escalation_at ELSE COALESCE(alert_incidents.next_escalation_at,EXCLUDED.next_escalation_at) END,state=CASE WHEN alert_incidents.state IN ('recovered','closed') THEN 'open' ELSE alert_incidents.state END,escalation_stage=CASE WHEN alert_incidents.state IN ('recovered','closed') THEN 0 ELSE alert_incidents.escalation_stage END,recovered_at=CASE WHEN alert_incidents.state IN ('recovered','closed') THEN NULL ELSE alert_incidents.recovered_at END,acknowledged_at=CASE WHEN alert_incidents.state IN ('recovered','closed') THEN NULL ELSE alert_incidents.acknowledged_at END,acknowledged_by=CASE WHEN alert_incidents.state IN ('recovered','closed') THEN NULL ELSE alert_incidents.acknowledged_by END,details=EXCLUDED.details RETURNING id,tenant_id,device_id::text,condition_key,priority,summary,state,escalation_stage,first_seen_at,last_seen_at,next_escalation_at,acknowledged_at,COALESCE(acknowledged_by,''),recovered_at,details,(xmax = 0)`, id, tenantID, deviceID, conditionKey, priority, summary, next, raw).Scan(&out.ID, &out.TenantID, &out.DeviceID, &out.ConditionKey, &out.Priority, &out.Summary, &out.State, &out.EscalationStage, &out.FirstSeenAt, &out.LastSeenAt, &out.NextEscalationAt, &out.AcknowledgedAt, &out.AcknowledgedBy, &out.RecoveredAt, &detailRaw, &created)
 	if err != nil {
-		return nil, fmt.Errorf("open alert incident: %w", err)
+		return nil, false, fmt.Errorf("open alert incident: %w", err)
 	}
 	if json.Unmarshal(detailRaw, &out.Details) != nil {
 		out.Details = map[string]any{}
 	}
-	return &out, nil
+	return &out, created, nil
 }
 
 func (r *IncidentRepository) SetState(ctx context.Context, id, state, actor string) error {
