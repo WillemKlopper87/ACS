@@ -34,6 +34,7 @@ require_nonempty ACS_TLS_CERT
 require_nonempty ACS_TLS_KEY
 require_nonempty ACS_USP_TLS_CERT
 require_nonempty ACS_USP_TLS_KEY
+require_nonempty ACS_USP_CLIENT_CA_CERT
 require_nonempty ACS_USP_ALLOWED_CIDRS
 
 if [ "${ACS_USP_ALLOW_PLAINTEXT:-false}" = "true" ]; then
@@ -70,6 +71,10 @@ for pair in "ACS_TLS_CERT ACS_TLS_KEY" "ACS_USP_TLS_CERT ACS_USP_TLS_KEY"; do
   fi
 done
 
+if [ -n "${ACS_USP_CLIENT_CA_CERT:-}" ] && [ ! -r "$ACS_USP_CLIENT_CA_CERT" ]; then
+  fail "ACS_USP_CLIENT_CA_CERT points to an unreadable file: $ACS_USP_CLIENT_CA_CERT"
+fi
+
 if [ "$errors" -ne 0 ]; then
   echo "Security preflight FAILED with $errors problem(s)." >&2
   exit 1
@@ -77,3 +82,4 @@ fi
 
 echo "Security preflight passed: production CWMP/USP transport requirements are configured."
 echo "Note: production CWMP rejects the shared fleet Digest username; provision per-device Digest credentials or mTLS before connecting established CPEs."
+echo "Note: production USP requires each agent certificate to be pre-bound to its device, EndpointID, and MQTT response topic in usp_transport_principals."
