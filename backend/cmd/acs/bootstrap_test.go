@@ -170,7 +170,9 @@ func TestBootstrapGuardAllowsPreRegisteredButUnmanagedIdentity(t *testing.T) {
 	authenticator := testBootstrapAuthenticator()
 	customerID := "preassigned-tenant"
 	guard := bootstrapCWMPGuardWithDeps(
-		func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "unexpected normal handler", http.StatusTeapot) },
+		func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "unexpected normal handler", http.StatusTeapot)
+		},
 		authenticator,
 		nil,
 		nil,
