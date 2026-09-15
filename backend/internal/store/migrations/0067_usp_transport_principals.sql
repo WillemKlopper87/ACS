@@ -16,7 +16,7 @@ CREATE TABLE usp_transport_principals (
     device_id              UUID PRIMARY KEY REFERENCES devices(id),
     endpoint_id            TEXT NOT NULL UNIQUE,
     client_cert_sha256     TEXT NOT NULL UNIQUE,
-    mqtt_topic             TEXT NOT NULL,
+    mqtt_topic             TEXT NOT NULL UNIQUE,
     enabled                BOOLEAN NOT NULL DEFAULT true,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -35,4 +35,4 @@ CREATE INDEX usp_transport_principals_enabled_idx
     ON usp_transport_principals (enabled);
 
 COMMENT ON TABLE usp_transport_principals IS
-    'Pre-provisioned USP transport identity authority: verified client-certificate fingerprint -> device, EndpointID, and MQTT response topic. Separate from live usp_agents state by design.';
+    'Pre-provisioned USP transport identity authority: verified client-certificate fingerprint -> device, EndpointID, and unique MQTT response topic. Separate from live usp_agents state by design.';
