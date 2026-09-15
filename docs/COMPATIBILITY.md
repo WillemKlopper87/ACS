@@ -66,11 +66,11 @@ Compatibility must not become a reason to disable authentication globally. Prefe
 | XMPP connection requests | — | — | not implemented |
 | Full TR-098 write catalog | partial root compatibility | partial | not qualified |
 | Malformed XML / oversized or invalidly compressed body handling | `cmd/acs/session.go` | unit | n/a |
-| USP (TR-369) Get/GetResp over WebSocket + MQTT 5 + MQTT 3.1.1 | `cmd/uspc`, `internal/usp`, `internal/usp/mtp` | unit (transport, codec, boundary) | obuspa v11.0.0-master, WebSocket + MQTT 5 + MQTT 3.1.1, Get/GetResp — CI job added (`usp-interop`), pending first green run |
+| USP (TR-369) Get/GetResp over WebSocket + MQTT 5 + MQTT 3.1.1 | `cmd/uspc`, `internal/usp`, `internal/usp/mtp` | ✅ unit + pinned obuspa reference-agent interop over WebSocket, MQTT 5 and MQTT 3.1.1, including Get/GetResp, job dispatch, allowlist and subscription/restart checks (`usp-interop`) | not yet — reference-agent CI is not physical-CPE qualification |
 
 ## Real-device qualification matrix
 
-Every model must be qualified **per firmware release**, because CWMP behaviour frequently changes between vendor firmware builds.
+Every model must be qualified **per firmware release**, because CWMP behaviour frequently changes between vendor firmware builds. Execute the qualification using [`FIELD-CPE-VALIDATION.md`](FIELD-CPE-VALIDATION.md); this matrix records the resulting support decision rather than replacing the evidence runbook.
 
 Record at least:
 
@@ -101,14 +101,15 @@ runs N concurrent mock CPEs (one Inform + close each) against a real Postgres an
 
 ## How to record a real-device result
 
-1. Point the device's `ManagementServer.URL` at a test ACS with `ACS_DEBUG=1` so the CWMP exchange is observable. Sanitize secrets before retaining logs.
-2. Record exact vendor, model, hardware revision and firmware version.
-3. Walk: bootstrap Inform → empty session exchange → GPN/GPV → SPV of a reversible test parameter → Connection Request → diagnostics → upload/download where supported.
-4. Test direct Connection Request first, then STUN/Annex G if the device sits behind NAT.
-5. Where safe on a dedicated test unit, test reboot, firmware download/TransferComplete and recovery after interrupted connectivity.
-6. Add a vendor row with every compatibility knob required. Do not silently make a weak vendor-specific setting the fleet-wide default.
-7. Commit a sanitized fixture under `backend/test/fixtures/` whenever a device exposes a new valid SOAP, namespace, HTTP-auth, compression or fault shape.
+1. Start from the release/commit, preflight, capture-first sequence, result classifications and evidence template in [`FIELD-CPE-VALIDATION.md`](FIELD-CPE-VALIDATION.md).
+2. Point the device's `ManagementServer.URL` at the controlled test ACS with capture enabled before the qualifying reconnect. Supplementary debug logs may be used when needed, but sanitize secrets before retaining them.
+3. Record exact vendor, model, hardware revision and firmware version.
+4. Walk: bootstrap Inform → empty session exchange → GPN/GPV → SPV of a reversible test parameter → Connection Request → diagnostics → upload/download where supported.
+5. Test direct Connection Request first, then STUN/Annex G if the device sits behind NAT.
+6. Where safe on a dedicated test unit, test reboot, approved firmware download/TransferComplete and recovery after interrupted connectivity.
+7. Add/update the vendor row with every compatibility knob required. Do not silently make a weak vendor-specific setting the fleet-wide default.
+8. Commit a sanitized fixture under `backend/test/fixtures/` whenever a device exposes a new valid SOAP, namespace, HTTP-auth, compression, fault or USP message shape.
 
 ## Production compatibility rule
 
-A CPE is **supported** only when its exact firmware appears in this matrix with a reproducible successful onboarding/session test. The generic parser and mock harness maximize the chance that an unknown CPE connects; they do not replace hardware qualification.
+A CPE is **supported** only when its exact firmware appears in this matrix with a reproducible successful onboarding/session test. The generic parser, mock harness and reference-agent interop maximize the chance that an unknown CPE connects; they do not replace hardware qualification.
