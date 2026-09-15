@@ -269,3 +269,5 @@ for _ in $(seq 1 90); do
 done
 
 fail "device_parameter_cache never showed $watched_param=$new_value with source=USP_NOTIFY_VALUE_CHANGE within 90s (last observed: value='$value' source='$source')"
+
+# Reconnect synchronization is required before asserting routed notifications.
