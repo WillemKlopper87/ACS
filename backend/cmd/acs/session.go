@@ -136,6 +136,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 		ok, stale, identity := h.auth.Verify(r)
 		if !ok {
 			h.logger.Warn("authentication failed or missing", "remote", r.RemoteAddr)
+			h.captureAuthFailure(r.Context(), remoteIP(r))
 			// Drain the unauthenticated encoded body before the challenge so
 			// keep-alive survives on CPEs that retry the same connection.
 			_, _ = io.Copy(io.Discard, r.Body)
@@ -199,6 +200,26 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.dispatch(ctx, w, r, env.Body)
+}
+
+// captureAuthFailure records only the fact that a CWMP request failed
+// authentication. It intentionally stores no request body or Authorization
+// header. This is useful for remote-IP captures because an unauthenticated
+// CPE cannot yet be correlated to a device identity.
+func (h *handler) captureAuthFailure(ctx context.Context, ip string) {
+	if h.captures == nil || ip == "" {
+		return
+	}
+	sessions, err := h.captures.ActiveMatch(ctx, "CWMP", "", ip)
+	if err != nil {
+		h.logger.Error("failed to check active captures for auth failure", "err", err, "remote_ip", ip)
+		return
+	}
+	for _, s := range sessions {
+		if err := h.captures.RecordEventWhileUnresolved(ctx, s.ID, "inbound", "AuthenticationFailure", "CWMP authentication failed", nil); err != nil {
+			h.logger.Error("failed to record CWMP auth failure capture", "err", err, "session_id", s.ID)
+		}
+	}
 }
 
 // inboundIdentity is what this request's credential asserts about device
