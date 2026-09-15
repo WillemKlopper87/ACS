@@ -4,30 +4,22 @@
 # except the AWS-console steps (launching the instance, opening security
 # group ports) — those can't be done from inside the instance.
 #
-# Dev quickstart publishes the monitoring UIs directly on the same public
-# IP as ACS, using their normal ports:
-#   http://<public-ip>:3000  Grafana
-#   http://<public-ip>:9090  Prometheus
-# Set ACS_MONITORING_PUBLIC=0 before invoking this script to keep both on
-# localhost instead. Prometheus has no login in this direct dev mode, so
-# restrict 9090/tcp to your own test IP/CIDR in the EC2 security group.
+# The host deployment starts the complete control plane: CWMP/STUN,
+# operator API, BSS/TMF adapter, USP controller, frontend, PostgreSQL,
+# Prometheus, Alertmanager and Grafana. The quickstart publishes the
+# monitoring UIs directly by default; set ACS_MONITORING_PUBLIC=0 to keep
+# Grafana and Prometheus localhost-only.
 #
 # Usage (on a fresh instance, logged in as the `ubuntu` user):
 #   curl -fsSL https://raw.githubusercontent.com/WillemKlopper87/ACS/main/scripts/quickstart.sh | bash
 # or, if you've already cloned:
 #   ./scripts/quickstart.sh
 #
-# Safe to rerun: every step is idempotent (skips work that's already done),
-# and it ends by calling scripts/start.sh, which itself always stops any
-# previous run first. Rerunning this after `git pull` is the supported way
-# to pick up a new commit (see §11 "Updating from GitHub" in the guide).
+# Safe to rerun: every step is idempotent and scripts/start.sh stops the
+# previous application processes before starting the new revision.
 #
 # Override via environment variables:
-#   REPO_URL     git URL to clone (default: the public HTTPS URL below —
-#                if the repo is private, set this to the SSH form
-#                (git@github.com:WillemKlopper87/ACS.git) with a deploy
-#                key already installed, or an HTTPS URL with a PAT
-#                embedded — see EC2-DEPLOYMENT-GUIDE.md §3)
+#   REPO_URL     git URL to clone
 #   GIT_REF      branch/tag/commit to check out (default: main)
 #   INSTALL_DIR  where to clone/find the repo (default: ~/ACS)
 #   GO_VERSION   Go toolchain to install (default: matches backend/go.mod)
@@ -120,47 +112,66 @@ else
   git clone --branch "$GIT_REF" "$REPO_URL" "$INSTALL_DIR"
 fi
 chmod +x "$INSTALL_DIR"/scripts/*.sh
-# Load the persisted credentials in this shell as well as in start.sh so the
-# final quickstart summary can show the exact values used by the services.
+# Load the persisted credentials/settings in this shell as well as in
+# start.sh so the final summary can show the exact values in use.
+# shellcheck disable=SC1090
 source "$INSTALL_DIR/scripts/gen-env.sh"
 
 GOMOD_GO="$(awk '/^go /{print $2; exit}' "$INSTALL_DIR/backend/go.mod" 2>/dev/null || true)"
 if [ -n "$GOMOD_GO" ] && [ "$GOMOD_GO" != "$GO_VERSION" ]; then
   echo ""
   echo "NOTE: this script installed Go $GO_VERSION, but backend/go.mod asks for $GOMOD_GO."
-  echo "      The build still works — GOTOOLCHAIN=auto fetches $GOMOD_GO on demand — but the"
-  echo "      first 'go build' will download a second toolchain. Update GO_VERSION in this"
-  echo "      script to $GOMOD_GO to avoid that."
+  echo "      GOTOOLCHAIN=auto can fetch $GOMOD_GO on demand, but align GO_VERSION"
+  echo "      with backend/go.mod to avoid the extra download."
 fi
 
 echo ""
-echo "=== 6/6: Build and start the stack ==="
+echo "=== 6/6: Build, start and verify the stack ==="
 # The docker group membership added in step 4 doesn't apply to this
 # already-running shell. `sg` starts the stack with that group active.
-sg docker -c "cd '$INSTALL_DIR' && ACS_PUBLIC_IP='$ACS_PUBLIC_IP' ACS_GRAFANA_PUBLIC='$ACS_MONITORING_PUBLIC' ACS_PROMETHEUS_PUBLIC='$ACS_MONITORING_PUBLIC' ./scripts/start.sh"
+sg docker -c "cd '$INSTALL_DIR' && ACS_PUBLIC_IP='${ACS_PUBLIC_IP:-}' ACS_GRAFANA_PUBLIC='$ACS_MONITORING_PUBLIC' ACS_PROMETHEUS_PUBLIC='$ACS_MONITORING_PUBLIC' ./scripts/start.sh"
 
 echo ""
 echo "=================================================="
-echo "  Quick start complete."
+echo "  Quick start complete — readiness gate passed."
 echo "=================================================="
 if [ "$ACS_MONITORING_PUBLIC" = "1" ]; then
   echo "Grafana and Prometheus were published directly on the ACS public IP:"
   echo "  Grafana:    http://<public-ip>:3000"
   echo "  Prometheus: http://<public-ip>:9090"
-  echo "The exact detected URLs and Grafana credentials were printed above."
+  echo "Restrict those ports to your operator/test CIDR."
 else
   echo "Grafana and Prometheus were kept on localhost only."
 fi
+
 echo ""
-echo "CPE CWMP configuration:"
-echo "  ACS URL:      http://<public-ip>:7547"
-echo "  CWMP username: $ACS_DIGEST_USERNAME"
-echo "  CWMP password: $ACS_DIGEST_PASSWORD"
+echo "CPE management endpoints:"
+echo "  CWMP ACS URL: http://<public-ip>:7547/cwmp"
+echo "  STUN:         <public-ip>:3478/udp"
+echo "  USP WebSocket: ws://<public-ip>:9877/usp"
+echo "  USP MQTT:      <public-ip>:1883"
+echo "  USP controller ID: $ACS_USP_CONTROLLER_ID"
+echo ""
+echo "CWMP credentials:"
+echo "  Username: $ACS_DIGEST_USERNAME"
+echo "  Password: $ACS_DIGEST_PASSWORD"
 echo "  Connection-request username: $ACS_CONNECTION_REQUEST_USERNAME"
 echo "  Connection-request password: $ACS_CONNECTION_REQUEST_PASSWORD"
-echo "  Credentials file: ~/.acs-secrets.env"
+echo "  Credentials/settings file: ~/.acs-secrets.env"
+echo ""
+echo "The BSS/TMF adapter binds to 127.0.0.1:8090 by default. Expose it only"
+echo "through an authenticated TLS reverse proxy or similarly controlled"
+echo "northbound path. Its health endpoint is checked automatically."
+echo ""
+echo "SECURITY: this quickstart intentionally opts USP into plaintext for"
+echo "controlled lab/field testing. For production, set ACS_USP_TLS_CERT and"
+echo "ACS_USP_TLS_KEY, set ACS_USP_ALLOW_PLAINTEXT=false, restrict"
+echo "ACS_USP_ALLOWED_CIDRS, and terminate operator/API/BSS traffic behind TLS."
 echo ""
 echo "Reminder — this script cannot open EC2 security group ports for you."
-echo "For the dev quickstart, allow inbound 7547/tcp, 3478/udp, 8080/tcp,"
-echo "5173/tcp, 3000/tcp and 9090/tcp. Restrict 3000/9090 to your test"
-echo "IP/CIDR where possible; Prometheus :9090 is unauthenticated in this mode."
+echo "For a controlled CPE test, allow only the required source CIDRs to"
+echo "7547/tcp, 3478/udp, 9877/tcp and/or 1883/tcp. The dev UI/API ports"
+echo "5173/8080 and monitoring 3000/9090 should be operator-CIDR restricted;"
+echo "8090 and 8092 are host-local by default."
+echo ""
+echo "Re-run '$INSTALL_DIR/scripts/healthcheck.sh' at any time to verify the stack."
