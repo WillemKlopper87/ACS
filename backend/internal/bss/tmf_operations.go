@@ -60,8 +60,14 @@ func (r *Repository) CreateAlarm(ctx context.Context, sourceKey, accountID, devi
 }
 
 func (r *Repository) FindEvent(ctx context.Context, id string) (*EventRecord, error) {
+	return r.findEvent(ctx, id, "")
+}
+func (r *Repository) FindEventForAccount(ctx context.Context, id, accountID string) (*EventRecord, error) {
+	return r.findEvent(ctx, id, accountID)
+}
+func (r *Repository) findEvent(ctx context.Context, id, accountID string) (*EventRecord, error) {
 	var e EventRecord
-	err := r.db.QueryRowContext(ctx, `SELECT id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),event_type,event_time,payload FROM tmf_events WHERE id::text=$1 OR source_key=$1`, id).Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload)
+	err := r.db.QueryRowContext(ctx, `SELECT id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),event_type,event_time,payload FROM tmf_events WHERE (id::text=$1 OR source_key=$1) AND ($2='' OR account_id=$2)`, id, accountID).Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -130,11 +136,17 @@ func (r *Repository) ListAlarms(ctx context.Context, accountID, state string, li
 }
 
 func (r *Repository) UpdateAlarmState(ctx context.Context, id, state string) error {
+	return r.updateAlarmState(ctx, id, "", state)
+}
+func (r *Repository) UpdateAlarmStateForAccount(ctx context.Context, id, accountID, state string) error {
+	return r.updateAlarmState(ctx, id, accountID, state)
+}
+func (r *Repository) updateAlarmState(ctx context.Context, id, accountID, state string) error {
 	var cleared any
 	if state == "cleared" {
 		cleared = time.Now().UTC()
 	}
-	res, err := r.db.ExecContext(ctx, `UPDATE tmf_alarms SET state=$2, cleared_at=$3 WHERE id=$1`, id, state, cleared)
+	res, err := r.db.ExecContext(ctx, `UPDATE tmf_alarms SET state=$2, cleared_at=$3 WHERE id=$1 AND ($4='' OR account_id=$4)`, id, state, cleared, accountID)
 	if err != nil {
 		return fmt.Errorf("update TMF alarm: %w", err)
 	}
@@ -212,7 +224,7 @@ func (r *Repository) ListServiceProblems(ctx context.Context, accountID, status 
 	if limit <= 0 || limit > 500 {
 		limit = 50
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id,COALESCE(external_id,''),account_id,COALESCE(service_id::text,''),status,COALESCE(priority,''),problem_type,description,COALESCE(related_alarm_id::text,''),created_at,resolved_at,COALESCE(resolution,'') FROM tmf_service_problems WHERE ($1='' OR account_id=$1) AND ($2='' OR status=$2) ORDER BY created_at DESC LIMIT $3`, accountID, status, limit)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,COALESCE(external_id,''),account_id,COALESCE(service_id::text,''),status,COALESCE(priority,''),problem_type,description,COALESCE(related_alarm_id::text,''),created_at,resolved_at,COALESCE(resolution,''),related_event_ids,affected_resource_ids,COALESCE(impact,''),COALESCE(severity,''),COALESCE(root_cause,''),resolution_date FROM tmf_service_problems WHERE ($1='' OR account_id=$1) AND ($2='' OR status=$2) ORDER BY created_at DESC LIMIT $3`, accountID, status, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list service problems: %w", err)
 	}
@@ -220,7 +232,14 @@ func (r *Repository) ListServiceProblems(ctx context.Context, accountID, status 
 	var out []ServiceProblemRecord
 	for rows.Next() {
 		var p ServiceProblemRecord
-		if err := rows.Scan(&p.ID, &p.ExternalID, &p.AccountID, &p.ServiceID, &p.Status, &p.Priority, &p.ProblemType, &p.Description, &p.RelatedAlarmID, &p.CreatedAt, &p.ResolvedAt, &p.Resolution); err != nil {
+		var eventIDs, resourceIDs []byte
+		if err := rows.Scan(&p.ID, &p.ExternalID, &p.AccountID, &p.ServiceID, &p.Status, &p.Priority, &p.ProblemType, &p.Description, &p.RelatedAlarmID, &p.CreatedAt, &p.ResolvedAt, &p.Resolution, &eventIDs, &resourceIDs, &p.Impact, &p.Severity, &p.RootCause, &p.ResolutionDate); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(eventIDs, &p.RelatedEventIDs); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(resourceIDs, &p.AffectedResourceIDs); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"acs/internal/bss"
@@ -83,6 +84,12 @@ func (h *handler) createTMF656Problem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	for _, eventID := range req.RelatedEventIDs {
+		if event, err := h.mappings.FindEventForAccount(r.Context(), eventID, req.AccountID); err != nil || event == nil {
+			writeError(w, http.StatusBadRequest, "ErrInvalidRelation", "related event is not in the requested account")
+			return
+		}
+	}
 	p, err := h.mappings.CreateServiceProblemRich(r.Context(), req.ExternalID, req.AccountID, req.ServiceID, req.ProblemType, req.Description, req.Priority, req.RelatedAlarmID, req.RelatedEventIDs, req.AffectedResourceIDs, req.Impact, req.Severity, req.RootCause)
 	if err != nil {
 		h.logger.Error("failed to create TMF656 service problem", "err", err)
@@ -125,7 +132,15 @@ func (h *handler) listTMF656Problems(w http.ResponseWriter, r *http.Request) {
 		p := problems[i]
 		responses = append(responses, tmf656ProblemResponse(&p))
 	}
-	writeJSON(w, 200, responses)
+	offset, end := tmfPageQuery(r, len(responses))
+	page := responses[offset:end]
+	selected := make([]map[string]any, len(page))
+	for i := range page {
+		selected[i] = tmfSelectMap(page[i], r.URL.Query().Get("fields"))
+	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(len(responses)))
+	w.Header().Set("X-Result-Count", strconv.Itoa(len(page)))
+	writeJSON(w, 200, selected)
 }
 
 func (h *handler) patchTMF656Problem(w http.ResponseWriter, r *http.Request) {
