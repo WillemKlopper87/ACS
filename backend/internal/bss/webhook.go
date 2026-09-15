@@ -139,6 +139,46 @@ func (r *WebhookRepository) EnqueueDelivery(ctx context.Context, subscriptionID,
 	return nil
 }
 
+// DispatchTMFEvents fans out newly persisted TMF events to matching hubs.
+// The ledger and delivery row are inserted in one statement, so polling is
+// safe across bssadapter restarts and multiple adapter instances.
+func (r *WebhookRepository) DispatchTMFEvents(ctx context.Context, since time.Time, limit int) (int, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	res, err := r.db.ExecContext(ctx, `
+		WITH candidates AS (
+			SELECT e.id, e.event_type, e.account_id, e.device_id, e.service_id,
+			       e.event_time, e.source_key, e.payload, s.id AS subscription_id
+			FROM tmf_events e
+			JOIN webhook_subscriptions s
+			  ON (s.account_id IS NULL OR s.account_id = e.account_id)
+			 AND e.event_type = ANY(s.event_types)
+			LEFT JOIN tmf_webhook_dispatches d
+			  ON d.event_id = e.id AND d.subscription_id = s.id
+			WHERE e.event_time >= $1 AND d.event_id IS NULL
+			ORDER BY e.event_time ASC
+			LIMIT $2
+		), claimed AS (
+			INSERT INTO tmf_webhook_dispatches (event_id, subscription_id)
+			SELECT id, subscription_id FROM candidates
+			ON CONFLICT DO NOTHING
+			RETURNING event_id, subscription_id
+		)
+		INSERT INTO webhook_deliveries (id, subscription_id, event_type, payload)
+		SELECT gen_random_uuid(), c.subscription_id, c.event_type,
+		       jsonb_build_object('eventId', c.id, 'eventType', c.event_type,
+		         'eventTime', c.event_time, 'sourceKey', c.source_key,
+		         'accountId', c.account_id, 'deviceId', c.device_id,
+		         'serviceId', c.service_id, 'event', c.payload)
+		FROM candidates c JOIN claimed x ON x.event_id = c.id AND x.subscription_id = c.subscription_id`, since, limit)
+	if err != nil {
+		return 0, fmt.Errorf("dispatch TMF events: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // maxDeliveryAttempts caps retries before a delivery is left FAILED for
 // good — same "don't retry forever" shape as diagnostics' max_attempts.
 const maxDeliveryAttempts = 8

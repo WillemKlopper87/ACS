@@ -36,6 +36,27 @@ const (
 	webhookHTTPTimeout     = 10 * time.Second
 )
 
+func (h *handler) runTMFEventDispatchLoop(ctx context.Context) {
+	// A bounded lookback covers events written while the adapter was stopped;
+	// tmf_webhook_dispatches makes replay of the lookback harmless.
+	ticker := time.NewTicker(webhookNotifyInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := h.webhooks.DispatchTMFEvents(ctx, time.Now().UTC().Add(-24*time.Hour), webhookBatchSize)
+			if err != nil {
+				h.logger.Error("failed to dispatch TMF events to webhook hubs", "err", err)
+			}
+			if n > 0 {
+				h.logger.Info("TMF events queued for webhook delivery", "count", n)
+			}
+		}
+	}
+}
+
 // jobCompletedPayload is the JOB_COMPLETED event body — the guide's
 // Workflow C shape, pushed instead of polled.
 type jobCompletedPayload struct {

@@ -202,6 +202,7 @@ func main() {
 
 	go h.runWebhookNotifyLoop(ctx)
 	go h.runWebhookDeliverLoop(ctx)
+	go h.runTMFEventDispatchLoop(ctx)
 	go h.runOrderReconcileLoop(ctx)
 
 	rateLimitPerSecond := envOrFloat("ACS_BSS_RATE_LIMIT_PER_SECOND", defaultRateLimitPerSecond)

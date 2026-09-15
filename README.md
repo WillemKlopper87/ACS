@@ -103,6 +103,10 @@ a Trivy scan, and gitleaks. Make every job required in branch protection.
   for Prometheus.
 - Alerts: `infra/alert_rules.yml` → Alertmanager → the webhook in
   `ACS_ALERT_WEBHOOK_URL` (`infra/alertmanager.yml`).
+- Device and tenant notifications: subscribe an external NMS or integration
+  relay through the TMF688 event hub; alarms remain queryable through TMF642.
+  See [Alerting and NMS integration](docs/integration/08-alerting-and-nms.md)
+  for the signed contract, NetPod-style setup, retries, and receiver checks.
 - Backups: `scripts/backup.sh` (pg_dump + firmware + uploads, checksummed
   tarball) and `scripts/restore.sh`. Your RPO is the backup cadence;
   measure RTO by rehearsing a restore on staging.
