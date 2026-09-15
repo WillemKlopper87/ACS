@@ -1,24 +1,21 @@
 #!/bin/bash
-# Starts the full ACS stack (Postgres, cmd/acs, cmd/api, frontend) as
-# backgrounded, nohup'd processes with PID files — so a single SSH
-# session is enough, and closing the terminal or losing the connection
-# doesn't kill anything. Rerun freely: stops any previous run first.
-#
-# Uses BUILT binaries (not `go run`) deliberately — `go run` wraps the
-# real binary in a subprocess, and killing the wrapper can leave the
-# actual binary running and still holding its port.
-set -e
+# Starts the full host-based ACS stack: Postgres/monitoring containers plus
+# cmd/acs, cmd/api, cmd/bssadapter, cmd/uspc and the frontend. Application
+# processes are backgrounded with PID files so one SSH session is enough.
+# Rerun freely: the previous application processes are stopped first.
+set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$HOME/acs-logs"
 mkdir -p "$LOG_DIR"
 
 echo "=== Loading/generating credentials ==="
+# shellcheck disable=SC1091
 source "$ROOT/scripts/gen-env.sh"
 
 echo "=== Detecting public IP ==="
 detect_public_ip() {
-  if [ -n "$ACS_PUBLIC_IP" ]; then
+  if [ -n "${ACS_PUBLIC_IP:-}" ]; then
     echo "$ACS_PUBLIC_IP"
     return
   fi
@@ -39,13 +36,8 @@ if [ -z "$PUBLIC_IP" ]; then
   exit 1
 fi
 echo "Public IP: $PUBLIC_IP"
-# The API uses this value for its CORS allow-origin. Keep it derived from the
-# same address used by the frontend so an EC2 stop/start with a new public IP
-# cannot leave the API serving a stale browser origin from the secrets file.
 export ACS_FRONTEND_BASE_URL="http://$PUBLIC_IP:5173"
 
-# docker compose reads infra/.env. gen-env.sh creates it before the public
-# IP is known, so update run-specific bind/root values here.
 set_compose_env() {
   local key="$1" value="$2" file="$ROOT/infra/.env"
   if grep -q "^${key}=" "$file"; then
@@ -71,7 +63,7 @@ else
 fi
 set_compose_env PROMETHEUS_BIND "$PROMETHEUS_BIND"
 
-echo "=== Stopping any previous ACS processes ==="
+echo "=== Stopping any previous ACS application processes ==="
 "$ROOT/scripts/stop.sh" || true
 sleep 1
 
@@ -84,69 +76,77 @@ echo "Postgres is up."
 # --- Monitoring stack -------------------------------------------------
 echo "=== Grafana's read-only database role ==="
 if command -v psql >/dev/null; then
-  "$ROOT/scripts/grafana-db-role.sh" || echo "WARNING: grafana-db-role.sh failed — the Postgres-backed dashboards will show auth errors."
+  "$ROOT/scripts/grafana-db-role.sh" || echo "WARNING: grafana-db-role.sh failed — Postgres-backed dashboards will show auth errors."
 else
   echo "WARNING: psql not found, skipping the grafana_ro role."
-  echo "         The Prometheus dashboards still work; the Postgres-backed ones"
-  echo "         won't until you 'sudo apt-get install -y postgresql-client' and rerun."
 fi
 
 echo "=== Starting monitoring stack (Prometheus, Alertmanager, Grafana) ==="
 (cd "$ROOT/infra" && docker compose up -d prometheus alertmanager grafana)
 
-echo "Waiting for Prometheus to become ready..."
-PROMETHEUS_UP=""
-for _ in $(seq 1 60); do
-  if curl -fsS -m 2 http://127.0.0.1:9090/-/ready >/dev/null 2>&1; then
-    PROMETHEUS_UP=1
-    break
-  fi
-  sleep 2
-done
-if [ -n "$PROMETHEUS_UP" ]; then
-  echo "Prometheus is up."
-else
-  echo "WARNING: Prometheus did not report ready within 120s."
-  echo "         Check: cd infra && docker compose logs prometheus"
-fi
+wait_url() {
+  local name="$1" url="$2" pid_file="${3:-}"
+  for _ in $(seq 1 60); do
+    if curl -fsS -m 2 "$url" >/dev/null 2>&1; then
+      echo "$name is ready."
+      return 0
+    fi
+    if [ -n "$pid_file" ] && [ -f "$pid_file" ]; then
+      local pid
+      pid="$(cat "$pid_file")"
+      if ! kill -0 "$pid" 2>/dev/null; then
+        echo "$name exited before becoming ready — check $LOG_DIR/${pid_file##*/}" >&2
+        return 1
+      fi
+    fi
+    sleep 2
+  done
+  echo "$name did not become ready within 120s ($url)." >&2
+  return 1
+}
 
-echo "Waiting for Grafana to become healthy..."
-GRAFANA_UP=""
-for _ in $(seq 1 60); do
-  if curl -fsS -m 2 http://127.0.0.1:3000/api/health 2>/dev/null | grep -q '"database": *"ok"'; then
-    GRAFANA_UP=1
-    break
-  fi
-  sleep 2
-done
-if [ -n "$GRAFANA_UP" ]; then
-  echo "Grafana is up."
-else
-  echo "WARNING: Grafana did not report healthy within 120s."
-  echo "         Check: cd infra && docker compose logs grafana"
-fi
+wait_url "Prometheus" "http://127.0.0.1:9090/-/ready"
+# Grafana's health endpoint can return 200 before the DB field is useful;
+# the final whole-stack healthcheck validates the response body as well.
+wait_url "Grafana" "http://127.0.0.1:3000/api/health"
 
 echo "=== Building backend binaries ==="
 cd "$ROOT/backend"
 mkdir -p bin
 go build -o bin/acs ./cmd/acs
 go build -o bin/api ./cmd/api
+go build -o bin/bssadapter ./cmd/bssadapter
+go build -o bin/uspc ./cmd/uspc
 
-echo "=== Starting cmd/acs (CWMP :7547, STUN :3478) ==="
-nohup "$ROOT/backend/bin/acs" > "$LOG_DIR/acs.log" 2>&1 &
-echo $! > "$LOG_DIR/acs.pid"
-sleep 1
-if ! kill -0 "$(cat "$LOG_DIR/acs.pid")" 2>/dev/null; then
-  echo "cmd/acs failed to start — check $LOG_DIR/acs.log"; tail -20 "$LOG_DIR/acs.log"; exit 1
-fi
+start_process() {
+  local name="$1"
+  shift
+  echo "=== Starting $name ==="
+  nohup "$@" > "$LOG_DIR/$name.log" 2>&1 &
+  echo $! > "$LOG_DIR/$name.pid"
+  sleep 1
+  if ! kill -0 "$(cat "$LOG_DIR/$name.pid")" 2>/dev/null; then
+    echo "$name failed to start — check $LOG_DIR/$name.log" >&2
+    tail -40 "$LOG_DIR/$name.log" || true
+    exit 1
+  fi
+}
 
-echo "=== Starting cmd/api (REST :8080) ==="
-nohup "$ROOT/backend/bin/api" > "$LOG_DIR/api.log" 2>&1 &
-echo $! > "$LOG_DIR/api.pid"
-sleep 1
-if ! kill -0 "$(cat "$LOG_DIR/api.pid")" 2>/dev/null; then
-  echo "cmd/api failed to start — check $LOG_DIR/api.log"; tail -20 "$LOG_DIR/api.log"; exit 1
+start_process acs "$ROOT/backend/bin/acs"
+wait_url "cmd/acs" "${ACS_HEALTH_ACS_URL:-http://127.0.0.1:7547/readyz}" "$LOG_DIR/acs.pid"
+
+start_process api "$ROOT/backend/bin/api"
+wait_url "cmd/api" "${ACS_HEALTH_API_URL:-http://127.0.0.1:8080/readyz}" "$LOG_DIR/api.pid"
+
+start_process bssadapter "$ROOT/backend/bin/bssadapter"
+wait_url "cmd/bssadapter" "${ACS_HEALTH_BSS_URL:-http://127.0.0.1:8090/readyz}" "$LOG_DIR/bssadapter.pid"
+
+if [ "${ACS_USP_ALLOW_PLAINTEXT:-false}" = "true" ] && { [ -z "${ACS_USP_TLS_CERT:-}" ] || [ -z "${ACS_USP_TLS_KEY:-}" ]; }; then
+  echo "WARNING: USP WebSocket/MQTT is explicitly running plaintext for this quickstart/field-test deployment."
+  echo "         Configure ACS_USP_TLS_CERT/ACS_USP_TLS_KEY and set ACS_USP_ALLOW_PLAINTEXT=false before production exposure."
 fi
+start_process uspc "$ROOT/backend/bin/uspc"
+wait_url "cmd/uspc" "${ACS_HEALTH_USPC_URL:-http://127.0.0.1:8092/readyz}" "$LOG_DIR/uspc.pid"
 
 echo "=== Building frontend ==="
 cd "$ROOT/frontend"
@@ -158,39 +158,48 @@ echo "=== Starting frontend static server (:5173) ==="
 cd "$ROOT/frontend/dist"
 nohup python3 "$ROOT/scripts/spa-server.py" 5173 "$ROOT/frontend/dist" "http://$PUBLIC_IP:8080" > "$LOG_DIR/frontend.log" 2>&1 &
 echo $! > "$LOG_DIR/frontend.pid"
-sleep 1
-if ! kill -0 "$(cat "$LOG_DIR/frontend.pid")" 2>/dev/null; then
-  echo "frontend server failed to start — check $LOG_DIR/frontend.log"; tail -20 "$LOG_DIR/frontend.log"; exit 1
-fi
+wait_url "frontend" "${ACS_HEALTH_FRONTEND_URL:-http://127.0.0.1:5173/}" "$LOG_DIR/frontend.pid"
+
+echo "=== Whole-stack readiness ==="
+bash "$ROOT/scripts/healthcheck.sh"
 
 echo ""
 echo "=================================================="
 echo "  ACS is running"
 echo "=================================================="
 CWMP_SCHEME="http"
-if [ -n "$ACS_TLS_CERT" ] && [ -n "$ACS_TLS_KEY" ]; then
+if [ -n "${ACS_TLS_CERT:-}" ] && [ -n "${ACS_TLS_KEY:-}" ]; then
   CWMP_SCHEME="https"
 fi
-echo "Console:    http://$PUBLIC_IP:5173"
-echo "API:        http://$PUBLIC_IP:8080"
-echo "CWMP URL:   $CWMP_SCHEME://$PUBLIC_IP:7547/cwmp"
-echo "STUN:       $PUBLIC_IP:3478 (UDP)"
+USP_SCHEME="ws"
+if [ -n "${ACS_USP_TLS_CERT:-}" ] && [ -n "${ACS_USP_TLS_KEY:-}" ]; then
+  USP_SCHEME="wss"
+fi
+echo "Console:     http://$PUBLIC_IP:5173"
+echo "API:         http://$PUBLIC_IP:8080"
+echo "CWMP URL:    $CWMP_SCHEME://$PUBLIC_IP:7547/cwmp"
+echo "STUN:        $PUBLIC_IP:3478 (UDP)"
+echo "USP WS:      $USP_SCHEME://$PUBLIC_IP:9877/usp"
+echo "USP MQTT:    $PUBLIC_IP:1883"
+echo "BSS adapter: http://127.0.0.1:8090 (host-local; use TLS reverse proxy for northbound access)"
+echo "USP health:  http://127.0.0.1:8092/readyz"
 
 if [ "${ACS_GRAFANA_PUBLIC:-}" = "1" ]; then
-  echo "Grafana:    http://$PUBLIC_IP:3000"
+  echo "Grafana:     http://$PUBLIC_IP:3000"
 else
-  echo "Grafana:    http://127.0.0.1:3000 on the instance (SSH tunnel required)"
+  echo "Grafana:     http://127.0.0.1:3000 on the instance (SSH tunnel required)"
 fi
 if [ "${ACS_PROMETHEUS_PUBLIC:-}" = "1" ]; then
-  echo "Prometheus: http://$PUBLIC_IP:9090"
+  echo "Prometheus:  http://$PUBLIC_IP:9090"
 else
-  echo "Prometheus: http://127.0.0.1:9090 on the instance (SSH tunnel required)"
+  echo "Prometheus:  http://127.0.0.1:9090 on the instance (SSH tunnel required)"
 fi
 
 echo ""
 echo "Login: $ACS_BOOTSTRAP_ADMIN_USERNAME / $ACS_BOOTSTRAP_ADMIN_PASSWORD"
 echo "Grafana login: admin / $GRAFANA_ADMIN_PASSWORD"
-echo "(credentials are also saved in ~/.acs-secrets.env)"
+echo "USP controller ID: $ACS_USP_CONTROLLER_ID"
+echo "(credentials/settings are also saved in ~/.acs-secrets.env)"
 if [ "${ACS_PROMETHEUS_PUBLIC:-}" = "1" ]; then
   echo ""
   echo "WARNING: Prometheus has no login in this dev mode. Restrict 9090/tcp"
@@ -198,7 +207,8 @@ if [ "${ACS_PROMETHEUS_PUBLIC:-}" = "1" ]; then
   echo "         broadly for a production deployment."
 fi
 echo ""
-echo "Logs:   $LOG_DIR/{acs,api,frontend}.log"
+echo "Logs:   $LOG_DIR/{acs,api,bssadapter,uspc,frontend}.log"
+echo "Health: scripts/healthcheck.sh"
 echo "Watch:  scripts/logs.sh"
 echo "Stop:   scripts/stop.sh"
 echo "=================================================="

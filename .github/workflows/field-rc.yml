@@ -1,0 +1,202 @@
+name: field-rc
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: field-rc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-services:
+    name: field RC host services (ACS + API + BSS + USP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env: { POSTGRES_USER: acs, POSTGRES_PASSWORD: acs, POSTGRES_DB: acs }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U acs -d acs"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      ACS_POSTGRES_DSN: postgres://acs:acs@127.0.0.1:5432/acs?sslmode=disable
+      ACS_JWT_SIGNING_SECRET: ci-field-jwt-secret-0123456789abcdef0123456789
+      ACS_CREDENTIAL_ENCRYPTION_KEY: ci-field-encryption-key-0123456789abcdef
+      ACS_INTERNAL_SERVICE_TOKEN: ci-field-internal-service-token-0123456789abcdef
+      ACS_BSS_OAUTH_SIGNING_SECRET: ci-field-bss-oauth-secret-0123456789abcdef
+      ACS_DIGEST_USERNAME: cpe
+      ACS_DIGEST_PASSWORD: ci-field-digest-password-0123456789
+      ACS_BOOTSTRAP_ADMIN_USERNAME: admin
+      ACS_BOOTSTRAP_ADMIN_PASSWORD: ci-field-admin-password-0123456789
+      ACS_ADDR: 127.0.0.1:17547
+      ACS_API_ADDR: 127.0.0.1:18080
+      ACS_STUN_ADDR: off
+      ACS_BSS_ADDR: 127.0.0.1:18090
+      ACS_INTERNAL_API_URL: http://127.0.0.1:18080
+      ACS_BSS_ADAPTER_URL: http://127.0.0.1:18090
+      ACS_USP_CONTROLLER_ID: ci-field-controller
+      ACS_USP_POSTGRES_DSN: postgres://acs:acs@127.0.0.1:5432/acs?sslmode=disable
+      ACS_USP_WS_ADDR: 127.0.0.1:19877
+      ACS_USP_MQTT_ADDR: 127.0.0.1:11883
+      ACS_USP_HTTP_ADDR: 127.0.0.1:18092
+      ACS_USP_ALLOW_PLAINTEXT: "true"
+      ACS_HEALTH_ACS_URL: http://127.0.0.1:17547/readyz
+      ACS_HEALTH_API_URL: http://127.0.0.1:18080/readyz
+      ACS_HEALTH_BSS_URL: http://127.0.0.1:18090/readyz
+      ACS_HEALTH_USPC_URL: http://127.0.0.1:18092/readyz
+      ACS_HEALTH_SKIP_FRONTEND: "1"
+      ACS_HEALTH_SKIP_MONITORING: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: deployment scripts parse
+        run: bash -n scripts/start.sh scripts/stop.sh scripts/gen-env.sh scripts/healthcheck.sh scripts/backup.sh scripts/restore.sh
+      - name: migrate and build complete host control plane
+        working-directory: backend
+        run: |
+          go build -o /tmp/migrate ./cmd/migrate
+          /tmp/migrate
+          go build -o /tmp/acs ./cmd/acs
+          go build -o /tmp/api ./cmd/api
+          go build -o /tmp/bssadapter ./cmd/bssadapter
+          go build -o /tmp/uspc ./cmd/uspc
+      - name: start and verify all backend services
+        run: |
+          set -euo pipefail
+          cleanup() {
+            for pid in ${PIDS:-}; do kill "$pid" 2>/dev/null || true; done
+            wait || true
+          }
+          trap cleanup EXIT
+          /tmp/acs >/tmp/acs.log 2>&1 & PIDS="$!"
+          /tmp/api >/tmp/api.log 2>&1 & PIDS="$PIDS $!"
+          /tmp/bssadapter >/tmp/bssadapter.log 2>&1 & PIDS="$PIDS $!"
+          /tmp/uspc >/tmp/uspc.log 2>&1 & PIDS="$PIDS $!"
+          for _ in $(seq 1 60); do
+            if bash scripts/healthcheck.sh; then exit 0; fi
+            sleep 2
+          done
+          echo "field-RC service readiness failed" >&2
+          for f in /tmp/{acs,api,bssadapter,uspc}.log; do echo "===== $f ====="; tail -80 "$f" || true; done
+          exit 1
+
+  upgrade-recovery:
+    name: field RC late-migration upgrade + backup/restore rehearsal
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ACS_POSTGRES_DSN: postgres://acs:acs@127.0.0.1:5432/acs?sslmode=disable
+      ACS_DB_CLIENT_MODE: compose
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: start repository PostgreSQL 18
+        run: |
+          cat > infra/.env <<'EOF'
+          GRAFANA_ADMIN_PASSWORD=ci-only
+          ACS_GRAFANA_DB_PASSWORD=ci-only
+          ACS_POSTGRES_PASSWORD=acs
+          EOF
+          docker compose -f infra/docker-compose.yml up -d postgres
+          cid=$(docker ps --filter 'label=com.docker.compose.service=postgres' --format '{{.ID}}' | head -n1)
+          test -n "$cid"
+          for _ in $(seq 1 60); do docker exec "$cid" pg_isready -U acs -d acs && exit 0; sleep 1; done
+          exit 1
+      - name: build migration runner
+        working-directory: backend
+        run: go build -o /tmp/migrate ./cmd/migrate
+      - name: prove late 0062 migration upgrades an already-newer schema
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter 'label=com.docker.compose.service=postgres' --format '{{.ID}}' | head -n1)
+          target='backend/internal/store/migrations/0062_bss_oauth_policy.sql'
+          test -f "$target"
+          docker exec "$cid" psql -U acs -d acs -v ON_ERROR_STOP=1 -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public; CREATE TABLE schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now(), checksum TEXT);'
+          mapfile -t files < <(find backend/internal/store/migrations -maxdepth 1 -name '*.sql' -type f | sort)
+          test "${#files[@]}" -gt 1
+          for f in "${files[@]}"; do
+            if [ "$f" = "$target" ]; then
+              continue
+            fi
+            docker exec -i "$cid" psql -U acs -d acs -v ON_ERROR_STOP=1 < "$f"
+            name=$(basename "$f")
+            sum=$(sha256sum "$f" | awk '{print $1}')
+            docker exec "$cid" psql -U acs -d acs -v ON_ERROR_STOP=1 -c "INSERT INTO schema_migrations(filename, checksum) VALUES ('$name', '$sum');" >/dev/null
+          done
+          test "$(docker exec "$cid" psql -U acs -d acs -tA -c "SELECT count(*) FROM schema_migrations WHERE filename='0062_bss_oauth_policy.sql'")" = "0"
+          for later in 0063_tmf_webhook_dispatch.sql 0064_alerting_policies.sql 0065_alert_incidents.sql 0066_alert_policy_steps.sql; do
+            test "$(docker exec "$cid" psql -U acs -d acs -tA -c "SELECT count(*) FROM schema_migrations WHERE filename='$later'")" = "1"
+          done
+          /tmp/migrate
+          test "$(docker exec "$cid" psql -U acs -d acs -tA -c "SELECT count(*) FROM schema_migrations WHERE filename='0062_bss_oauth_policy.sql'")" = "1"
+          test "$(docker exec "$cid" psql -U acs -d acs -tA -c "SELECT count(*) FROM information_schema.columns WHERE table_name='bss_oauth_clients' AND column_name IN ('scopes','account_ids','global_access')")" = "3"
+          applied=$(docker exec "$cid" psql -U acs -d acs -tA -c 'SELECT count(*) FROM schema_migrations')
+          test "$applied" = "${#files[@]}"
+          echo "late migration 0062 applied successfully after 0063-0066 were already recorded"
+      - name: rehearse backup and destructive restore with file stores
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter 'label=com.docker.compose.service=postgres' --format '{{.ID}}' | head -n1)
+          ROOT=/tmp/field-rc
+          export ACS_FIRMWARE_STORAGE_ROOT="$ROOT/custom-firmware-root"
+          export ACS_UPLOAD_STORAGE_ROOT="$ROOT/custom-upload-root"
+          mkdir -p "$ACS_FIRMWARE_STORAGE_ROOT" "$ACS_UPLOAD_STORAGE_ROOT" "$ROOT/backups"
+          printf 'firmware-canary\n' > "$ACS_FIRMWARE_STORAGE_ROOT/canary.bin"
+          printf 'upload-canary\n' > "$ACS_UPLOAD_STORAGE_ROOT/canary.txt"
+          docker exec "$cid" psql -U acs -d acs -v ON_ERROR_STOP=1 -c "CREATE TABLE field_rc_canary(value text NOT NULL); INSERT INTO field_rc_canary VALUES ('database-canary');"
+          bash scripts/backup.sh "$ROOT/backups"
+          backup=$(find "$ROOT/backups" -name 'acs-backup-*.tar.gz' -type f | head -n1)
+          test -n "$backup"
+          printf 'mutated\n' > "$ACS_FIRMWARE_STORAGE_ROOT/canary.bin"
+          rm -f "$ACS_UPLOAD_STORAGE_ROOT/canary.txt"
+          docker exec "$cid" psql -U acs -d acs -c 'DROP TABLE field_rc_canary;'
+          start=$SECONDS
+          bash scripts/restore.sh "$backup"
+          rto=$((SECONDS-start))
+          test "$(docker exec "$cid" psql -U acs -d acs -tA -c 'SELECT value FROM field_rc_canary')" = "database-canary"
+          grep -qx 'firmware-canary' "$ACS_FIRMWARE_STORAGE_ROOT/canary.bin"
+          grep -qx 'upload-canary' "$ACS_UPLOAD_STORAGE_ROOT/canary.txt"
+          /tmp/migrate
+          echo "backup/restore rehearsal passed; restore elapsed ${rto}s"
+      - name: stop PostgreSQL
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v
+
+  uspc-image:
+    name: USP image build + SBOM + vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: build uspc image
+        run: docker build -f backend/Dockerfile.uspc -t acs-uspc:ci backend
+      - name: generate USP image SBOM
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/v1.51.1/install.sh | sh -s -- -b /usr/local/bin v1.51.1
+          mkdir -p sbom
+          syft acs-uspc:ci -o spdx-json > sbom/acs-uspc.spdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: uspc-sbom
+          path: sbom/acs-uspc.spdx.json
+          retention-days: 90
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: acs-uspc:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          trivyignores: .trivyignore.yaml
