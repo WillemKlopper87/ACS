@@ -66,3 +66,20 @@ func (r *Repository) Delete(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+func (r *Repository) GroupIDsForDevice(ctx context.Context, deviceID string) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT group_id::text FROM device_group_members WHERE device_id=$1`, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("list device alert groups: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}

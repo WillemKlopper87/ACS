@@ -93,7 +93,12 @@ func (h *handler) ingestTMFFaults(ctx context.Context) {
 		if json.Unmarshal(event.Payload, &body) != nil || body.Message == "" {
 			continue
 		}
-		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: event.AccountID, DeviceID: event.DeviceID})
+		groupIDs, err := h.alertPolicies.GroupIDsForDevice(ctx, event.DeviceID)
+		if err != nil {
+			h.logger.Error("failed to resolve CPE alert groups", "err", err, "device_id", event.DeviceID)
+			continue
+		}
+		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: event.AccountID, GroupIDs: groupIDs, DeviceID: event.DeviceID})
 		if !ok {
 			continue
 		}
