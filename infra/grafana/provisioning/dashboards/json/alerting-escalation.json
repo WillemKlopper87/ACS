@@ -1,0 +1,14 @@
+{
+  "uid": "acs-alerting-escalation",
+  "title": "ACS Alerting & Escalation",
+  "tags": ["acs", "alerts", "nms"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {"id": 1, "type": "stat", "title": "Open incidents", "gridPos": {"x": 0, "y": 0, "w": 6, "h": 5}, "datasource": {"type": "grafana-postgresql-datasource", "uid": "acs-postgres-ds"}, "targets": [{"format": "table", "rawSql": "SELECT count(*) AS \"Open incidents\" FROM alert_incidents WHERE state = 'open'", "refId": "A"}], "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}},
+    {"id": 2, "type": "stat", "title": "Acknowledged", "gridPos": {"x": 6, "y": 0, "w": 6, "h": 5}, "datasource": {"type": "grafana-postgresql-datasource", "uid": "acs-postgres-ds"}, "targets": [{"format": "table", "rawSql": "SELECT count(*) AS \"Acknowledged\" FROM alert_incidents WHERE state = 'acknowledged'", "refId": "A"}], "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}},
+    {"id": 3, "type": "stat", "title": "Escalation due", "gridPos": {"x": 12, "y": 0, "w": 6, "h": 5}, "datasource": {"type": "grafana-postgresql-datasource", "uid": "acs-postgres-ds"}, "targets": [{"format": "table", "rawSql": "SELECT count(*) AS \"Escalation due\" FROM alert_incidents WHERE state = 'open' AND next_escalation_at <= now()", "refId": "A"}], "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}},
+    {"id": 4, "type": "table", "title": "Active and ageing incidents", "gridPos": {"x": 0, "y": 5, "w": 24, "h": 10}, "datasource": {"type": "grafana-postgresql-datasource", "uid": "acs-postgres-ds"}, "targets": [{"format": "table", "rawSql": "SELECT priority, tenant_id, device_id::text AS device_id, summary, state, escalation_stage, EXTRACT(EPOCH FROM (now() - first_seen_at)) AS age_seconds, next_escalation_at FROM alert_incidents WHERE state IN ('open','acknowledged','suppressed') ORDER BY priority, first_seen_at", "refId": "A"}]}
+  ]
+}
