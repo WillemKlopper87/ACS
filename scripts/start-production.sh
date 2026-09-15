@@ -39,8 +39,10 @@ for var in \
   fi
 done
 
-# Load the same stable credentials/settings used by scripts/start.sh so the
-# preflight validates the effective environment that the services will see.
+# Load/generate stable secrets exactly once. start.sh normally sources the same
+# file itself, but that second source would overwrite the explicit production
+# values restored below with persisted lab defaults. ACS_ENV_ALREADY_LOADED is
+# the handoff contract telling start.sh to use this already-resolved environment.
 # shellcheck disable=SC1091
 source "$ROOT/scripts/gen-env.sh"
 
@@ -49,16 +51,13 @@ for var in "${!production_overrides[@]}"; do
 done
 
 # The generated lab environment historically binds the API on :8080. Override
-# that before preflight and again inside start.sh's production branch so the
-# host service is never itself the public TLS endpoint. The SPA server follows
-# the same rule through ACS_FRONTEND_BIND.
+# that before the shared production preflight in start.sh so the host service is
+# never itself the public TLS endpoint. The SPA server follows the same rule.
 export ACS_API_ADDR="127.0.0.1:8080"
 export ACS_FRONTEND_BIND="127.0.0.1"
+export ACS_ENV_ALREADY_LOADED="1"
 
-"$ROOT/scripts/security-preflight.sh"
-
-# ACS_DEPLOYMENT_PROFILE remains exported across exec; cmd/acs and cmd/uspc
-# therefore enforce their production request/config boundaries too. start.sh
-# additionally keeps console/API on loopback and builds the browser bundle
-# against ACS_API_PUBLIC_URL.
+# ACS_DEPLOYMENT_PROFILE remains exported across exec; start.sh runs the shared
+# production preflight, keeps console/API on loopback, and builds the browser
+# bundle against ACS_API_PUBLIC_URL.
 exec "$ROOT/scripts/start.sh"
