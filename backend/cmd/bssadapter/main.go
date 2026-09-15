@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"acs/internal/alerting"
 	"acs/internal/auth"
 	"acs/internal/bss"
 	"acs/internal/config"
@@ -165,6 +166,8 @@ func main() {
 		metrics:            metrics,
 		walledGarden:       walledGarden,
 		webhooks:           bss.NewWebhookRepository(db),
+		alertPolicies:      alerting.NewRepository(db),
+		alertIncidents:     alerting.NewIncidentRepository(db),
 		netPolicy:          webhookNetPolicy,
 	}
 
@@ -203,6 +206,7 @@ func main() {
 	go h.runWebhookNotifyLoop(ctx)
 	go h.runWebhookDeliverLoop(ctx)
 	go h.runTMFEventDispatchLoop(ctx)
+	go h.runIncidentIngestLoop(ctx)
 	go h.runOrderReconcileLoop(ctx)
 
 	rateLimitPerSecond := envOrFloat("ACS_BSS_RATE_LIMIT_PER_SECOND", defaultRateLimitPerSecond)
@@ -405,6 +409,8 @@ type handler struct {
 	metrics            *observability.Metrics
 	walledGarden       bss.WalledGardenConfig
 	webhooks           *bss.WebhookRepository
+	alertPolicies      *alerting.Repository
+	alertIncidents     *alerting.IncidentRepository
 	// netPolicy bounds where a webhook target_url (BSS-operator-
 	// controlled) may point (audit H-7) -- checked at subscription
 	// creation and again at delivery time.
