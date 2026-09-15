@@ -37,6 +37,22 @@ scripts/start.sh                     # Postgres + Prometheus/Alertmanager/Grafan
                                      # services + the console, in one pass
 ```
 
+`gen-env.sh` is the lab/field-test profile. Before carrying production
+device traffic, generate the fail-closed production device-plane profile:
+
+```bash
+export ACS_PRODUCTION_BIND_ADDRESS=10.20.0.10
+export ACS_PRODUCTION_ALLOWED_CIDRS=10.30.0.0/16,10.40.0.0/16
+export ACS_PRODUCTION_TLS_CERT=/etc/letsencrypt/live/acs.example/fullchain.pem
+export ACS_PRODUCTION_TLS_KEY=/etc/letsencrypt/live/acs.example/privkey.pem
+source scripts/gen-production-env.sh
+```
+
+This requires readable TLS material, refuses wildcard listener addresses,
+uses TLS 1.2 or newer, disables Basic/plaintext transport, restricts USP
+source networks, and keeps the shared CWMP credential bootstrap-only.
+Established devices must use their own CWMP credential or mTLS identity.
+
 Run `gen-env.sh` first: it generates `GRAFANA_ADMIN_PASSWORD` and
 `ACS_GRAFANA_DB_PASSWORD` and writes them to `infra/.env`, which is what
 lets `docker compose` interpolate the whole file (it does that before

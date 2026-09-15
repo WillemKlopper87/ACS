@@ -27,6 +27,9 @@
 #                instance isn't on EC2 or IMDS is blocked
 #   ACS_MONITORING_PUBLIC  1 (default) publishes Grafana :3000 and
 #                Prometheus :9090; 0 keeps them localhost-only
+#
+# This is a LAB/FIELD profile. Run scripts/gen-production-env.sh with an
+# explicit protected bind address, CPE CIDRs and TLS files before production.
 set -e
 
 if [ "$(id -u)" -eq 0 ]; then
@@ -167,6 +170,8 @@ echo "SECURITY: this quickstart intentionally opts USP into plaintext for"
 echo "controlled lab/field testing. For production, set ACS_USP_TLS_CERT and"
 echo "ACS_USP_TLS_KEY, set ACS_USP_ALLOW_PLAINTEXT=false, restrict"
 echo "ACS_USP_ALLOWED_CIDRS, and terminate operator/API/BSS traffic behind TLS."
+echo "For production, use scripts/gen-production-env.sh; the host quickstart"
+echo "is deliberately a lab/field profile and must not be exposed as-is."
 echo ""
 echo "Reminder — this script cannot open EC2 security group ports for you."
 echo "For a controlled CPE test, allow only the required source CIDRs to"

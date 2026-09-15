@@ -253,8 +253,9 @@ func (d DigestAuthenticator) challenge(w http.ResponseWriter, stale bool) {
 // verify the request's claimed device identity equals BoundDeviceID
 // before trusting it.
 type Identity struct {
-	Username      string
-	BoundDeviceID string
+	Username         string
+	BoundDeviceID    string
+	SharedCredential bool
 }
 
 func (d DigestAuthenticator) Verify(r *http.Request) (ok bool, stale bool, identity Identity) {
@@ -279,7 +280,7 @@ func (d DigestAuthenticator) Verify(r *http.Request) (ok bool, stale bool, ident
 func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time.Time) (ok bool, stale bool, identity Identity) {
 	params := parseDigestParams(rest)
 	username := params["username"]
-	password, deviceID, _, found := d.passwordFor(username)
+	password, deviceID, perDevice, found := d.passwordFor(username)
 	if !found {
 		return false, false, Identity{}
 	}
@@ -331,7 +332,7 @@ func (d DigestAuthenticator) verifyDigest(r *http.Request, rest string, now time
 	if !d.checkReplay(r.Context(), nonce, qop, params["nc"], issued.Add(nonceTTL), now) {
 		return false, false, Identity{}
 	}
-	return true, false, Identity{Username: username, BoundDeviceID: deviceID}
+	return true, false, Identity{Username: username, BoundDeviceID: deviceID, SharedCredential: !perDevice}
 }
 
 // checkReplay records this (nonce, nc) use and reports whether it is
@@ -457,14 +458,14 @@ func (d DigestAuthenticator) verifyBasic(encoded string) (bool, Identity) {
 	if !ok {
 		return false, Identity{}
 	}
-	expected, deviceID, _, found := d.passwordFor(user)
+	expected, deviceID, perDevice, found := d.passwordFor(user)
 	if !found {
 		return false, Identity{}
 	}
 	if subtle.ConstantTimeCompare([]byte(pass), []byte(expected)) != 1 {
 		return false, Identity{}
 	}
-	return true, Identity{Username: user, BoundDeviceID: deviceID}
+	return true, Identity{Username: user, BoundDeviceID: deviceID, SharedCredential: !perDevice}
 }
 
 func md5Hex(s string) string {

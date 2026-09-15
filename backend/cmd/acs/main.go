@@ -142,6 +142,13 @@ func main() {
 			})
 		},
 	}
+	sharedCredentialBootstrapOnly := !envBool("ACS_CWMP_ALLOW_SHARED_ESTABLISHED")
+	if authr.Username != "" && sharedCredentialBootstrapOnly {
+		logger.Info("shared CWMP credential restricted to first Inform bootstrap; established devices require per-device credentials or mTLS")
+	}
+	if envBool("ACS_CWMP_ALLOW_SHARED_ESTABLISHED") {
+		logger.Warn("ACS_CWMP_ALLOW_SHARED_ESTABLISHED enabled: shared fleet credential can authenticate established devices; compatibility mode is unsafe for production")
+	}
 	if authr.Password == "" {
 		// Per-device-only (or mTLS) fleets: nonces still need a key.
 		authr.NonceSecret = []byte(os.Getenv("ACS_CREDENTIAL_ENCRYPTION_KEY"))
@@ -205,6 +212,7 @@ func main() {
 		deviceLimiter:      ratelimit.New(deviceRate, deviceBurst, rateLimitIdleTTL),
 		onboardingListener: newOnboardingListener(envOr("ACS_ONBOARDING_LISTENER", "off"), logger),
 	}
+	h.sharedCredentialBootstrapOnly = sharedCredentialBootstrapOnly
 	logger.Info("rate limits configured", "ip_per_second", ipRate, "ip_burst", ipBurst,
 		"device_per_second", deviceRate, "device_burst", deviceBurst)
 
@@ -409,4 +417,10 @@ type handler struct {
 	ipLimiter          *ratelimit.Limiter
 	deviceLimiter      *ratelimit.Limiter
 	onboardingListener *onboardingListener
+
+	// sharedCredentialBootstrapOnly prevents the legacy fleet credential
+	// from authenticating an identity that already exists or continuing a
+	// CWMP session. It is enabled by default in main and disabled only in
+	// isolated tests or explicit compatibility mode.
+	sharedCredentialBootstrapOnly bool
 }

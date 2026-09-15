@@ -149,6 +149,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 		}
 		bound.credentialDeviceID = identity.BoundDeviceID
 		bound.credentialUsername = identity.Username
+		bound.sharedCredential = identity.SharedCredential
 		authMode = devices.AuthModeDigest
 	}
 
@@ -176,6 +177,10 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 		deviceKey = env.Body.Inform.DeviceId.NaturalKey()
 	} else if cookie, err := r.Cookie("acs_session"); err == nil {
 		deviceKey = cookie.Value
+	}
+	if bound.sharedCredential && h.sharedCredentialBootstrapOnly {
+		http.Error(w, "shared credential is restricted to device bootstrap", http.StatusForbidden)
+		return
 	}
 	if !h.deviceLimiter.Allow(deviceKey) {
 		h.metrics.RateLimitRejectedTotal.Inc()
@@ -233,6 +238,7 @@ type inboundIdentity struct {
 	credentialDeviceID string
 	credentialUsername string
 	mtlsNaturalKey     string
+	sharedCredential   bool
 }
 
 func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *http.Request, inform *cwmp.Inform, authMode string, bound inboundIdentity, respID, ns string) {
@@ -252,6 +258,15 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 		return
 	}
 	naturalKey := inform.DeviceId.NaturalKey()
+	if bound.sharedCredential && h.sharedCredentialBootstrapOnly {
+		if _, err := h.devices.GetByOUIserial(ctx, naturalKey); err == nil {
+			http.Error(w, "shared credential cannot authenticate an established device", http.StatusForbidden)
+			return
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
 
 	// audit C-1: a credential bound to one device must not be able to
 	// author another device's Inform — that would let its holder receive

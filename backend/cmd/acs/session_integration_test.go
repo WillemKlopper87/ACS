@@ -368,6 +368,30 @@ func newTestGateway(t *testing.T) (*handler, *httptest.Server, context.Context) 
 	return h, srv, ctx
 }
 
+// TestIntegration_SharedCredentialIsBootstrapOnly proves the legacy fleet
+// credential can create a previously unknown inventory identity but cannot
+// authenticate that established identity or continue into job dispatch.
+func TestIntegration_SharedCredentialIsBootstrapOnly(t *testing.T) {
+	h, srv, ctx := newTestGateway(t)
+	h.sharedCredentialBootstrapOnly = true
+	cpe := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp"}
+
+	if code, body := cpe.post(vendorInform(t, "Huawei", "00E0FC", "CPE", "BOOTSTRAP001")); code != http.StatusOK || !strings.Contains(body, "InformResponse") {
+		t.Fatalf("bootstrap Inform = %d %s, want InformResponse", code, body)
+	}
+	list, err := h.devices.List(ctx, devices.ListParams{})
+	if err != nil || list.Total != 1 {
+		t.Fatalf("bootstrap inventory count = %d, err=%v; want 1", list.Total, err)
+	}
+	if code, _ := cpe.post(""); code != http.StatusForbidden {
+		t.Fatalf("shared credential session continuation = %d, want 403", code)
+	}
+	cpe.cookie = nil
+	if code, _ := cpe.post(vendorInform(t, "Huawei", "00E0FC", "CPE", "BOOTSTRAP001")); code != http.StatusForbidden {
+		t.Fatalf("shared credential established-device Inform = %d, want 403", code)
+	}
+}
+
 func TestIntegration_CPEVendorProfiles(t *testing.T) {
 	h, srv, ctx := newTestGateway(t)
 	profiles := []struct{ manufacturer, oui, productClass, serial string }{

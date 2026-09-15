@@ -165,3 +165,24 @@ CI), and Postgres RLS would require per-request transaction-local
 principal context on every one of ~25 repositories for a second copy of
 the same predicate. Revisit if repositories ever get written against by
 code that bypasses the handler layer.
+## Production device-plane profile
+
+The ordinary `scripts/gen-env.sh` and `scripts/quickstart.sh` flows are for
+controlled lab and field qualification. Convert a host before admitting
+production CPE traffic:
+
+```bash
+export ACS_PRODUCTION_BIND_ADDRESS=10.20.0.10
+export ACS_PRODUCTION_ALLOWED_CIDRS=10.30.0.0/16
+export ACS_PRODUCTION_TLS_CERT=/etc/acs/tls/fullchain.pem
+export ACS_PRODUCTION_TLS_KEY=/etc/acs/tls/privkey.pem
+source scripts/gen-production-env.sh
+```
+
+Restart the host services after generating the profile and run
+`scripts/field-preflight.sh`. Do not set
+`ACS_CWMP_ALLOW_SHARED_ESTABLISHED=true` in production. The fleet-wide
+CWMP credential is limited to the first Inform for a new inventory identity;
+provision a per-device `CWMP_DIGEST` credential or mTLS identity before that
+device's next session. This prevents one compromised fleet credential from
+claiming an established device and receiving its queued work.
