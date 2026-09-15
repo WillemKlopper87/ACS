@@ -54,9 +54,9 @@ func TestTLSPairRequired(t *testing.T) {
 	}
 
 	_, err = loadConfig(mapGetenv(map[string]string{
-		"ACS_USP_CONTROLLER_ID": "ci-controller",
+		"ACS_USP_CONTROLLER_ID":  "ci-controller",
 		"ACS_USP_CLIENT_CA_CERT": "/tmp/client-ca.pem",
-		"ACS_USP_POSTGRES_DSN": "postgres://localhost/acs_test",
+		"ACS_USP_POSTGRES_DSN":   "postgres://localhost/acs_test",
 	}), slog.Default())
 	if err == nil {
 		t.Fatal("loadConfig() with a client CA but no server TLS keypair = nil error, want error")
