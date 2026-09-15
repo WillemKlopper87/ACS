@@ -1,10 +1,15 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"acs/internal/tmf/telemetry"
 )
 
 type tmf688EventRequest struct {
@@ -32,6 +37,49 @@ type tmf688HubRequest struct {
 	Secret     string   `json:"secret"`
 	AccountID  string   `json:"accountId"`
 	EventTypes []string `json:"eventTypes"`
+}
+
+func tmfPage(total, offset, limit int) (int, int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return offset, end
+}
+func tmfPageQuery(r *http.Request, total int) (int, int) {
+	offset, limit := 0, 50
+	if n, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil {
+		offset = n
+	}
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil {
+		limit = n
+	}
+	return tmfPage(total, offset, limit)
+}
+func tmfSelectMap(m map[string]any, raw string) map[string]any {
+	if strings.TrimSpace(raw) == "" {
+		return m
+	}
+	out := map[string]any{}
+	for _, key := range strings.Split(raw, ",") {
+		key = strings.TrimSpace(key)
+		if _, ok := m[key]; ok {
+			out[key] = m[key]
+		}
+	}
+	return out
 }
 
 func (h *handler) createTMF688Hub(w http.ResponseWriter, r *http.Request) {
@@ -62,11 +110,24 @@ func (h *handler) listTMF688Hubs(w http.ResponseWriter, r *http.Request) {
 	for _, s := range subs {
 		out = append(out, map[string]any{"id": s.ID, "callback": s.TargetURL, "accountId": s.AccountID, "eventTypes": s.EventTypes, "createdAt": s.CreatedAt})
 	}
-	writeJSON(w, 200, out)
+	offset, end := tmfPageQuery(r, len(out))
+	page := out[offset:end]
+	selected := make([]map[string]any, len(page))
+	for i := range page {
+		selected[i] = tmfSelectMap(page[i], r.URL.Query().Get("fields"))
+	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(len(out)))
+	w.Header().Set("X-Result-Count", strconv.Itoa(len(page)))
+	writeJSON(w, 200, selected)
 }
 
 func (h *handler) getTMF688Event(w http.ResponseWriter, r *http.Request) {
-	e, err := h.mappings.FindEvent(r.Context(), strings.TrimSpace(r.PathValue("id")))
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	if accountID == "" {
+		writeError(w, 400, "ErrInvalidRequest", "accountId is required")
+		return
+	}
+	e, err := h.mappings.FindEventForAccount(r.Context(), strings.TrimSpace(r.PathValue("id")), accountID)
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
@@ -79,7 +140,12 @@ func (h *handler) getTMF688Event(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) getTMF642Alarm(w http.ResponseWriter, r *http.Request) {
-	a, err := h.mappings.FindAlarm(r.Context(), strings.TrimSpace(r.PathValue("id")))
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	if accountID == "" {
+		writeError(w, 400, "ErrInvalidRequest", "accountId is required")
+		return
+	}
+	a, err := h.mappings.FindAlarmForAccount(r.Context(), strings.TrimSpace(r.PathValue("id")), accountID)
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
@@ -101,7 +167,15 @@ func (h *handler) listTMF688Events(w http.ResponseWriter, r *http.Request) {
 	for _, e := range events {
 		out = append(out, map[string]any{"id": e.ID, "eventType": e.EventType, "eventTime": e.EventTime, "sourceKey": e.SourceKey, "accountId": e.AccountID, "deviceId": e.DeviceID, "serviceId": e.ServiceID, "event": json.RawMessage(e.Payload)})
 	}
-	writeJSON(w, 200, out)
+	offset, end := tmfPageQuery(r, len(out))
+	page := out[offset:end]
+	selected := make([]map[string]any, len(page))
+	for i := range page {
+		selected[i] = tmfSelectMap(page[i], r.URL.Query().Get("fields"))
+	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(len(out)))
+	w.Header().Set("X-Result-Count", strconv.Itoa(len(page)))
+	writeJSON(w, 200, selected)
 }
 
 func (h *handler) listTMF642Alarms(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +188,15 @@ func (h *handler) listTMF642Alarms(w http.ResponseWriter, r *http.Request) {
 	for _, a := range alarms {
 		out = append(out, map[string]any{"id": a.ID, "alarmType": a.AlarmType, "perceivedSeverity": a.Severity, "state": a.State, "sourceKey": a.SourceKey, "accountId": a.AccountID, "deviceId": a.DeviceID, "serviceId": a.ServiceID, "raisedAt": a.RaisedAt, "clearedAt": a.ClearedAt})
 	}
-	writeJSON(w, 200, out)
+	offset, end := tmfPageQuery(r, len(out))
+	page := out[offset:end]
+	selected := make([]map[string]any, len(page))
+	for i := range page {
+		selected[i] = tmfSelectMap(page[i], r.URL.Query().Get("fields"))
+	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(len(out)))
+	w.Header().Set("X-Result-Count", strconv.Itoa(len(page)))
+	writeJSON(w, 200, selected)
 }
 
 func (h *handler) patchTMF642Alarm(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +207,12 @@ func (h *handler) patchTMF642Alarm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "ErrInvalidRequest", "state must be acknowledged or cleared")
 		return
 	}
-	if err := h.mappings.UpdateAlarmState(r.Context(), strings.TrimSpace(r.PathValue("id")), body.State); err != nil {
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	if accountID == "" {
+		writeError(w, 400, "ErrInvalidRequest", "accountId is required")
+		return
+	}
+	if err := h.mappings.UpdateAlarmStateForAccount(r.Context(), strings.TrimSpace(r.PathValue("id")), accountID, body.State); err != nil {
 		writeError(w, 404, "ErrNotFound", "no such alarm")
 		return
 	}
@@ -152,6 +239,20 @@ func (h *handler) createTMF688Event(w http.ResponseWriter, r *http.Request) {
 	if e == nil {
 		writeJSON(w, 200, map[string]any{"status": "duplicate", "sourceKey": req.SourceKey})
 		return
+	}
+	// Recovery events are retained above, then may close only the matching
+	// tenant/device alarm. Requiring faultCode prevents a generic "online"
+	// notification from clearing unrelated conditions.
+	if telemetry.QualifyingRecoveryEvent(req.EventType) {
+		if code, ok := req.Payload["faultCode"].(string); ok && strings.TrimSpace(code) != "" {
+			protocol := "ACS"
+			if p, ok := req.Payload["protocol"].(string); ok && strings.TrimSpace(p) != "" {
+				protocol = p
+			}
+			if err := h.mappings.ClearAlarm(r.Context(), req.AccountID, req.DeviceID, telemetry.ConditionKey(protocol, req.DeviceID, code)); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				h.logger.Warn("failed to clear recovered TMF alarm", "err", err, "device_id", req.DeviceID)
+			}
+		}
 	}
 	writeJSON(w, 201, e)
 }

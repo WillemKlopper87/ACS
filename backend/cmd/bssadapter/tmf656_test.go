@@ -6,6 +6,17 @@ import (
 	"testing"
 )
 
+func TestTMFPageAndFieldSelection(t *testing.T) {
+	o, end := tmfPage(7, 2, 3)
+	if o != 2 || end != 5 {
+		t.Fatalf("page = %d:%d, want 2:5", o, end)
+	}
+	got := tmfSelectMap(map[string]any{"id": "1", "status": "raised", "secret": "x"}, "id, status")
+	if !reflect.DeepEqual(got, map[string]any{"id": "1", "status": "raised"}) {
+		t.Fatalf("fields = %#v", got)
+	}
+}
+
 func TestNormalizeTMF656IDsDeterministicAndDeduplicated(t *testing.T) {
 	got := normalizeTMF656IDs([]string{" event-b ", "event-a", "event-b", "", "event-a"})
 	want := []string{"event-a", "event-b"}
