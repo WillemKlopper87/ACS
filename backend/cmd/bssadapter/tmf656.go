@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 
 	"acs/internal/bss"
@@ -12,13 +13,18 @@ import (
 )
 
 type tmf656CreateRequest struct {
-	ExternalID     string `json:"externalId"`
-	AccountID      string `json:"accountId"`
-	ServiceID      string `json:"serviceId"`
-	ProblemType    string `json:"problemType"`
-	Description    string `json:"description"`
-	Priority       string `json:"priority"`
-	RelatedAlarmID string `json:"relatedAlarmId"`
+	ExternalID          string   `json:"externalId"`
+	AccountID           string   `json:"accountId"`
+	ServiceID           string   `json:"serviceId"`
+	ProblemType         string   `json:"problemType"`
+	Description         string   `json:"description"`
+	Priority            string   `json:"priority"`
+	RelatedAlarmID      string   `json:"relatedAlarmId"`
+	RelatedEventIDs     []string `json:"relatedEventIds"`
+	AffectedResourceIDs []string `json:"affectedResourceIds"`
+	Impact              string   `json:"impact"`
+	Severity            string   `json:"severity"`
+	RootCause           string   `json:"rootCause"`
 }
 
 type tmf656StatusRequest struct {
@@ -26,8 +32,24 @@ type tmf656StatusRequest struct {
 	Resolution string `json:"resolution"`
 }
 
+func normalizeTMF656IDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				out = append(out, id)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func tmf656ProblemResponse(p *bss.ServiceProblemRecord) map[string]any {
-	response := map[string]any{"id": p.ID, "href": "/tmf-api/serviceProblemManagement/v4/serviceProblem/" + p.ID, "externalId": p.ExternalID, "status": p.Status, "priority": p.Priority, "problemType": p.ProblemType, "description": p.Description}
+	response := map[string]any{"id": p.ID, "href": "/tmf-api/serviceProblemManagement/v4/serviceProblem/" + p.ID, "externalId": p.ExternalID, "status": p.Status, "priority": p.Priority, "problemType": p.ProblemType, "description": p.Description, "accountId": p.AccountID, "serviceId": p.ServiceID, "impact": p.Impact, "severity": p.Severity, "rootCause": p.RootCause, "relatedEventIds": p.RelatedEventIDs, "affectedResourceIds": p.AffectedResourceIDs, "createdAt": p.CreatedAt}
 	if p.RelatedAlarmID != "" {
 		response["relatedAlarm"] = map[string]any{"id": p.RelatedAlarmID}
 	}
@@ -40,8 +62,14 @@ func (h *handler) createTMF656Problem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "accountId, problemType, and description are required")
 		return
 	}
+	req.RelatedEventIDs = normalizeTMF656IDs(req.RelatedEventIDs)
+	req.AffectedResourceIDs = normalizeTMF656IDs(req.AffectedResourceIDs)
+	if req.Severity != "" && !map[string]bool{"critical": true, "major": true, "minor": true, "warning": true, "indeterminate": true}[strings.ToLower(req.Severity)] {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "severity is invalid")
+		return
+	}
 	if req.ExternalID != "" {
-		if existing, err := h.mappings.FindServiceProblem(r.Context(), req.ExternalID); err != nil {
+		if existing, err := h.mappings.FindServiceProblemForAccount(r.Context(), req.ExternalID, req.AccountID); err != nil {
 			writeError(w, 500, "ErrInternal", "internal error")
 			return
 		} else if existing != nil {
@@ -49,7 +77,13 @@ func (h *handler) createTMF656Problem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	p, err := h.mappings.CreateServiceProblem(r.Context(), req.ExternalID, req.AccountID, req.ServiceID, req.ProblemType, req.Description, req.Priority, req.RelatedAlarmID)
+	if req.RelatedAlarmID != "" {
+		if alarm, err := h.mappings.FindAlarmForAccount(r.Context(), req.RelatedAlarmID, req.AccountID); err != nil || alarm == nil {
+			writeError(w, http.StatusBadRequest, "ErrInvalidRelation", "related alarm is not in the requested account")
+			return
+		}
+	}
+	p, err := h.mappings.CreateServiceProblemRich(r.Context(), req.ExternalID, req.AccountID, req.ServiceID, req.ProblemType, req.Description, req.Priority, req.RelatedAlarmID, req.RelatedEventIDs, req.AffectedResourceIDs, req.Impact, req.Severity, req.RootCause)
 	if err != nil {
 		h.logger.Error("failed to create TMF656 service problem", "err", err)
 		writeError(w, 500, "ErrInternal", "internal error")
@@ -63,7 +97,12 @@ func (h *handler) createTMF656Problem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) getTMF656Problem(w http.ResponseWriter, r *http.Request) {
-	p, err := h.mappings.FindServiceProblem(r.Context(), strings.TrimSpace(r.PathValue("id")))
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	if accountID == "" {
+		writeError(w, 400, "ErrInvalidRequest", "accountId is required")
+		return
+	}
+	p, err := h.mappings.FindServiceProblemForAccount(r.Context(), strings.TrimSpace(r.PathValue("id")), accountID)
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
@@ -100,7 +139,12 @@ func (h *handler) patchTMF656Problem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "ErrInvalidRequest", "status must be inProgress, resolved, or closed")
 		return
 	}
-	if err := h.mappings.UpdateServiceProblemStatus(r.Context(), id, req.Status, req.Resolution); errors.Is(err, sql.ErrNoRows) {
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	if accountID == "" {
+		writeError(w, 400, "ErrInvalidRequest", "accountId is required for lifecycle updates")
+		return
+	}
+	if err := h.mappings.UpdateServiceProblemStatus(r.Context(), id, accountID, req.Status, req.Resolution); errors.Is(err, sql.ErrNoRows) {
 		writeError(w, 404, "ErrNotFound", "no such service problem")
 		return
 	} else if err != nil {

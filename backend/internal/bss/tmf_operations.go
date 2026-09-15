@@ -28,6 +28,9 @@ type ServiceProblemRecord struct {
 	CreatedAt                                                                        time.Time
 	ResolvedAt                                                                       *time.Time
 	Resolution                                                                       string
+	RelatedEventIDs, AffectedResourceIDs                                             []string
+	Impact, Severity, RootCause                                                      string
+	ResolutionDate                                                                   *time.Time
 }
 
 func (r *Repository) CreateEvent(ctx context.Context, sourceKey, accountID, deviceID, serviceID, eventType string, payload json.RawMessage, at time.Time) (*EventRecord, error) {
@@ -69,8 +72,14 @@ func (r *Repository) FindEvent(ctx context.Context, id string) (*EventRecord, er
 }
 
 func (r *Repository) FindAlarm(ctx context.Context, id string) (*AlarmRecord, error) {
+	return r.findAlarm(ctx, id, "")
+}
+func (r *Repository) FindAlarmForAccount(ctx context.Context, id, accountID string) (*AlarmRecord, error) {
+	return r.findAlarm(ctx, id, accountID)
+}
+func (r *Repository) findAlarm(ctx context.Context, id, accountID string) (*AlarmRecord, error) {
 	var a AlarmRecord
-	err := r.db.QueryRowContext(ctx, `SELECT id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),alarm_type,perceived_severity,state,COALESCE(probable_cause,''),COALESCE(specific_problem,''),raised_at,cleared_at,details FROM tmf_alarms WHERE id::text=$1 OR source_key=$1`, id).Scan(&a.ID, &a.SourceKey, &a.AccountID, &a.DeviceID, &a.ServiceID, &a.AlarmType, &a.Severity, &a.State, &a.ProbableCause, &a.SpecificProblem, &a.RaisedAt, &a.ClearedAt, &a.Details)
+	err := r.db.QueryRowContext(ctx, `SELECT id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),alarm_type,perceived_severity,state,COALESCE(probable_cause,''),COALESCE(specific_problem,''),raised_at,cleared_at,details FROM tmf_alarms WHERE (id::text=$1 OR source_key=$1) AND ($2='' OR account_id=$2)`, id, accountID).Scan(&a.ID, &a.SourceKey, &a.AccountID, &a.DeviceID, &a.ServiceID, &a.AlarmType, &a.Severity, &a.State, &a.ProbableCause, &a.SpecificProblem, &a.RaisedAt, &a.ClearedAt, &a.Details)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -136,9 +145,15 @@ func (r *Repository) UpdateAlarmState(ctx context.Context, id, state string) err
 }
 
 func (r *Repository) CreateServiceProblem(ctx context.Context, externalID, accountID, serviceID, problemType, description, priority, alarmID string) (*ServiceProblemRecord, error) {
+	return r.CreateServiceProblemRich(ctx, externalID, accountID, serviceID, problemType, description, priority, alarmID, nil, nil, "", "", "")
+}
+
+func (r *Repository) CreateServiceProblemRich(ctx context.Context, externalID, accountID, serviceID, problemType, description, priority, alarmID string, eventIDs, resourceIDs []string, impact, severity, rootCause string) (*ServiceProblemRecord, error) {
 	id := uuid.New().String()
 	var p ServiceProblemRecord
-	err := r.db.QueryRowContext(ctx, `INSERT INTO tmf_service_problems (id,external_id,account_id,service_id,problem_type,description,priority,related_alarm_id) VALUES ($1,NULLIF($2,''),$3,NULLIF($4,'')::uuid,$5,$6,NULLIF($7,''),NULLIF($8,'')::uuid) RETURNING id,COALESCE(external_id,''),account_id,COALESCE(service_id::text,''),status,COALESCE(priority,''),problem_type,description,COALESCE(related_alarm_id::text,''),created_at,resolved_at,COALESCE(resolution,'')`, id, externalID, accountID, serviceID, problemType, description, priority, alarmID).Scan(&p.ID, &p.ExternalID, &p.AccountID, &p.ServiceID, &p.Status, &p.Priority, &p.ProblemType, &p.Description, &p.RelatedAlarmID, &p.CreatedAt, &p.ResolvedAt, &p.Resolution)
+	events, _ := json.Marshal(eventIDs)
+	resources, _ := json.Marshal(resourceIDs)
+	err := r.db.QueryRowContext(ctx, `INSERT INTO tmf_service_problems (id,external_id,account_id,service_id,problem_type,description,priority,related_alarm_id,related_event_ids,affected_resource_ids,impact,severity,root_cause) VALUES ($1,NULLIF($2,''),$3,NULLIF($4,'')::uuid,$5,$6,NULLIF($7,''),NULLIF($8,'')::uuid,$9,$10,NULLIF($11,''),NULLIF($12,''),NULLIF($13,'')) RETURNING id,COALESCE(external_id,''),account_id,COALESCE(service_id::text,''),status,COALESCE(priority,''),problem_type,description,COALESCE(related_alarm_id::text,''),created_at,resolved_at,COALESCE(resolution,''),related_event_ids,affected_resource_ids,COALESCE(impact,''),COALESCE(severity,''),COALESCE(root_cause,''),resolution_date`, id, externalID, accountID, serviceID, problemType, description, priority, alarmID, events, resources, impact, severity, rootCause).Scan(&p.ID, &p.ExternalID, &p.AccountID, &p.ServiceID, &p.Status, &p.Priority, &p.ProblemType, &p.Description, &p.RelatedAlarmID, &p.CreatedAt, &p.ResolvedAt, &p.Resolution, &p.RelatedEventIDs, &p.AffectedResourceIDs, &p.Impact, &p.Severity, &p.RootCause, &p.ResolutionDate)
 	if err != nil {
 		return nil, fmt.Errorf("create service problem: %w", err)
 	}
@@ -146,8 +161,16 @@ func (r *Repository) CreateServiceProblem(ctx context.Context, externalID, accou
 }
 
 func (r *Repository) FindServiceProblem(ctx context.Context, id string) (*ServiceProblemRecord, error) {
+	return r.findServiceProblem(ctx, id, "")
+}
+
+func (r *Repository) FindServiceProblemForAccount(ctx context.Context, id, accountID string) (*ServiceProblemRecord, error) {
+	return r.findServiceProblem(ctx, id, accountID)
+}
+
+func (r *Repository) findServiceProblem(ctx context.Context, id, accountID string) (*ServiceProblemRecord, error) {
 	var p ServiceProblemRecord
-	err := r.db.QueryRowContext(ctx, `SELECT id,COALESCE(external_id,''),account_id,COALESCE(service_id::text,''),status,COALESCE(priority,''),problem_type,description,COALESCE(related_alarm_id::text,''),created_at,resolved_at,COALESCE(resolution,'') FROM tmf_service_problems WHERE id=$1 OR external_id=$1`, id).Scan(&p.ID, &p.ExternalID, &p.AccountID, &p.ServiceID, &p.Status, &p.Priority, &p.ProblemType, &p.Description, &p.RelatedAlarmID, &p.CreatedAt, &p.ResolvedAt, &p.Resolution)
+	err := r.db.QueryRowContext(ctx, `SELECT id,COALESCE(external_id,''),account_id,COALESCE(service_id::text,''),status,COALESCE(priority,''),problem_type,description,COALESCE(related_alarm_id::text,''),created_at,resolved_at,COALESCE(resolution,''),related_event_ids,affected_resource_ids,COALESCE(impact,''),COALESCE(severity,''),COALESCE(root_cause,''),resolution_date FROM tmf_service_problems WHERE (id=$1 OR external_id=$1) AND ($2='' OR account_id=$2)`, id, accountID).Scan(&p.ID, &p.ExternalID, &p.AccountID, &p.ServiceID, &p.Status, &p.Priority, &p.ProblemType, &p.Description, &p.RelatedAlarmID, &p.CreatedAt, &p.ResolvedAt, &p.Resolution, &p.RelatedEventIDs, &p.AffectedResourceIDs, &p.Impact, &p.Severity, &p.RootCause, &p.ResolutionDate)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -157,12 +180,12 @@ func (r *Repository) FindServiceProblem(ctx context.Context, id string) (*Servic
 	return &p, nil
 }
 
-func (r *Repository) UpdateServiceProblemStatus(ctx context.Context, id, status, resolution string) error {
+func (r *Repository) UpdateServiceProblemStatus(ctx context.Context, id, accountID, status, resolution string) error {
 	var resolved any
 	if status == "resolved" || status == "closed" {
 		resolved = time.Now().UTC()
 	}
-	res, err := r.db.ExecContext(ctx, `UPDATE tmf_service_problems SET status=$2,resolution=NULLIF($3,''),resolved_at=$4 WHERE id=$1`, id, status, resolution, resolved)
+	res, err := r.db.ExecContext(ctx, `UPDATE tmf_service_problems SET status=$3,resolution=NULLIF($4,''),resolved_at=$5,resolution_date=$5 WHERE id=$1 AND account_id=$2`, id, accountID, status, resolution, resolved)
 	if err != nil {
 		return fmt.Errorf("update service problem: %w", err)
 	}
