@@ -66,7 +66,18 @@ require_nonempty ACS_USP_ALLOWED_CIDRS
 require_https_origin ACS_FRONTEND_BASE_URL
 require_https_origin ACS_API_PUBLIC_URL
 
-# Production's public operator surfaces terminate TLS at a reverse proxy/load
+# The current host console/API do not implement a browser CORS trust layer.
+# Keep the supported production topology same-origin and let one HTTPS ingress
+# route API paths to the loopback API upstream and all other console traffic to
+# the loopback SPA upstream. A separate API origin requires its own reviewed
+# CORS design and is deliberately not implied by this launcher.
+frontend_origin="${ACS_FRONTEND_BASE_URL%/}"
+api_origin="${ACS_API_PUBLIC_URL%/}"
+if [ -n "$frontend_origin" ] && [ -n "$api_origin" ] && [ "$frontend_origin" != "$api_origin" ]; then
+  fail "ACS_API_PUBLIC_URL must equal ACS_FRONTEND_BASE_URL in the supported host production profile (same-origin HTTPS ingress required)"
+fi
+
+# Production's public operator surface terminates TLS at a reverse proxy/load
 # balancer. The host quickstart's API/SPA listeners are intentionally plain
 # HTTP, so they must be loopback-only upstreams rather than public sockets.
 case "${ACS_API_ADDR:-}" in
@@ -141,6 +152,6 @@ if [ "$errors" -ne 0 ]; then
 fi
 
 echo "Security preflight passed: production device transports and operator ingress requirements are configured."
-echo "Operator console/API: HTTPS public origins -> loopback-only host listeners."
+echo "Operator console/API: one HTTPS public origin -> loopback-only host listeners."
 echo "Note: production CWMP rejects the shared fleet Digest username; provision per-device Digest credentials or mTLS before connecting established CPEs."
 echo "Note: production USP requires each agent certificate to be pre-bound to its device, EndpointID, and MQTT response topic in usp_transport_principals."
