@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"acs/internal/bss"
@@ -10,12 +12,13 @@ import (
 )
 
 type tmf641ItemRequest struct {
-	ID             string `json:"id"`
-	Action         string `json:"action"`
-	Role           string `json:"role"`
-	OUISerial      string `json:"ouiSerial"`
-	ServicePlan    string `json:"servicePlan"`
-	UnassignReason string `json:"unassignReason"`
+	ID             string            `json:"id"`
+	Action         string            `json:"action"`
+	Role           string            `json:"role"`
+	OUISerial      string            `json:"ouiSerial"`
+	ServicePlan    string            `json:"servicePlan"`
+	UnassignReason string            `json:"unassignReason"`
+	Parameters     map[string]string `json:"parameters"`
 }
 type tmf641OrderRequest struct {
 	ExternalID string              `json:"externalId"`
@@ -94,6 +97,36 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 			}
 			items[i].Status = "COMPLETED"
 			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "COMPLETED", "")
+		} else if item.Action == "modify" {
+			mapping, lookupErr := h.mappings.ActiveDeviceForAccount(r.Context(), req.AccountID, roleOrDefault(item.Role))
+			if lookupErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", lookupErr.Error())
+				writeError(w, 400, "ErrExecution", "could not resolve service device")
+				return
+			}
+			dev, lookupErr := h.acs.GetDevice(r.Context(), mapping.DeviceID)
+			if lookupErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", lookupErr.Error())
+				writeError(w, 502, "ErrACSUnreachable", "underlying ACS engine is unreachable")
+				return
+			}
+			params, translateErr := bss.Translate("MODIFY_WIFI", item.Parameters, h.walledGarden, dev.DataModelRoot)
+			if translateErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", translateErr.Error())
+				writeError(w, 400, "ErrInvalidRequest", translateErr.Error())
+				return
+			}
+			if _, dispatchErr := h.dispatchOrder(r.Context(), req.ExternalID+":"+strconv.Itoa(i), req.AccountID, "MODIFY_WIFI", mapping.DeviceID, params); dispatchErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", dispatchErr.Error())
+				if errors.Is(dispatchErr, bss.ErrACSUnreachable) {
+					writeError(w, 502, "ErrACSUnreachable", "underlying ACS engine is unreachable")
+				} else {
+					writeError(w, 500, "ErrInternal", "internal error")
+				}
+				return
+			}
+			items[i].Status = "DISPATCHED"
+			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "DISPATCHED", "")
 		}
 	}
 	writeJSON(w, 201, tmf641OrderResponse(order, items))
