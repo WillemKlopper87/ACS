@@ -23,7 +23,7 @@ func TestNormalizeOAuthPolicy(t *testing.T) {
 		},
 		{
 			name: "global scoped",
-			in: OAuthPolicy{Scopes: []string{ScopeTMFRead}, GlobalAccess: true},
+			in:   OAuthPolicy{Scopes: []string{ScopeTMFRead}, GlobalAccess: true},
 			want: OAuthPolicy{Scopes: []string{ScopeTMFRead}, GlobalAccess: true},
 		},
 		{
@@ -32,18 +32,18 @@ func TestNormalizeOAuthPolicy(t *testing.T) {
 			want: OAuthPolicy{},
 		},
 		{
-			name: "unsupported scope",
-			in: OAuthPolicy{Scopes: []string{"tmf:admin"}, GlobalAccess: true},
+			name:    "unsupported scope",
+			in:      OAuthPolicy{Scopes: []string{"tmf:admin"}, GlobalAccess: true},
 			wantErr: true,
 		},
 		{
-			name: "global cannot also list accounts",
-			in: OAuthPolicy{Scopes: []string{ScopeTMFRead}, AccountIDs: []string{"acct-a"}, GlobalAccess: true},
+			name:    "global cannot also list accounts",
+			in:      OAuthPolicy{Scopes: []string{ScopeTMFRead}, AccountIDs: []string{"acct-a"}, GlobalAccess: true},
 			wantErr: true,
 		},
 		{
-			name: "permissions require entitlement",
-			in: OAuthPolicy{Scopes: []string{ScopeTMFRead}},
+			name:    "permissions require entitlement",
+			in:      OAuthPolicy{Scopes: []string{ScopeTMFRead}},
 			wantErr: true,
 		},
 	}
