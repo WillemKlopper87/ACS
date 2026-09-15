@@ -140,10 +140,25 @@ func (r *IncidentRepository) Advance(ctx context.Context, id string, next *time.
 }
 
 func (r *IncidentRepository) RecoverOnline(ctx context.Context) (int, error) {
-	res, err := r.db.ExecContext(ctx, `UPDATE alert_incidents i SET state='recovered',recovered_at=COALESCE(recovered_at,now()),next_escalation_at=NULL FROM devices d WHERE i.device_id=d.id AND i.condition_key='acs-offline' AND i.state IN ('open','acknowledged','suppressed') AND d.online_status='ONLINE'`)
+	items, err := r.RecoverOnlineIncidents(ctx)
+	return len(items), err
+}
+
+func (r *IncidentRepository) RecoverOnlineIncidents(ctx context.Context) ([]Incident, error) {
+	rows, err := r.db.QueryContext(ctx, `UPDATE alert_incidents i SET state='recovered',recovered_at=COALESCE(recovered_at,now()),next_escalation_at=NULL FROM devices d WHERE i.device_id=d.id AND i.condition_key='acs-offline' AND i.state IN ('open','acknowledged','suppressed') AND d.online_status='ONLINE' RETURNING i.id,i.tenant_id,i.device_id::text,i.condition_key,i.priority,i.summary,i.state,i.escalation_stage,i.first_seen_at,i.last_seen_at,i.next_escalation_at,i.acknowledged_at,COALESCE(i.acknowledged_by,''),i.recovered_at,i.details`)
 	if err != nil {
-		return 0, fmt.Errorf("recover online incidents: %w", err)
+		return nil, fmt.Errorf("recover online incidents: %w", err)
 	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	defer rows.Close()
+	var out []Incident
+	for rows.Next() {
+		var i Incident
+		var raw []byte
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.DeviceID, &i.ConditionKey, &i.Priority, &i.Summary, &i.State, &i.EscalationStage, &i.FirstSeenAt, &i.LastSeenAt, &i.NextEscalationAt, &i.AcknowledgedAt, &i.AcknowledgedBy, &i.RecoveredAt, &raw); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(raw, &i.Details)
+		out = append(out, i)
+	}
+	return out, rows.Err()
 }
