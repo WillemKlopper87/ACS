@@ -6,16 +6,17 @@ This document implements the security-remediation policy tracked in #56. It sepa
 
 ### `ACS_DEPLOYMENT_PROFILE=lab`
 
-The lab profile exists for controlled hardware qualification, packet/session capture and compatibility testing. It may use plaintext management transports and the historical fleet-wide CWMP Digest credential when the surrounding network is explicitly restricted.
+The lab profile exists for controlled hardware qualification, packet/session capture and compatibility testing. It may use plaintext management transports and the historical fleet-wide CWMP Digest credential when the surrounding network is explicitly restricted. Legacy CWMP TLS 1.0/1.1 compatibility also remains available here for older CPEs that need it during qualification.
 
 A lab deployment is **not** a production security baseline. Restrict inbound management ports to the test source CIDR/security group, retain capture redaction, and avoid placing unrelated tenant devices behind the same exposed lab endpoint.
 
 ### `ACS_DEPLOYMENT_PROFILE=production`
 
-Production is fail-closed:
+Production is fail-closed. An unknown or misspelled deployment profile is rejected at `cmd/acs`/`cmd/uspc` startup rather than silently inheriting lab behavior.
 
-- CWMP requests must arrive over TLS.
-- HTTP Basic is rejected for CWMP.
+- CWMP server TLS certificate and key are required before `cmd/acs` starts.
+- CWMP requires TLS 1.2 or TLS 1.3. An unset `ACS_TLS_MIN_VERSION` is normalized to 1.2 in production; explicit 1.0/1.1 compatibility floors are rejected.
+- HTTP Basic is rejected for CWMP and enabling `ACS_AUTH_ALLOW_BASIC` is a startup error.
 - The configured fleet-wide `ACS_DIGEST_USERNAME` is rejected for CWMP. Established CPEs must use a per-device Digest credential resolved from `device_credentials`, or verified mTLS.
 - A production deployment may run with device-specific CWMP Digest credentials only; it does not need to retain the fleet-wide Digest password. `ACS_CREDENTIAL_ENCRYPTION_KEY` remains required because it protects device credentials at rest and is also used as the Digest nonce-signing secret when no shared Digest password exists.
 - USP plaintext is forbidden.
@@ -37,14 +38,15 @@ The shared fleet credential is retained only for controlled lab compatibility wh
 
 For Huawei N5368X qualification (#54):
 
-1. Use the lab profile on a source-restricted field endpoint for first-contact capture if the device cannot yet be provisioned with a unique ACS credential.
-2. Capture and verify Manufacturer, OUI, ProductClass, SerialNumber, firmware and observed CWMP data model.
+1. Use the lab profile on a source-restricted field endpoint for first-contact capture if the device cannot yet be provisioned with a unique ACS credential or modern TLS.
+2. Capture and verify Manufacturer, OUI, ProductClass, SerialNumber, firmware and observed CWMP data model/TLS capability.
 3. Create a unique per-device `CWMP_DIGEST` credential for the registered ACS device.
 4. Configure the Huawei ManagementServer username/password with that credential, retaining Digest SHA-256 compatibility.
 5. Reconnect and prove the credential resolves to the intended `device_id` and the Inform OUI/ProductClass/Serial identity matches it.
 6. Prove identity substitution is rejected before accepting the device as securely qualified.
 7. Configure Connection Request credentials independently and uniquely for the device where supported.
-8. Only after bound reconnect should normal provisioning, diagnostics, firmware or commercial fulfilment be treated as production-authorized.
+8. Prove the device can use the production transport floor (TLS 1.2+) before treating direct production CWMP as supported. If it cannot, that limitation is field evidence to resolve rather than a reason to weaken the production profile silently.
+9. Only after bound reconnect and transport validation should normal provisioning, diagnostics, firmware or commercial fulfilment be treated as production-authorized.
 
 The desired end state is an automated bootstrap-to-bound-credential graduation. Until that automation is complete, pre-provisioning or manual credential installation is safer than using a fleet secret in production.
 
@@ -98,5 +100,5 @@ A production release is not accepted until:
 - WebSocket rejects EndpointID substitution;
 - MQTT rejects Record From-ID substitution and cross-agent Response Topic / reply-to / publish-subscribe access;
 - OB-USP-Agent WebSocket, MQTT 5 and MQTT 3.1.1 interoperability remains green in the controlled compatibility profile;
-- the Huawei field evidence in #54 records the bound-credential reconnect and identity-substitution result;
+- the Huawei field evidence in #54 records the bound-credential reconnect, TLS capability and identity-substitution result;
 - the security review is rerun and the findings tracked in #56 are either closed or explicitly proven unreachable in the supported production profile.
