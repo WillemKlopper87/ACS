@@ -335,6 +335,15 @@ func TestHandleResponseResolvesSuccess(t *testing.T) {
 	}
 }
 
+func TestResolvedParameterPathDoesNotDuplicateQualifiedName(t *testing.T) {
+	if got := resolvedParameterPath("Device.DeviceInfo.", "Device.DeviceInfo.SoftwareVersion"); got != "Device.DeviceInfo.SoftwareVersion" {
+		t.Fatalf("resolvedParameterPath() = %q, want canonical qualified path", got)
+	}
+	if got := resolvedParameterPath("Device.DeviceInfo.", "SoftwareVersion"); got != "Device.DeviceInfo.SoftwareVersion" {
+		t.Fatalf("resolvedParameterPath() relative = %q, want canonical qualified path", got)
+	}
+}
+
 func TestHandleResponseResolvesFailure(t *testing.T) {
 	d, jobsRepo, jobID, msgID, _ := dispatchTestSetup(t)
 
