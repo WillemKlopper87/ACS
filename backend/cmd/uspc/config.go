@@ -150,8 +150,8 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 	}
 
 	return serviceConfig{
-		DeploymentProfile:   profile,
-		ControllerID:        usp.FormatEndpointID("self", rawID),
+		DeploymentProfile: profile,
+		ControllerID:      usp.FormatEndpointID("self", rawID),
 
 		WSAddr: envOrDefault(getenv, log, "ACS_USP_WS_ADDR", ":9877"),
 		WSPath: envOrDefault(getenv, log, "ACS_USP_WS_PATH", "/usp"),
