@@ -53,3 +53,29 @@ Alertmanager sends `send_resolved: true`. The receiver should inspect `status` (
 Targets are checked against `ACS_BSS_WEBHOOK_ALLOWED_CIDRS` when saved and immediately before delivery. Redirects are not followed. Use HTTPS in production and restrict the allowlist to the NMS or relay network.
 
 Deliveries are durable in Postgres, retried with exponential backoff, and marked `FAILED` after eight attempts. Monitor `webhook_deliveries` for failed or growing pending rows. For rollout, first verify signatures in a receiver without opening tickets, then trigger a lab CWMP/USP fault, confirm one event/alarm/delivery, test deduplication, verify recovery closes the NMS incident, and verify Alertmanager firing and resolved notifications.
+
+## CPE escalation policies
+
+Policies can apply to the whole fleet, a tenant, a device group, or one CPE. Resolution precedence is device, group, tenant, then fleet. A tenant policy may also specify `customer_tier`; the runtime uses the mapped service plan to select the premium policy. Fault codes support exact keys and suffix wildcards, and the special `offline` key controls silent-CPE incidents.
+
+Create a policy with delays expressed as nanoseconds in the current Go JSON contract (the console converts seconds to nanoseconds):
+
+```json
+{
+  "name": "Premium CPE escalation",
+  "scope": "tenant",
+  "tenant_id": "tenant-001",
+  "customer_tier": "premium",
+  "enabled": true,
+  "fault_priorities": {"offline": "P1", "9002": "P2"},
+  "offline_after": 180000000000,
+  "steps": [
+    {"after": 300000000000, "destination": "nms", "recipient": "netpod-premium"},
+    {"after": 900000000000, "destination": "sms", "recipient": "+27115550123"}
+  ]
+}
+```
+
+Use `POST /api/v1/alert-policies` with the policy-management permission, list policies with `GET /api/v1/alert-policies`, and remove one with `DELETE /api/v1/alert-policies/{id}`. Incidents are available through `GET /api/v1/alert-incidents`; operators can acknowledge, suppress, recover, or close them with the protected PATCH endpoint.
+
+Incident webhooks use the existing signed delivery outbox and can subscribe to `ALERT_OPENED`, `ALERT_ESCALATED`, and `ALERT_RECOVERED`. `ALERT_OPENED` is emitted once when a deduplicated condition first appears, escalation steps emit `ALERT_ESCALATED`, and a CPE check-in emits `ALERT_RECOVERED`. Receivers should correlate on `incident_id` and remain idempotent because delivery is retried after transport failures.
