@@ -14,8 +14,8 @@ type Repository struct{ db *sql.DB }
 
 type OfflineDevice struct {
 	TenantID, DeviceID, CustomerTier string
-	GroupIDs           []string
-	LastInformAt       *time.Time
+	GroupIDs                         []string
+	LastInformAt                     *time.Time
 }
 
 func NewRepository(db *sql.DB) *Repository { return &Repository{db: db} }
@@ -26,8 +26,12 @@ func (r *Repository) Create(ctx context.Context, p Policy) (*Policy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal fault priorities: %w", err)
 	}
+	steps, err := json.Marshal(p.Steps)
+	if err != nil {
+		return nil, fmt.Errorf("marshal escalation steps: %w", err)
+	}
 	var out Policy
-	err = r.db.QueryRowContext(ctx, `INSERT INTO alert_policies (id,name,scope,tenant_id,group_id,device_id,customer_tier,enabled,fault_priorities,offline_after_seconds) VALUES ($1,$2,$3,NULLIF($4,''),NULLIF($5,'')::uuid,NULLIF($6,'')::uuid,NULLIF($7,''),$8,$9,$10) RETURNING id,name,scope,COALESCE(tenant_id,''),COALESCE(group_id::text,''),COALESCE(device_id::text,''),COALESCE(customer_tier,''),enabled,fault_priorities,offline_after_seconds`, id, p.Name, p.Scope, p.TenantID, p.GroupID, p.DeviceID, p.CustomerTier, p.Enabled, priorities, int(p.OfflineAfter/time.Second)).Scan(&out.ID, &out.Name, &out.Scope, &out.TenantID, &out.GroupID, &out.DeviceID, &out.CustomerTier, &out.Enabled, &priorities, &out.OfflineAfter)
+	err = r.db.QueryRowContext(ctx, `INSERT INTO alert_policies (id,name,scope,tenant_id,group_id,device_id,customer_tier,enabled,fault_priorities,offline_after_seconds,steps) VALUES ($1,$2,$3,NULLIF($4,''),NULLIF($5,'')::uuid,NULLIF($6,'')::uuid,NULLIF($7,''),$8,$9,$10,$11) RETURNING id,name,scope,COALESCE(tenant_id,''),COALESCE(group_id::text,''),COALESCE(device_id::text,''),COALESCE(customer_tier,''),enabled,fault_priorities,offline_after_seconds,steps`, id, p.Name, p.Scope, p.TenantID, p.GroupID, p.DeviceID, p.CustomerTier, p.Enabled, priorities, int(p.OfflineAfter/time.Second), steps).Scan(&out.ID, &out.Name, &out.Scope, &out.TenantID, &out.GroupID, &out.DeviceID, &out.CustomerTier, &out.Enabled, &priorities, &out.OfflineAfter, &steps)
 	if err != nil {
 		return nil, fmt.Errorf("create alert policy: %w", err)
 	}
@@ -35,11 +39,14 @@ func (r *Repository) Create(ctx context.Context, p Policy) (*Policy, error) {
 		return nil, err
 	}
 	out.OfflineAfter *= time.Second
+	if err := json.Unmarshal(steps, &out.Steps); err != nil {
+		return nil, fmt.Errorf("unmarshal escalation steps: %w", err)
+	}
 	return &out, nil
 }
 
 func (r *Repository) List(ctx context.Context) ([]Policy, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id,name,scope,COALESCE(tenant_id,''),COALESCE(group_id::text,''),COALESCE(device_id::text,''),COALESCE(customer_tier,''),enabled,fault_priorities,offline_after_seconds FROM alert_policies ORDER BY scope,id`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,name,scope,COALESCE(tenant_id,''),COALESCE(group_id::text,''),COALESCE(device_id::text,''),COALESCE(customer_tier,''),enabled,fault_priorities,offline_after_seconds,steps FROM alert_policies ORDER BY scope,id`)
 	if err != nil {
 		return nil, fmt.Errorf("list alert policies: %w", err)
 	}
@@ -49,13 +56,17 @@ func (r *Repository) List(ctx context.Context) ([]Policy, error) {
 		var p Policy
 		var raw []byte
 		var seconds int
-		if err := rows.Scan(&p.ID, &p.Name, &p.Scope, &p.TenantID, &p.GroupID, &p.DeviceID, &p.CustomerTier, &p.Enabled, &raw, &seconds); err != nil {
+		var stepRaw []byte
+		if err := rows.Scan(&p.ID, &p.Name, &p.Scope, &p.TenantID, &p.GroupID, &p.DeviceID, &p.CustomerTier, &p.Enabled, &raw, &seconds, &stepRaw); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(raw, &p.FaultPriorities); err != nil {
 			return nil, err
 		}
 		p.OfflineAfter = time.Duration(seconds) * time.Second
+		if err := json.Unmarshal(stepRaw, &p.Steps); err != nil {
+			return nil, err
+		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -114,6 +125,8 @@ func (r *Repository) OfflineDevices(ctx context.Context, limit int) ([]OfflineDe
 func (r *Repository) CustomerTier(ctx context.Context, tenantID, deviceID string) (string, error) {
 	var tier string
 	err := r.db.QueryRowContext(ctx, `SELECT COALESCE(service_plan,'') FROM account_device_mappings WHERE account_id=$1 AND device_id=$2 LIMIT 1`, tenantID, deviceID).Scan(&tier)
-	if err != nil && err != sql.ErrNoRows { return "", fmt.Errorf("lookup customer tier: %w", err) }
+	if err != nil && err != sql.ErrNoRows {
+		return "", fmt.Errorf("lookup customer tier: %w", err)
+	}
 	return tier, nil
 }
