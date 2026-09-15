@@ -37,6 +37,15 @@ require_nonempty ACS_USP_TLS_KEY
 require_nonempty ACS_USP_CLIENT_CA_CERT
 require_nonempty ACS_USP_ALLOWED_CIDRS
 
+# cmd/acs normalizes an unset production floor to TLS 1.2. Surface the same
+# rule here so field preflight cannot report success for an explicitly weak
+# 1.0/1.1 compatibility setting. Those versions remain available in lab.
+cwmp_tls_min="${ACS_TLS_MIN_VERSION:-1.2}"
+case "$cwmp_tls_min" in
+  1.2|1.3) ;;
+  *) fail "ACS_TLS_MIN_VERSION must be 1.2 or 1.3 in production (effective value: $cwmp_tls_min)" ;;
+esac
+
 if [ "${ACS_USP_ALLOW_PLAINTEXT:-false}" = "true" ]; then
   fail "ACS_USP_ALLOW_PLAINTEXT=true is forbidden in production"
 fi
