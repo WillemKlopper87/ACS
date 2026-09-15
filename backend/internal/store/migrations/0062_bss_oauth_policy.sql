@@ -20,4 +20,15 @@ ALTER TABLE bss_oauth_clients
 ALTER TABLE bss_oauth_clients
     ADD CONSTRAINT bss_oauth_clients_account_policy_ck CHECK (
         global_access OR cardinality(account_ids) > 0 OR cardinality(scopes) = 0
+    ),
+    ADD CONSTRAINT bss_oauth_clients_account_mode_ck CHECK (
+        NOT (global_access AND cardinality(account_ids) > 0)
+    ),
+    ADD CONSTRAINT bss_oauth_clients_scope_values_ck CHECK (
+        scopes <@ ARRAY[
+            'tmf:read',
+            'tmf:write',
+            'tmf:execute',
+            'tmf:acknowledge'
+        ]::TEXT[]
     );
