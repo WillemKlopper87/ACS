@@ -24,6 +24,11 @@ var controllerIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // convention nobody checks.
 const minControllerIDBytes = 8
 
+const (
+	deploymentProfileLab        = "lab"
+	deploymentProfileProduction = "production"
+)
+
 // placeholderControllerIDs are rejected outright regardless of shape or
 // length -- the strings an operator types when they mean to come back
 // and set a real value later, and then don't. Comparison is
@@ -40,6 +45,12 @@ var placeholderControllerIDs = map[string]bool{
 // Named serviceConfig, not config, because internal/config is imported
 // by name into main.go's scope.
 type serviceConfig struct {
+	// DeploymentProfile is either "lab" or "production". Lab retains
+	// explicit compatibility escape hatches for hardware investigation;
+	// production fails closed on plaintext USP and a missing network
+	// allowlist.
+	DeploymentProfile string
+
 	// ControllerID is this controller's own USP endpoint id
 	// (self::<ACS_USP_CONTROLLER_ID>), stamped as From on every record
 	// this process sends and checked as To on every record it accepts.
@@ -52,7 +63,7 @@ type serviceConfig struct {
 	MQTTControllerTopic string
 
 	// TLSCert and TLSKey are either both empty (plaintext, requires
-	// AllowPlaintext) or both set (both transports serve TLS).
+	// AllowPlaintext in lab) or both set (both transports serve TLS).
 	TLSCert        string
 	TLSKey         string
 	AllowPlaintext bool
@@ -67,8 +78,8 @@ type serviceConfig struct {
 
 	// AllowedCIDRs is the network-level half of the USP agent allowlist
 	// (design docs/superpowers/specs/2026-09-12-usp-agent-allowlist-design.md
-	// S2.1) -- empty is permissive, matching netguard's own
-	// default-permissive-until-configured convention.
+	// S2.1). Lab keeps the historical empty-is-permissive behaviour;
+	// production requires at least one non-universal network.
 	AllowedCIDRs []*net.IPNet
 }
 
@@ -79,6 +90,14 @@ type serviceConfig struct {
 // for genuinely optional knobs -- listen addresses and paths).
 func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, error) {
 	var problems []string
+
+	profile := strings.ToLower(strings.TrimSpace(getenv("ACS_DEPLOYMENT_PROFILE")))
+	if profile == "" {
+		profile = deploymentProfileLab
+	}
+	if profile != deploymentProfileLab && profile != deploymentProfileProduction {
+		problems = append(problems, fmt.Sprintf("ACS_DEPLOYMENT_PROFILE must be %q or %q", deploymentProfileLab, deploymentProfileProduction))
+	}
 
 	rawID := getenv("ACS_USP_CONTROLLER_ID")
 	if err := validateControllerID(rawID); err != nil {
@@ -95,6 +114,12 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 	if tlsCert == "" && tlsKey == "" && !allowPlaintext {
 		problems = append(problems, "no TLS certificate is configured (ACS_USP_TLS_CERT/ACS_USP_TLS_KEY) and ACS_USP_ALLOW_PLAINTEXT is not \"true\" -- refusing to serve USP in plaintext")
 	}
+	if profile == deploymentProfileProduction && allowPlaintext {
+		problems = append(problems, "ACS_USP_ALLOW_PLAINTEXT=true is forbidden when ACS_DEPLOYMENT_PROFILE=production")
+	}
+	if profile == deploymentProfileProduction && (tlsCert == "" || tlsKey == "") {
+		problems = append(problems, "ACS_DEPLOYMENT_PROFILE=production requires ACS_USP_TLS_CERT and ACS_USP_TLS_KEY")
+	}
 
 	postgresDSN := getenv("ACS_USP_POSTGRES_DSN")
 	if postgresDSN == "" {
@@ -104,6 +129,16 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 	allowedCIDRs, err := netguard.ParseCIDRList(getenv("ACS_USP_ALLOWED_CIDRS"))
 	if err != nil {
 		problems = append(problems, fmt.Sprintf("ACS_USP_ALLOWED_CIDRS: %v", err))
+	}
+	if profile == deploymentProfileProduction && len(allowedCIDRs) == 0 {
+		problems = append(problems, "ACS_DEPLOYMENT_PROFILE=production requires ACS_USP_ALLOWED_CIDRS")
+	}
+	if profile == deploymentProfileProduction {
+		for _, network := range allowedCIDRs {
+			if isUniversalCIDR(network) {
+				problems = append(problems, fmt.Sprintf("ACS_USP_ALLOWED_CIDRS contains universal network %q in production", network.String()))
+			}
+		}
 	}
 
 	if len(problems) > 0 {
@@ -115,7 +150,8 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 	}
 
 	return serviceConfig{
-		ControllerID: usp.FormatEndpointID("self", rawID),
+		DeploymentProfile: profile,
+		ControllerID:       usp.FormatEndpointID("self", rawID),
 
 		WSAddr: envOrDefault(getenv, log, "ACS_USP_WS_ADDR", ":9877"),
 		WSPath: envOrDefault(getenv, log, "ACS_USP_WS_PATH", "/usp"),
@@ -133,6 +169,14 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 
 		AllowedCIDRs: allowedCIDRs,
 	}, nil
+}
+
+func isUniversalCIDR(network *net.IPNet) bool {
+	if network == nil {
+		return false
+	}
+	ones, bits := network.Mask.Size()
+	return ones == 0 && (bits == 32 || bits == 128)
 }
 
 // validateControllerID enforces the ACS_USP_CONTROLLER_ID rules: present,
