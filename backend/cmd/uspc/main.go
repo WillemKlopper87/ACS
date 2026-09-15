@@ -11,24 +11,17 @@
 // device that queued a job before it connected, and a periodic sweep as
 // the safety net all converge on dispatcher.tryDispatch.
 //
-// Agent allowlisting is two independent gates (design
-// docs/superpowers/specs/2026-09-12-usp-agent-allowlist-design.md):
-// network-level (ACS_USP_ALLOWED_CIDRS, empty is permissive) and
-// identity-level (an agent's OUI+SerialNumber must already correspond to
-// a devices row -- pre-registered via the bulk-import API, a prior CWMP
-// Inform, or a prior USP onboarding -- or the connection is refused and
-// closed). The identity-level refusal fires once an agent attempts
-// identity reconciliation (an OnBoardRequest, or the interop probe's
-// Get as a fallback) -- a connection that completes the transport
-// (WebSocket/MQTT) handshake and then sends nothing is not yet
-// independently timed out or force-closed by this gate; that is a
-// pre-existing gap in the connection-registry/dispatch machinery, out
-// of this plan's scope.
+// Production admission has three independent layers: TLS client-certificate
+// verification, a durable certificate-fingerprint -> device/EndpointID/topic
+// principal binding, and a CIDR allowlist as defence in depth. Lab retains
+// explicit compatibility behavior for reference-agent and hardware discovery
+// work, including plaintext when ACS_USP_ALLOW_PLAINTEXT=true.
 package main
 
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -50,6 +43,7 @@ import (
 	"acs/internal/store"
 	"acs/internal/subscriptions"
 	"acs/internal/usp/mtp"
+	"acs/internal/usp/principal"
 )
 
 func main() {
@@ -70,15 +64,12 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// None of these three are secrets: ACS_USP_TLS_CERT/ACS_USP_TLS_KEY
-	// are file paths, not key material, and ACS_USP_CONTROLLER_ID is
-	// deliberately published to every connected agent (see loadConfig's
-	// doc comment) -- config.LogSummary's redact-to-"set (N bytes)"
-	// treatment would only hide information useful in a startup summary,
-	// so these are logged plainly instead of passed through it.
+	// These are file paths/identifiers, not secret material. Logging them
+	// makes the effective startup posture visible without exposing keys.
 	logger.Info("config", "var", "ACS_USP_CONTROLLER_ID", "value", cfg.ControllerID)
 	logger.Info("config", "var", "ACS_USP_TLS_CERT", "value", cfg.TLSCert)
 	logger.Info("config", "var", "ACS_USP_TLS_KEY", "value", cfg.TLSKey)
+	logger.Info("config", "var", "ACS_USP_CLIENT_CA_CERT", "value", cfg.TLSClientCA)
 	if len(cfg.AllowedCIDRs) == 0 {
 		logger.Warn("ACS_USP_ALLOWED_CIDRS is not set: any network can reach this service's listeners. Set it for a production deployment.")
 	}
@@ -100,12 +91,8 @@ func run(logger *slog.Logger) error {
 	// restart, a resolveAndMarkReconciled failure after LinkUspAgent
 	// already ran, or a takeover connection that never itself
 	// reconciles. Left uncleared, any of those permanently exempts a
-	// device from the liveness reaper's UNREACHABLE marking -- the exact
-	// regression this plan's Task 4 was built to fix (final-review
-	// finding 2). Must run before the transports start accepting
-	// connections, so a real reconnect's own LinkUspAgent can never race
-	// this reset and have its fresh connected=true clobbered back to
-	// false.
+	// device from the liveness reaper's UNREACHABLE marking. Must run
+	// before the transports start accepting reconnects.
 	if err := resetUspAgentsConnected(ctx, db, logger); err != nil {
 		db.Close()
 		return err
@@ -114,7 +101,7 @@ func run(logger *slog.Logger) error {
 	metrics := observability.NewMetrics("uspc")
 	uspm := newUSPMetrics(metrics)
 
-	tlsConfig, err := loadTLSConfig(cfg.TLSCert, cfg.TLSKey)
+	tlsConfig, err := loadTLSConfig(cfg.TLSCert, cfg.TLSKey, cfg.TLSClientCA)
 	if err != nil {
 		db.Close()
 		return fmt.Errorf("load TLS configuration: %w", err)
@@ -127,6 +114,7 @@ func run(logger *slog.Logger) error {
 	p := newProbe(cfg.ControllerID, logger)
 	p.setMetrics(uspm)
 	repo := devices.NewRepository(db)
+	principalRepo := principal.NewRepository(db)
 	registry := mtp.NewRegistry()
 	jobsRepo := jobs.NewRepository(db)
 	capturesRepo := captures.NewRepository(db)
@@ -152,19 +140,17 @@ func run(logger *slog.Logger) error {
 	}
 
 	// dispatchCtx bounds the two dispatch goroutines below independently of
-	// ctx's own cancellation timing (fix round 1, Important 4): waitForShutdown's
-	// http-server-error branch calls shutdown without ever canceling ctx
-	// itself (ctx is only canceled by run's own deferred stop(), after
-	// shutdown has already returned), so a goroutine that only stopped on
-	// ctx.Done() would never receive a stop signal on that path and
-	// dispatchWG.Wait() below would block for the full shutdown timeout for
-	// nothing. dispatchCancel is called explicitly inside shutdown instead,
-	// so both shutdown paths behave the same way.
+	// ctx's own cancellation timing. shutdown explicitly cancels it on both
+	// signal and HTTP-server-error paths before waiting on dispatchWG.
 	dispatchCtx, dispatchCancel := context.WithCancel(ctx)
 	defer dispatchCancel()
 	var dispatchWG sync.WaitGroup
 
-	ws, mq, err := newTransports(cfg, tlsConfig, logger)
+	var principalAuth principal.CertificateAuthenticator
+	if cfg.DeploymentProfile == deploymentProfileProduction {
+		principalAuth = principalRepo
+	}
+	ws, mq, err := newTransports(cfg, tlsConfig, principalAuth, logger)
 	if err != nil {
 		shutdown(logger, server, nil, nil, nil, db, dispatchCancel, &dispatchWG)
 		return err
@@ -179,12 +165,6 @@ func run(logger *slog.Logger) error {
 	// safety-net (periodic sweep) dispatch triggers (design S6.1); the
 	// third trigger, a fresh identity reconcile, runs inline from
 	// handler.resolveAndMarkReconciled and needs no wiring here.
-	// drainDispatchNotifications's own loop actually ends when
-	// listener.Notifications() closes (which shutdown's explicit
-	// listener.Close() call causes); periodicSweep's loop ends on
-	// dispatchCtx.Done(). Both are tracked on dispatchWG so shutdown can
-	// wait for them to actually finish, not just signal them to stop (see
-	// shutdown's own doc comment).
 	listener, err := jobs.Listen(ctx, db, jobs.NotifyChannel, logger)
 	if err != nil {
 		shutdown(logger, server, ws, mq, nil, db, dispatchCancel, &dispatchWG)
@@ -202,7 +182,8 @@ func run(logger *slog.Logger) error {
 
 	ready.Store(true)
 	logger.Info("uspc listening", "controller_id", cfg.ControllerID,
-		"ws_addr", ws.Addr(), "mqtt_addr", mq.Addr(), "http_addr", cfg.HTTPAddr, "tls", tlsConfig != nil)
+		"ws_addr", ws.Addr(), "mqtt_addr", mq.Addr(), "http_addr", cfg.HTTPAddr,
+		"tls", tlsConfig != nil, "principal_auth", principalAuth != nil)
 
 	return waitForShutdown(ctx, logger, server, serverErrCh, ws, mq, listener, db, dispatchCancel, &dispatchWG)
 }
@@ -210,9 +191,7 @@ func run(logger *slog.Logger) error {
 // drainDispatchNotifications forwards every device id delivered on
 // listener's Notifications() channel into disp.tryDispatch -- the NOTIFY
 // trigger path for a device that is already connected when its job is
-// queued (design S6.1). The loop ends when Notifications() closes, which
-// happens once listener's own background goroutine exits (ctx canceled,
-// or listener.Close called) -- no separate stop signal is needed here.
+// queued (design S6.1).
 func drainDispatchNotifications(ctx context.Context, listener *jobs.QueueListener, disp *dispatcher, logger *slog.Logger) {
 	for deviceID := range listener.Notifications() {
 		if err := disp.tryDispatch(ctx, deviceID); err != nil {
@@ -223,11 +202,8 @@ func drainDispatchNotifications(ctx context.Context, listener *jobs.QueueListene
 
 // resetUspAgentsConnected clears connected=true on every usp_agents row.
 // Called once at startup, before the transports begin accepting
-// connections (see run's call site for the full rationale) -- a one-shot
-// correction for state that can only be stale at this point in the
-// process's life, not an ongoing repository method, so a plain
-// ExecContext here is enough; it doesn't need a *devices.Repository
-// method of its own.
+// connections -- a one-shot correction for state that can only be stale
+// at this point in the process's life.
 func resetUspAgentsConnected(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	result, err := db.ExecContext(ctx, `UPDATE usp_agents SET connected = false WHERE connected`)
 	if err != nil {
@@ -242,10 +218,11 @@ func resetUspAgentsConnected(ctx context.Context, db *sql.DB, logger *slog.Logge
 	return nil
 }
 
-// loadTLSConfig builds the shared *tls.Config both transports serve
-// over, or nil for plaintext (cfg has already validated that plaintext
-// is opted into when no cert/key pair is set).
-func loadTLSConfig(certFile, keyFile string) (*tls.Config, error) {
+// loadTLSConfig builds the shared *tls.Config both transports serve over,
+// or nil for plaintext. When clientCAFile is set, every network peer must
+// present a certificate chaining to that CA before MQTT/WebSocket code can
+// perform the application-level fingerprint lookup.
+func loadTLSConfig(certFile, keyFile, clientCAFile string) (*tls.Config, error) {
 	if certFile == "" && keyFile == "" {
 		return nil, nil
 	}
@@ -253,31 +230,50 @@ func loadTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load TLS keypair: %w", err)
 	}
-	return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+
+	cfg := &tls.Config{Certificates: []tls.Certificate{cert}}
+	if clientCAFile == "" {
+		return cfg, nil
+	}
+	pem, err := os.ReadFile(clientCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read USP client CA certificate: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, errors.New("USP client CA certificate did not contain a valid PEM certificate")
+	}
+	cfg.MinVersion = tls.VersionTLS12
+	cfg.ClientAuth = tls.RequireAndVerifyClientCert
+	cfg.ClientCAs = pool
+	return cfg, nil
 }
 
 // newTransports constructs the WebSocket and MQTT transports from cfg,
 // without starting either -- Start is a separate step so run can log
 // once both are known to be valid.
-func newTransports(cfg serviceConfig, tlsConfig *tls.Config, logger *slog.Logger) (*mtp.WebSocket, *mtp.MQTT, error) {
+func newTransports(cfg serviceConfig, tlsConfig *tls.Config, principalAuth principal.CertificateAuthenticator, logger *slog.Logger) (*mtp.WebSocket, *mtp.MQTT, error) {
 	ws, err := mtp.NewWebSocket(mtp.WebSocketConfig{
-		Addr:           cfg.WSAddr,
-		Path:           cfg.WSPath,
-		TLS:            tlsConfig,
-		AllowPlaintext: cfg.AllowPlaintext,
-		AllowedCIDRs:   cfg.AllowedCIDRs,
+		Addr:                   cfg.WSAddr,
+		Path:                   cfg.WSPath,
+		ControllerEndpointID:   cfg.ControllerID,
+		TLS:                    tlsConfig,
+		AllowPlaintext:         cfg.AllowPlaintext,
+		AllowedCIDRs:           cfg.AllowedCIDRs,
+		PrincipalAuthenticator: principalAuth,
 	}, logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("construct WebSocket transport: %w", err)
 	}
 
 	mq, err := mtp.NewMQTT(mtp.MQTTConfig{
-		Addr:                 cfg.MQTTAddr,
-		ControllerTopic:      cfg.MQTTControllerTopic,
-		ControllerEndpointID: cfg.ControllerID,
-		TLS:                  tlsConfig,
-		AllowPlaintext:       cfg.AllowPlaintext,
-		AllowedCIDRs:         cfg.AllowedCIDRs,
+		Addr:                   cfg.MQTTAddr,
+		ControllerTopic:        cfg.MQTTControllerTopic,
+		ControllerEndpointID:   cfg.ControllerID,
+		TLS:                    tlsConfig,
+		AllowPlaintext:         cfg.AllowPlaintext,
+		AllowedCIDRs:           cfg.AllowedCIDRs,
+		PrincipalAuthenticator: principalAuth,
 	}, logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("construct MQTT transport: %w", err)
@@ -301,10 +297,8 @@ func startTransports(ctx context.Context, ws *mtp.WebSocket, mq *mtp.MQTT, h *ha
 
 // startHTTPServer mounts /healthz, /readyz, /metrics and starts serving
 // in the background, returning immediately -- so run can start it before
-// the transports exist, and /readyz genuinely answers 503 (ready is
-// still false) for the window between the HTTP server coming up and the
-// transports finishing Start, rather than only ever being reachable
-// once both are already true.
+// the transports exist, and /readyz genuinely answers 503 while they are
+// still coming up.
 func startHTTPServer(addr string, metrics *observability.Metrics, ready *atomic.Bool) (*http.Server, <-chan error) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", metrics.Handler())
@@ -340,23 +334,8 @@ func waitForShutdown(ctx context.Context, logger *slog.Logger, server *http.Serv
 
 // shutdown drains server and, when non-nil, both transports and the job
 // queue listener, waits (bounded by the same shutdownCtx timeout the rest
-// of this function already uses) for the two dispatch goroutines
-// (drainDispatchNotifications, periodicSweep) tracked on dispatchWG to
-// actually finish -- not merely signaled to stop via dispatchCancel --
-// then closes db, logging (rather than failing the caller) on any error.
-// ws, mq and listener are nil when called from an early-return path where
-// the HTTP server was already started but the piece in question never
-// got as far as existing; dispatchCancel/dispatchWG are always non-nil
-// (constructed before the first shutdown call site in run), guarding them
-// anyway costs nothing and keeps this function safe to call from a future
-// early-return path that predates their construction. db is closed last,
-// after the transports, the job queue listener, and the dispatch
-// goroutines have all stopped, so in-flight identity reconciliation and
-// dispatch work is not cut off mid-shutdown (fix round 1, Important 4 --
-// this used to only be true for identity reconciliation, since nothing
-// waited for the dispatch goroutines to actually exit before db.Close()
-// ran), and listener's dedicated connection is released back to db's pool
-// before db itself closes.
+// of this function already uses) for the two dispatch goroutines tracked
+// on dispatchWG to finish, then closes db.
 func shutdown(logger *slog.Logger, server *http.Server, ws *mtp.WebSocket, mq *mtp.MQTT, listener *jobs.QueueListener, db *sql.DB, dispatchCancel context.CancelFunc, dispatchWG *sync.WaitGroup) {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -401,12 +380,8 @@ func shutdown(logger *slog.Logger, server *http.Server, ws *mtp.WebSocket, mq *m
 }
 
 // readinessHandler reports 200 once ready is true -- both transports
-// have started -- and 503 before that. It does not itself depend on
-// *sql.DB the way internal/observability.ReadinessHandler does:
-// connectivity to Postgres is established once at startup (run calls
-// store.Open, which pings) and failure there refuses to start the
-// process at all, rather than being polled here on every readiness
-// check.
+// have started -- and 503 before that. Postgres connectivity is already
+// established at startup by store.Open.
 func readinessHandler(ready *atomic.Bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
