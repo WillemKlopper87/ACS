@@ -193,8 +193,27 @@ echo "$cli_out" | grep -E '\.(ID|NotifType|ReferenceList) => '
 add_count_before=$(add_succeeded_count)
 echo "OK: baseline Add-succeeded count for subscription_id=$sub_id = $add_count_before"
 
+# The agent CLI can be responsive before the runtime WebSocket client has
+# reconnected. Snapshot connect evidence so the notification assertion below
+# cannot race the second process restart.
+connect_count_before=$(grep -c 'record_type=WebSocketConnect' "$uspc_log" 2>/dev/null || true)
 echo "forcing a second reconnect (docker restart $container) to exercise the decode path against a real non-empty GetResp"
 docker restart "$container" >/dev/null
+
+echo "waiting for cmd/uspc to observe the post-restart WebSocketConnect"
+connected=0
+for _ in $(seq 1 30); do
+  connect_count_after=$(grep -c 'record_type=WebSocketConnect' "$uspc_log" 2>/dev/null || true)
+  if [ "${connect_count_after:-0}" -gt "${connect_count_before:-0}" ]; then
+    connected=1
+    break
+  fi
+  sleep 1
+done
+if [ "$connected" -ne 1 ]; then
+  fail "cmd/uspc did not observe a WebSocketConnect after the second agent restart within 30s"
+fi
+echo "OK: cmd/uspc observed the post-restart WebSocketConnect"
 
 echo "waiting for the second reconcile pass to settle, then asserting exactly ONE Device.LocalAgent.Subscription. instance survives (not zero: not deleted-then-recreated; not two: not duplicated)"
 settled=0
