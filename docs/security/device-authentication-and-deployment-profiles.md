@@ -30,7 +30,7 @@ CIDR filtering is defence in depth. It does not establish device identity.
 
 ## Production operator management plane
 
-The host-based production launcher deliberately separates **public HTTPS origins** from **private HTTP upstreams**. The built-in API listener and Python SPA server are not production TLS endpoints and must never be published directly.
+The host-based production launcher deliberately separates one **public HTTPS origin** from **private HTTP upstreams**. The built-in API listener and Python SPA server are not production TLS endpoints and must never be published directly.
 
 Supported topology:
 
@@ -39,23 +39,23 @@ operator browser
       |
       | HTTPS
       v
-reverse proxy / load balancer
-      |-- https://acs.example.com     -> http://127.0.0.1:5173  (SPA upstream)
-      `-- https://api.acs.example.com -> http://127.0.0.1:8080  (API upstream)
+https://acs.example.com  (reverse proxy / load balancer)
+      |-- API routes -> http://127.0.0.1:8080  (API upstream)
+      `-- SPA routes -> http://127.0.0.1:5173  (SPA upstream)
 
 host-local monitoring only:
   Grafana    -> 127.0.0.1:3000
   Prometheus -> 127.0.0.1:9090
 ```
 
-A same-origin proxy is also supported, for example `ACS_FRONTEND_BASE_URL=https://acs.example.com` and `ACS_API_PUBLIC_URL=https://acs.example.com`, provided the ingress routes API requests to the loopback API listener.
+The current host launcher is intentionally **same-origin**. Set both `ACS_FRONTEND_BASE_URL` and `ACS_API_PUBLIC_URL` to the same HTTPS origin. `cmd/api` does not currently define a reviewed browser CORS trust policy, so a separate `https://api...` origin is rejected by production preflight rather than silently widening the browser trust boundary. If separate-origin API access is required later, add it as a distinct security-reviewed change with explicit CORS tests and policy.
 
 The production launcher requires:
 
 ```text
 ACS_DEPLOYMENT_PROFILE=production
-ACS_FRONTEND_BASE_URL=https://<console-origin>
-ACS_API_PUBLIC_URL=https://<api-origin>
+ACS_FRONTEND_BASE_URL=https://acs.example.com
+ACS_API_PUBLIC_URL=https://acs.example.com
 ACS_TLS_CERT=/path/to/cwmp-server-fullchain.pem
 ACS_TLS_KEY=/path/to/cwmp-server-key.pem
 ACS_TLS_MIN_VERSION=1.2              # 1.3 also accepted; unset normalizes to 1.2
@@ -66,7 +66,7 @@ ACS_USP_ALLOWED_CIDRS=<management-network-cidr[,more-cidrs]>
 ACS_USP_ALLOW_PLAINTEXT=false
 ```
 
-`scripts/start-production.sh` loads the stable generated secrets once, restores explicit production environment overrides, marks that environment as already resolved, and hands it to `scripts/start.sh` without sourcing the lab defaults a second time. `scripts/start.sh` then forces `ACS_API_ADDR=127.0.0.1:8080`, forces `ACS_FRONTEND_BIND=127.0.0.1`, narrows API CORS to `ACS_FRONTEND_BASE_URL`, and runs the same security preflight before starting services.
+`scripts/start-production.sh` loads the stable generated secrets once, restores explicit production environment overrides, marks that environment as already resolved, and hands it to `scripts/start.sh` without sourcing the lab defaults a second time. `scripts/start.sh` then forces `ACS_API_ADDR=127.0.0.1:8080`, forces `ACS_FRONTEND_BIND=127.0.0.1`, and runs the same security preflight before starting services. The Vite bundle is built against the same public HTTPS origin, so browser requests remain same-origin at the reverse proxy boundary.
 
 `ACS_GRAFANA_PUBLIC=1` and `ACS_PROMETHEUS_PUBLIC=1` are forbidden in this host production profile. If monitoring must be remotely accessible, publish it through a separately reviewed authenticated HTTPS ingress rather than enabling the lab compatibility flags. Prometheus in particular has no login in the host quickstart.
 
@@ -138,7 +138,8 @@ A production release is not accepted until:
 
 - normal CI and field-RC workflows are green;
 - `scripts/security-preflight.sh` and its regression matrix pass for the supported production topology;
-- the public console/API origins are HTTPS while the host API/SPA listeners remain loopback-only;
+- the public console/API origin is HTTPS while the host API/SPA listeners remain loopback-only;
+- the host production launcher rejects a separate browser API origin until an explicit CORS policy exists;
 - Grafana and Prometheus remain host-local in the supported production launcher;
 - a shared CWMP fleet credential is rejected in production;
 - a per-device CWMP credential can reconnect and manage only its bound device;
