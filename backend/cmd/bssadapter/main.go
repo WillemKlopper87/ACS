@@ -629,6 +629,73 @@ func (h *handler) respondWithExistingOrder(w http.ResponseWriter, r *http.Reques
 	return true
 }
 
+// dispatchOrder runs the outbox's write-ahead-then-dispatch sequence
+// (design docs/superpowers/specs/2026-09-13-bss-improvements-design.md
+// S3): InsertPending, SetParameters, then Mark(Dispatched|Failed) plus
+// the audit record and log line -- extracted here as the ONE place this
+// sequence exists (design docs/superpowers/specs/
+// 2026-09-13-bss-tmf640-design.md §4.2), shared by createOrder
+// (/bss/v1/orders) and patchService (TMF640's PATCH /service/{id}, added
+// in a later task in this same plan) so neither path can drift from the
+// other's outbox semantics.
+//
+// On a genuine InsertPending race (bss.ErrOrderAlreadyExists returned
+// unwrapped, per errors.Is), the caller is responsible for routing to
+// its own idempotent-response path -- this function only dispatches, it
+// does not know how to shape either caller's response.
+func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID, action, deviceID string, params []bss.ParameterWrite) (commandKey string, err error) {
+	// Write-ahead: the order's intent, including exactly what dispatch
+	// would send, is durable before dispatch is attempted (design S3).
+	if err := h.mappings.InsertPending(ctx, externalOrderID, accountID, action, deviceID, params); err != nil {
+		// ErrOrderAlreadyExists is the expected idempotent-retry race --
+		// the caller routes it to its own existing-order response, not
+		// an error worth logging here. Any other InsertPending failure
+		// (e.g. a DB connectivity error) never reached ACS at all, so it
+		// gets its own log line distinct from a dispatch failure below.
+		if !errors.Is(err, bss.ErrOrderAlreadyExists) {
+			h.logger.Error("failed to record pending order", "err", err, "external_order_id", externalOrderID)
+		}
+		return "", err
+	}
+
+	commandKey, err = h.acs.SetParameters(ctx, deviceID, params)
+	if err != nil {
+		if markErr := h.mappings.MarkDispatchFailed(ctx, externalOrderID, err.Error()); markErr != nil {
+			h.logger.Error("failed to record dispatch failure", "err", markErr, "external_order_id", externalOrderID)
+		}
+		// ErrACSUnreachable maps to its own 502 at the caller with no
+		// extra logging there; any other SetParameters failure is logged
+		// here (with the context a caller-side generic branch wouldn't
+		// have without re-deriving it) before the caller turns it into a
+		// generic 500.
+		if !errors.Is(err, bss.ErrACSUnreachable) {
+			h.logger.Error("failed to dispatch order to ACS", "err", err, "account_id", accountID, "action", action)
+		}
+		return "", err
+	}
+
+	// Dispatch succeeded. If this update itself fails, the job IS already
+	// queued on the ACS side but the row stays PENDING_DISPATCH with no
+	// command_key recorded -- order_reconciler.go will retry SetParameters
+	// for it, which can double-dispatch in this narrow window (design S3's
+	// disclosed residual: one UPDATE statement wide, not the open-ended
+	// "any future BSS retry" window this design replaces).
+	if err := h.mappings.MarkDispatched(ctx, externalOrderID, commandKey); err != nil {
+		h.logger.Error("failed to record order dispatched -- reconciler retry may double-dispatch",
+			"err", err, "external_order_id", externalOrderID, "command_key", commandKey)
+	}
+
+	if err := h.auditor.Record(ctx, "bss:"+accountID, deviceID, "BSSOrderDispatched", map[string]any{
+		"external_order_id": externalOrderID, "action": action, "command_key": commandKey,
+	}); err != nil {
+		h.logger.Error("failed to write audit record", "err", err)
+	}
+	h.logger.Info("order dispatched", "external_order_id", externalOrderID, "account_id", accountID,
+		"action", action, "command_key", commandKey)
+
+	return commandKey, nil
+}
+
 // createOrder implements Workflow B, idempotently: a retried
 // external_order_id is answered from bss_orders (with the order's
 // *current* status, not a stale "QUEUED") instead of dispatching a
@@ -644,7 +711,7 @@ func (h *handler) respondWithExistingOrder(w http.ResponseWriter, r *http.Reques
 // specs/2026-09-13-bss-improvements-design.md §3; it is not the same
 // thing this comment used to call a "known limitation," which was the
 // double-dispatch race closed by ClaimDuePendingOrders (internal/bss/
-// order.go) and InsertPending's own last_attempt_at stamp.
+// order.go) and InsertPending's own last_attempt_at stamp. The write-ahead-then-dispatch sequence itself now lives in dispatchOrder, shared with TMF640's PATCH /service/{id} handler.
 func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 	var req createOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -702,15 +769,14 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Write-ahead: the order's intent, including exactly what dispatch
-	// would send, is durable before dispatch is attempted (design S3).
-	if err := h.mappings.InsertPending(r.Context(), req.ExternalOrderID, req.AccountID, req.Action, mapping.DeviceID, params); err != nil {
+	commandKey, err := h.dispatchOrder(r.Context(), req.ExternalOrderID, req.AccountID, req.Action, mapping.DeviceID, params)
+	if err != nil {
 		if errors.Is(err, bss.ErrOrderAlreadyExists) {
 			// A genuine race: another request for the same
 			// external_order_id won InsertPending between our own
-			// FindOrder check above and this call (final review finding
-			// 6). The loser should get the same idempotent answer a
-			// retried external_order_id gets, not a 500.
+			// FindOrder check above and dispatchOrder's own call (final
+			// review finding 6). The loser should get the same idempotent
+			// answer a retried external_order_id gets, not a 500.
 			existing, findErr := h.mappings.FindOrder(r.Context(), req.ExternalOrderID)
 			if findErr != nil || existing == nil {
 				h.logger.Error("failed to resolve order after InsertPending race", "err", findErr, "external_order_id", req.ExternalOrderID)
@@ -720,43 +786,16 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 			h.respondWithExistingOrder(w, r, req.ExternalOrderID, existing)
 			return
 		}
-		h.logger.Error("failed to record pending order", "err", err, "external_order_id", req.ExternalOrderID)
-		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
-		return
-	}
-
-	commandKey, err := h.acs.SetParameters(r.Context(), mapping.DeviceID, params)
-	if err != nil {
-		if markErr := h.mappings.MarkDispatchFailed(r.Context(), req.ExternalOrderID, err.Error()); markErr != nil {
-			h.logger.Error("failed to record dispatch failure", "err", markErr, "external_order_id", req.ExternalOrderID)
-		}
 		if errors.Is(err, bss.ErrACSUnreachable) {
 			writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
 			return
 		}
-		h.logger.Error("failed to dispatch order to ACS", "err", err, "account_id", req.AccountID, "action", req.Action)
+		// Any other failure was already logged inside dispatchOrder,
+		// which knows which step (InsertPending vs SetParameters) it
+		// came from -- this branch only shapes the HTTP response.
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
-
-	// Dispatch succeeded. If this update itself fails, the job IS already
-	// queued on the ACS side but the row stays PENDING_DISPATCH with no
-	// command_key recorded -- order_reconciler.go will retry SetParameters
-	// for it, which can double-dispatch in this narrow window (design S3's
-	// disclosed residual: one UPDATE statement wide, not the open-ended
-	// "any future BSS retry" window this design replaces).
-	if err := h.mappings.MarkDispatched(r.Context(), req.ExternalOrderID, commandKey); err != nil {
-		h.logger.Error("failed to record order dispatched -- reconciler retry may double-dispatch",
-			"err", err, "external_order_id", req.ExternalOrderID, "command_key", commandKey)
-	}
-
-	if err := h.auditor.Record(r.Context(), "bss:"+req.AccountID, mapping.DeviceID, "BSSOrderDispatched", map[string]any{
-		"external_order_id": req.ExternalOrderID, "action": req.Action, "command_key": commandKey,
-	}); err != nil {
-		h.logger.Error("failed to write audit record", "err", err)
-	}
-	h.logger.Info("order dispatched", "external_order_id", req.ExternalOrderID, "account_id", req.AccountID,
-		"action", req.Action, "command_key", commandKey)
 
 	writeJSON(w, http.StatusAccepted, orderResponse{
 		OrderTrackingID: req.ExternalOrderID, CommandKey: commandKey, Status: "QUEUED", Timestamp: time.Now().UTC(),

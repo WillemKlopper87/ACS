@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -89,6 +90,22 @@ func (c *ACSClient) SetParameters(ctx context.Context, deviceID string, params [
 type DeviceSummary struct {
 	ID            string `json:"id"`
 	DataModelRoot string `json:"data_model_root"`
+}
+
+// CachedParameter mirrors one entry of GET /api/v1/devices/{id}/parameters'
+// response — mirrored here rather than importing internal/parameters
+// directly, for the same process-boundary reason as ParameterWrite/
+// DeviceSummary/JobStatus above (design docs/superpowers/specs/
+// 2026-09-13-bss-tmf640-design.md §4.1).
+type CachedParameter struct {
+	Value     string `json:"value"`
+	Type      string `json:"type,omitempty"`
+	UpdatedAt string `json:"updated_at"`
+	Source    string `json:"source"`
+}
+
+type getParametersResponse struct {
+	Parameters map[string]CachedParameter `json:"parameters"`
 }
 
 // ErrDeviceLookupNotFound mirrors a 404 from GET /api/v1/devices/{id}.
@@ -181,4 +198,33 @@ func (c *ACSClient) GetJobStatus(ctx context.Context, commandKey string) (*JobSt
 		return nil, fmt.Errorf("decode ACS response: %w", err)
 	}
 	return &out, nil
+}
+
+// GetParameters calls GET /api/v1/devices/{id}/parameters?paths=<comma-
+// separated>, requesting only the named paths rather than the device's
+// entire cache — used by the TMF640 Service read path (design S4.1) to
+// reflect a device's current SSID/WiFiPassword characteristic values.
+func (c *ACSClient) GetParameters(ctx context.Context, deviceID string, paths []string) (map[string]CachedParameter, error) {
+	url := fmt.Sprintf("%s/api/v1/devices/%s/parameters?paths=%s", c.baseURL, deviceID, strings.Join(paths, ","))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build parameters request: %w", err)
+	}
+	c.setAuth(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrACSUnreachable, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status from ACS: %d", resp.StatusCode)
+	}
+
+	var out getParametersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode ACS response: %w", err)
+	}
+	return out.Parameters, nil
 }

@@ -379,3 +379,29 @@ func TestDeviceIDForSerial(t *testing.T) {
 		t.Errorf("got %v, want ErrDeviceNotFound", err)
 	}
 }
+
+func TestGetMappingByID(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, "11111111-1111-1111-1111-111111111111", "AABBCC-SERIAL-1")
+
+	created, err := r.AssignDevice(ctx, "acct-1", "AABBCC-SERIAL-1", RoleGateway, "")
+	if err != nil {
+		t.Fatalf("AssignDevice: %v", err)
+	}
+
+	got, err := r.GetMappingByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetMappingByID: %v", err)
+	}
+	if got.ID != created.ID || got.AccountID != "acct-1" || got.DeviceID != created.DeviceID {
+		t.Errorf("GetMappingByID = %+v, want a match for %+v", got, created)
+	}
+}
+
+func TestGetMappingByIDNotFound(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	_, err := r.GetMappingByID(ctx, "99999999-9999-9999-9999-999999999999")
+	if !errors.Is(err, ErrMappingNotFound) {
+		t.Fatalf("GetMappingByID for an unknown id = %v, want ErrMappingNotFound", err)
+	}
+}
