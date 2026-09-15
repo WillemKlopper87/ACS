@@ -1,6 +1,11 @@
 # BSS & Customer Management Integration Guide
 
-Status: reflects the actual implementation as of 2026-08-11, verified against the running code (not speculative). Originally written 2026-08-04; updated 2026-08-11 to correct the webhooks status below, which shipped in the interim and was previously (wrongly) documented here as not implemented.  
+> **New readers: start with [`docs/integration/`](docs/integration/README.md).**
+> That pack adds a quickstart, the async/idempotency model, a go-live
+> checklist and a roadmap, and points back here for the endpoint-by-endpoint
+> detail. This document remains the workflow reference.
+
+Status: reflects the actual implementation as of 2026-08-11, verified against the running code (not speculative). Originally written 2026-08-04; updated 2026-08-11 to correct the webhooks status below, which shipped in the interim and was previously (wrongly) documented here as not implemented. Updated 2026-09-13: §6's first bullet corrected — it predated role addressing and contradicted §2.  
 Audience: BSS/CRM integration teams (Salesforce Comm Cloud, Amdocs, Netcracker, custom operator CRM).  
 Implementation: `backend/cmd/bssadapter`, `backend/internal/bss` — see `tr069-acs-build-plan.md` §5 for the design rationale and §9-§10 for everything built since, including the OAuth2 client-credentials rollout.
 
@@ -396,7 +401,7 @@ Every error response has the shape:
 
 ## 6. Known limitations to plan around
 
-- **One primary device per account.** Order dispatch resolves the account's most recently active mapping. An account genuinely managing multiple devices needs a different order shape (not yet designed) to name which device.
+- **Device release and swap are not on the API yet.** Multi-device accounts *are* supported — every mapping and order carries a `role` (§2), an account holds at most one active device per role, and an order addresses the role rather than "whichever device was touched last". (An earlier version of this bullet said otherwise; it predated role addressing and contradicted §2.) What is still missing is the write side of assignment lifecycle: **unassigning a device, and swapping one under RMA or upgrade, currently need operator action** — there is no `/bss/v1` endpoint for either. Both are planned to arrive as order items on the TMF641 surface. If your rollout needs programmatic device swap, raise it early.
 - **Idempotency now has a durable outbox, with one disclosed narrow residual.** The order's intent (including the exact device and parameters it will dispatch) is recorded *before* dispatch is attempted, and a background reconciler retries a failed dispatch with exponential backoff, dead-lettering it after 8 attempts (visible via the admin panel's order-status stats; dead-lettered orders are not automatically requeued -- that's an operator decision). A retried `external_order_id` while an order is still pending or dead-lettered returns that order's own current status. Two concurrent requests for the same new `external_order_id`, and any number of concurrently-running adapter instances, are both handled safely -- neither can double-dispatch the same order. The one remaining gap is narrower and shaped differently: a crash in the exact window between dispatch succeeding and that success being recorded can still, in principle, cause the reconciler's retry to double-dispatch. This is not a concurrent-timing issue (that's closed); it needs an actual process crash at that one specific point. A fully exactly-once guarantee would need idempotency-key support on the internal ACS API itself, not yet built.
 - **Rate limiting is live**, per-token (or per-IP when auth is disabled): a token-bucket limiter keyed on your bearer token, defaulting to 5 req/s with a burst of 10 (`ACS_BSS_RATE_LIMIT_PER_SECOND`/`ACS_BSS_RATE_LIMIT_BURST`, set server-side). A `429` means you've exceeded your bucket, not an auth problem — back off and retry rather than treating it as a hard failure.
 - **Request bodies are capped at 1 MiB.** An oversized `POST /bss/v1/orders` or `/mappings` body is rejected with `400` before it reaches mapping/order logic.
