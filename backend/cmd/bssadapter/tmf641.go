@@ -83,6 +83,24 @@ func (h *handler) getTMF641Order(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, tmf641OrderResponse(order, items))
 }
 
+func (h *handler) listTMF641Orders(w http.ResponseWriter, r *http.Request) {
+	orders, err := h.mappings.ListServiceOrders(r.Context(), strings.TrimSpace(r.URL.Query().Get("accountId")), 100)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	out := make([]map[string]any, 0, len(orders))
+	for _, o := range orders {
+		items, e := h.mappings.ServiceOrderItems(r.Context(), o.ID)
+		if e != nil {
+			writeError(w, 500, "ErrInternal", "internal error")
+			return
+		}
+		out = append(out, tmf641OrderResponse(&o, items))
+	}
+	writeJSON(w, 200, out)
+}
+
 func (h *handler) cancelTMF641Order(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.PathValue("id"))
 	var req tmf641CancelRequest

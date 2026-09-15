@@ -105,3 +105,23 @@ func (r *Repository) CancelServiceOrder(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+func (r *Repository) ListServiceOrders(ctx context.Context, accountID string, limit int) ([]ServiceOrder, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT id,external_id,account_id,raw_request,created_at,cancelled_at FROM service_orders WHERE ($1='' OR account_id=$1) ORDER BY created_at DESC LIMIT $2`, accountID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list service orders: %w", err)
+	}
+	defer rows.Close()
+	var out []ServiceOrder
+	for rows.Next() {
+		var o ServiceOrder
+		if err := rows.Scan(&o.ID, &o.ExternalID, &o.AccountID, &o.RawRequest, &o.CreatedAt, &o.CancelledAt); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
