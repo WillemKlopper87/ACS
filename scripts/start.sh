@@ -9,9 +9,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$HOME/acs-logs"
 mkdir -p "$LOG_DIR"
 
-echo "=== Loading/generating credentials ==="
-# shellcheck disable=SC1091
-source "$ROOT/scripts/gen-env.sh"
+if [ "${ACS_ENV_ALREADY_LOADED:-0}" = "1" ]; then
+  echo "=== Using preloaded production environment ==="
+else
+  echo "=== Loading/generating credentials ==="
+  # shellcheck disable=SC1091
+  source "$ROOT/scripts/gen-env.sh"
+fi
 
 PROFILE="${ACS_DEPLOYMENT_PROFILE:-lab}"
 case "$PROFILE" in
@@ -66,6 +70,12 @@ if [ "$PROFILE" = "production" ]; then
   # Do not inherit a wildcard/stale CORS setting into production; the browser
   # may call the API only from the configured HTTPS console origin.
   export ACS_API_CORS_ORIGIN="$FRONTEND_PUBLIC_URL"
+
+  # One shared fail-closed production gate covers device transports, operator
+  # ingress, monitoring exposure, TLS floors and plaintext compatibility flags.
+  # Running it here means direct production use of start.sh cannot bypass the
+  # checks that start-production.sh relies on.
+  "$ROOT/scripts/security-preflight.sh"
 else
   FRONTEND_PUBLIC_URL=""
   API_PUBLIC_URL=""
