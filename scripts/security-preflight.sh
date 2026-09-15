@@ -30,12 +30,63 @@ require_nonempty() {
   fi
 }
 
+require_https_origin() {
+  local name="$1" value="${!1:-}"
+  if [ -z "$value" ]; then
+    fail "$name is required when ACS_DEPLOYMENT_PROFILE=production"
+    return
+  fi
+  if ! python3 - "$value" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+u = urlsplit(sys.argv[1])
+valid = (
+    u.scheme == "https"
+    and bool(u.netloc)
+    and u.path in ("", "/")
+    and not u.query
+    and not u.fragment
+    and not u.username
+    and not u.password
+)
+raise SystemExit(0 if valid else 1)
+PY
+  then
+    fail "$name must be an HTTPS origin with no path/query/fragment (got '$value')"
+  fi
+}
+
 require_nonempty ACS_TLS_CERT
 require_nonempty ACS_TLS_KEY
 require_nonempty ACS_USP_TLS_CERT
 require_nonempty ACS_USP_TLS_KEY
 require_nonempty ACS_USP_CLIENT_CA_CERT
 require_nonempty ACS_USP_ALLOWED_CIDRS
+require_https_origin ACS_FRONTEND_BASE_URL
+require_https_origin ACS_API_PUBLIC_URL
+
+# Production's public operator surfaces terminate TLS at a reverse proxy/load
+# balancer. The host quickstart's API/SPA listeners are intentionally plain
+# HTTP, so they must be loopback-only upstreams rather than public sockets.
+case "${ACS_API_ADDR:-}" in
+  127.0.0.1:*|localhost:*|'[::1]':*) ;;
+  *) fail "ACS_API_ADDR must bind loopback in production (got '${ACS_API_ADDR:-<unset>}')" ;;
+esac
+case "${ACS_FRONTEND_BIND:-}" in
+  127.0.0.1|localhost|::1) ;;
+  *) fail "ACS_FRONTEND_BIND must be loopback in production (got '${ACS_FRONTEND_BIND:-<unset>}')" ;;
+esac
+
+# Monitoring is intentionally host-local in this production launcher. Grafana
+# and especially Prometheus must not be turned into additional cleartext public
+# management surfaces by compatibility flags.
+if [ "${ACS_GRAFANA_PUBLIC:-0}" = "1" ]; then
+  fail "ACS_GRAFANA_PUBLIC=1 is forbidden in production; publish it only through separately hardened HTTPS ingress"
+fi
+if [ "${ACS_PROMETHEUS_PUBLIC:-0}" = "1" ]; then
+  fail "ACS_PROMETHEUS_PUBLIC=1 is forbidden in production; Prometheus has no login in the host quickstart"
+fi
 
 # cmd/acs normalizes an unset production floor to TLS 1.2. Surface the same
 # rule here so field preflight cannot report success for an explicitly weak
@@ -89,6 +140,7 @@ if [ "$errors" -ne 0 ]; then
   exit 1
 fi
 
-echo "Security preflight passed: production CWMP/USP transport requirements are configured."
+echo "Security preflight passed: production device transports and operator ingress requirements are configured."
+echo "Operator console/API: HTTPS public origins -> loopback-only host listeners."
 echo "Note: production CWMP rejects the shared fleet Digest username; provision per-device Digest credentials or mTLS before connecting established CPEs."
 echo "Note: production USP requires each agent certificate to be pre-bound to its device, EndpointID, and MQTT response topic in usp_transport_principals."
