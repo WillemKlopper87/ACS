@@ -62,7 +62,9 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
       - name: deployment scripts parse
-        run: bash -n scripts/start.sh scripts/stop.sh scripts/gen-env.sh scripts/healthcheck.sh scripts/field-preflight.sh scripts/backup.sh scripts/restore.sh
+        run: bash -n scripts/start.sh scripts/start-production.sh scripts/security-preflight.sh scripts/security-preflight-test.sh scripts/stop.sh scripts/gen-env.sh scripts/healthcheck.sh scripts/field-preflight.sh scripts/backup.sh scripts/restore.sh
+      - name: production security preflight regression matrix
+        run: bash scripts/security-preflight-test.sh
       - name: migrate and build complete host control plane
         working-directory: backend
         run: |

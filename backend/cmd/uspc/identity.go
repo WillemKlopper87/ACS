@@ -6,33 +6,37 @@ import (
 	"log/slog"
 	"strings"
 
+	"acs/internal/cwmp"
 	"acs/internal/devices"
 	"acs/internal/usp"
 	"acs/internal/usp/mtp"
+	"acs/internal/usp/principal"
 )
 
 // identityStore is the narrow slice of *devices.Repository the
 // reconciler needs -- not the concrete repository itself -- so
 // identity_test.go (and handler_test.go) can exercise reconciliation
-// against a fake and stay fast and DB-free, matching the plan's stated
-// intent for cmd/uspc's own tests.
+// against a fake and stay fast and DB-free.
 type identityStore interface {
+	Get(ctx context.Context, id string) (*devices.Device, error)
 	ReconcileFromOnBoard(ctx context.Context, oui, productClass, serialNumber string) (*devices.Device, error)
 	LinkUspAgent(ctx context.Context, deviceID, endpointID, mtpKind string, supportedProtocolVersions []string) error
 	MarkUspAgentDisconnected(ctx context.Context, deviceID, endpointID string) error
 	GetUspAgentByEndpointID(ctx context.Context, endpointID string) (*devices.UspAgent, error)
-	// GetUspAgentByDeviceID is the reverse lookup dispatcher.tryDispatch
-	// needs (device_id -> endpoint_id -> live mtp.Conn): a job is queued
-	// against a device_id, but the registry is keyed by endpoint id.
 	GetUspAgentByDeviceID(ctx context.Context, deviceID string) (*devices.UspAgent, error)
 }
 
+// endpointPrincipalStore is deliberately narrower than
+// *principal.Repository. Reconciliation only needs the durable
+// EndpointID->device binding; certificate verification remains the MTP's
+// responsibility. It is nil in lab mode and configured in production.
+type endpointPrincipalStore interface {
+	ByEndpointID(ctx context.Context, endpointID usp.EndpointID) (*principal.Principal, error)
+}
+
 // splitProtocolVersions parses AgentSupportedProtocolVersions, a
-// comma-separated list per the USP wire format (design spec §3.4; obuspa
-// advertises "1.0,1.1,1.2,1.3" despite headlining USP 1.4), into the slice
-// usp_agents.supported_protocol_versions stores. An empty input yields a
-// nil slice (LinkUspAgent's caller-has-no-data-for-this-field signal), not
-// a slice containing one empty string.
+// comma-separated list per the USP wire format, into the slice
+// usp_agents.supported_protocol_versions stores.
 func splitProtocolVersions(s string) []string {
 	if s == "" {
 		return nil
@@ -49,17 +53,17 @@ func splitProtocolVersions(s string) []string {
 
 // reconciler ties a connected USP agent's identity (OUI/ProductClass/
 // SerialNumber) to a devices row and its usp_agents live-connection
-// state. An OnBoardRequest Notify is the primary path (design spec
-// S5.3); fromProbeFallback is the last-resort path used when only the
-// interop probe's GetResp -- not an OnBoardRequest -- yields identity.
+// state. In production principals adds a second, independent identity
+// check: the reported natural key must belong to the devices row already
+// bound to the cryptographically authenticated EndpointID.
 type reconciler struct {
-	store identityStore
-	log   *slog.Logger
+	store      identityStore
+	principals endpointPrincipalStore
+	log        *slog.Logger
 }
 
-// newReconciler returns a reconciler ready for use. log defaults to
-// slog.Default() when nil, matching this package's other constructors
-// (see newProbe).
+// newReconciler returns a reconciler ready for use. principals is left nil
+// for lab compatibility; production wiring calls usePrincipalStore.
 func newReconciler(store identityStore, log *slog.Logger) *reconciler {
 	if log == nil {
 		log = slog.Default()
@@ -67,10 +71,46 @@ func newReconciler(store identityStore, log *slog.Logger) *reconciler {
 	return &reconciler{store: store, log: log}
 }
 
-// onBoard reconciles identity from an OnBoardRequest Notify: upsert the
-// devices row on its oui_serial natural key, then link this
-// connection's endpoint id and MTP kind to it.
+func (r *reconciler) usePrincipalStore(store endpointPrincipalStore) {
+	r.principals = store
+}
+
+// validateAuthenticatedIdentity runs before ReconcileFromOnBoard so a valid
+// certificate for device A cannot self-report device B's OUI/serial and cause
+// device B to be marked online or linked to A's EndpointID. The transport has
+// already authenticated the certificate and constrained the claimed EndpointID;
+// this independently binds the USP application identity to the same device row.
+func (r *reconciler) validateAuthenticatedIdentity(ctx context.Context, c mtp.Conn, oui, productClass, serialNumber string) error {
+	if r.principals == nil {
+		return nil
+	}
+	if oui == "" || serialNumber == "" {
+		return devices.ErrEmptyIdentity
+	}
+
+	p, err := r.principals.ByEndpointID(ctx, c.Endpoint())
+	if err != nil {
+		return fmt.Errorf("resolve authenticated USP principal: %w", err)
+	}
+	boundDevice, err := r.store.Get(ctx, p.DeviceID)
+	if err != nil {
+		return fmt.Errorf("load authenticated USP principal device: %w", err)
+	}
+	reportedKey := (cwmp.DeviceID{OUI: oui, ProductClass: productClass, SerialNumber: serialNumber}).NaturalKey()
+	if boundDevice.OUISerial != reportedKey {
+		return fmt.Errorf("authenticated USP principal identity mismatch: endpoint %q is bound to device %s (%q), agent reported %q",
+			c.Endpoint(), p.DeviceID, boundDevice.OUISerial, reportedKey)
+	}
+	return nil
+}
+
+// onBoard reconciles identity from an OnBoardRequest Notify: validate any
+// production principal binding, refresh the known devices row on its
+// oui_serial natural key, then link this connection's endpoint id and MTP.
 func (r *reconciler) onBoard(ctx context.Context, c mtp.Conn, ob *usp.OnBoardRequest) error {
+	if err := r.validateAuthenticatedIdentity(ctx, c, ob.OUI, ob.ProductClass, ob.SerialNumber); err != nil {
+		return fmt.Errorf("reconcile onboard: %w", err)
+	}
 	device, err := r.store.ReconcileFromOnBoard(ctx, ob.OUI, ob.ProductClass, ob.SerialNumber)
 	if err != nil {
 		return fmt.Errorf("reconcile onboard: %w", err)
@@ -83,12 +123,12 @@ func (r *reconciler) onBoard(ctx context.Context, c mtp.Conn, ob *usp.OnBoardReq
 }
 
 // fromProbeFallback reconciles identity from the interop probe's own
-// GetResp when no OnBoardRequest arrived on this connection -- the
-// design spec's "last resort" path (S5.3). Same upsert-then-link shape
-// as onBoard, but logged at Info: which path onboarded a device is
-// diagnostically useful, since the primary path (OnBoardRequest) not
-// firing may indicate an agent that doesn't implement it.
+// GetResp when no OnBoardRequest arrived on this connection. It applies the
+// same production principal binding before touching device state.
 func (r *reconciler) fromProbeFallback(ctx context.Context, c mtp.Conn, oui, productClass, serialNumber string) error {
+	if err := r.validateAuthenticatedIdentity(ctx, c, oui, productClass, serialNumber); err != nil {
+		return fmt.Errorf("reconcile probe fallback: %w", err)
+	}
 	device, err := r.store.ReconcileFromOnBoard(ctx, oui, productClass, serialNumber)
 	if err != nil {
 		return fmt.Errorf("reconcile probe fallback: %w", err)
@@ -107,14 +147,7 @@ func (r *reconciler) fromProbeFallback(ctx context.Context, c mtp.Conn, oui, pro
 
 // disconnect records that deviceID's live USP session on endpointID ended.
 // It only logs (never returns) an error: a disconnect-path failure must
-// never block the transport's own connection cleanup (registry.Remove,
-// probe.forget), which run regardless of whether this succeeds.
-//
-// endpointID is passed through to MarkUspAgentDisconnected so a stale
-// disconnect for a connection that has since been superseded by a
-// reconnect under a DIFFERENT endpoint id (usp_agents is keyed by
-// device_id, one row per device) is a no-op rather than clearing the
-// still-live reconnection's row (final-review finding 3).
+// never block the transport's own connection cleanup.
 func (r *reconciler) disconnect(ctx context.Context, deviceID, endpointID string) {
 	if err := r.store.MarkUspAgentDisconnected(ctx, deviceID, endpointID); err != nil {
 		r.log.Warn("uspc: failed to mark usp agent disconnected", "device_id", deviceID, "endpoint", endpointID, "error", err)

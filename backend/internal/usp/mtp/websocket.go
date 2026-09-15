@@ -3,6 +3,7 @@ package mtp
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"acs/internal/usp"
+	"acs/internal/usp/principal"
 
 	"github.com/coder/websocket"
 )
@@ -32,6 +34,10 @@ type WebSocketConfig struct {
 	// Path is the HTTP path the USP endpoint is served on. Defaults to
 	// "/usp".
 	Path string
+	// ControllerEndpointID is the controller's USP endpoint id. When a
+	// principal authenticator is configured it is required so the read
+	// loop can decode every Record far enough to enforce From-ID == eid.
+	ControllerEndpointID usp.EndpointID
 	// TLS, when non-nil, serves WebSocket over TLS. When nil, the
 	// listener is plaintext, which requires AllowPlaintext.
 	TLS *tls.Config
@@ -48,9 +54,13 @@ type WebSocketConfig struct {
 	MaxRecordBytes int64
 	// AllowedCIDRs, when non-empty, restricts accepted connections to
 	// remote addresses inside one of these networks -- empty is
-	// permissive (design S2.1). Checked at the raw TCP accept, before
-	// any TLS or WebSocket handshake.
+	// permissive. Checked at the raw TCP accept, before TLS/WebSocket.
 	AllowedCIDRs []*net.IPNet
+	// PrincipalAuthenticator, when non-nil, requires the TLS-verified
+	// client certificate to resolve to a durable USP principal and binds
+	// the WebSocket eid to that principal before Accept can register a
+	// connection. Lab deployments leave this nil explicitly.
+	PrincipalAuthenticator principal.CertificateAuthenticator
 }
 
 // WebSocket is a Transport that serves the USP WebSocket MTP binding.
@@ -81,6 +91,9 @@ var (
 func NewWebSocket(cfg WebSocketConfig, log *slog.Logger) (*WebSocket, error) {
 	if cfg.TLS == nil && !cfg.AllowPlaintext {
 		return nil, errors.New("mtp: WebSocket requires TLS unless AllowPlaintext is set")
+	}
+	if cfg.PrincipalAuthenticator != nil && cfg.ControllerEndpointID == "" {
+		return nil, errors.New("mtp: authenticated WebSocket requires ControllerEndpointID")
 	}
 	if cfg.Path == "" {
 		cfg.Path = "/usp"
@@ -160,10 +173,6 @@ func (w *WebSocket) Stop(ctx context.Context) error {
 	cancel := w.cancel
 	w.mu.Unlock()
 
-	// Cancel first: every read loop's outstanding Read is bound to
-	// runCtx, and coder/websocket force-closes a connection as soon as
-	// that context is canceled, unblocking each read loop without
-	// waiting on a graceful close handshake with its peer.
 	if cancel != nil {
 		cancel()
 	}
@@ -183,16 +192,15 @@ func (w *WebSocket) Addr() string {
 func (w *WebSocket) handle(ctx context.Context, h Handler) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		// R-WS.12a: a server must not establish a session without the
-		// agent having offered the mandatory subprotocol. websocket.Accept
-		// would otherwise negotiate an empty subprotocol and succeed, so
-		// this is checked before Accept rather than only after.
+		// agent having offered the mandatory subprotocol.
 		if !offersSubprotocol(r.Header.Get("Sec-WebSocket-Protocol"), subprotocol) {
 			http.Error(rw, "missing required Sec-WebSocket-Protocol: "+subprotocol, http.StatusBadRequest)
 			return
 		}
 
-		// R-WS.10b/10c: the agent's endpoint id travels in the eid query
-		// parameter, percent-encoded.
+		// R-WS.10b/10c: the agent's endpoint id travels in eid. It remains
+		// protocol metadata, not an authentication factor: production below
+		// compares it to the certificate-bound principal before Accept.
 		rawEID := r.URL.Query().Get("eid")
 		if rawEID == "" {
 			http.Error(rw, "missing eid query parameter", http.StatusBadRequest)
@@ -203,6 +211,30 @@ func (w *WebSocket) handle(ctx context.Context, h Handler) http.HandlerFunc {
 			http.Error(rw, "invalid eid: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		endpoint := usp.EndpointID(decoded)
+
+		// The request TLS state contains the certificate chain the listener
+		// has already verified. Resolve its leaf fingerprint to the durable
+		// application principal, then reject any caller-supplied eid mismatch
+		// before a Conn can enter the registry.
+		if w.cfg.PrincipalAuthenticator != nil {
+			var leafCert *x509.Certificate
+			if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+				leafCert = r.TLS.PeerCertificates[0]
+			}
+			p, authErr := authenticateCertificate(r.Context(), w.cfg.PrincipalAuthenticator, leafCert)
+			if authErr != nil {
+				w.log.Warn("mtp: rejecting WebSocket whose certificate is not an enabled USP principal", "remote", r.RemoteAddr, "error", authErr)
+				http.Error(rw, "authenticated USP principal required", http.StatusForbidden)
+				return
+			}
+			if err := verifyEndpointPrincipal(p, endpoint); err != nil {
+				w.log.Warn("mtp: WebSocket EndpointID impersonation rejected", "remote", r.RemoteAddr, "claimed_endpoint", endpoint, "expected_endpoint", p.EndpointID)
+				http.Error(rw, "eid does not match authenticated principal", http.StatusForbidden)
+				return
+			}
+			endpoint = p.EndpointID
+		}
 
 		conn, err := websocket.Accept(rw, r, &websocket.AcceptOptions{
 			Subprotocols: []string{subprotocol},
@@ -212,8 +244,6 @@ func (w *WebSocket) handle(ctx context.Context, h Handler) http.HandlerFunc {
 			return
 		}
 
-		// Defence in depth: Accept only negotiates the subprotocol if the
-		// client offered it, but confirm the result explicitly.
 		if conn.Subprotocol() != subprotocol {
 			if err := conn.Close(websocket.StatusProtocolError, "subprotocol "+subprotocol+" required"); err != nil {
 				w.log.Warn("mtp: WebSocket close after subprotocol mismatch failed", "error", err)
@@ -224,9 +254,10 @@ func (w *WebSocket) handle(ctx context.Context, h Handler) http.HandlerFunc {
 		conn.SetReadLimit(w.cfg.MaxRecordBytes)
 
 		wc := &wsConn{
-			conn:       conn,
-			endpoint:   usp.EndpointID(decoded),
-			remoteAddr: r.RemoteAddr,
+			conn:                 conn,
+			endpoint:             endpoint,
+			controllerEndpointID: w.cfg.ControllerEndpointID,
+			remoteAddr:           r.RemoteAddr,
 		}
 
 		h.OnConnect(wc)
@@ -247,9 +278,10 @@ func offersSubprotocol(header, want string) bool {
 
 // wsConn implements Conn over a coder/websocket connection.
 type wsConn struct {
-	conn       *websocket.Conn
-	endpoint   usp.EndpointID
-	remoteAddr string
+	conn                 *websocket.Conn
+	endpoint             usp.EndpointID
+	controllerEndpointID usp.EndpointID
+	remoteAddr           string
 
 	disconnectOnce sync.Once
 }
@@ -273,11 +305,11 @@ func (c *wsConn) Close(reason string) error {
 	return c.conn.Close(websocket.StatusNormalClosure, reason)
 }
 
-// readLoop runs for the life of the connection: coder/websocket only
-// answers control-frame pings while a Read is outstanding (R-WS.13), so
-// this must stay active the whole time. It fires OnDisconnect exactly
-// once, from this loop's exit path, guarded by disconnectOnce so a
-// concurrent Close cannot double-fire it.
+// readLoop runs for the life of the connection. When a controller endpoint
+// id is configured, every decodable Record is checked against the immutable
+// connection endpoint before it reaches the handler. This prevents a client
+// that authenticated as one eid from changing Record.from_id after the
+// WebSocket handshake.
 func (c *wsConn) readLoop(ctx context.Context, h Handler) {
 	var terminalErr error
 	for {
@@ -291,20 +323,17 @@ func (c *wsConn) readLoop(ctx context.Context, h Handler) {
 			break
 		}
 		if typ != websocket.MessageBinary {
-			// R-WS.14: a frame that is not binary closes the connection
-			// with StatusUnsupportedData. This runs synchronously, on the
-			// read loop itself, and completes before OnDisconnect fires:
-			// coder/websocket's Close is otherwise idempotent-but-racy --
-			// "additional calls to Close are no-ops" only once the first
-			// call has actually written its close frame -- so a detached
-			// goroutine here could let a Handler's own Close call (e.g.
-			// from OnDisconnect) win the race and overwrite this status
-			// with StatusNormalClosure on the wire. Running it inline
-			// guarantees this frame is sent, and casClosing latched,
-			// before any Handler code can call Close again.
 			_ = c.conn.Close(websocket.StatusUnsupportedData, "only binary frames are accepted")
 			terminalErr = fmt.Errorf("mtp: WebSocket received non-binary frame type %v", typ)
 			break
+		}
+		if c.controllerEndpointID != "" {
+			rec, _ := usp.DecodeRecord(data, c.controllerEndpointID)
+			if rec != nil && rec.From != c.endpoint {
+				_ = c.conn.Close(websocket.StatusPolicyViolation, "record from_id does not match authenticated endpoint")
+				terminalErr = fmt.Errorf("mtp: WebSocket record From-ID %q does not match connection endpoint %q", rec.From, c.endpoint)
+				break
+			}
 		}
 		h.OnRecord(Inbound{
 			Conn:       c,

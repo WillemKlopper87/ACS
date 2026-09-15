@@ -64,3 +64,125 @@ func TestCWMPMuxUsesConstantRouteLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestProductionCWMPGuardRequiresTLS(t *testing.T) {
+	t.Setenv("ACS_DEPLOYMENT_PROFILE", "production")
+	called := false
+	guard := productionCWMPGuard(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://acs.example/cwmp", strings.NewReader(""))
+	rec := httptest.NewRecorder()
+	guard(rec, req)
+
+	if rec.Code != http.StatusUpgradeRequired {
+		t.Fatalf("plaintext production CWMP = %d, want %d", rec.Code, http.StatusUpgradeRequired)
+	}
+	if called {
+		t.Fatal("plaintext production request reached CWMP session handler")
+	}
+}
+
+func TestProductionCWMPGuardRejectsBasic(t *testing.T) {
+	t.Setenv("ACS_DEPLOYMENT_PROFILE", "production")
+	guard := productionCWMPGuard(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "https://acs.example/cwmp", strings.NewReader(""))
+	req.Header.Set("Authorization", "Basic Y3BlOnNlY3JldA==")
+	rec := httptest.NewRecorder()
+	guard(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("Basic production CWMP = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestProductionCWMPGuardRejectsSharedDigestUsername(t *testing.T) {
+	t.Setenv("ACS_DEPLOYMENT_PROFILE", "production")
+	t.Setenv("ACS_DIGEST_USERNAME", "acs-device")
+	called := false
+	guard := productionCWMPGuard(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "https://acs.example/cwmp", strings.NewReader(""))
+	req.Header.Set("Authorization", `Digest realm="acs", username="acs-device", nonce="n", uri="/cwmp", response="x"`)
+	// Use a real HTTP header value rather than the Go-escaped form above.
+	req.Header.Set("Authorization", strings.ReplaceAll(req.Header.Get("Authorization"), `\"`, `"`))
+	rec := httptest.NewRecorder()
+	guard(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("shared Digest production CWMP = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if called {
+		t.Fatal("shared production credential reached CWMP session handler")
+	}
+}
+
+func TestProductionCWMPGuardAllowsPerDeviceDigestForCryptographicVerification(t *testing.T) {
+	t.Setenv("ACS_DEPLOYMENT_PROFILE", "production")
+	t.Setenv("ACS_DIGEST_USERNAME", "acs-device")
+	called := false
+	guard := productionCWMPGuard(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusUnauthorized) // stand-in for the real Digest verifier
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "https://acs.example/cwmp", strings.NewReader(""))
+	req.Header.Set("Authorization", `Digest username="cpe-00e0fc-serial1", realm="acs", nonce="n", uri="/cwmp", response="x"`)
+	req.Header.Set("Authorization", strings.ReplaceAll(req.Header.Get("Authorization"), `\"`, `"`))
+	rec := httptest.NewRecorder()
+	guard(rec, req)
+
+	if !called {
+		t.Fatal("per-device Digest credential did not reach the real verifier")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("per-device Digest stand-in response = %d, want 401", rec.Code)
+	}
+}
+
+func TestLabCWMPGuardRetainsCompatibilityPath(t *testing.T) {
+	t.Setenv("ACS_DEPLOYMENT_PROFILE", "lab")
+	t.Setenv("ACS_DIGEST_USERNAME", "acs-device")
+	called := false
+	guard := productionCWMPGuard(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://acs.example/cwmp", strings.NewReader(""))
+	req.Header.Set("Authorization", `Digest username="acs-device"`)
+	rec := httptest.NewRecorder()
+	guard(rec, req)
+
+	if !called || rec.Code != http.StatusNoContent {
+		t.Fatalf("lab compatibility path called=%v status=%d, want true/204", called, rec.Code)
+	}
+}
+
+func TestDigestAuthorizationUsername(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		header string
+		want   string
+	}{
+		{"normal", `Digest realm="acs", username="device-1", nonce="abc"`, "device-1"},
+		{"mixed case", `dIgEsT Username="device-2", realm="acs"`, "device-2"},
+		{"basic", `Basic YTpi`, ""},
+		{"missing", `Digest realm="acs"`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			header := strings.ReplaceAll(tc.header, `\"`, `"`)
+			if got := digestAuthorizationUsername(header); got != tc.want {
+				t.Fatalf("digestAuthorizationUsername(%q) = %q, want %q", header, got, tc.want)
+			}
+		})
+	}
+}

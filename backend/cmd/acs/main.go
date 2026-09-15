@@ -65,21 +65,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Fail-closed CPE authentication (audit P0.1): the CWMP listener must
-	// authenticate devices via Digest credentials or mTLS; the historical
-	// unauthenticated mode now requires ACS_INSECURE_DEV_MODE=true.
+	// Fail-closed CPE authentication (audit P0.1 / security goal #56):
+	// fleet-wide Digest and mTLS are optional authentication sources. The
+	// production-safe steady state may use only unique device_credentials;
+	// validateCPEAuthStartup keeps configured sources strong and requires
+	// the credential/nonce key whenever the shared Digest password is absent.
 	cpeAuthSecrets := []config.Secret{
 		{Env: "ACS_DIGEST_PASSWORD", MinBytes: 16, Purpose: "authenticates CPE CWMP sessions via HTTP Digest"},
 		{Env: "ACS_MTLS_CA_CERT", MinBytes: 1, Purpose: "authenticates CPE CWMP sessions via client certificates"},
 	}
-	// Per-device Digest credentials are read from device_credentials,
-	// which cmd/api encrypts with this key; without it, rows written by
-	// an encrypting cmd/api cannot be decrypted here.
-	if err := config.Validate(logger, config.Secret{Env: "ACS_CREDENTIAL_ENCRYPTION_KEY", MinBytes: 16, Purpose: "decrypts per-device CWMP Digest credentials", Optional: true}); err != nil {
-		logger.Error("refusing to start", "err", err)
-		os.Exit(1)
-	}
-	if err := config.RequireOneOf(logger, "the CWMP endpoint would otherwise accept unauthenticated devices", cpeAuthSecrets...); err != nil {
+	if err := validateCPEAuthStartup(logger, cpeAuthSecrets...); err != nil {
 		logger.Error("refusing to start", "err", err)
 		os.Exit(1)
 	}

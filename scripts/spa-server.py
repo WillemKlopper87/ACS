@@ -22,6 +22,11 @@ bundle was built with; it goes into connect-src/frame-src of the CSP,
 exactly as frontend/Dockerfile substitutes it into the nginx template.
 Omit it and no CSP is sent, rather than one that would silently block
 every API call.
+
+ACS_FRONTEND_BIND controls the listener address. It defaults to 0.0.0.0
+for the compatibility-first lab quickstart. The production launcher sets
+it to 127.0.0.1 so this deliberately plain-HTTP development server can
+only be reached through the operator's HTTPS reverse proxy.
 """
 
 import os
@@ -105,6 +110,8 @@ class SPAHandler(SimpleHTTPRequestHandler):
     def end_headers(self):
         # Browser-side hardening, identical to nginx.conf.template. HSTS
         # is deliberately absent here too — this listener is plain HTTP.
+        # Production therefore binds it to loopback and puts the HSTS/TLS
+        # boundary in the external reverse proxy instead.
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -133,14 +140,15 @@ def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 5173
     directory = sys.argv[2] if len(sys.argv) > 2 else "."
     api_origin = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("ACS_API_ORIGIN", "")
+    bind = os.environ.get("ACS_FRONTEND_BIND", "0.0.0.0").strip() or "0.0.0.0"
 
     SPAHandler.csp = csp_for(api_origin)
     handler = partial(SPAHandler, directory=directory)
     # Threading, unlike http.server's default: one slow or half-open
     # client connection would otherwise stall the whole console.
-    httpd = ThreadingHTTPServer(("0.0.0.0", port), handler)
+    httpd = ThreadingHTTPServer((bind, port), handler)
     httpd.daemon_threads = True
-    print(f"spa-server: serving {directory} on 0.0.0.0:{port} "
+    print(f"spa-server: serving {directory} on {bind}:{port} "
           f"(SPA fallback to index.html{'; CSP set' if SPAHandler.csp else '; no CSP'})",
           flush=True)
     httpd.serve_forever()
