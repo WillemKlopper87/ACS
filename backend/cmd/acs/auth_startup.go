@@ -1,12 +1,67 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 
 	"acs/internal/config"
 )
+
+const (
+	acsDeploymentProfileLab        = "lab"
+	acsDeploymentProfileProduction = "production"
+)
+
+// loadACSDeploymentProfile makes the lab/production split explicit at process
+// startup. An unknown value must never fall through to the compatibility path:
+// a misspelled production profile would otherwise disable every production
+// request guard while still looking intentional in deployment configuration.
+func loadACSDeploymentProfile() (string, error) {
+	profile := strings.ToLower(strings.TrimSpace(os.Getenv("ACS_DEPLOYMENT_PROFILE")))
+	if profile == "" {
+		profile = acsDeploymentProfileLab
+	}
+	switch profile {
+	case acsDeploymentProfileLab, acsDeploymentProfileProduction:
+		return profile, nil
+	default:
+		return "", fmt.Errorf("ACS_DEPLOYMENT_PROFILE must be %q or %q, got %q", acsDeploymentProfileLab, acsDeploymentProfileProduction, profile)
+	}
+}
+
+// validateCWMPTransportStartup enforces the transport promises made by the
+// production profile before the database is opened or the listener starts.
+// Lab deliberately retains the compatibility settings used for field
+// qualification of older CPEs.
+func validateCWMPTransportStartup(profile string) error {
+	if profile != acsDeploymentProfileProduction {
+		return nil
+	}
+
+	certFile := strings.TrimSpace(os.Getenv("ACS_TLS_CERT"))
+	keyFile := strings.TrimSpace(os.Getenv("ACS_TLS_KEY"))
+	if certFile == "" || keyFile == "" {
+		return errors.New("ACS_TLS_CERT and ACS_TLS_KEY are required when ACS_DEPLOYMENT_PROFILE=production")
+	}
+	if envBool("ACS_AUTH_ALLOW_BASIC") {
+		return errors.New("ACS_AUTH_ALLOW_BASIC is forbidden when ACS_DEPLOYMENT_PROFILE=production")
+	}
+
+	// Production defaults to TLS 1.2 when ACS_TLS_MIN_VERSION is unset,
+	// and explicitly refuses the legacy 1.0/1.1 compatibility floors.
+	// Lab continues to support those versions for controlled qualification.
+	switch strings.TrimSpace(os.Getenv("ACS_TLS_MIN_VERSION")) {
+	case "", "1.2", "1.3":
+		return nil
+	case "1.0", "1.1":
+		return errors.New("ACS_TLS_MIN_VERSION must be 1.2 or 1.3 when ACS_DEPLOYMENT_PROFILE=production")
+	default:
+		return fmt.Errorf("invalid ACS_TLS_MIN_VERSION %q (want 1.2 or 1.3 in production)", strings.TrimSpace(os.Getenv("ACS_TLS_MIN_VERSION")))
+	}
+}
 
 // validateCPEAuthStartup validates the secrets used by cmd/acs before it
 // opens the database and constructs the Digest authenticator.
