@@ -39,6 +39,10 @@ if [ -z "$PUBLIC_IP" ]; then
   exit 1
 fi
 echo "Public IP: $PUBLIC_IP"
+# The API uses this value for its CORS allow-origin. Keep it derived from the
+# same address used by the frontend so an EC2 stop/start with a new public IP
+# cannot leave the API serving a stale browser origin from the secrets file.
+export ACS_FRONTEND_BASE_URL="http://$PUBLIC_IP:5173"
 
 # docker compose reads infra/.env. gen-env.sh creates it before the public
 # IP is known, so update run-specific bind/root values here.
