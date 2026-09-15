@@ -144,6 +144,19 @@ func (r *Repository) UpdateAlarmState(ctx context.Context, id, state string) err
 	return nil
 }
 
+// ClearAlarm closes only a raised alarm belonging to accountID and the
+// device/condition pair. Events are retained separately in tmf_events.
+func (r *Repository) ClearAlarm(ctx context.Context, accountID, deviceID, sourceKey string) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE tmf_alarms SET state='cleared', cleared_at=COALESCE(cleared_at, now()) WHERE source_key=$1 AND account_id=$2 AND device_id=$3::uuid AND state='raised'`, sourceKey, accountID, deviceID)
+	if err != nil {
+		return fmt.Errorf("clear TMF alarm: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (r *Repository) CreateServiceProblem(ctx context.Context, externalID, accountID, serviceID, problemType, description, priority, alarmID string) (*ServiceProblemRecord, error) {
 	return r.CreateServiceProblemRich(ctx, externalID, accountID, serviceID, problemType, description, priority, alarmID, nil, nil, "", "", "")
 }

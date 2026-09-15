@@ -1,10 +1,14 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
+
+	"acs/internal/tmf/telemetry"
 )
 
 type tmf688EventRequest struct {
@@ -152,6 +156,20 @@ func (h *handler) createTMF688Event(w http.ResponseWriter, r *http.Request) {
 	if e == nil {
 		writeJSON(w, 200, map[string]any{"status": "duplicate", "sourceKey": req.SourceKey})
 		return
+	}
+	// Recovery events are retained above, then may close only the matching
+	// tenant/device alarm. Requiring faultCode prevents a generic "online"
+	// notification from clearing unrelated conditions.
+	if telemetry.QualifyingRecoveryEvent(req.EventType) {
+		if code, ok := req.Payload["faultCode"].(string); ok && strings.TrimSpace(code) != "" {
+			protocol := "ACS"
+			if p, ok := req.Payload["protocol"].(string); ok && strings.TrimSpace(p) != "" {
+				protocol = p
+			}
+			if err := h.mappings.ClearAlarm(r.Context(), req.AccountID, req.DeviceID, telemetry.ConditionKey(protocol, req.DeviceID, code)); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				h.logger.Warn("failed to clear recovered TMF alarm", "err", err, "device_id", req.DeviceID)
+			}
+		}
 	}
 	writeJSON(w, 201, e)
 }
