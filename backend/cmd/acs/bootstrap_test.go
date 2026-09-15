@@ -108,7 +108,7 @@ func TestBootstrapGuardAcceptsUnregisteredInformWithoutEnteringNormalHandler(t *
 		nil,
 		func(_ context.Context, naturalKey string) (*devices.Device, error) {
 			lookupCalls++
-			if naturalKey != "A1B2C3_N5368X_BOOTSTRAP-SERIAL-1" {
+			if naturalKey != "A1B2C3+N5368X+BOOTSTRAP-SERIAL-1" {
 				t.Fatalf("natural key = %q, want normalized Inform identity", naturalKey)
 			}
 			return nil, sql.ErrNoRows
