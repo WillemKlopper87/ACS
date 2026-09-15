@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"acs/internal/bss"
 	"acs/internal/tmf/telemetry"
 )
 
@@ -82,15 +83,24 @@ func tmfSelectMap(m map[string]any, raw string) map[string]any {
 	return out
 }
 
+func tmf642AlarmResponse(a *bss.AlarmRecord) map[string]any {
+	return map[string]any{"id": a.ID, "href": "/tmf-api/alarmManagement/v4/alarm/" + a.ID, "alarmType": a.AlarmType, "perceivedSeverity": a.Severity, "state": a.State, "probableCause": a.ProbableCause, "specificProblem": a.SpecificProblem, "sourceKey": a.SourceKey, "accountId": a.AccountID, "deviceId": a.DeviceID, "serviceId": a.ServiceID, "details": json.RawMessage(a.Details), "raisedAt": a.RaisedAt, "clearedAt": a.ClearedAt}
+}
+
 func (h *handler) createTMF688Hub(w http.ResponseWriter, r *http.Request) {
 	var req tmf688HubRequest
 	if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.Callback) == "" || strings.TrimSpace(req.Secret) == "" || len(req.EventTypes) == 0 {
 		writeError(w, 400, "ErrInvalidRequest", "callback, secret, and eventTypes are required")
 		return
 	}
+	claims, ok := h.tmfPrincipal(w, r, bss.ScopeTMFWrite)
+	if !ok || !tmfAccountAllowed(w, claims, strings.TrimSpace(req.AccountID)) {
+		return
+	}
 	var account *string
 	if strings.TrimSpace(req.AccountID) != "" {
-		account = &req.AccountID
+		id := strings.TrimSpace(req.AccountID)
+		account = &id
 	}
 	sub, err := h.webhooks.CreateSubscription(r.Context(), account, req.Callback, req.Secret, req.EventTypes)
 	if err != nil {
@@ -101,13 +111,29 @@ func (h *handler) createTMF688Hub(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) listTMF688Hubs(w http.ResponseWriter, r *http.Request) {
+	claims, ok := h.tmfPrincipal(w, r, bss.ScopeTMFRead)
+	if !ok {
+		return
+	}
 	subs, err := h.webhooks.ListSubscriptions(r.Context())
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
 	}
+	allowedAccounts := map[string]struct{}{}
+	for _, id := range claims.AccountIDs {
+		allowedAccounts[id] = struct{}{}
+	}
 	out := make([]map[string]any, 0, len(subs))
 	for _, s := range subs {
+		if !claims.GlobalAccess {
+			if s.AccountID == nil {
+				continue
+			}
+			if _, allowed := allowedAccounts[*s.AccountID]; !allowed {
+				continue
+			}
+		}
 		out = append(out, map[string]any{"id": s.ID, "callback": s.TargetURL, "accountId": s.AccountID, "eventTypes": s.EventTypes, "createdAt": s.CreatedAt})
 	}
 	offset, end := tmfPageQuery(r, len(out))
@@ -125,6 +151,9 @@ func (h *handler) getTMF688Event(w http.ResponseWriter, r *http.Request) {
 	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
 	if accountID == "" {
 		writeError(w, 400, "ErrInvalidRequest", "accountId is required")
+		return
+	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, accountID) {
 		return
 	}
 	e, err := h.mappings.FindEventForAccount(r.Context(), strings.TrimSpace(r.PathValue("id")), accountID)
@@ -145,6 +174,9 @@ func (h *handler) getTMF642Alarm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "ErrInvalidRequest", "accountId is required")
 		return
 	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, accountID) {
+		return
+	}
 	a, err := h.mappings.FindAlarmForAccount(r.Context(), strings.TrimSpace(r.PathValue("id")), accountID)
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
@@ -154,11 +186,23 @@ func (h *handler) getTMF642Alarm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "ErrNotFound", "no such alarm")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"id": a.ID, "href": "/tmf-api/alarmManagement/v4/alarm/" + a.ID, "alarmType": a.AlarmType, "perceivedSeverity": a.Severity, "state": a.State, "probableCause": a.ProbableCause, "specificProblem": a.SpecificProblem, "sourceKey": a.SourceKey, "accountId": a.AccountID, "deviceId": a.DeviceID, "serviceId": a.ServiceID, "details": json.RawMessage(a.Details), "raisedAt": a.RaisedAt, "clearedAt": a.ClearedAt})
+	writeJSON(w, 200, tmf642AlarmResponse(a))
 }
 
 func (h *handler) listTMF688Events(w http.ResponseWriter, r *http.Request) {
-	events, err := h.mappings.ListEvents(r.Context(), strings.TrimSpace(r.URL.Query().Get("accountId")), 100)
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	claims, ok := h.tmfPrincipal(w, r, bss.ScopeTMFRead)
+	if !ok {
+		return
+	}
+	if accountID == "" && !claims.GlobalAccess {
+		writeError(w, 400, "ErrInvalidRequest", "accountId is required for scoped clients")
+		return
+	}
+	if accountID != "" && !tmfAccountAllowed(w, claims, accountID) {
+		return
+	}
+	events, err := h.mappings.ListEvents(r.Context(), accountID, 100)
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
@@ -179,7 +223,19 @@ func (h *handler) listTMF688Events(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) listTMF642Alarms(w http.ResponseWriter, r *http.Request) {
-	alarms, err := h.mappings.ListAlarms(r.Context(), strings.TrimSpace(r.URL.Query().Get("accountId")), strings.TrimSpace(r.URL.Query().Get("state")), 100)
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	claims, ok := h.tmfPrincipal(w, r, bss.ScopeTMFRead)
+	if !ok {
+		return
+	}
+	if accountID == "" && !claims.GlobalAccess {
+		writeError(w, 400, "ErrInvalidRequest", "accountId is required for scoped clients")
+		return
+	}
+	if accountID != "" && !tmfAccountAllowed(w, claims, accountID) {
+		return
+	}
+	alarms, err := h.mappings.ListAlarms(r.Context(), accountID, strings.TrimSpace(r.URL.Query().Get("state")), 100)
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
@@ -212,17 +268,33 @@ func (h *handler) patchTMF642Alarm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "ErrInvalidRequest", "accountId is required")
 		return
 	}
-	if err := h.mappings.UpdateAlarmStateForAccount(r.Context(), strings.TrimSpace(r.PathValue("id")), accountID, body.State); err != nil {
+	if !h.authorizeTMF(w, r, bss.ScopeTMFAcknowledge, accountID) {
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	if err := h.mappings.UpdateAlarmStateForAccount(r.Context(), id, accountID, body.State); err != nil {
 		writeError(w, 404, "ErrNotFound", "no such alarm")
 		return
 	}
-	h.getTMF642Alarm(w, r)
+	a, err := h.mappings.FindAlarmForAccount(r.Context(), id, accountID)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	if a == nil {
+		writeError(w, 404, "ErrNotFound", "no such alarm")
+		return
+	}
+	writeJSON(w, 200, tmf642AlarmResponse(a))
 }
 
 func (h *handler) createTMF688Event(w http.ResponseWriter, r *http.Request) {
 	var req tmf688EventRequest
 	if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.SourceKey) == "" || strings.TrimSpace(req.EventType) == "" {
 		writeError(w, 400, "ErrInvalidRequest", "sourceKey and eventType are required")
+		return
+	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFWrite, strings.TrimSpace(req.AccountID)) {
 		return
 	}
 	at := time.Now().UTC()
@@ -261,6 +333,9 @@ func (h *handler) createTMF642Alarm(w http.ResponseWriter, r *http.Request) {
 	var req tmf642AlarmRequest
 	if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.SourceKey) == "" || strings.TrimSpace(req.AlarmType) == "" || strings.TrimSpace(req.Severity) == "" {
 		writeError(w, 400, "ErrInvalidRequest", "sourceKey, alarmType, and perceivedSeverity are required")
+		return
+	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFWrite, strings.TrimSpace(req.AccountID)) {
 		return
 	}
 	allowed := map[string]bool{"critical": true, "major": true, "minor": true, "warning": true, "indeterminate": true}

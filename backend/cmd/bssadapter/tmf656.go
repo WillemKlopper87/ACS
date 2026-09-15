@@ -63,10 +63,14 @@ func (h *handler) createTMF656Problem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "accountId, problemType, and description are required")
 		return
 	}
+	req.AccountID = strings.TrimSpace(req.AccountID)
 	req.RelatedEventIDs = normalizeTMF656IDs(req.RelatedEventIDs)
 	req.AffectedResourceIDs = normalizeTMF656IDs(req.AffectedResourceIDs)
 	if req.Severity != "" && !map[string]bool{"critical": true, "major": true, "minor": true, "warning": true, "indeterminate": true}[strings.ToLower(req.Severity)] {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "severity is invalid")
+		return
+	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFWrite, req.AccountID) {
 		return
 	}
 	if req.ExternalID != "" {
@@ -109,6 +113,9 @@ func (h *handler) getTMF656Problem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "ErrInvalidRequest", "accountId is required")
 		return
 	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, accountID) {
+		return
+	}
 	p, err := h.mappings.FindServiceProblemForAccount(r.Context(), strings.TrimSpace(r.PathValue("id")), accountID)
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
@@ -122,7 +129,19 @@ func (h *handler) getTMF656Problem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) listTMF656Problems(w http.ResponseWriter, r *http.Request) {
-	problems, err := h.mappings.ListServiceProblems(r.Context(), strings.TrimSpace(r.URL.Query().Get("accountId")), strings.TrimSpace(r.URL.Query().Get("status")), 500)
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	claims, ok := h.tmfPrincipal(w, r, bss.ScopeTMFRead)
+	if !ok {
+		return
+	}
+	if accountID == "" && !claims.GlobalAccess {
+		writeError(w, 400, "ErrInvalidRequest", "accountId is required for scoped clients")
+		return
+	}
+	if accountID != "" && !tmfAccountAllowed(w, claims, accountID) {
+		return
+	}
+	problems, err := h.mappings.ListServiceProblems(r.Context(), accountID, strings.TrimSpace(r.URL.Query().Get("status")), 500)
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
@@ -159,6 +178,9 @@ func (h *handler) patchTMF656Problem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "ErrInvalidRequest", "accountId is required for lifecycle updates")
 		return
 	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFWrite, accountID) {
+		return
+	}
 	if err := h.mappings.UpdateServiceProblemStatus(r.Context(), id, accountID, req.Status, req.Resolution); errors.Is(err, sql.ErrNoRows) {
 		writeError(w, 404, "ErrNotFound", "no such service problem")
 		return
@@ -166,5 +188,14 @@ func (h *handler) patchTMF656Problem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
 	}
-	h.getTMF656Problem(w, r)
+	p, err := h.mappings.FindServiceProblemForAccount(r.Context(), id, accountID)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	if p == nil {
+		writeError(w, 404, "ErrNotFound", "no such service problem")
+		return
+	}
+	writeJSON(w, 200, tmf656ProblemResponse(p))
 }

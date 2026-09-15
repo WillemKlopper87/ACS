@@ -3,12 +3,6 @@
 // translation layer over the same account_device_mappings/bss_orders
 // data and dispatchOrder sequence /bss/v1/* already uses -- no new
 // dispatch logic lives here.
-//
-// TMF640 is CRUD on a Service resource plus a Monitor resource for async
-// tracking -- verified against the real TM Forum swagger spec before
-// this was written, not assumed from the loose "ServiceOrder" shape an
-// earlier architecture note incorrectly described (that's TMF641, a
-// different API -- see design S2).
 package main
 
 import (
@@ -33,10 +27,6 @@ type tmfRelatedParty struct {
 	ID string `json:"id"`
 }
 
-// tmfService is TMF640's Service resource, reduced to the fields this
-// increment populates (design §4.1) -- every other TMF640 Service field
-// (feature, serviceRelationship, supportingResource, ...) is valid to
-// omit per TMF's own extensibility model, not an error.
 type tmfService struct {
 	ID                    string                     `json:"id"`
 	Href                  string                     `json:"href"`
@@ -47,24 +37,8 @@ type tmfService struct {
 }
 
 // serviceFromMapping builds a Service resource for one mapping, resolving
-// SSID's current value via ACSClient.GetParameters (never
-// internal/parameters directly -- design S4.1's process-boundary rule)
-// using the exact same canonical-parameter resolution
-// internal/bss/template.go's translateModifyWifi already uses for the
-// write side, so read and write can never disagree about which
-// TR-181/TR-098 path a characteristic means. A characteristic whose
-// value isn't in the cache yet (device never reported it) is simply
-// omitted from ServiceCharacteristic, not an error -- a fresh device's
-// Service is still a valid, mostly-empty read.
-//
-// WiFiPassword is deliberately never read back here: a security review
-// flagged the original design (reflecting its live value in GET, per the
-// spec as first written) as exposing a plaintext credential to any
-// authenticated BSS integrator. Redacting it in reads -- and never even
-// requesting its value from ACSClient.GetParameters, so the plaintext
-// doesn't transit this path at all -- was the resulting decision;
-// PATCH /service/{id} (a later task) can still write it, matching common
-// TR-069/TR-369 practice of treating KeyPassphrase as write-only.
+// SSID's current value via ACSClient.GetParameters. WiFiPassword is
+// deliberately never read back: it remains write-only credential material.
 func (h *handler) serviceFromMapping(r *http.Request, m *bss.AccountDeviceMapping) (tmfService, error) {
 	svc := tmfService{
 		ID:           m.ID,
@@ -106,6 +80,9 @@ func (h *handler) getService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, m.AccountID) {
+		return
+	}
 
 	svc, err := h.serviceFromMapping(r, m)
 	if errors.Is(err, bss.ErrACSUnreachable) {
@@ -120,16 +97,15 @@ func (h *handler) getService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, svc)
 }
 
-// listServices implements GET /service?accountId=.... TMF640's own base
-// spec has no account-scoping query param (multi-tenant scoping is an
-// implementation concern, not part of the standard) -- accountId is
-// required here because bssadapter has no "list every account's
-// services" operation, mirroring /bss/v1/mappings/{account_id}'s own
-// account-scoped-only design.
+// listServices implements GET /service?accountId=.... accountId is required
+// so the inventory can never degrade into an unscoped cross-tenant list.
 func (h *handler) listServices(w http.ResponseWriter, r *http.Request) {
 	accountID := r.URL.Query().Get("accountId")
 	if accountID == "" {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "accountId query parameter is required")
+		return
+	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, accountID) {
 		return
 	}
 

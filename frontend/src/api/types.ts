@@ -449,6 +449,9 @@ export interface BSSOAuthClient {
   id: string;
   name: string;
   client_id: string;
+  scopes: string[];
+  account_ids: string[];
+  global_access: boolean;
   created_at: string;
   revoked_at?: string;
 }

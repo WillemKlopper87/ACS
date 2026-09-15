@@ -27,6 +27,9 @@ func (h *handler) getTMF638Service(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, mapping.AccountID) {
+		return
+	}
 	service, err := h.serviceFromMapping(r, mapping)
 	if err != nil {
 		h.logger.Error("failed to build TMF638 service", "err", err, "id", id)
@@ -44,6 +47,9 @@ func (h *handler) listTMF638Services(w http.ResponseWriter, r *http.Request) {
 	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
 	if accountID == "" {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "accountId query parameter is required")
+		return
+	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, accountID) {
 		return
 	}
 	mappings, err := h.mappings.ListByAccount(r.Context(), accountID)
