@@ -27,6 +27,43 @@ type tmf642AlarmRequest struct {
 	SpecificProblem string         `json:"specificProblem"`
 	Details         map[string]any `json:"details"`
 }
+type tmf688HubRequest struct {
+	Callback   string   `json:"callback"`
+	Secret     string   `json:"secret"`
+	AccountID  string   `json:"accountId"`
+	EventTypes []string `json:"eventTypes"`
+}
+
+func (h *handler) createTMF688Hub(w http.ResponseWriter, r *http.Request) {
+	var req tmf688HubRequest
+	if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.Callback) == "" || strings.TrimSpace(req.Secret) == "" || len(req.EventTypes) == 0 {
+		writeError(w, 400, "ErrInvalidRequest", "callback, secret, and eventTypes are required")
+		return
+	}
+	var account *string
+	if strings.TrimSpace(req.AccountID) != "" {
+		account = &req.AccountID
+	}
+	sub, err := h.webhooks.CreateSubscription(r.Context(), account, req.Callback, req.Secret, req.EventTypes)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	writeJSON(w, 201, map[string]any{"id": sub.ID, "callback": sub.TargetURL, "accountId": account, "eventTypes": sub.EventTypes, "createdAt": sub.CreatedAt})
+}
+
+func (h *handler) listTMF688Hubs(w http.ResponseWriter, r *http.Request) {
+	subs, err := h.webhooks.ListSubscriptions(r.Context())
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	out := make([]map[string]any, 0, len(subs))
+	for _, s := range subs {
+		out = append(out, map[string]any{"id": s.ID, "callback": s.TargetURL, "accountId": s.AccountID, "eventTypes": s.EventTypes, "createdAt": s.CreatedAt})
+	}
+	writeJSON(w, 200, out)
+}
 
 func (h *handler) getTMF688Event(w http.ResponseWriter, r *http.Request) {
 	e, err := h.mappings.FindEvent(r.Context(), strings.TrimSpace(r.PathValue("id")))

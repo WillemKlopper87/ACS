@@ -192,6 +192,8 @@ func main() {
 	mux.HandleFunc("GET /tmf-api/alarmManagement/v4/alarm/{id}", metrics.InstrumentHTTP("GET /tmf-api/alarmManagement/v4/alarm/{id}", h.getTMF642Alarm))
 	mux.HandleFunc("GET /tmf-api/eventManagement/v4/event", metrics.InstrumentHTTP("GET /tmf-api/eventManagement/v4/event", h.listTMF688Events))
 	mux.HandleFunc("GET /tmf-api/alarmManagement/v4/alarm", metrics.InstrumentHTTP("GET /tmf-api/alarmManagement/v4/alarm", h.listTMF642Alarms))
+	mux.HandleFunc("POST /tmf-api/eventManagement/v4/hub", metrics.InstrumentHTTP("POST /tmf-api/eventManagement/v4/hub", h.createTMF688Hub))
+	mux.HandleFunc("GET /tmf-api/eventManagement/v4/hub", metrics.InstrumentHTTP("GET /tmf-api/eventManagement/v4/hub", h.listTMF688Hubs))
 	mux.HandleFunc("PATCH /tmf-api/alarmManagement/v4/alarm/{id}", metrics.InstrumentHTTP("PATCH /tmf-api/alarmManagement/v4/alarm/{id}", h.patchTMF642Alarm))
 	mux.HandleFunc("POST /tmf-api/serviceOrdering/v4/serviceOrder", metrics.InstrumentHTTP("POST /tmf-api/serviceOrdering/v4/serviceOrder", h.createTMF641Order))
 	mux.HandleFunc("GET /tmf-api/serviceOrdering/v4/serviceOrder/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceOrdering/v4/serviceOrder/{id}", h.getTMF641Order))
