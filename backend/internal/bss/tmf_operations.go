@@ -116,3 +116,23 @@ func (r *Repository) UpdateServiceProblemStatus(ctx context.Context, id, status,
 	}
 	return nil
 }
+
+func (r *Repository) ListServiceProblems(ctx context.Context, accountID, status string, limit int) ([]ServiceProblemRecord, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT id,COALESCE(external_id,''),account_id,COALESCE(service_id::text,''),status,COALESCE(priority,''),problem_type,description,COALESCE(related_alarm_id::text,''),created_at,resolved_at,COALESCE(resolution,'') FROM tmf_service_problems WHERE ($1='' OR account_id=$1) AND ($2='' OR status=$2) ORDER BY created_at DESC LIMIT $3`, accountID, status, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list service problems: %w", err)
+	}
+	defer rows.Close()
+	var out []ServiceProblemRecord
+	for rows.Next() {
+		var p ServiceProblemRecord
+		if err := rows.Scan(&p.ID, &p.ExternalID, &p.AccountID, &p.ServiceID, &p.Status, &p.Priority, &p.ProblemType, &p.Description, &p.RelatedAlarmID, &p.CreatedAt, &p.ResolvedAt, &p.Resolution); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

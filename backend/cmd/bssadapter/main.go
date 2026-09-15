@@ -184,6 +184,7 @@ func main() {
 	mux.HandleFunc("GET /tmf-api/serviceInventoryManagement/v4/service/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceInventoryManagement/v4/service/{id}", h.getTMF638Service))
 	mux.HandleFunc("POST /tmf-api/serviceProblemManagement/v4/serviceProblem", metrics.InstrumentHTTP("POST /tmf-api/serviceProblemManagement/v4/serviceProblem", h.createTMF656Problem))
 	mux.HandleFunc("GET /tmf-api/serviceProblemManagement/v4/serviceProblem/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceProblemManagement/v4/serviceProblem/{id}", h.getTMF656Problem))
+	mux.HandleFunc("GET /tmf-api/serviceProblemManagement/v4/serviceProblem", metrics.InstrumentHTTP("GET /tmf-api/serviceProblemManagement/v4/serviceProblem", h.listTMF656Problems))
 	mux.HandleFunc("PATCH /tmf-api/serviceProblemManagement/v4/serviceProblem/{id}", metrics.InstrumentHTTP("PATCH /tmf-api/serviceProblemManagement/v4/serviceProblem/{id}", h.patchTMF656Problem))
 	mux.HandleFunc("POST /tmf-api/eventManagement/v4/event", metrics.InstrumentHTTP("POST /tmf-api/eventManagement/v4/event", h.createTMF688Event))
 	mux.HandleFunc("POST /tmf-api/alarmManagement/v4/alarm", metrics.InstrumentHTTP("POST /tmf-api/alarmManagement/v4/alarm", h.createTMF642Alarm))

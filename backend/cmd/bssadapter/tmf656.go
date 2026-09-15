@@ -75,6 +75,20 @@ func (h *handler) getTMF656Problem(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, tmf656ProblemResponse(p))
 }
 
+func (h *handler) listTMF656Problems(w http.ResponseWriter, r *http.Request) {
+	problems, err := h.mappings.ListServiceProblems(r.Context(), strings.TrimSpace(r.URL.Query().Get("accountId")), strings.TrimSpace(r.URL.Query().Get("status")), 500)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	responses := make([]map[string]any, 0, len(problems))
+	for i := range problems {
+		p := problems[i]
+		responses = append(responses, tmf656ProblemResponse(&p))
+	}
+	writeJSON(w, 200, responses)
+}
+
 func (h *handler) patchTMF656Problem(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.PathValue("id"))
 	if _, err := uuid.Parse(id); err != nil {
