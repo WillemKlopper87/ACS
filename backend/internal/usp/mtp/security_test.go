@@ -96,7 +96,7 @@ func TestMQTTTopicACLIsPrincipalScoped(t *testing.T) {
 
 	writeCases := map[string]bool{
 		controller: true,
-		controller + replyToKey + EscapeReplyTo(p.MQTTTopic):         true,
+		controller + replyToKey + EscapeReplyTo(p.MQTTTopic):        true,
 		controller + replyToKey + EscapeReplyTo("/usp/agent/other"): false,
 		"/usp/agent/trusted": false,
 		"/other":             false,
@@ -108,7 +108,7 @@ func TestMQTTTopicACLIsPrincipalScoped(t *testing.T) {
 	}
 
 	readCases := map[string]bool{
-		p.MQTTTopic:           true,
+		p.MQTTTopic:          true,
 		p.MQTTTopic + "/#":   true,
 		p.MQTTTopic + "/one": true,
 		"/usp/agent/other":   false,
