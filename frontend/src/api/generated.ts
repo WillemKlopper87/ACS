@@ -4435,7 +4435,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** Register a new OAuth2 client-credentials integration (superadmin) — client_secret returned exactly once */
+        /** Register a new OAuth2 client-credentials integration with explicit TMF authorization policy (superadmin) — client_secret returned exactly once */
         post: {
             parameters: {
                 query?: never;
@@ -4447,6 +4447,15 @@ export interface paths {
                 content: {
                     "application/json": {
                         name: string;
+                        /** @description TMF permissions granted to this integration. An empty list creates an authenticated but TMF-disabled client. */
+                        scopes: ("tmf:read" | "tmf:write" | "tmf:execute" | "tmf:acknowledge")[];
+                        /** @description Accounts this client may access. Required for a non-empty scope list unless global_access is true; mutually exclusive with global_access. */
+                        account_ids?: string[];
+                        /**
+                         * @description Deliberate fleet-wide TMF access. Mutually exclusive with account_ids.
+                         * @default false
+                         */
+                        global_access?: boolean;
                     };
                 };
             };
@@ -4459,6 +4468,13 @@ export interface paths {
                     content: {
                         "application/json": components["schemas"]["BSSOAuthClientCreateResult"];
                     };
+                };
+                /** @description Invalid OAuth authorization policy */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
             };
         };
@@ -5972,11 +5988,14 @@ export interface components {
             error?: string | null;
         };
         BSSOAuthClient: {
-            id?: string;
-            name?: string;
-            client_id?: string;
+            id: string;
+            name: string;
+            client_id: string;
+            scopes: ("tmf:read" | "tmf:write" | "tmf:execute" | "tmf:acknowledge")[];
+            account_ids: string[];
+            global_access: boolean;
             /** Format: date-time */
-            created_at?: string;
+            created_at: string;
             /** Format: date-time */
             revoked_at?: string | null;
         };

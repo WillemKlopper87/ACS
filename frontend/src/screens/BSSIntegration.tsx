@@ -15,6 +15,8 @@ import { toast } from "../lib/toast";
 // response flow a BSS integrator would see, auth and faults included.
 type Tab = "setup" | "health" | "troubleshoot";
 
+const TMF_OAUTH_SCOPES = ["tmf:read", "tmf:write", "tmf:execute", "tmf:acknowledge"] as const;
+
 function statusPillClass(status: string) {
   if (status === "ACTIVE") return "pill pill-ok";
   if (status === "SUSPENDED") return "pill pill-warn";
@@ -81,6 +83,9 @@ export function BSSIntegration() {
   // --- setup: OAuth2 clients ---
   const [oauthClients, setOauthClients] = useState<BSSOAuthClient[]>([]);
   const [oauthClientName, setOauthClientName] = useState("");
+  const [oauthScopes, setOauthScopes] = useState<string[]>(["tmf:read"]);
+  const [oauthAccountIds, setOauthAccountIds] = useState("");
+  const [oauthGlobalAccess, setOauthGlobalAccess] = useState(false);
   const [newClientSecret, setNewClientSecret] = useState<{ clientId: string; secret: string } | null>(null);
 
   // --- health ---
@@ -113,15 +118,34 @@ export function BSSIntegration() {
 
   async function createOAuthClient(e: React.FormEvent) {
     e.preventDefault();
+    const accountIds = oauthGlobalAccess
+      ? []
+      : oauthAccountIds.split(",").map((value) => value.trim()).filter(Boolean);
+    if (oauthScopes.length > 0 && !oauthGlobalAccess && accountIds.length === 0) {
+      toast("Grant at least one account ID or deliberately enable fleet-wide access", "error");
+      return;
+    }
     try {
-      const result = await api.createBSSOAuthClient(oauthClientName);
+      const result = await api.createBSSOAuthClient({
+        name: oauthClientName,
+        scopes: oauthScopes,
+        account_ids: accountIds,
+        global_access: oauthGlobalAccess,
+      });
       setOauthClientName("");
+      setOauthScopes(["tmf:read"]);
+      setOauthAccountIds("");
+      setOauthGlobalAccess(false);
       setNewClientSecret({ clientId: result.client.client_id, secret: result.client_secret });
       toast("OAuth2 client registered", "success");
       await loadSetup();
     } catch (e) {
       toast(e instanceof ApiError ? e.message : "Failed to create OAuth2 client", "error");
     }
+  }
+
+  function toggleOAuthScope(scope: string) {
+    setOauthScopes((current) => current.includes(scope) ? current.filter((value) => value !== scope) : [...current, scope]);
   }
 
   async function revokeOAuthClient(id: string, name: string) {
@@ -311,12 +335,43 @@ export function BSSIntegration() {
           <div className="panel">
             <h3>OAuth2 clients</h3>
             <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
-              Recommended auth for new integrations (RFC 6749 client-credentials). The secret is shown once, right
-              after creation — copy it now, it can't be retrieved again.
+              Recommended auth for new integrations (RFC 6749 client-credentials). Grant only the TMF permissions and
+              accounts this integration needs, or deliberately choose fleet-wide access. The secret is shown once after creation.
             </p>
-            <form onSubmit={createOAuthClient} className="form-row" style={{ flexWrap: "wrap" }}>
-              <input aria-label="Integration name, e.g. Salesforce Comm Cloud" placeholder="Integration name, e.g. Salesforce Comm Cloud" value={oauthClientName} onChange={(e) => setOauthClientName(e.target.value)} required />
-              <button type="submit" className="btn primary">Register</button>
+            <form onSubmit={createOAuthClient} style={{ marginTop: "0.75rem" }}>
+              <div className="form-row" style={{ flexWrap: "wrap" }}>
+                <input aria-label="Integration name, e.g. Salesforce Comm Cloud" placeholder="Integration name, e.g. Salesforce Comm Cloud" value={oauthClientName} onChange={(e) => setOauthClientName(e.target.value)} required />
+                <input
+                  aria-label="Authorized account IDs"
+                  placeholder="account IDs, comma-separated"
+                  value={oauthAccountIds}
+                  onChange={(e) => setOauthAccountIds(e.target.value)}
+                  disabled={oauthGlobalAccess}
+                />
+                <label style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={oauthGlobalAccess}
+                    onChange={(e) => {
+                      setOauthGlobalAccess(e.target.checked);
+                      if (e.target.checked) setOauthAccountIds("");
+                    }}
+                  />
+                  Fleet-wide access
+                </label>
+              </div>
+              <div className="form-row" role="group" aria-label="TMF OAuth scopes" style={{ flexWrap: "wrap", marginTop: "0.5rem" }}>
+                {TMF_OAUTH_SCOPES.map((scope) => (
+                  <label key={scope} style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
+                    <input type="checkbox" checked={oauthScopes.includes(scope)} onChange={() => toggleOAuthScope(scope)} />
+                    <code>{scope}</code>
+                  </label>
+                ))}
+                <button type="submit" className="btn primary">Register</button>
+              </div>
+              <p className="dim" style={{ margin: "0.45rem 0 0", fontSize: "0.76rem" }}>
+                A client with no scopes may authenticate but cannot call TMF routes. Any scoped client must be account-bound or explicitly fleet-wide.
+              </p>
             </form>
             {newClientSecret && (
               <div className="panel" style={{ marginTop: "0.75rem", background: "var(--surface-2)" }}>
@@ -351,6 +406,9 @@ export function BSSIntegration() {
                       </button>
                     )}
                     <span className="src mono">{c.client_id}</span>
+                    <span className="src">
+                      {c.scopes.length > 0 ? c.scopes.join(", ") : "no TMF scopes"} · {c.global_access ? "fleet-wide" : c.account_ids.length > 0 ? c.account_ids.join(", ") : "no accounts"}
+                    </span>
                   </div>
                 ))}
               </div>

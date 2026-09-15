@@ -1516,12 +1516,33 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/BSSOAuthClient" } } } } } } }
     post:
       tags: [BSS Admin]
-      summary: Register a new OAuth2 client-credentials integration (superadmin) — client_secret returned exactly once
+      summary: Register a new OAuth2 client-credentials integration with explicit TMF authorization policy (superadmin) — client_secret returned exactly once
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } }
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, scopes]
+              properties:
+                name: { type: string }
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                    enum: [tmf:read, tmf:write, tmf:execute, tmf:acknowledge]
+                  description: "TMF permissions granted to this integration. An empty list creates an authenticated but TMF-disabled client."
+                account_ids:
+                  type: array
+                  items: { type: string }
+                  description: "Accounts this client may access. Required for a non-empty scope list unless global_access is true; mutually exclusive with global_access."
+                global_access:
+                  type: boolean
+                  default: false
+                  description: "Deliberate fleet-wide TMF access. Mutually exclusive with account_ids."
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/BSSOAuthClientCreateResult" } } } }
+        "400": { description: Invalid OAuth authorization policy }
 
   /api/v1/bss/oauth-clients/{id}:
     delete:
@@ -2326,10 +2347,18 @@ components:
 
     BSSOAuthClient:
       type: object
+      required: [id, name, client_id, scopes, account_ids, global_access, created_at]
       properties:
         id: { type: string }
         name: { type: string }
         client_id: { type: string }
+        scopes:
+          type: array
+          items:
+            type: string
+            enum: [tmf:read, tmf:write, tmf:execute, tmf:acknowledge]
+        account_ids: { type: array, items: { type: string } }
+        global_access: { type: boolean }
         created_at: { type: string, format: date-time }
         revoked_at: { type: string, format: date-time, nullable: true }
 
