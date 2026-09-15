@@ -15,7 +15,7 @@ import { useTheme, type Theme } from "./theme/useTheme";
 // is worse than no badge at all. Set VITE_ENV_LABEL at build time.
 const ENV_LABEL = import.meta.env.VITE_ENV_LABEL as string | undefined;
 
-type Screen = "dashboard" | "fleet" | "control" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help";
+type Screen = "dashboard" | "fleet" | "control" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help" | "alerting";
 
 const THEME_LABEL: Record<Theme, string> = { dark: "Dark", light: "Light", unfold: "Unfold", fluent: "Fluent 2" };
 
@@ -32,6 +32,7 @@ const NAV: { id: Screen; label: string; adminOnly?: boolean; group: string }[] =
   { group: "Monitor", id: "dashboard", label: "Dashboard" },
   { group: "Monitor", id: "health", label: "Fleet Health" },
   { group: "Monitor", id: "jobs", label: "Jobs" },
+  { group: "Monitor", id: "alerting", label: "Alerting" },
 
   { group: "Devices", id: "fleet", label: "Device Fleet" },
   { group: "Devices", id: "control", label: "Fleet Control" },
@@ -118,6 +119,7 @@ const SCREEN_COMPONENT: Record<Screen, ComponentType> = {
   reports: screen(() => import("./screens/Reports"), "Reports"),
   bss: screen(() => import("./screens/BSSIntegration"), "BSSIntegration"),
   help: screen(() => import("./screens/Help"), "Help"),
+  alerting: screen(() => import("./screens/Alerting"), "Alerting"),
 };
 
 function AppShell() {
