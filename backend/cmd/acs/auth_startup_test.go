@@ -83,7 +83,7 @@ func TestValidateCWMPTransportStartupProduction(t *testing.T) {
 		}
 	})
 
-	t.Run("defaults to tls 1.2 floor", func(t *testing.T) {
+	t.Run("allows implicit tls 1.2 floor", func(t *testing.T) {
 		clearCWMPTransportEnv(t)
 		t.Setenv("ACS_TLS_CERT", "/tmp/cert.pem")
 		t.Setenv("ACS_TLS_KEY", "/tmp/key.pem")
@@ -107,8 +107,50 @@ func TestValidateCWMPTransportStartupProduction(t *testing.T) {
 	})
 }
 
+func TestValidateCPEAuthStartupRejectsUnknownProfile(t *testing.T) {
+	clearCPEAuthEnv(t)
+	clearCWMPTransportEnv(t)
+	t.Setenv("ACS_DEPLOYMENT_PROFILE", "prodution")
+	t.Setenv("ACS_CREDENTIAL_ENCRYPTION_KEY", "device-credential-key-material-32b")
+
+	err := validateCPEAuthStartup(discardLogger(), testCPEAuthSecrets()...)
+	if err == nil || !strings.Contains(err.Error(), "ACS_DEPLOYMENT_PROFILE") {
+		t.Fatalf("unknown profile startup error = %v, want deployment-profile failure", err)
+	}
+}
+
+func TestValidateCPEAuthStartupAppliesProductionTLSDefault(t *testing.T) {
+	clearCPEAuthEnv(t)
+	clearCWMPTransportEnv(t)
+	t.Setenv("ACS_DEPLOYMENT_PROFILE", "production")
+	t.Setenv("ACS_TLS_CERT", "/tmp/cert.pem")
+	t.Setenv("ACS_TLS_KEY", "/tmp/key.pem")
+	// A configured strong shared secret avoids making this transport-default
+	// regression depend on the per-device credential-key requirement.
+	t.Setenv("ACS_DIGEST_PASSWORD", "production-digest-password-material")
+
+	if err := validateCPEAuthStartup(discardLogger(), testCPEAuthSecrets()...); err != nil {
+		t.Fatalf("valid production startup rejected: %v", err)
+	}
+	if got := strings.TrimSpace(testGetenv("ACS_TLS_MIN_VERSION")); got != "1.2" {
+		t.Fatalf("ACS_TLS_MIN_VERSION after production startup = %q, want 1.2", got)
+	}
+}
+
+func testGetenv(key string) string {
+	return strings.TrimSpace(getenvForTest(key))
+}
+
+// getenvForTest is a tiny seam kept local to this test file so assertions on
+// environment normalization are explicit without changing production APIs.
+var getenvForTest = func(key string) string {
+	// testing.T.Setenv restores the process environment after each test.
+	return getenv(key)
+}
+
 func TestValidateCPEAuthStartupAllowsPerDeviceDigestOnly(t *testing.T) {
 	clearCPEAuthEnv(t)
+	clearCWMPTransportEnv(t)
 	t.Setenv("ACS_CREDENTIAL_ENCRYPTION_KEY", "device-credential-key-material-32b")
 
 	if err := validateCPEAuthStartup(discardLogger(), testCPEAuthSecrets()...); err != nil {
@@ -118,6 +160,7 @@ func TestValidateCPEAuthStartupAllowsPerDeviceDigestOnly(t *testing.T) {
 
 func TestValidateCPEAuthStartupRequiresNonceSecretWithoutSharedDigest(t *testing.T) {
 	clearCPEAuthEnv(t)
+	clearCWMPTransportEnv(t)
 
 	err := validateCPEAuthStartup(discardLogger(), testCPEAuthSecrets()...)
 	if err == nil {
@@ -130,6 +173,7 @@ func TestValidateCPEAuthStartupRequiresNonceSecretWithoutSharedDigest(t *testing
 
 func TestValidateCPEAuthStartupStillValidatesConfiguredSharedSecret(t *testing.T) {
 	clearCPEAuthEnv(t)
+	clearCWMPTransportEnv(t)
 	t.Setenv("ACS_DIGEST_PASSWORD", "short")
 
 	err := validateCPEAuthStartup(discardLogger(), testCPEAuthSecrets()...)
