@@ -83,7 +83,7 @@ func tmfSelectMap(m map[string]any, raw string) map[string]any {
 	return out
 }
 
-func tmf642AlarmResponse(a *bss.TMFAlarm) map[string]any {
+func tmf642AlarmResponse(a *bss.AlarmRecord) map[string]any {
 	return map[string]any{"id": a.ID, "href": "/tmf-api/alarmManagement/v4/alarm/" + a.ID, "alarmType": a.AlarmType, "perceivedSeverity": a.Severity, "state": a.State, "probableCause": a.ProbableCause, "specificProblem": a.SpecificProblem, "sourceKey": a.SourceKey, "accountId": a.AccountID, "deviceId": a.DeviceID, "serviceId": a.ServiceID, "details": json.RawMessage(a.Details), "raisedAt": a.RaisedAt, "clearedAt": a.ClearedAt}
 }
 
