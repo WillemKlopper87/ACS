@@ -41,9 +41,15 @@ import sys
 from urllib.parse import urlsplit
 
 u = urlsplit(sys.argv[1])
+try:
+    _ = u.port
+    valid_port = True
+except ValueError:
+    valid_port = False
 valid = (
     u.scheme == "https"
-    and bool(u.netloc)
+    and bool(u.hostname)
+    and valid_port
     and u.path in ("", "/")
     and not u.query
     and not u.fragment
@@ -53,8 +59,16 @@ valid = (
 raise SystemExit(0 if valid else 1)
 PY
   then
-    fail "$name must be an HTTPS origin with no path/query/fragment (got '$value')"
+    fail "$name must be a valid HTTPS origin with no path/query/fragment (got '$value')"
   fi
+}
+
+require_loopback_socket() {
+  local name="$1" value="${!1:-}"
+  case "$value" in
+    127.0.0.1:*|localhost:*|'[::1]':*) ;;
+    *) fail "$name must bind loopback in production (got '${value:-<unset>}')" ;;
+  esac
 }
 
 require_nonempty ACS_TLS_CERT
@@ -77,13 +91,12 @@ if [ -n "$frontend_origin" ] && [ -n "$api_origin" ] && [ "$frontend_origin" != 
   fail "ACS_API_PUBLIC_URL must equal ACS_FRONTEND_BASE_URL in the supported host production profile (same-origin HTTPS ingress required)"
 fi
 
-# Production's public operator surface terminates TLS at a reverse proxy/load
-# balancer. The host quickstart's API/SPA listeners are intentionally plain
-# HTTP, so they must be loopback-only upstreams rather than public sockets.
-case "${ACS_API_ADDR:-}" in
-  127.0.0.1:*|localhost:*|'[::1]':*) ;;
-  *) fail "ACS_API_ADDR must bind loopback in production (got '${ACS_API_ADDR:-<unset>}')" ;;
-esac
+# Every plain-HTTP management/control listener started by the host launcher is
+# an upstream, never an externally reachable production endpoint. Enforce this
+# even if ~/.acs-secrets.env was manually edited away from its safe defaults.
+require_loopback_socket ACS_API_ADDR
+require_loopback_socket ACS_BSS_ADDR
+require_loopback_socket ACS_USP_HTTP_ADDR
 case "${ACS_FRONTEND_BIND:-}" in
   127.0.0.1|localhost|::1) ;;
   *) fail "ACS_FRONTEND_BIND must be loopback in production (got '${ACS_FRONTEND_BIND:-<unset>}')" ;;
@@ -153,5 +166,6 @@ fi
 
 echo "Security preflight passed: production device transports and operator ingress requirements are configured."
 echo "Operator console/API: one HTTPS public origin -> loopback-only host listeners."
+echo "BSS adapter, USP health/metrics, Grafana and Prometheus remain host-local in this production profile."
 echo "Note: production CWMP rejects the shared fleet Digest username; provision per-device Digest credentials or mTLS before connecting established CPEs."
 echo "Note: production USP requires each agent certificate to be pre-bound to its device, EndpointID, and MQTT response topic in usp_transport_principals."
