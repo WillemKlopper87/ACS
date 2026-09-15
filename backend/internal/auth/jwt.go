@@ -18,10 +18,11 @@ import (
 // about *why* their token was rejected than an attacker should get.
 var ErrInvalidToken = errors.New("invalid or expired token")
 
-// Claims is the JWT payload for operator sessions (design doc v3 §11.3
-// credential class 4: REST/API operator, "OIDC/JWT rotation"). There is
-// no external identity provider in this lab, so cmd/api is its own
-// minimal token issuer — this is that token's shape.
+// Claims is the common JWT payload for operator sessions and machine
+// integrations. Operator tokens leave Scopes/AccountIDs/GlobalAccess empty;
+// BSS OAuth client-credentials tokens populate them from the client's
+// persisted policy so the bssadapter can authorize each TMF request without
+// trusting caller-supplied account identifiers.
 type Claims struct {
 	Subject   string
 	Role      string
@@ -37,18 +38,26 @@ type Claims struct {
 	// revoked once the stored version moves past it (password change,
 	// logout). Zero for tokens that predate revocation support.
 	Version int
+	// Scopes and account entitlements are used only by machine tokens.
+	// Empty scopes deliberately grant no TMF permissions.
+	Scopes       []string
+	AccountIDs   []string
+	GlobalAccess bool
 }
 
 // AudienceBrowserTicket marks a ticket minted by POST /auth/ticket.
 const AudienceBrowserTicket = "browser-ticket"
 
 type jwtPayload struct {
-	Subject   string `json:"sub"`
-	Role      string `json:"role"`
-	IssuedAt  int64  `json:"iat"`
-	ExpiresAt int64  `json:"exp"`
-	Audience  string `json:"aud,omitempty"`
-	Version   int    `json:"ver,omitempty"`
+	Subject      string   `json:"sub"`
+	Role         string   `json:"role"`
+	IssuedAt     int64    `json:"iat"`
+	ExpiresAt    int64    `json:"exp"`
+	Audience     string   `json:"aud,omitempty"`
+	Version      int      `json:"ver,omitempty"`
+	Scopes       []string `json:"scp,omitempty"`
+	AccountIDs   []string `json:"accounts,omitempty"`
+	GlobalAccess bool     `json:"global,omitempty"`
 }
 
 const jwtHeader = `{"alg":"HS256","typ":"JWT"}`
@@ -62,12 +71,15 @@ const jwtHeader = `{"alg":"HS256","typ":"JWT"}`
 // — that's not something to hand-roll.
 func SignJWT(secret []byte, claims Claims) (string, error) {
 	payload, err := json.Marshal(jwtPayload{
-		Subject:   claims.Subject,
-		Role:      claims.Role,
-		IssuedAt:  claims.IssuedAt.Unix(),
-		ExpiresAt: claims.ExpiresAt.Unix(),
-		Audience:  claims.Audience,
-		Version:   claims.Version,
+		Subject:      claims.Subject,
+		Role:         claims.Role,
+		IssuedAt:     claims.IssuedAt.Unix(),
+		ExpiresAt:    claims.ExpiresAt.Unix(),
+		Audience:     claims.Audience,
+		Version:      claims.Version,
+		Scopes:       claims.Scopes,
+		AccountIDs:   claims.AccountIDs,
+		GlobalAccess: claims.GlobalAccess,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal claims: %w", err)
@@ -100,12 +112,15 @@ func VerifyJWT(secret []byte, token string) (*Claims, error) {
 	}
 
 	claims := &Claims{
-		Subject:   p.Subject,
-		Role:      p.Role,
-		IssuedAt:  time.Unix(p.IssuedAt, 0).UTC(),
-		ExpiresAt: time.Unix(p.ExpiresAt, 0).UTC(),
-		Audience:  p.Audience,
-		Version:   p.Version,
+		Subject:      p.Subject,
+		Role:         p.Role,
+		IssuedAt:     time.Unix(p.IssuedAt, 0).UTC(),
+		ExpiresAt:    time.Unix(p.ExpiresAt, 0).UTC(),
+		Audience:     p.Audience,
+		Version:      p.Version,
+		Scopes:       p.Scopes,
+		AccountIDs:   p.AccountIDs,
+		GlobalAccess: p.GlobalAccess,
 	}
 	if time.Now().After(claims.ExpiresAt) {
 		return nil, ErrInvalidToken
