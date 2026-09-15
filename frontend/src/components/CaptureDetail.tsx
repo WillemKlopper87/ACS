@@ -3,9 +3,12 @@ import { api, ApiError } from "../api/client";
 import type { CaptureEvent, CaptureSession } from "../api/types";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
+import { diagnoseCapture } from "../lib/captureDiagnostics";
 import { fmtTime, timeAgo } from "../lib/format";
 import { useLive } from "../lib/useLive";
 import { StatusBadge } from "./StatusBadge";
+
+const STAGE_BADGE = { pass: "PASS", warn: "CHECK", pending: "PENDING" } as const;
 
 export function CaptureDetail({ sessionId, onStopped }: { sessionId: string; onStopped?: () => void }) {
   const { role } = useAuth();
@@ -73,6 +76,8 @@ export function CaptureDetail({ sessionId, onStopped }: { sessionId: string; onS
   }
   if (!session) return <div className="loading">Loading capture…</div>;
 
+  const diagnosis = diagnoseCapture(events);
+
   return (
     <section className="panel capture-detail" aria-label={`Capture ${session.id}`}>
       <div className="capture-detail-heading">
@@ -109,6 +114,36 @@ export function CaptureDetail({ sessionId, onStopped }: { sessionId: string; onS
         <dt>Expires</dt>
         <dd>{fmtTime(session.expires_at)} UTC</dd>
       </dl>
+
+      {session.protocol === "CWMP" && (
+        <div style={{ border: "1px solid var(--border)", borderRadius: "8px", padding: "0.75rem", margin: "0.8rem 0" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.7rem", alignItems: "baseline", flexWrap: "wrap" }}>
+            <strong>{diagnosis.headline}</strong>
+            {diagnosis.huaweiN5368 && <span className="chip">Huawei · N5368 family detected</span>}
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+              gap: "0.45rem",
+              marginTop: "0.6rem",
+            }}
+          >
+            {diagnosis.stages.map((stage) => (
+              <div key={stage.id} style={{ borderTop: "1px solid var(--border)", paddingTop: "0.45rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "0.4rem", alignItems: "center" }}>
+                  <span style={{ fontSize: "0.76rem", fontWeight: 600 }}>{stage.label}</span>
+                  <StatusBadge value={STAGE_BADGE[stage.state]} />
+                </div>
+                <div className="dim" style={{ fontSize: "0.7rem", lineHeight: 1.35, marginTop: "0.25rem" }}>{stage.detail}</div>
+              </div>
+            ))}
+          </div>
+          <div className={diagnosis.faultCodes.length > 0 ? "banner" : "dim"} style={{ marginTop: "0.65rem", fontSize: "0.76rem", lineHeight: 1.4 }}>
+            <strong>Next step:</strong> {diagnosis.nextStep}
+          </div>
+        </div>
+      )}
 
       <div className="table-wrap capture-events">
         <table>
