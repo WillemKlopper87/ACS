@@ -1,0 +1,37 @@
+name: Field RC generated API sync
+
+on:
+  push:
+    branches:
+      - fix/field-rc-ci-baseline
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: fix/field-rc-ci-baseline
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Regenerate committed API types
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run generate:api
+      - name: Commit generated file
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/api/generated.ts
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "chore(api): refresh generated client for alerting contract"
+          git push origin HEAD:fix/field-rc-ci-baseline
