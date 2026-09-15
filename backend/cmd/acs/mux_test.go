@@ -112,6 +112,8 @@ func TestProductionCWMPGuardRejectsSharedDigestUsername(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "https://acs.example/cwmp", strings.NewReader(""))
 	req.Header.Set("Authorization", `Digest realm="acs", username="acs-device", nonce="n", uri="/cwmp", response="x"`)
+	// Use a real HTTP header value rather than the Go-escaped form above.
+	req.Header.Set("Authorization", strings.ReplaceAll(req.Header.Get("Authorization"), `\"`, `"`))
 	rec := httptest.NewRecorder()
 	guard(rec, req)
 
@@ -134,6 +136,7 @@ func TestProductionCWMPGuardAllowsPerDeviceDigestForCryptographicVerification(t 
 
 	req := httptest.NewRequest(http.MethodPost, "https://acs.example/cwmp", strings.NewReader(""))
 	req.Header.Set("Authorization", `Digest username="cpe-00e0fc-serial1", realm="acs", nonce="n", uri="/cwmp", response="x"`)
+	req.Header.Set("Authorization", strings.ReplaceAll(req.Header.Get("Authorization"), `\"`, `"`))
 	rec := httptest.NewRecorder()
 	guard(rec, req)
 
@@ -176,8 +179,9 @@ func TestDigestAuthorizationUsername(t *testing.T) {
 		{"missing", `Digest realm="acs"`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := digestAuthorizationUsername(tc.header); got != tc.want {
-				t.Fatalf("digestAuthorizationUsername(%q) = %q, want %q", tc.header, got, tc.want)
+			header := strings.ReplaceAll(tc.header, `\"`, `"`)
+			if got := digestAuthorizationUsername(header); got != tc.want {
+				t.Fatalf("digestAuthorizationUsername(%q) = %q, want %q", header, got, tc.want)
 			}
 		})
 	}
