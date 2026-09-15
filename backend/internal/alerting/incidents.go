@@ -101,3 +101,34 @@ func (r *IncidentRepository) List(ctx context.Context, state string) ([]Incident
 	}
 	return out, rows.Err()
 }
+
+func (r *IncidentRepository) Due(ctx context.Context, limit int) ([]Incident, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,tenant_id,device_id::text,condition_key,priority,summary,state,escalation_stage,first_seen_at,last_seen_at,next_escalation_at,acknowledged_at,COALESCE(acknowledged_by,''),recovered_at,details FROM alert_incidents WHERE state='open' AND next_escalation_at IS NOT NULL AND next_escalation_at <= now() ORDER BY next_escalation_at LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list due alert incidents: %w", err)
+	}
+	defer rows.Close()
+	var out []Incident
+	for rows.Next() {
+		var i Incident
+		var raw []byte
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.DeviceID, &i.ConditionKey, &i.Priority, &i.Summary, &i.State, &i.EscalationStage, &i.FirstSeenAt, &i.LastSeenAt, &i.NextEscalationAt, &i.AcknowledgedAt, &i.AcknowledgedBy, &i.RecoveredAt, &raw); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(raw, &i.Details)
+		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
+func (r *IncidentRepository) Advance(ctx context.Context, id string, next *time.Time) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE alert_incidents SET escalation_stage=escalation_stage+1,next_escalation_at=$2 WHERE id=$1 AND state='open' AND next_escalation_at <= now()`, id, next)
+	if err != nil {
+		return fmt.Errorf("advance alert incident: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
