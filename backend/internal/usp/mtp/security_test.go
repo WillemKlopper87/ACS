@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"log/slog"
 	"testing"
 
 	"acs/internal/usp"
 	"acs/internal/usp/principal"
+
+	mqttserver "github.com/mochi-mqtt/server/v2"
 )
 
 type staticPrincipalAuth struct {
@@ -79,6 +82,32 @@ func TestMQTTTopicACLIsPrincipalScoped(t *testing.T) {
 		if got := mqttTopicAllowed(p, controller, topic, false); got != want {
 			t.Errorf("read ACL %q = %v, want %v", topic, got, want)
 		}
+	}
+}
+
+// The broker's in-process controller client is privileged, but the MQTT
+// ClientIdentifier is caller-controlled. A network agent choosing the literal
+// ID "inline" must not inherit controller ACL privileges; only mochi-mqtt's
+// Net.Inline marker identifies an actual in-process client.
+func TestMQTTInlinePrivilegeCannotBeClaimedByClientID(t *testing.T) {
+	server := mqttserver.New(&mqttserver.Options{InlineClient: true})
+	p := &principal.Principal{EndpointID: "os::trusted", MQTTTopic: "/usp/agent/trusted"}
+	hook := &allowlistHook{
+		log:             slog.Default(),
+		auth:            staticPrincipalAuth{p: p},
+		controllerTopic: "/usp/controller",
+		principals:      make(map[*mqttserver.Client]*principal.Principal),
+	}
+
+	spoof := server.NewClient(nil, mqttListenerID, mqttserver.InlineClientId, false)
+	hook.remember(spoof, p)
+	if hook.OnACLCheck(spoof, "/usp/agent/other", false) {
+		t.Fatal("network client using ClientIdentifier=inline bypassed principal-scoped ACL")
+	}
+
+	inline := server.NewClient(nil, mqttserver.LocalListener, "controller-internal-test", true)
+	if !hook.OnACLCheck(inline, "/usp/agent/other", false) {
+		t.Fatal("actual broker inline client did not retain controller ACL privilege")
 	}
 }
 
