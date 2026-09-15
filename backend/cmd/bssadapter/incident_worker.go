@@ -104,7 +104,7 @@ func (h *handler) ingestTMFFaults(ctx context.Context) {
 		}
 		priority := alerting.Classify(p, body.FaultCode, false)
 		next := event.EventTime.Add(firstEscalationDelay(p))
-		_, err := h.alertIncidents.Open(ctx, event.AccountID, event.DeviceID, telemetry.ConditionKey(body.Protocol, event.DeviceID, body.FaultCode), priority, body.Message, &next, map[string]any{"event_id": event.ID, "fault_code": body.FaultCode, "protocol": body.Protocol, "job_id": body.JobID})
+		_, err = h.alertIncidents.Open(ctx, event.AccountID, event.DeviceID, telemetry.ConditionKey(body.Protocol, event.DeviceID, body.FaultCode), priority, body.Message, &next, map[string]any{"event_id": event.ID, "fault_code": body.FaultCode, "protocol": body.Protocol, "job_id": body.JobID})
 		if err != nil {
 			h.logger.Error("failed to open CPE incident", "err", err, "event_id", event.ID)
 		}
