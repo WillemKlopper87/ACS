@@ -54,6 +54,32 @@ func (h *handler) getTMF642Alarm(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"id": a.ID, "href": "/tmf-api/alarmManagement/v4/alarm/" + a.ID, "alarmType": a.AlarmType, "perceivedSeverity": a.Severity, "state": a.State, "probableCause": a.ProbableCause, "specificProblem": a.SpecificProblem, "sourceKey": a.SourceKey, "accountId": a.AccountID, "deviceId": a.DeviceID, "serviceId": a.ServiceID, "details": json.RawMessage(a.Details), "raisedAt": a.RaisedAt, "clearedAt": a.ClearedAt})
 }
 
+func (h *handler) listTMF688Events(w http.ResponseWriter, r *http.Request) {
+	events, err := h.mappings.ListEvents(r.Context(), strings.TrimSpace(r.URL.Query().Get("accountId")), 100)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	out := make([]map[string]any, 0, len(events))
+	for _, e := range events {
+		out = append(out, map[string]any{"id": e.ID, "eventType": e.EventType, "eventTime": e.EventTime, "sourceKey": e.SourceKey, "accountId": e.AccountID, "deviceId": e.DeviceID, "serviceId": e.ServiceID, "event": json.RawMessage(e.Payload)})
+	}
+	writeJSON(w, 200, out)
+}
+
+func (h *handler) listTMF642Alarms(w http.ResponseWriter, r *http.Request) {
+	alarms, err := h.mappings.ListAlarms(r.Context(), strings.TrimSpace(r.URL.Query().Get("accountId")), strings.TrimSpace(r.URL.Query().Get("state")), 100)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	out := make([]map[string]any, 0, len(alarms))
+	for _, a := range alarms {
+		out = append(out, map[string]any{"id": a.ID, "alarmType": a.AlarmType, "perceivedSeverity": a.Severity, "state": a.State, "sourceKey": a.SourceKey, "accountId": a.AccountID, "deviceId": a.DeviceID, "serviceId": a.ServiceID, "raisedAt": a.RaisedAt, "clearedAt": a.ClearedAt})
+	}
+	writeJSON(w, 200, out)
+}
+
 func (h *handler) createTMF688Event(w http.ResponseWriter, r *http.Request) {
 	var req tmf688EventRequest
 	if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.SourceKey) == "" || strings.TrimSpace(req.EventType) == "" {

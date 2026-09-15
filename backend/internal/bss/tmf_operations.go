@@ -80,6 +80,46 @@ func (r *Repository) FindAlarm(ctx context.Context, id string) (*AlarmRecord, er
 	return &a, nil
 }
 
+func (r *Repository) ListEvents(ctx context.Context, accountID string, limit int) ([]EventRecord, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),event_type,event_time,payload FROM tmf_events WHERE ($1='' OR account_id=$1) ORDER BY event_time DESC LIMIT $2`, accountID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EventRecord
+	for rows.Next() {
+		var e EventRecord
+		if err := rows.Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) ListAlarms(ctx context.Context, accountID, state string, limit int) ([]AlarmRecord, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),alarm_type,perceived_severity,state,COALESCE(probable_cause,''),COALESCE(specific_problem,''),raised_at,cleared_at,details FROM tmf_alarms WHERE ($1='' OR account_id=$1) AND ($2='' OR state=$2) ORDER BY raised_at DESC LIMIT $3`, accountID, state, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AlarmRecord
+	for rows.Next() {
+		var a AlarmRecord
+		if err := rows.Scan(&a.ID, &a.SourceKey, &a.AccountID, &a.DeviceID, &a.ServiceID, &a.AlarmType, &a.Severity, &a.State, &a.ProbableCause, &a.SpecificProblem, &a.RaisedAt, &a.ClearedAt, &a.Details); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) CreateServiceProblem(ctx context.Context, externalID, accountID, serviceID, problemType, description, priority, alarmID string) (*ServiceProblemRecord, error) {
 	id := uuid.New().String()
 	var p ServiceProblemRecord
