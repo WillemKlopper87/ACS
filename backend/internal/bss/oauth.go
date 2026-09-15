@@ -12,8 +12,11 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,16 +24,86 @@ import (
 )
 
 var ErrInvalidClientCredentials = errors.New("invalid client credentials")
+var ErrInvalidOAuthPolicy = errors.New("invalid oauth client policy")
+
+const (
+	ScopeTMFRead        = "tmf:read"
+	ScopeTMFWrite       = "tmf:write"
+	ScopeTMFExecute     = "tmf:execute"
+	ScopeTMFAcknowledge = "tmf:acknowledge"
+)
+
+var validTMFScopes = map[string]struct{}{
+	ScopeTMFRead:        {},
+	ScopeTMFWrite:       {},
+	ScopeTMFExecute:     {},
+	ScopeTMFAcknowledge: {},
+}
+
+// AllTMFScopes is the full northbound permission set. It is returned as a
+// new slice so callers cannot mutate package state.
+func AllTMFScopes() []string {
+	return []string{ScopeTMFRead, ScopeTMFWrite, ScopeTMFExecute, ScopeTMFAcknowledge}
+}
+
+// OAuthPolicy is the authorization boundary attached to one integration.
+// A client with scopes must be either explicitly fleet-wide or restricted
+// to at least one account. An empty policy is allowed so an integration can
+// be registered before TMF access is granted; it authenticates but cannot
+// call /tmf-api routes.
+type OAuthPolicy struct {
+	Scopes       []string `json:"scopes"`
+	AccountIDs   []string `json:"account_ids"`
+	GlobalAccess bool     `json:"global_access"`
+}
+
+func NormalizeOAuthPolicy(policy OAuthPolicy) (OAuthPolicy, error) {
+	scopes := uniqueTrimmed(policy.Scopes)
+	accounts := uniqueTrimmed(policy.AccountIDs)
+	for _, scope := range scopes {
+		if _, ok := validTMFScopes[scope]; !ok {
+			return OAuthPolicy{}, fmt.Errorf("%w: unsupported scope %q", ErrInvalidOAuthPolicy, scope)
+		}
+	}
+	if policy.GlobalAccess && len(accounts) > 0 {
+		return OAuthPolicy{}, fmt.Errorf("%w: global_access cannot be combined with account_ids", ErrInvalidOAuthPolicy)
+	}
+	if len(scopes) > 0 && !policy.GlobalAccess && len(accounts) == 0 {
+		return OAuthPolicy{}, fmt.Errorf("%w: scoped clients require global_access or at least one account_id", ErrInvalidOAuthPolicy)
+	}
+	return OAuthPolicy{Scopes: scopes, AccountIDs: accounts, GlobalAccess: policy.GlobalAccess}, nil
+}
+
+func uniqueTrimmed(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // OAuthClient is a row of bss_oauth_clients. ClientSecretHash is never
 // exposed outside this package — ListClients/CreateClient's returned
 // struct omits it entirely (see scanOAuthClient).
 type OAuthClient struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	ClientID  string     `json:"client_id"`
-	CreatedAt time.Time  `json:"created_at"`
-	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	ID           string     `json:"id"`
+	Name         string     `json:"name"`
+	ClientID     string     `json:"client_id"`
+	Scopes       []string   `json:"scopes"`
+	AccountIDs   []string   `json:"account_ids"`
+	GlobalAccess bool       `json:"global_access"`
+	CreatedAt    time.Time  `json:"created_at"`
+	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
 }
 
 type OAuthRepository struct {
@@ -41,13 +114,21 @@ func NewOAuthRepository(db *sql.DB) *OAuthRepository {
 	return &OAuthRepository{db: db}
 }
 
-// CreateClient generates a fresh client_id/client_secret pair — 16
-// random bytes hex-encoded for the ID (readable in a UI, still
-// unguessable), 32 random bytes for the secret (256 bits) — and stores
-// only the secret's bcrypt hash. The plaintext secret is returned once,
-// here, and never again; same "shown once" rule as every other generated
-// credential in this codebase.
-func (r *OAuthRepository) CreateClient(ctx context.Context, name string) (client *OAuthClient, plaintextSecret string, err error) {
+// CreateClient preserves the historical helper for internal callers, but
+// fails closed for TMF authorization: the client receives no TMF scopes.
+// New admin flows should call CreateClientWithPolicy explicitly.
+func (r *OAuthRepository) CreateClient(ctx context.Context, name string) (*OAuthClient, string, error) {
+	return r.CreateClientWithPolicy(ctx, name, OAuthPolicy{})
+}
+
+// CreateClientWithPolicy generates a fresh client_id/client_secret pair
+// and persists an explicit TMF authorization policy. Only the bcrypt hash
+// of the secret is stored; plaintext is returned once.
+func (r *OAuthRepository) CreateClientWithPolicy(ctx context.Context, name string, policy OAuthPolicy) (client *OAuthClient, plaintextSecret string, err error) {
+	policy, err = NormalizeOAuthPolicy(policy)
+	if err != nil {
+		return nil, "", err
+	}
 	idBytes := make([]byte, 16)
 	if _, err := rand.Read(idBytes); err != nil {
 		return nil, "", fmt.Errorf("generate client_id: %w", err)
@@ -63,12 +144,17 @@ func (r *OAuthRepository) CreateClient(ctx context.Context, name string) (client
 	if err != nil {
 		return nil, "", fmt.Errorf("hash client_secret: %w", err)
 	}
+	scopesJSON, _ := json.Marshal(policy.Scopes)
+	accountsJSON, _ := json.Marshal(policy.AccountIDs)
 
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO bss_oauth_clients (id, name, client_id, client_secret_hash)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, name, client_id, created_at, revoked_at`,
-		uuid.New().String(), name, clientID, string(hash))
+		INSERT INTO bss_oauth_clients (id, name, client_id, client_secret_hash, scopes, account_ids, global_access)
+		VALUES ($1, $2, $3, $4,
+			ARRAY(SELECT jsonb_array_elements_text($5::jsonb)),
+			ARRAY(SELECT jsonb_array_elements_text($6::jsonb)), $7)
+		RETURNING id, name, client_id, created_at, revoked_at,
+			array_to_json(scopes), array_to_json(account_ids), global_access`,
+		uuid.New().String(), name, clientID, string(hash), string(scopesJSON), string(accountsJSON), policy.GlobalAccess)
 	c, err := scanOAuthClient(row)
 	if err != nil {
 		return nil, "", err
@@ -77,7 +163,10 @@ func (r *OAuthRepository) CreateClient(ctx context.Context, name string) (client
 }
 
 func (r *OAuthRepository) ListClients(ctx context.Context) ([]OAuthClient, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, name, client_id, created_at, revoked_at FROM bss_oauth_clients ORDER BY created_at DESC`)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, name, client_id, created_at, revoked_at,
+			array_to_json(scopes), array_to_json(account_ids), global_access
+		FROM bss_oauth_clients ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list oauth clients: %w", err)
 	}
@@ -107,13 +196,7 @@ func (r *OAuthRepository) RevokeClient(ctx context.Context, id string) error {
 }
 
 // IsRevoked reports whether clientID (embedded in an already-issued
-// access token's claims, audit P2.3) has since been revoked — checked
-// on every request behind a short cache (see cmd/bssadapter's
-// withAuth), the same "bound the residual validity of an already-issued
-// token to a short, explicit cache TTL rather than its own long
-// expiry" shape cmd/api's operator token_version check already uses.
-// An unknown client_id (deleted row, or none — defensive) counts as
-// revoked: fail closed.
+// access token's claims) has since been revoked. Unknown clients fail closed.
 func (r *OAuthRepository) IsRevoked(ctx context.Context, clientID string) (bool, error) {
 	var revokedAt sql.NullTime
 	err := r.db.QueryRowContext(ctx, `SELECT revoked_at FROM bss_oauth_clients WHERE client_id = $1`, clientID).Scan(&revokedAt)
@@ -126,26 +209,47 @@ func (r *OAuthRepository) IsRevoked(ctx context.Context, clientID string) (bool,
 	return revokedAt.Valid, nil
 }
 
-// VerifyCredentials checks a client_id/client_secret pair against the
-// stored bcrypt hash — constant-time by construction (bcrypt.CompareHashAndPassword
-// is designed to be), and rejects a revoked client even with a correct secret.
-func (r *OAuthRepository) VerifyCredentials(ctx context.Context, clientID, clientSecret string) error {
+// AuthenticateClient checks the client secret and returns the current
+// authorization policy used to mint the short-lived token.
+func (r *OAuthRepository) AuthenticateClient(ctx context.Context, clientID, clientSecret string) (*OAuthClient, error) {
 	var hash string
 	var revokedAt sql.NullTime
-	err := r.db.QueryRowContext(ctx, `SELECT client_secret_hash, revoked_at FROM bss_oauth_clients WHERE client_id = $1`, clientID).Scan(&hash, &revokedAt)
+	var id, name string
+	var createdAt time.Time
+	var scopesRaw, accountsRaw []byte
+	var globalAccess bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, name, client_secret_hash, created_at, revoked_at,
+			array_to_json(scopes), array_to_json(account_ids), global_access
+		FROM bss_oauth_clients WHERE client_id = $1`, clientID).
+		Scan(&id, &name, &hash, &createdAt, &revokedAt, &scopesRaw, &accountsRaw, &globalAccess)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ErrInvalidClientCredentials
+		return nil, ErrInvalidClientCredentials
 	}
 	if err != nil {
-		return fmt.Errorf("look up oauth client: %w", err)
+		return nil, fmt.Errorf("look up oauth client: %w", err)
 	}
+	if revokedAt.Valid || bcrypt.CompareHashAndPassword([]byte(hash), []byte(clientSecret)) != nil {
+		return nil, ErrInvalidClientCredentials
+	}
+	client := &OAuthClient{ID: id, Name: name, ClientID: clientID, CreatedAt: createdAt, GlobalAccess: globalAccess}
 	if revokedAt.Valid {
-		return ErrInvalidClientCredentials
+		t := revokedAt.Time
+		client.RevokedAt = &t
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(clientSecret)); err != nil {
-		return ErrInvalidClientCredentials
+	if err := json.Unmarshal(scopesRaw, &client.Scopes); err != nil {
+		return nil, fmt.Errorf("decode oauth scopes: %w", err)
 	}
-	return nil
+	if err := json.Unmarshal(accountsRaw, &client.AccountIDs); err != nil {
+		return nil, fmt.Errorf("decode oauth accounts: %w", err)
+	}
+	return client, nil
+}
+
+// VerifyCredentials remains for callers that only need authentication.
+func (r *OAuthRepository) VerifyCredentials(ctx context.Context, clientID, clientSecret string) error {
+	_, err := r.AuthenticateClient(ctx, clientID, clientSecret)
+	return err
 }
 
 type oauthScanner interface {
@@ -155,12 +259,19 @@ type oauthScanner interface {
 func scanOAuthClient(s oauthScanner) (*OAuthClient, error) {
 	var c OAuthClient
 	var revokedAt sql.NullTime
-	if err := s.Scan(&c.ID, &c.Name, &c.ClientID, &c.CreatedAt, &revokedAt); err != nil {
+	var scopesRaw, accountsRaw []byte
+	if err := s.Scan(&c.ID, &c.Name, &c.ClientID, &c.CreatedAt, &revokedAt, &scopesRaw, &accountsRaw, &c.GlobalAccess); err != nil {
 		return nil, fmt.Errorf("scan oauth client: %w", err)
 	}
 	if revokedAt.Valid {
 		t := revokedAt.Time
 		c.RevokedAt = &t
+	}
+	if err := json.Unmarshal(scopesRaw, &c.Scopes); err != nil {
+		return nil, fmt.Errorf("decode oauth scopes: %w", err)
+	}
+	if err := json.Unmarshal(accountsRaw, &c.AccountIDs); err != nil {
+		return nil, fmt.Errorf("decode oauth accounts: %w", err)
 	}
 	return &c, nil
 }
