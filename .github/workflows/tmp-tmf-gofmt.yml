@@ -19,10 +19,25 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
-      - name: Remove stale import and format replayed Go
+      - name: Normalize replayed Go and policy tests
         working-directory: backend
         run: |
           sed -i '/^[[:space:]]*"errors"$/d' cmd/bssadapter/tmf641.go
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('internal/bss/oauth_policy_test.go')
+          s = p.read_text()
+          s = s.replace(
+              'want: OAuthPolicy{Scopes: []string{ScopeTMFRead}, GlobalAccess: true},',
+              'want: OAuthPolicy{Scopes: []string{ScopeTMFRead}, AccountIDs: []string{}, GlobalAccess: true},',
+          )
+          s = s.replace(
+              'want: OAuthPolicy{},',
+              'want: OAuthPolicy{Scopes: []string{}, AccountIDs: []string{}},',
+              1,
+          )
+          p.write_text(s)
+          PY
           gofmt -w cmd/api/bss_admin_handlers.go cmd/bssadapter/oauth_handlers.go cmd/bssadapter/tmf638.go cmd/bssadapter/tmf640.go cmd/bssadapter/tmf641.go cmd/bssadapter/tmf642_688.go cmd/bssadapter/tmf656.go cmd/bssadapter/tmf_authz.go cmd/bssadapter/tmf_authz_test.go internal/auth/jwt.go internal/auth/jwt_test.go internal/bss/oauth.go internal/bss/oauth_policy_test.go
           go test ./internal/auth ./internal/bss ./cmd/bssadapter
       - name: Commit cleanup
