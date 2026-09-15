@@ -34,6 +34,10 @@ type WebSocketConfig struct {
 	// Path is the HTTP path the USP endpoint is served on. Defaults to
 	// "/usp".
 	Path string
+	// ControllerEndpointID is the controller's USP endpoint id. When a
+	// principal authenticator is configured it is required so the read
+	// loop can decode every Record far enough to enforce From-ID == eid.
+	ControllerEndpointID usp.EndpointID
 	// TLS, when non-nil, serves WebSocket over TLS. When nil, the
 	// listener is plaintext, which requires AllowPlaintext.
 	TLS *tls.Config
@@ -87,6 +91,9 @@ var (
 func NewWebSocket(cfg WebSocketConfig, log *slog.Logger) (*WebSocket, error) {
 	if cfg.TLS == nil && !cfg.AllowPlaintext {
 		return nil, errors.New("mtp: WebSocket requires TLS unless AllowPlaintext is set")
+	}
+	if cfg.PrincipalAuthenticator != nil && cfg.ControllerEndpointID == "" {
+		return nil, errors.New("mtp: authenticated WebSocket requires ControllerEndpointID")
 	}
 	if cfg.Path == "" {
 		cfg.Path = "/usp"
@@ -247,9 +254,10 @@ func (w *WebSocket) handle(ctx context.Context, h Handler) http.HandlerFunc {
 		conn.SetReadLimit(w.cfg.MaxRecordBytes)
 
 		wc := &wsConn{
-			conn:       conn,
-			endpoint:   endpoint,
-			remoteAddr: r.RemoteAddr,
+			conn:                 conn,
+			endpoint:             endpoint,
+			controllerEndpointID: w.cfg.ControllerEndpointID,
+			remoteAddr:           r.RemoteAddr,
 		}
 
 		h.OnConnect(wc)
@@ -270,9 +278,10 @@ func offersSubprotocol(header, want string) bool {
 
 // wsConn implements Conn over a coder/websocket connection.
 type wsConn struct {
-	conn       *websocket.Conn
-	endpoint   usp.EndpointID
-	remoteAddr string
+	conn                 *websocket.Conn
+	endpoint             usp.EndpointID
+	controllerEndpointID usp.EndpointID
+	remoteAddr           string
 
 	disconnectOnce sync.Once
 }
@@ -296,11 +305,11 @@ func (c *wsConn) Close(reason string) error {
 	return c.conn.Close(websocket.StatusNormalClosure, reason)
 }
 
-// readLoop runs for the life of the connection: coder/websocket only
-// answers control-frame pings while a Read is outstanding (R-WS.13), so
-// this must stay active the whole time. It fires OnDisconnect exactly
-// once, from this loop's exit path, guarded by disconnectOnce so a
-// concurrent Close cannot double-fire it.
+// readLoop runs for the life of the connection. When a controller endpoint
+// id is configured, every decodable Record is checked against the immutable
+// connection endpoint before it reaches the handler. This prevents a client
+// that authenticated as one eid from changing Record.from_id after the
+// WebSocket handshake.
 func (c *wsConn) readLoop(ctx context.Context, h Handler) {
 	var terminalErr error
 	for {
@@ -317,6 +326,14 @@ func (c *wsConn) readLoop(ctx context.Context, h Handler) {
 			_ = c.conn.Close(websocket.StatusUnsupportedData, "only binary frames are accepted")
 			terminalErr = fmt.Errorf("mtp: WebSocket received non-binary frame type %v", typ)
 			break
+		}
+		if c.controllerEndpointID != "" {
+			rec, _ := usp.DecodeRecord(data, c.controllerEndpointID)
+			if rec != nil && rec.From != c.endpoint {
+				_ = c.conn.Close(websocket.StatusPolicyViolation, "record from_id does not match authenticated endpoint")
+				terminalErr = fmt.Errorf("mtp: WebSocket record From-ID %q does not match connection endpoint %q", rec.From, c.endpoint)
+				break
+			}
 		}
 		h.OnRecord(Inbound{
 			Conn:       c,
