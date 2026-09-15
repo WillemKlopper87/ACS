@@ -88,8 +88,9 @@ for _ in $(seq 1 60); do
   status=$(psql "$dsn" -tAc "SELECT status FROM jobs WHERE id = '$job_id';")
 
   if [ "$status" = "SUCCESS" ]; then
-    value=$(psql "$dsn" -tAc "SELECT result_detail->'params'->>'Device.DeviceInfo.SoftwareVersion' FROM jobs WHERE id = '$job_id';")
-    if [ -n "$value" ] && [ "$value" != "null" ]; then
+    has_value=$(psql "$dsn" -tAc "SELECT COALESCE(result_detail->'params' ? 'Device.DeviceInfo.SoftwareVersion', false) FROM jobs WHERE id = '$job_id';" | tr -d '[:space:]')
+    if [ "$has_value" = "t" ]; then
+      value=$(psql "$dsn" -tAc "SELECT result_detail->'params'->>'Device.DeviceInfo.SoftwareVersion' FROM jobs WHERE id = '$job_id';")
       echo "OK: job $job_id dispatched via LISTEN/NOTIFY and resolved SUCCESS against $agent"
       echo "OK: result_detail carries Device.DeviceInfo.SoftwareVersion=$value"
       exit 0
