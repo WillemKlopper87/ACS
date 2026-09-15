@@ -1190,6 +1190,19 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         "204": { description: Deleted }
+  /api/v1/alert-incidents:
+    get:
+      tags: [Alerting]
+      responses:
+        "200": { description: OK }
+  /api/v1/alert-incidents/{id}:
+    patch:
+      tags: [Alerting]
+      parameters:
+        [{ name: id, in: path, required: true, schema: { type: string, format: uuid } },
+         { name: state, in: query, required: true, schema: { type: string, enum: [acknowledged, suppressed, recovered, closed] } }]
+      responses:
+        "204": { description: Updated }
 
   # --- Policies ---
   /api/v1/policies:

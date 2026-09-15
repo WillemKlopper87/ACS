@@ -134,6 +134,8 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	routePerm("POST", "/api/v1/alert-policies", operators.PermPolicyManage, h.createAlertPolicy)
 	route("GET", "/api/v1/alert-policies", ro, h.listAlertPolicies)
 	routePerm("DELETE", "/api/v1/alert-policies/{id}", operators.PermPolicyManage, h.deleteAlertPolicy)
+	route("GET", "/api/v1/alert-incidents", ro, h.listAlertIncidents)
+	routePerm("PATCH", "/api/v1/alert-incidents/{id}", operators.PermPolicyManage, h.updateAlertIncident)
 	route("GET", "/api/v1/policies", ro, h.listPolicies)
 	routePerm("DELETE", "/api/v1/policies/{id}", operators.PermPolicyManage, h.deletePolicy)
 	routePerm("POST", "/api/v1/policies/{id}/enable", operators.PermPolicyManage, h.setPolicyEnabled(true))

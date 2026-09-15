@@ -10,6 +10,11 @@ import (
 	"github.com/google/uuid"
 )
 
+var (
+	ErrIncidentNotFound     = sql.ErrNoRows
+	ErrInvalidIncidentState = fmt.Errorf("invalid incident state")
+)
+
 type IncidentState string
 
 const (
@@ -65,7 +70,7 @@ func (r *IncidentRepository) SetState(ctx context.Context, id, state, actor stri
 	case IncidentClosed:
 		q = `UPDATE alert_incidents SET state='closed' WHERE id=$1 AND state IN ('recovered','acknowledged','suppressed')`
 	default:
-		return fmt.Errorf("invalid incident state")
+		return ErrInvalidIncidentState
 	}
 	res, err := r.db.ExecContext(ctx, q, id, actor)
 	if err != nil {
@@ -76,4 +81,23 @@ func (r *IncidentRepository) SetState(ctx context.Context, id, state, actor stri
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+func (r *IncidentRepository) List(ctx context.Context, state string) ([]Incident, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,tenant_id,device_id::text,condition_key,priority,summary,state,escalation_stage,first_seen_at,last_seen_at,next_escalation_at,acknowledged_at,COALESCE(acknowledged_by,''),recovered_at,details FROM alert_incidents WHERE ($1='' OR state=$1) ORDER BY last_seen_at DESC LIMIT 500`, state)
+	if err != nil {
+		return nil, fmt.Errorf("list alert incidents: %w", err)
+	}
+	defer rows.Close()
+	var out []Incident
+	for rows.Next() {
+		var i Incident
+		var raw []byte
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.DeviceID, &i.ConditionKey, &i.Priority, &i.Summary, &i.State, &i.EscalationStage, &i.FirstSeenAt, &i.LastSeenAt, &i.NextEscalationAt, &i.AcknowledgedAt, &i.AcknowledgedBy, &i.RecoveredAt, &raw); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(raw, &i.Details)
+		out = append(out, i)
+	}
+	return out, rows.Err()
 }

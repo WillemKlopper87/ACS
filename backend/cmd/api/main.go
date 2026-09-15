@@ -243,6 +243,7 @@ func main() {
 		metrics:             metrics,
 		groups:              devices.NewGroupRepository(db),
 		alertPolicies:       alerting.NewRepository(db),
+		alertIncidents:      alerting.NewIncidentRepository(db),
 		credentials:         credentialsRepo,
 		schedules:           scheduler.NewRepository(db),
 		rollouts:            rollout.NewRepository(db),
@@ -428,13 +429,14 @@ type handler struct {
 	versionMu    sync.Mutex
 	versionCache map[string]versionEntry
 
-	metrics       *observability.Metrics
-	groups        *devices.GroupRepository
-	alertPolicies *alerting.Repository
-	credentials   *credentials.Repository
-	schedules     *scheduler.Repository
-	rollouts      *rollout.Repository
-	policies      *policy.Repository
+	metrics        *observability.Metrics
+	groups         *devices.GroupRepository
+	alertPolicies  *alerting.Repository
+	alertIncidents *alerting.IncidentRepository
+	credentials    *credentials.Repository
+	schedules      *scheduler.Repository
+	rollouts       *rollout.Repository
+	policies       *policy.Repository
 
 	uploads     *uploads.Repository
 	uploadsFS   uploads.Storage

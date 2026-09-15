@@ -63,7 +63,7 @@ const (
 // since frontend/nginx.conf serves the console without proxying the API.
 // TestCORSAllowsEveryRegisteredMethod derives the required set from
 // routes.go so this cannot silently drift again.
-const corsAllowedMethods = "GET, POST, PUT, DELETE, OPTIONS"
+const corsAllowedMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 
 func withCORS(origin string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
