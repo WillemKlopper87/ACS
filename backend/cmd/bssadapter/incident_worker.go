@@ -37,6 +37,11 @@ func (h *handler) runOfflineIncidentLoop(ctx context.Context) {
 }
 
 func (h *handler) ingestOfflineDevices(ctx context.Context) {
+	if n, err := h.alertIncidents.RecoverOnline(ctx); err != nil {
+		h.logger.Error("failed to recover online CPE incidents", "err", err)
+	} else if n > 0 {
+		h.logger.Info("recovered online CPE incidents", "count", n)
+	}
 	devices, err := h.alertPolicies.OfflineDevices(ctx, webhookBatchSize)
 	if err != nil {
 		h.logger.Error("failed to list offline devices for alerting", "err", err)

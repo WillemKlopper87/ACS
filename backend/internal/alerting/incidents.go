@@ -132,3 +132,12 @@ func (r *IncidentRepository) Advance(ctx context.Context, id string, next *time.
 	}
 	return nil
 }
+
+func (r *IncidentRepository) RecoverOnline(ctx context.Context) (int, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE alert_incidents i SET state='recovered',recovered_at=COALESCE(recovered_at,now()),next_escalation_at=NULL FROM devices d WHERE i.device_id=d.id AND i.condition_key='acs-offline' AND i.state IN ('open','acknowledged','suppressed') AND d.online_status='ONLINE'`)
+	if err != nil {
+		return 0, fmt.Errorf("recover online incidents: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
