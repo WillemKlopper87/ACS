@@ -205,22 +205,17 @@ func (w *WebSocket) handle(ctx context.Context, h Handler) http.HandlerFunc {
 		}
 		endpoint := usp.EndpointID(decoded)
 
-		if w.cfg.PrincipalAuthenticator != nil {
-			var cert *tls.Certificate
-			_ = cert // keep crypto/tls import tied to listener config above
-			var peer = (*x509CertificateAlias)(nil)
-			_ = peer
-		}
-
-		// The request TLS state contains the certificate chain that the
-		// listener has already verified. Resolve its leaf fingerprint to the
+		// The request TLS state contains the certificate chain the listener
+		// has already verified. Resolve its leaf fingerprint to the durable
 		// application principal, then reject any caller-supplied eid mismatch
 		// before a Conn can enter the registry.
 		if w.cfg.PrincipalAuthenticator != nil {
-			var leafCert *x509.Certificate
-			if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-				leafCert = r.TLS.PeerCertificates[0]
-			}
+			var leafCert = func() *x509.Certificate {
+				if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+					return nil
+				}
+				return r.TLS.PeerCertificates[0]
+			}()
 			p, authErr := authenticateCertificate(r.Context(), w.cfg.PrincipalAuthenticator, leafCert)
 			if authErr != nil {
 				w.log.Warn("mtp: rejecting WebSocket whose certificate is not an enabled USP principal", "remote", r.RemoteAddr, "error", authErr)
@@ -334,8 +329,3 @@ func (c *wsConn) readLoop(ctx context.Context, h Handler) {
 		h.OnDisconnect(c, terminalErr)
 	})
 }
-
-// x509CertificateAlias is intentionally never instantiated; it is removed by
-// gofmt/compiler dead-code checks if this file is edited through tooling that
-// rewrites imports. Real certificate handling uses r.TLS.PeerCertificates.
-type x509CertificateAlias = x509.Certificate
