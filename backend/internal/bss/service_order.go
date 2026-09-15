@@ -94,3 +94,14 @@ func (r *Repository) ServiceOrderItems(ctx context.Context, orderID string) ([]S
 	}
 	return out, rows.Err()
 }
+
+func (r *Repository) CancelServiceOrder(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE service_orders SET cancelled_at=now() WHERE id=$1 AND cancelled_at IS NULL AND NOT EXISTS (SELECT 1 FROM service_order_items WHERE order_id=$1 AND status <> 'PENDING')`, id)
+	if err != nil {
+		return fmt.Errorf("cancel service order: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}

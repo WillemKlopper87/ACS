@@ -19,6 +19,9 @@ type tmf641OrderRequest struct {
 	AccountID  string              `json:"accountId"`
 	OrderItem  []tmf641ItemRequest `json:"orderItem"`
 }
+type tmf641CancelRequest struct {
+	State string `json:"state"`
+}
 
 func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 	var req tmf641OrderRequest
@@ -78,4 +81,18 @@ func (h *handler) getTMF641Order(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, tmf641OrderResponse(order, items))
+}
+
+func (h *handler) cancelTMF641Order(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	var req tmf641CancelRequest
+	if json.NewDecoder(r.Body).Decode(&req) != nil || req.State != "cancelled" {
+		writeError(w, 400, "ErrInvalidRequest", "only state=cancelled is supported")
+		return
+	}
+	if err := h.mappings.CancelServiceOrder(r.Context(), id); err != nil {
+		writeError(w, 409, "ErrConflict", "service order cannot be cancelled after execution begins")
+		return
+	}
+	h.getTMF641Order(w, r)
 }

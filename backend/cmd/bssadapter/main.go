@@ -189,6 +189,7 @@ func main() {
 	mux.HandleFunc("POST /tmf-api/alarmManagement/v4/alarm", metrics.InstrumentHTTP("POST /tmf-api/alarmManagement/v4/alarm", h.createTMF642Alarm))
 	mux.HandleFunc("POST /tmf-api/serviceOrdering/v4/serviceOrder", metrics.InstrumentHTTP("POST /tmf-api/serviceOrdering/v4/serviceOrder", h.createTMF641Order))
 	mux.HandleFunc("GET /tmf-api/serviceOrdering/v4/serviceOrder/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceOrdering/v4/serviceOrder/{id}", h.getTMF641Order))
+	mux.HandleFunc("PATCH /tmf-api/serviceOrdering/v4/serviceOrder/{id}", metrics.InstrumentHTTP("PATCH /tmf-api/serviceOrdering/v4/serviceOrder/{id}", h.cancelTMF641Order))
 
 	go h.runWebhookNotifyLoop(ctx)
 	go h.runWebhookDeliverLoop(ctx)
