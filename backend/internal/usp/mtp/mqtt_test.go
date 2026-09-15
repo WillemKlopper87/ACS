@@ -47,15 +47,12 @@ func TestMQTTStartStop(t *testing.T) {
 	if m.Kind() != KindMQTT {
 		t.Errorf("Kind() = %q, want MQTT", m.Kind())
 	}
-	// The broker must be listening: a raw TCP connect succeeds.
-	c, err := net.DialTimeout("tcp", m.Addr(), 2*time.Second)
-	if err != nil {
-		t.Fatalf("broker not listening on %s: %v", m.Addr(), err)
-	}
-	// Close the listener before the broker shutdown. This lets the accept
-	// loop finish before Server.Close touches the broker state, avoiding
-	// Mochi's accept/EstablishConnection race under -race.
-	defer c.Close()
+	// Start returning successfully proves Server.Serve attached the bound
+	// listener. Do not open a raw TCP socket here: a socket that never sends
+	// MQTT CONNECT remains half-established inside mochi-mqtt and can race
+	// Server.Close's ClientsWg.Wait under -race. Real listener acceptance is
+	// covered below by the allow/deny wire tests, which complete CONNECT and
+	// CONNACK before shutdown.
 	// Stop is called directly here, before the deferred cancel() ever
 	// fires -- this is what exercises Start's ctx-watcher goroutine
 	// waking from Stop's internal done channel rather than blocking
