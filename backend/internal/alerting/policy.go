@@ -49,6 +49,27 @@ type Target struct {
 	CustomerTier string
 }
 
+// Classify applies an explicit policy mapping first, then uses conservative
+// defaults for operational conditions. Callers can map vendor fault codes to
+// the policy keys without embedding vendor knowledge in the worker.
+func Classify(p Policy, faultCode string, offline bool) Priority {
+	if offline {
+		if v, ok := p.FaultPriorities["offline"]; ok {
+			return v
+		}
+		return P2
+	}
+	if v, ok := p.FaultPriorities[faultCode]; ok {
+		return v
+	}
+	for key, v := range p.FaultPriorities {
+		if key != "" && len(key) > 1 && key[len(key)-1] == '*' && len(faultCode) >= len(key)-1 && faultCode[:len(key)-1] == key[:len(key)-1] {
+			return v
+		}
+	}
+	return P3
+}
+
 // Resolve selects the most specific enabled policy. Ties at one scope are
 // resolved by list order, which is deterministic because repository queries
 // order by priority and creation time.

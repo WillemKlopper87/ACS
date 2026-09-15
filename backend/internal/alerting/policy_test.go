@@ -34,3 +34,16 @@ func TestResolveSkipsDisabledAndDoesNotCrossTenant(t *testing.T) {
 		t.Fatalf("Resolve() = %q, %v; want fleet, true", got.ID, ok)
 	}
 }
+
+func TestClassifyUsesExactWildcardAndOfflineRules(t *testing.T) {
+	p := Policy{FaultPriorities: map[string]Priority{"9002": P1, "9*": P2, "offline": P1}}
+	if got := Classify(p, "9002", false); got != P1 {
+		t.Fatalf("exact = %s", got)
+	}
+	if got := Classify(p, "9010", false); got != P2 {
+		t.Fatalf("wildcard = %s", got)
+	}
+	if got := Classify(p, "anything", true); got != P1 {
+		t.Fatalf("offline = %s", got)
+	}
+}
