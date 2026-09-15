@@ -13,7 +13,7 @@ import (
 type Repository struct{ db *sql.DB }
 
 type OfflineDevice struct {
-	TenantID, DeviceID string
+	TenantID, DeviceID, CustomerTier string
 	GroupIDs           []string
 	LastInformAt       *time.Time
 }
@@ -91,7 +91,7 @@ func (r *Repository) GroupIDsForDevice(ctx context.Context, deviceID string) ([]
 }
 
 func (r *Repository) OfflineDevices(ctx context.Context, limit int) ([]OfflineDevice, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT m.account_id, d.id::text, d.last_inform_at FROM devices d JOIN account_device_mappings m ON m.device_id=d.id WHERE d.online_status IN ('OFFLINE','UNREACHABLE') ORDER BY d.last_inform_at NULLS FIRST LIMIT $1`, limit)
+	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT m.account_id, d.id::text, COALESCE(m.service_plan,''), d.last_inform_at FROM devices d JOIN account_device_mappings m ON m.device_id=d.id WHERE d.online_status IN ('OFFLINE','UNREACHABLE') ORDER BY d.last_inform_at NULLS FIRST LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list offline devices: %w", err)
 	}
@@ -99,7 +99,7 @@ func (r *Repository) OfflineDevices(ctx context.Context, limit int) ([]OfflineDe
 	var out []OfflineDevice
 	for rows.Next() {
 		var d OfflineDevice
-		if err := rows.Scan(&d.TenantID, &d.DeviceID, &d.LastInformAt); err != nil {
+		if err := rows.Scan(&d.TenantID, &d.DeviceID, &d.CustomerTier, &d.LastInformAt); err != nil {
 			return nil, err
 		}
 		d.GroupIDs, err = r.GroupIDsForDevice(ctx, d.DeviceID)
@@ -109,4 +109,11 @@ func (r *Repository) OfflineDevices(ctx context.Context, limit int) ([]OfflineDe
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+func (r *Repository) CustomerTier(ctx context.Context, tenantID, deviceID string) (string, error) {
+	var tier string
+	err := r.db.QueryRowContext(ctx, `SELECT COALESCE(service_plan,'') FROM account_device_mappings WHERE account_id=$1 AND device_id=$2 LIMIT 1`, tenantID, deviceID).Scan(&tier)
+	if err != nil && err != sql.ErrNoRows { return "", fmt.Errorf("lookup customer tier: %w", err) }
+	return tier, nil
 }

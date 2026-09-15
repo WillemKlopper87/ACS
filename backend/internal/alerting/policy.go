@@ -100,7 +100,7 @@ func matches(p Policy, t Target) bool {
 		}
 		return false
 	case ScopeTenant:
-		return p.TenantID != "" && p.TenantID == t.TenantID
+		return p.TenantID != "" && p.TenantID == t.TenantID && (p.CustomerTier == "" || p.CustomerTier == t.CustomerTier)
 	case ScopeFleet:
 		return p.TenantID == "" && p.GroupID == "" && p.DeviceID == ""
 	default:

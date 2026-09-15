@@ -53,7 +53,7 @@ func (h *handler) ingestOfflineDevices(ctx context.Context) {
 	}
 	now := time.Now().UTC()
 	for _, d := range devices {
-		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: d.TenantID, GroupIDs: d.GroupIDs, DeviceID: d.DeviceID})
+		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: d.TenantID, CustomerTier: d.CustomerTier, GroupIDs: d.GroupIDs, DeviceID: d.DeviceID})
 		if !ok || p.OfflineAfter <= 0 {
 			continue
 		}
@@ -144,7 +144,12 @@ func (h *handler) ingestTMFFaults(ctx context.Context) {
 			h.logger.Error("failed to resolve CPE alert groups", "err", err, "device_id", event.DeviceID)
 			continue
 		}
-		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: event.AccountID, GroupIDs: groupIDs, DeviceID: event.DeviceID})
+		tier, err := h.alertPolicies.CustomerTier(ctx, event.AccountID, event.DeviceID)
+		if err != nil {
+			h.logger.Error("failed to resolve customer tier", "err", err, "device_id", event.DeviceID)
+			continue
+		}
+		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: event.AccountID, CustomerTier: tier, GroupIDs: groupIDs, DeviceID: event.DeviceID})
 		if !ok {
 			continue
 		}
