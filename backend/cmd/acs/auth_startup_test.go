@@ -30,6 +30,83 @@ func clearCPEAuthEnv(t *testing.T) {
 	t.Setenv("ACS_CREDENTIAL_ENCRYPTION_KEY", "")
 }
 
+func clearCWMPTransportEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("ACS_DEPLOYMENT_PROFILE", "")
+	t.Setenv("ACS_TLS_CERT", "")
+	t.Setenv("ACS_TLS_KEY", "")
+	t.Setenv("ACS_TLS_MIN_VERSION", "")
+	t.Setenv("ACS_AUTH_ALLOW_BASIC", "")
+}
+
+func TestLoadACSDeploymentProfile(t *testing.T) {
+	clearCWMPTransportEnv(t)
+
+	profile, err := loadACSDeploymentProfile()
+	if err != nil || profile != acsDeploymentProfileLab {
+		t.Fatalf("default profile = %q, %v; want lab", profile, err)
+	}
+
+	t.Setenv("ACS_DEPLOYMENT_PROFILE", "production")
+	profile, err = loadACSDeploymentProfile()
+	if err != nil || profile != acsDeploymentProfileProduction {
+		t.Fatalf("production profile = %q, %v; want production", profile, err)
+	}
+
+	t.Setenv("ACS_DEPLOYMENT_PROFILE", "prodution")
+	if _, err := loadACSDeploymentProfile(); err == nil {
+		t.Fatal("misspelled production profile succeeded; want fail closed")
+	}
+}
+
+func TestValidateCWMPTransportStartupProduction(t *testing.T) {
+	clearCWMPTransportEnv(t)
+
+	if err := validateCWMPTransportStartup(acsDeploymentProfileLab); err != nil {
+		t.Fatalf("lab compatibility config rejected: %v", err)
+	}
+
+	t.Run("tls pair required", func(t *testing.T) {
+		clearCWMPTransportEnv(t)
+		if err := validateCWMPTransportStartup(acsDeploymentProfileProduction); err == nil {
+			t.Fatal("production without TLS pair succeeded")
+		}
+	})
+
+	t.Run("basic forbidden", func(t *testing.T) {
+		clearCWMPTransportEnv(t)
+		t.Setenv("ACS_TLS_CERT", "/tmp/cert.pem")
+		t.Setenv("ACS_TLS_KEY", "/tmp/key.pem")
+		t.Setenv("ACS_AUTH_ALLOW_BASIC", "true")
+		if err := validateCWMPTransportStartup(acsDeploymentProfileProduction); err == nil {
+			t.Fatal("production with HTTP Basic enabled succeeded")
+		}
+	})
+
+	t.Run("defaults to tls 1.2 floor", func(t *testing.T) {
+		clearCWMPTransportEnv(t)
+		t.Setenv("ACS_TLS_CERT", "/tmp/cert.pem")
+		t.Setenv("ACS_TLS_KEY", "/tmp/key.pem")
+		if err := validateCWMPTransportStartup(acsDeploymentProfileProduction); err != nil {
+			t.Fatalf("production with implicit TLS 1.2 floor rejected: %v", err)
+		}
+	})
+
+	t.Run("legacy tls floor rejected", func(t *testing.T) {
+		for _, version := range []string{"1.0", "1.1"} {
+			t.Run(version, func(t *testing.T) {
+				clearCWMPTransportEnv(t)
+				t.Setenv("ACS_TLS_CERT", "/tmp/cert.pem")
+				t.Setenv("ACS_TLS_KEY", "/tmp/key.pem")
+				t.Setenv("ACS_TLS_MIN_VERSION", version)
+				if err := validateCWMPTransportStartup(acsDeploymentProfileProduction); err == nil {
+					t.Fatalf("production with TLS %s floor succeeded", version)
+				}
+			})
+		}
+	})
+}
+
 func TestValidateCPEAuthStartupAllowsPerDeviceDigestOnly(t *testing.T) {
 	clearCPEAuthEnv(t)
 	t.Setenv("ACS_CREDENTIAL_ENCRYPTION_KEY", "device-credential-key-material-32b")
