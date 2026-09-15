@@ -1,0 +1,265 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"acs/internal/bss"
+	"acs/internal/tmf"
+)
+
+type tmf641ItemRequest struct {
+	ID             string            `json:"id"`
+	Action         string            `json:"action"`
+	Role           string            `json:"role"`
+	OUISerial      string            `json:"ouiSerial"`
+	ServicePlan    string            `json:"servicePlan"`
+	UnassignReason string            `json:"unassignReason"`
+	Parameters     map[string]string `json:"parameters"`
+}
+type tmf641OrderRequest struct {
+	ExternalID string              `json:"externalId"`
+	AccountID  string              `json:"accountId"`
+	OrderItem  []tmf641ItemRequest `json:"orderItem"`
+}
+type tmf641CancelRequest struct {
+	State string `json:"state"`
+}
+
+func tmf641SwapPair(items []tmf641ItemRequest) (int, bool) {
+	if len(items) != 2 || items[0].Action != "delete" || items[1].Action != "add" {
+		return 0, false
+	}
+	if roleOrDefault(items[0].Role) != roleOrDefault(items[1].Role) || strings.TrimSpace(items[1].OUISerial) == "" {
+		return 0, false
+	}
+	return 1, true
+}
+
+func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
+	var req tmf641OrderRequest
+	if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.ExternalID) == "" || strings.TrimSpace(req.AccountID) == "" || len(req.OrderItem) == 0 {
+		writeError(w, 400, "ErrInvalidRequest", "externalId, accountId, and orderItem are required")
+		return
+	}
+	if existing, err := h.mappings.FindServiceOrder(r.Context(), req.ExternalID); err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	} else if existing != nil {
+		items, _ := h.mappings.ServiceOrderItems(r.Context(), existing.ID)
+		writeJSON(w, 200, tmf641OrderResponse(existing, items))
+		return
+	}
+	raw, _ := json.Marshal(req)
+	items := make([]bss.ServiceOrderItem, len(req.OrderItem))
+	for i, it := range req.OrderItem {
+		if it.Action != "add" && it.Action != "modify" && it.Action != "delete" && it.Action != "noChange" {
+			writeError(w, 400, "ErrInvalidRequest", "invalid orderItem action")
+			return
+		}
+		items[i] = bss.ServiceOrderItem{Seq: i, Action: it.Action, Role: it.Role, Status: "PENDING"}
+		if it.Action == "add" && strings.TrimSpace(it.OUISerial) == "" {
+			writeError(w, 400, "ErrInvalidRequest", "ouiSerial is required for add items")
+			return
+		}
+		if it.Action == "delete" && strings.TrimSpace(it.Role) == "" {
+			writeError(w, 400, "ErrInvalidRequest", "role is required for delete items")
+			return
+		}
+	}
+	order, err := h.mappings.CreateServiceOrder(r.Context(), req.ExternalID, req.AccountID, raw, items)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	for i := range items {
+		if items[i].Action == "noChange" {
+			if err := h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "COMPLETED", ""); err != nil {
+				writeError(w, 500, "ErrInternal", "internal error")
+				return
+			}
+			items[i].Status = "COMPLETED"
+		}
+	}
+	swapAddIndex, isSwap := tmf641SwapPair(req.OrderItem)
+	for i, item := range req.OrderItem {
+		if isSwap && i == 0 {
+			item = req.OrderItem[swapAddIndex]
+			reason := strings.TrimSpace(req.OrderItem[0].UnassignReason)
+			if reason == "" {
+				reason = "TMF641 service order swap"
+			}
+			mapping, execErr := h.mappings.SwapDevice(r.Context(), req.AccountID, roleOrDefault(item.Role), item.OUISerial, reason)
+			if execErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", execErr.Error())
+				items[i].Status = "FAILED"
+				for j := i + 1; j < len(items); j++ {
+					_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[j].ID, "SKIPPED", "previous item failed")
+					items[j].Status = "SKIPPED"
+				}
+				break
+			}
+			items[0].Status = "COMPLETED"
+			items[swapAddIndex].MappingID = mapping.ID
+			items[swapAddIndex].Status = "COMPLETED"
+			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[0].ID, "COMPLETED", "")
+			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[swapAddIndex].ID, "COMPLETED", "")
+			continue
+		}
+		if isSwap && i == swapAddIndex {
+			continue
+		}
+		if i > 0 && items[i-1].Status == "FAILED" {
+			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "SKIPPED", "previous item failed")
+			items[i].Status = "SKIPPED"
+			continue
+		}
+		if item.Action == "add" {
+			mapping, execErr := h.mappings.AssignDevice(r.Context(), req.AccountID, item.OUISerial, roleOrDefault(item.Role), item.ServicePlan)
+			if execErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", execErr.Error())
+				items[i].Status = "FAILED"
+				for j := i + 1; j < len(items); j++ {
+					_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[j].ID, "SKIPPED", "previous item failed")
+					items[j].Status = "SKIPPED"
+				}
+				break
+			}
+			items[i].MappingID = mapping.ID
+			items[i].Status = "COMPLETED"
+			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "COMPLETED", "")
+		} else if item.Action == "delete" {
+			reason := strings.TrimSpace(item.UnassignReason)
+			if reason == "" {
+				reason = "TMF641 service order"
+			}
+			if execErr := h.mappings.UnassignDevice(r.Context(), req.AccountID, roleOrDefault(item.Role), reason); execErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", execErr.Error())
+				items[i].Status = "FAILED"
+				for j := i + 1; j < len(items); j++ {
+					_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[j].ID, "SKIPPED", "previous item failed")
+					items[j].Status = "SKIPPED"
+				}
+				break
+			}
+			items[i].Status = "COMPLETED"
+			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "COMPLETED", "")
+		} else if item.Action == "modify" {
+			mapping, lookupErr := h.mappings.ActiveDeviceForAccount(r.Context(), req.AccountID, roleOrDefault(item.Role))
+			if lookupErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", lookupErr.Error())
+				items[i].Status = "FAILED"
+				for j := i + 1; j < len(items); j++ {
+					_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[j].ID, "SKIPPED", "previous item failed")
+					items[j].Status = "SKIPPED"
+				}
+				break
+			}
+			dev, lookupErr := h.acs.GetDevice(r.Context(), mapping.DeviceID)
+			if lookupErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", lookupErr.Error())
+				items[i].Status = "FAILED"
+				for j := i + 1; j < len(items); j++ {
+					_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[j].ID, "SKIPPED", "previous item failed")
+					items[j].Status = "SKIPPED"
+				}
+				break
+			}
+			params, translateErr := bss.Translate("MODIFY_WIFI", item.Parameters, h.walledGarden, dev.DataModelRoot)
+			if translateErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", translateErr.Error())
+				items[i].Status = "FAILED"
+				for j := i + 1; j < len(items); j++ {
+					_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[j].ID, "SKIPPED", "previous item failed")
+					items[j].Status = "SKIPPED"
+				}
+				break
+			}
+			if _, dispatchErr := h.dispatchOrder(r.Context(), req.ExternalID+":"+strconv.Itoa(i), req.AccountID, "MODIFY_WIFI", mapping.DeviceID, params); dispatchErr != nil {
+				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", dispatchErr.Error())
+				if errors.Is(dispatchErr, bss.ErrACSUnreachable) {
+					items[i].Status = "FAILED"
+					for j := i + 1; j < len(items); j++ {
+						_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[j].ID, "SKIPPED", "previous item failed")
+						items[j].Status = "SKIPPED"
+					}
+					break
+				} else {
+					items[i].Status = "FAILED"
+					for j := i + 1; j < len(items); j++ {
+						_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[j].ID, "SKIPPED", "previous item failed")
+						items[j].Status = "SKIPPED"
+					}
+					break
+				}
+			}
+			items[i].Status = "DISPATCHED"
+			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "DISPATCHED", "")
+		}
+	}
+	writeJSON(w, 201, tmf641OrderResponse(order, items))
+}
+
+func tmf641OrderResponse(order *bss.ServiceOrder, items []bss.ServiceOrderItem) map[string]any {
+	states := make([]string, len(items))
+	out := make([]tmf.ServiceOrderItem, len(items))
+	for i, it := range items {
+		states[i] = it.Status
+		out[i] = tmf.ServiceOrderItem{ID: it.ID, Action: it.Action, State: it.Status, Role: it.Role}
+	}
+	return map[string]any{"id": order.ID, "href": "/tmf-api/serviceOrdering/v4/serviceOrder/" + order.ID, "externalId": order.ExternalID, "state": tmf.ServiceOrderState(order.CancelledAt != nil, states), "orderDate": order.CreatedAt, "relatedParty": []tmf.RelatedParty{{ID: order.AccountID, Role: "customer"}}, "orderItem": out}
+}
+
+func (h *handler) getTMF641Order(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	order, err := h.mappings.FindServiceOrder(r.Context(), id)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	if order == nil {
+		writeError(w, 404, "ErrNotFound", "no such service order")
+		return
+	}
+	items, err := h.mappings.ServiceOrderItems(r.Context(), order.ID)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	writeJSON(w, 200, tmf641OrderResponse(order, items))
+}
+
+func (h *handler) listTMF641Orders(w http.ResponseWriter, r *http.Request) {
+	orders, err := h.mappings.ListServiceOrders(r.Context(), strings.TrimSpace(r.URL.Query().Get("accountId")), 100)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	out := make([]map[string]any, 0, len(orders))
+	for _, o := range orders {
+		items, e := h.mappings.ServiceOrderItems(r.Context(), o.ID)
+		if e != nil {
+			writeError(w, 500, "ErrInternal", "internal error")
+			return
+		}
+		out = append(out, tmf641OrderResponse(&o, items))
+	}
+	writeJSON(w, 200, out)
+}
+
+func (h *handler) cancelTMF641Order(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	var req tmf641CancelRequest
+	if json.NewDecoder(r.Body).Decode(&req) != nil || req.State != "cancelled" {
+		writeError(w, 400, "ErrInvalidRequest", "only state=cancelled is supported")
+		return
+	}
+	if err := h.mappings.CancelServiceOrder(r.Context(), id); err != nil {
+		writeError(w, 409, "ErrConflict", "service order cannot be cancelled after execution begins")
+		return
+	}
+	h.getTMF641Order(w, r)
+}
