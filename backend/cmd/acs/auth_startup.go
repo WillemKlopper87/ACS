@@ -63,8 +63,10 @@ func validateCWMPTransportStartup(profile string) error {
 	}
 }
 
-// validateCPEAuthStartup validates the secrets used by cmd/acs before it
-// opens the database and constructs the Digest authenticator.
+// validateCPEAuthStartup validates the profile, transport configuration and
+// secrets used by cmd/acs before it opens the database and constructs the
+// Digest authenticator. It is the early startup gate main() already calls, so
+// profile mistakes cannot bypass the later per-request production guard.
 //
 // A fleet-wide Digest password and CWMP mTLS CA are optional authentication
 // sources: productionCWMPGuard rejects the shared Digest identity in
@@ -81,6 +83,22 @@ func validateCWMPTransportStartup(profile string) error {
 func validateCPEAuthStartup(logger *slog.Logger, authSecrets ...config.Secret) error {
 	if logger == nil {
 		logger = slog.Default()
+	}
+
+	profile, err := loadACSDeploymentProfile()
+	if err != nil {
+		return err
+	}
+	if err := validateCWMPTransportStartup(profile); err != nil {
+		return err
+	}
+	// main.go reads ACS_TLS_MIN_VERSION later while building tls.Config.
+	// Normalize the production default here so the existing listener code
+	// cannot silently retain its lab-oriented TLS 1.0 fallback.
+	if profile == acsDeploymentProfileProduction && strings.TrimSpace(os.Getenv("ACS_TLS_MIN_VERSION")) == "" {
+		if err := os.Setenv("ACS_TLS_MIN_VERSION", "1.2"); err != nil {
+			return fmt.Errorf("set production TLS minimum: %w", err)
+		}
 	}
 
 	// The fleet-wide Digest password and mTLS CA are optional sources. If
