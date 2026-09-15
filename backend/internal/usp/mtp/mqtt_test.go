@@ -52,7 +52,11 @@ func TestMQTTStartStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("broker not listening on %s: %v", m.Addr(), err)
 	}
-	c.Close()
+	// Keep the probe connection open until Stop has closed the listener.
+	// Closing it immediately races with Mochi's accept/EstablishConnection
+	// goroutine under -race; the transport must be tested with the listener
+	// shutdown ordering, not with an artificial client disconnect race.
+	defer c.Close()
 	// Stop is called directly here, before the deferred cancel() ever
 	// fires -- this is what exercises Start's ctx-watcher goroutine
 	// waking from Stop's internal done channel rather than blocking
