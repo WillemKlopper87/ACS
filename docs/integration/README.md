@@ -2,7 +2,7 @@
 
 **For BSS and OSS developers integrating with the ACS platform.**
 
-Version 2026-09-13 · covers the `/bss/v1` API, which is live and stable.
+Version 2026-09-15 · covers the live `/bss/v1` API and the TMF northbound surfaces.
 
 The ACS platform manages customer premises equipment (routers, ONTs,
 extenders, set-top boxes) over TR-069/CWMP and USP/TR-369. It does not
@@ -19,11 +19,13 @@ device belongs to which account, and asks it to change device settings.
 | 3 | [`bss-integration-guide.md`](../../bss-integration-guide.md) | The workflow reference: every endpoint, request and response, with captured examples. |
 | 4 | [Go-live checklist](03-go-live-checklist.md) | What to verify before production traffic. |
 | 5 | [Roadmap](04-roadmap.md) | What is coming, so you can plan rather than rework. |
+| 6 | [TMF API status](../TMF-API-STATUS.md) | Current TMF routes, behavior, ownership, and boundaries. |
 
 ## Machine-readable specification
 
 [`backend/openapi-bssadapter.yaml`](../../backend/openapi-bssadapter.yaml) —
-OpenAPI 3.0.3, covering every `/bss/v1` endpoint.
+OpenAPI 3.0.3, covering every `/bss/v1` endpoint. The TMF routes are
+documented in the TMF status page and their version-specific contracts.
 
 Generate a client rather than hand-writing one:
 
@@ -52,14 +54,13 @@ drift from the running service.
 | Change Wi-Fi settings | `POST /bss/v1/orders` |
 | Check an order's progress | `GET /bss/v1/jobs/{command_key}` |
 | Subscribe to completion events | `POST /bss/v1/webhooks` |
+| Read operational services | `GET /tmf-api/serviceInventoryManagement/v4/service` |
+| Submit and track a service order | `POST/GET /tmf-api/serviceOrdering/v4/serviceOrder` |
+| Read events and alarms | `GET /tmf-api/eventManagement/v4/event`, `GET /tmf-api/alarmManagement/v4/alarm` |
+| Create or update a service problem | `/tmf-api/serviceProblemManagement/v4/serviceProblem` |
 
 ## What you cannot do yet
 
-- **Suspend / reactivate a service.** Deliberately unimplemented — see
-  [Roadmap](04-roadmap.md) and the guide's §2.2 for why a naive
-  implementation is unsafe.
-- **Actions other than Wi-Fi changes.** Firmware, reboot and diagnostics
-  exist in the ACS but are not yet exposed on this API.
 - **Read a Wi-Fi password back.** Passwords are write-only by design.
 
 ## Three things that catch people out

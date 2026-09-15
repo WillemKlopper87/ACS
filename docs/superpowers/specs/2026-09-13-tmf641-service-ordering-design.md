@@ -1,5 +1,7 @@
 # TMF641 Service Ordering Management (Sub-project C-4) — Design
 
+> **Delivery status:** Implemented on `main`. See [`docs/TMF-API-STATUS.md`](../../TMF-API-STATUS.md) for current routes and behavior; unbuilt statements below are historical scope.
+
 ## 1. Purpose and driver
 
 `bss-integration-guide.md` §6 opens its known-limitations list with:

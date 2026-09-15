@@ -1,5 +1,7 @@
 # TMF640 Service Activation and Configuration (Sub-project C-2) — Design
 
+> **Delivery status:** Implemented on `main`. See [`docs/TMF-API-STATUS.md`](../../TMF-API-STATUS.md) for current routes and behavior; unbuilt statements below are historical scope.
+
 ## 1. Purpose and driver
 
 Sub-project C ("BSS improvements") named four items: outbox, action set,

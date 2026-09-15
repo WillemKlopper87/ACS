@@ -138,4 +138,5 @@ a Trivy scan, and gitleaks. Make every job required in branch protection.
 - [deployment-testing-onboarding-guide.md](deployment-testing-onboarding-guide.md) — full environment/variable reference and test workflow.
 - [EC2-DEPLOYMENT-GUIDE.md](EC2-DEPLOYMENT-GUIDE.md) — single-host EC2 deployment.
 - [bss-integration-guide.md](bss-integration-guide.md) — BSS/CRM integration contract.
+- [docs/TMF-API-STATUS.md](docs/TMF-API-STATUS.md) — current TMF638/639/640/641/642/656/688 routes and behavior.
 - [tr069-acs-application-design-v3.md](tr069-acs-application-design-v3.md), [tr069-acs-build-plan.md](tr069-acs-build-plan.md) — design and build plan (historical; the code is the source of truth where they differ).

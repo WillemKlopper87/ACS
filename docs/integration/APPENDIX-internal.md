@@ -22,22 +22,22 @@ Before handing the pack to a third party:
 5. Check `04-roadmap.md` still matches reality. It is the file that goes
    stale fastest and the one an integrator will plan against.
 
-## Current build state — 2026-09-13
+## Current build state — 2026-09-15
 
-Accurate as of branch `design/tmf-expansion`, commit `8c98a43`.
+Accurate as of merged `origin/main` after PRs #46 and #47.
 
 | Surface | State |
 |---|---|
 | `/bss/v1` — 8 routes | Live, wired in `cmd/bssadapter/main.go:175-182` |
-| TMF640 `GET /service`, `GET /service/{id}` | Handlers exist in `cmd/bssadapter/tmf640.go` (`getService`, `listServices`) but **no route registers them** — Task 7 has not run, so they are unreachable |
-| TMF640 `GET /monitor/{id}` | Task 5, not started |
-| TMF640 `PATCH /service/{id}` | Task 6, not started |
-| TMF638 / TMF641 / TMF642+688 | Specced only (C-3/C-4/C-5, branch `design/tmf-expansion`) |
+| TMF640 | Live service reads, activation/configuration, and monitor state through the existing ACS job engine |
+| TMF638 / TMF639 | Live operational service/resource projections with scoping, paging, and field selection |
+| TMF641 | Live order submit/read/list/cancel with add/delete/modify/no-change, sequential halt/skip, and swaps |
+| TMF642 / TMF688 | Live durable alarm/event lifecycle, deduplication, recovery clearing, and event hubs |
+| TMF656 | Live tenant-scoped service-problem lifecycle with alarm/event/resource correlation |
 
-This is why `04-roadmap.md` says TMF640 is "not yet reachable — do not
-build against it". **If Task 7 lands, that line must change**, and
-`openapi-bssadapter.yaml` needs the TMF paths added or the drift test
-will fail.
+The external status page in `docs/TMF-API-STATUS.md` is the concise
+description of the current routes and behavior. Keep this internal table
+aligned with it when future TMF work lands.
 
 ## A contradiction fixed in the guide
 
@@ -54,10 +54,9 @@ resolution with role addressing, backed by
 `(account_id, role) WHERE unassigned_at IS NULL`. `ActiveDeviceForAccount`
 and `ErrNoDeviceForRole` have existed in `internal/bss/mapping.go` since.
 
-Corrected in the same change as this pack. The residual, genuine gap is
-narrower: `UnassignDevice`, `SwapDevice` and `AssignmentHistory` exist in
-the repository layer but are **not exposed on any HTTP surface**. That is
-what `04-roadmap.md` describes as arriving with TMF641.
+Corrected in the same change as this pack. The supported unassignment and
+same-role swap operations are now exposed through TMF641 service-order
+items, while assignment history remains an internal audit concern.
 
 ## Security decisions worth remembering
 

@@ -1,5 +1,7 @@
 # TMF638 Service Inventory Management (Sub-project C-3) — Design
 
+> **Delivery status:** Implemented on `main`. See [`docs/TMF-API-STATUS.md`](../../TMF-API-STATUS.md) for current routes and behavior; unbuilt statements below are historical scope.
+
 ## 1. Purpose and driver
 
 Sub-project C-2 (`docs/superpowers/specs/2026-09-13-bss-tmf640-design.md`)

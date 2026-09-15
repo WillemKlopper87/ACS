@@ -1,5 +1,7 @@
 # TMF642 Alarm + TMF688 Event Management (Sub-project C-5) — Design
 
+> **Delivery status:** Implemented on `main`. See [`docs/TMF-API-STATUS.md`](../../TMF-API-STATUS.md) for current routes and behavior; unbuilt statements below are historical scope.
+
 ## 1. Purpose and driver
 
 C-5 is the only sub-project in the TMF programme that **retires existing

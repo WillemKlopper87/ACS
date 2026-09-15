@@ -1,68 +1,25 @@
 # Roadmap
 
-What is coming, so you can plan rather than rework. **No dates are given
-here** — treat this as direction, and confirm timing with the operator
-before depending on anything below.
+The current implementation status is maintained in [TMF API status](../TMF-API-STATUS.md). This roadmap describes the next expansion work; it no longer lists the delivered TMF surfaces as pending.
 
-## Today: `/bss/v1`
+## Available now
 
-Live, stable, documented, and not going away without a long notice
-period and a migration path. Build against it now.
+The ACS exposes the existing `/bss/v1` integration contract alongside the TMF northbound APIs. TMF638/639 provide operational inventory, TMF640 provides activation/configuration, TMF641 provides service ordering, TMF688 and TMF642 provide durable events and alarms, and TMF656 provides service-problem management.
 
-## Coming: TM Forum Open APIs
+See [TMF API status](../TMF-API-STATUS.md) for routes and behavior, and the machine-readable adapter contract in [`backend/openapi-bssadapter.yaml`](../../backend/openapi-bssadapter.yaml) where applicable.
 
-A standards-based surface is being added alongside `/bss/v1`. If your BSS
-already speaks TM Forum, this will let you use a generated client and your
-existing connectors instead of a bespoke integration.
+## Next priorities
 
-| API | Purpose | Status |
-|---|---|---|
-| **TMF640** Service Activation and Configuration | Read and modify a service | In development. **Not yet reachable** — do not build against it. |
-| **TMF638** Service Inventory | Search and list services | Designed, not built |
-| **TMF641** Service Ordering | Multi-item orders, full order lifecycle | Designed, not built |
-| **TMF642 / TMF688** Alarms and Events | Standard alarm model and subscribe/notify hub | Designed, not built |
+- Add official TM Forum contract and CTK validation for each selected API version.
+- Expand notification delivery so order, service, alarm, and problem lifecycle changes are published consistently through the shared hub/webhook abstraction.
+- Add richer service/resource relationship projections and operational service persistence where ACS can truthfully own the state.
+- Add end-to-end correlation tests from BSS order through ACS job, CWMP/USP result, event, alarm, and service problem.
+- Add low-cardinality TMF request, outcome, delivery-backlog, and lifecycle metrics.
+- Evaluate TMF628 performance management after the service/resource/event/assurance graph is stable.
 
-Conformance will be a documented pragmatic subset: correct resource
-shapes and standard state enumerations, with the filter parameters that
-have real consumers, and every deviation listed explicitly rather than
-left for you to discover.
+## Boundaries
 
-### What this means for you now
+The BSS remains the system of record for catalog, billing, contracts, entitlements, and commercial subscription truth. ACS stores operational state only. Wi-Fi passwords remain write-only, and TMF event responses do not expose raw protocol payloads or secrets.
 
-**Nothing changes today.** `/bss/v1` remains the integration surface, and
-the TMF endpoints are not routed yet.
+Existing `/bss/v1` behavior remains supported while the TMF surfaces mature.
 
-Two things worth knowing while you design:
-
-- **TMF640 is CRUD on a `Service` plus a `Monitor` for async tracking.**
-  It is *not* an order-placement API. If you are planning around a
-  `ServiceOrder` with an `acknowledged → inProgress → completed`
-  lifecycle, that is **TMF641**, a different API. Getting these two
-  confused is common and leads to building against the wrong resource.
-- **Wi-Fi passwords will remain write-only** on the TMF surface too.
-
-### Multi-device accounts
-
-The data model already supports several devices per account, addressed by
-`role`, with at most one active device per role. `/bss/v1` exposes this on
-mappings and orders today.
-
-What it does not yet expose is **unassignment and device swap** over the
-API — releasing a device or replacing one under RMA currently needs
-operator action. Both are planned to arrive with TMF641, where they are
-naturally expressed as order items. If your rollout needs programmatic
-device swap, say so early.
-
-## Not planned
-
-- Reading Wi-Fi passwords back. Write-only, by design, permanently.
-- The ACS holding customer, billing or product data. Your BSS stays the
-  system of record.
-- Scheduled activation on this API. Schedule on your side.
-
-## Influencing this
-
-Priorities respond to real integration needs. If something above is
-blocking you, or something absent would unblock you, raise it — a
-concrete use case with volumes attached carries considerably more weight
-than a feature request.
