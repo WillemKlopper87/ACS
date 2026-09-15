@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"acs/internal/bss"
@@ -50,8 +51,16 @@ func (h *handler) listTMF638Services(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
+	requestedRole := strings.TrimSpace(r.URL.Query().Get("serviceCharacteristic.role"))
+	requestedState := strings.TrimSpace(r.URL.Query().Get("state"))
 	services := make([]tmfService, 0, len(mappings))
 	for i := range mappings {
+		if requestedRole != "" && mappings[i].Role != requestedRole {
+			continue
+		}
+		if requestedState != "" && tmf638State(mappings[i].Status) != requestedState {
+			continue
+		}
 		service, err := h.serviceFromMapping(r, &mappings[i])
 		if err != nil {
 			h.logger.Error("failed to build TMF638 service", "err", err, "id", mappings[i].ID)
@@ -61,5 +70,45 @@ func (h *handler) listTMF638Services(w http.ResponseWriter, r *http.Request) {
 		service.Href = tmf638ServiceBasePath + service.ID
 		services = append(services, service)
 	}
-	writeJSON(w, http.StatusOK, services)
+	total := len(services)
+	offset, limit := 0, 50
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		if n, e := strconv.Atoi(raw); e == nil && n >= 0 {
+			offset = n
+		}
+	}
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, e := strconv.Atoi(raw); e == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	page := services[offset:end]
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
+	w.Header().Set("X-Result-Count", strconv.Itoa(len(page)))
+	writeJSON(w, http.StatusOK, page)
+}
+
+func tmf638State(status string) string {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "PENDING_ACTIVE":
+		return "reserved"
+	case "ACTIVE":
+		return "active"
+	case "SUSPENDED":
+		return "inactive"
+	case "TERMINATED":
+		return "terminated"
+	default:
+		return ""
+	}
 }
