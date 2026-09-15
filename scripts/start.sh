@@ -27,8 +27,8 @@ case "$PROFILE" in
 esac
 
 # Production never publishes the operator console or bearer-token API from
-# their plain-HTTP development listeners. The externally visible origins are
-# HTTPS endpoints owned by a real reverse proxy/load balancer; the processes
+# their plain-HTTP development listeners. The externally visible origin is an
+# HTTPS endpoint owned by a real reverse proxy/load balancer; the processes
 # started below are loopback-only upstreams. Keeping this logic here (rather
 # than only in start-production.sh) means `ACS_DEPLOYMENT_PROFILE=production
 # ./scripts/start.sh` is fail-closed too.
@@ -64,12 +64,11 @@ if [ "$PROFILE" = "production" ]; then
   API_PUBLIC_URL="${ACS_API_PUBLIC_URL%/}"
 
   # The TLS ingress is the only public operator surface. These two listeners
-  # stay private even when the host itself has a public address.
+  # stay private even when the host itself has a public address. The shared
+  # security preflight below additionally requires both browser-facing URLs to
+  # be the same origin because cmd/api has no cross-origin trust policy.
   export ACS_API_ADDR="127.0.0.1:8080"
   export ACS_FRONTEND_BIND="127.0.0.1"
-  # Do not inherit a wildcard/stale CORS setting into production; the browser
-  # may call the API only from the configured HTTPS console origin.
-  export ACS_API_CORS_ORIGIN="$FRONTEND_PUBLIC_URL"
 
   # One shared fail-closed production gate covers device transports, operator
   # ingress, monitoring exposure, TLS floors and plaintext compatibility flags.
@@ -250,8 +249,9 @@ if [ -n "${ACS_USP_TLS_CERT:-}" ] && [ -n "${ACS_USP_TLS_KEY:-}" ]; then
   USP_SCHEME="wss"
 fi
 if [ "$PROFILE" = "production" ]; then
-  echo "Console:     $FRONTEND_PUBLIC_URL (HTTPS ingress -> http://127.0.0.1:5173)"
-  echo "API:         $API_PUBLIC_URL (HTTPS ingress -> http://127.0.0.1:8080)"
+  echo "Console/API: $FRONTEND_PUBLIC_URL (same-origin HTTPS ingress)"
+  echo "  SPA upstream: http://127.0.0.1:5173"
+  echo "  API upstream: http://127.0.0.1:8080"
 else
   echo "Console:     $FRONTEND_PUBLIC_URL"
   echo "API:         $API_PUBLIC_URL"
