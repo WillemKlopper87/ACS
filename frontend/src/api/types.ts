@@ -475,7 +475,7 @@ export interface VPNEnrollResult {
   config: string;
 }
 
-export interface AlertPolicy { id: string; name: string; scope: "fleet"|"tenant"|"group"|"device"; tenant_id?: string; group_id?: string; device_id?: string; customer_tier?: string; enabled: boolean; fault_priorities: Record<string,string>; offline_after: string; steps: Array<{after: string; destination: string; recipient: string}> }
+export interface AlertPolicy { id: string; name: string; scope: "fleet"|"tenant"|"group"|"device"; tenant_id?: string; group_id?: string; device_id?: string; customer_tier?: string; enabled: boolean; fault_priorities: Record<string,string>; offline_after: string|number; steps: Array<{after: string; destination: string; recipient: string}> }
 export interface AlertIncident { id: string; tenant_id: string; device_id: string; condition_key: string; priority: string; summary: string; state: string; escalation_stage: number; first_seen_at: string; last_seen_at: string; next_escalation_at?: string }
 
 export interface VPNConcentrator {
