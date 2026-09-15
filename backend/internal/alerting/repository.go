@@ -12,6 +12,12 @@ import (
 
 type Repository struct{ db *sql.DB }
 
+type OfflineDevice struct {
+	TenantID, DeviceID string
+	GroupIDs           []string
+	LastInformAt       *time.Time
+}
+
 func NewRepository(db *sql.DB) *Repository { return &Repository{db: db} }
 
 func (r *Repository) Create(ctx context.Context, p Policy) (*Policy, error) {
@@ -82,4 +88,25 @@ func (r *Repository) GroupIDsForDevice(ctx context.Context, deviceID string) ([]
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+func (r *Repository) OfflineDevices(ctx context.Context, limit int) ([]OfflineDevice, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT m.account_id, d.id::text, d.last_inform_at FROM devices d JOIN account_device_mappings m ON m.device_id=d.id WHERE d.online_status IN ('OFFLINE','UNREACHABLE') ORDER BY d.last_inform_at NULLS FIRST LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list offline devices: %w", err)
+	}
+	defer rows.Close()
+	var out []OfflineDevice
+	for rows.Next() {
+		var d OfflineDevice
+		if err := rows.Scan(&d.TenantID, &d.DeviceID, &d.LastInformAt); err != nil {
+			return nil, err
+		}
+		d.GroupIDs, err = r.GroupIDsForDevice(ctx, d.DeviceID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }

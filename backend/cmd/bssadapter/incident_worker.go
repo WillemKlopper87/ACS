@@ -23,6 +23,47 @@ func (h *handler) runIncidentIngestLoop(ctx context.Context) {
 	}
 }
 
+func (h *handler) runOfflineIncidentLoop(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			h.ingestOfflineDevices(ctx)
+		}
+	}
+}
+
+func (h *handler) ingestOfflineDevices(ctx context.Context) {
+	devices, err := h.alertPolicies.OfflineDevices(ctx, webhookBatchSize)
+	if err != nil {
+		h.logger.Error("failed to list offline devices for alerting", "err", err)
+		return
+	}
+	policies, err := h.alertPolicies.List(ctx)
+	if err != nil {
+		return
+	}
+	now := time.Now().UTC()
+	for _, d := range devices {
+		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: d.TenantID, GroupIDs: d.GroupIDs, DeviceID: d.DeviceID})
+		if !ok || p.OfflineAfter <= 0 {
+			continue
+		}
+		if d.LastInformAt != nil && now.Sub(*d.LastInformAt) < p.OfflineAfter {
+			continue
+		}
+		priority := alerting.Classify(p, "offline", true)
+		next := now.Add(firstEscalationDelay(p))
+		_, err = h.alertIncidents.Open(ctx, d.TenantID, d.DeviceID, "acs-offline", priority, "CPE has not checked in", &next, map[string]any{"last_inform_at": d.LastInformAt, "trigger": "liveness"})
+		if err != nil {
+			h.logger.Error("failed to open offline CPE incident", "err", err, "device_id", d.DeviceID)
+		}
+	}
+}
+
 func (h *handler) runEscalationLoop(ctx context.Context) {
 	ticker := time.NewTicker(webhookNotifyInterval)
 	defer ticker.Stop()
