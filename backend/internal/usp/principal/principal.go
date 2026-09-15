@@ -119,6 +119,23 @@ func (r *Repository) AuthenticateCertificate(ctx context.Context, cert *x509.Cer
 	return p, err
 }
 
+// ByEndpointID resolves the enabled principal currently allowed to speak as
+// endpointID. cmd/uspc uses this as an independent application-layer check:
+// after the transport has authenticated the client certificate, an
+// OnBoardRequest/probe identity must still resolve to this principal's bound
+// devices row before reconciliation is allowed to mutate live device state.
+func (r *Repository) ByEndpointID(ctx context.Context, endpointID usp.EndpointID) (*Principal, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT `+principalColumns+`
+		FROM usp_transport_principals
+		WHERE endpoint_id = $1 AND enabled`, string(endpointID))
+	p, err := scanPrincipal(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return p, err
+}
+
 // Disable revokes a device's USP transport principal without deleting its
 // audit-relevant binding metadata. A disabled certificate can no longer open
 // either MQTT or WebSocket sessions.
