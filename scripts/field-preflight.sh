@@ -38,6 +38,13 @@ is_loopback_bind() {
   esac
 }
 
+bind_port() {
+  local addr="${1:-}"
+  # Works for host:port and [IPv6]:port. Callers only use this for
+  # configured listener strings, never untrusted input.
+  printf '%s\n' "${addr##*:}" | tr -d ']'
+}
+
 echo "=== ACS real-CPE field preflight ==="
 
 # Record the exact software under test. A dirty worktree makes evidence
@@ -95,6 +102,25 @@ else
   fail "USP management/health bind is not loopback ($USP_HTTP_BIND)"
 fi
 
+# The reachability probe never bypasses authentication, but leaving it on
+# indefinitely adds noisy request telemetry. Prefer once for a single
+# problem device and record the mode in field evidence.
+ONBOARDING_MODE="${ACS_ONBOARDING_LISTENER:-off}"
+case "$ONBOARDING_MODE" in
+  off)
+    ok "CWMP onboarding reachability probe is off"
+    ;;
+  once)
+    ok "CWMP onboarding reachability probe is armed for one successful Inform"
+    ;;
+  on)
+    warn "ACS_ONBOARDING_LISTENER=on remains enabled after onboarding; prefer 'once' for a bounded field test"
+    ;;
+  *)
+    fail "ACS_ONBOARDING_LISTENER must be off, on or once (got '$ONBOARDING_MODE')"
+    ;;
+esac
+
 # Plaintext USP can be useful when qualifying unknown devices in an
 # isolated lab, but it must be a conscious field-test choice.
 if [ "${ACS_USP_ALLOW_PLAINTEXT:-false}" = "true" ] && { [ -z "${ACS_USP_TLS_CERT:-}" ] || [ -z "${ACS_USP_TLS_KEY:-}" ]; }; then
@@ -119,14 +145,16 @@ fi
 
 # Also inspect live listeners when ss is available; this catches a stale
 # process/configuration whose current environment no longer reflects how
-# it was started.
+# it was started. Use the configured ports rather than assuming defaults.
 if command -v ss >/dev/null 2>&1; then
   LISTENERS="$(ss -H -lnt 2>/dev/null || true)"
-  if printf '%s\n' "$LISTENERS" | grep -Eq '(^|[[:space:]])(0\.0\.0\.0|\*|\[::\]):8090([[:space:]]|$)'; then
-    fail "live BSS adapter port 8090 appears bound on all interfaces"
+  BSS_PORT="$(bind_port "$BSS_BIND")"
+  USP_HTTP_PORT="$(bind_port "$USP_HTTP_BIND")"
+  if printf '%s\n' "$LISTENERS" | grep -Eq "(^|[[:space:]])(0\\.0\\.0\\.0|\\*|\\[::\\]):${BSS_PORT}([[:space:]]|$)"; then
+    fail "live BSS adapter port $BSS_PORT appears bound on all interfaces"
   fi
-  if printf '%s\n' "$LISTENERS" | grep -Eq '(^|[[:space:]])(0\.0\.0\.0|\*|\[::\]):8092([[:space:]]|$)'; then
-    fail "live USP health port 8092 appears bound on all interfaces"
+  if printf '%s\n' "$LISTENERS" | grep -Eq "(^|[[:space:]])(0\\.0\\.0\\.0|\\*|\\[::\\]):${USP_HTTP_PORT}([[:space:]]|$)"; then
+    fail "live USP health port $USP_HTTP_PORT appears bound on all interfaces"
   fi
 fi
 
