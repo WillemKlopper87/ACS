@@ -1,10 +1,9 @@
 #!/bin/bash
-# Stops everything scripts/start.sh started, using the PID files it
-# wrote — avoids the "port already in use" problem that comes from
-# losing track of a `go run` process after a stray Ctrl+Z.
+# Stops every host process scripts/start.sh starts, using PID files first
+# and then a conservative stray-process cleanup for pre-PID deployments.
 LOG_DIR="$HOME/acs-logs"
 
-for name in acs api frontend; do
+for name in acs api bssadapter uspc frontend; do
   PID_FILE="$LOG_DIR/$name.pid"
   if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
@@ -19,17 +18,14 @@ for name in acs api frontend; do
 done
 
 # Belt-and-suspenders: catch anything from an old `go run` invocation
-# (before this script existed) that a PID file wouldn't know about.
-pkill -f "backend/bin/acs" 2>/dev/null && echo "Killed a stray bin/acs process" || true
-pkill -f "backend/bin/api" 2>/dev/null && echo "Killed a stray bin/api process" || true
-pkill -f "go run ./cmd/acs" 2>/dev/null && echo "Killed a stray 'go run ./cmd/acs' process" || true
-pkill -f "go run ./cmd/api" 2>/dev/null && echo "Killed a stray 'go run ./cmd/api' process" || true
+# or an interrupted deployment that a PID file would not know about.
+for name in acs api bssadapter uspc; do
+  pkill -f "backend/bin/$name" 2>/dev/null && echo "Killed a stray bin/$name process" || true
+  pkill -f "go run ./cmd/$name" 2>/dev/null && echo "Killed a stray 'go run ./cmd/$name' process" || true
+done
 pkill -f "scripts/spa-server.py" 2>/dev/null && echo "Killed a stray frontend server" || true
 pkill -f "http.server 5173" 2>/dev/null && echo "Killed a stray old-style frontend server" || true
 
-# Postgres and the monitoring containers (Prometheus, Alertmanager,
-# Grafana) are deliberately left running — they hold the fleet's data and
-# metrics history, and start.sh is safe to rerun against them. To stop
-# those too: cd infra && docker compose stop
+# Durable state/monitoring containers are deliberately left running.
 echo "Done. (Postgres + Prometheus/Alertmanager/Grafana containers left running;"
 echo " 'cd infra && docker compose stop' stops those as well.)"
