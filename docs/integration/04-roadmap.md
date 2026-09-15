@@ -13,9 +13,15 @@ See [TMF API status](../TMF-API-STATUS.md) for routes and behavior, and the mach
 - Add official TM Forum contract and CTK validation for each selected API version.
 - Expand notification delivery so order, service, alarm, and problem lifecycle changes are published consistently through the shared hub/webhook abstraction.
 - Add richer service/resource relationship projections and operational service persistence where ACS can truthfully own the state.
-- Add end-to-end correlation tests from BSS order through ACS job, CWMP/USP result, event, alarm, and service problem.
 - Add low-cardinality TMF request, outcome, delivery-backlog, and lifecycle metrics.
 - Evaluate TMF628 performance management after the service/resource/event/assurance graph is stable.
+
+The BSS-to-assurance correlation path is covered by the DB-backed
+`TestBSSOrderToTMFAssuranceFlow` integration test. It verifies order dispatch
+through the ACS client, fault publication, durable TMF event and alarm
+creation, and service-problem correlation. The test uses the same emulator/
+mock-CPE qualification harness described in [COMPATIBILITY](../COMPATIBILITY.md);
+physical-device qualification remains deferred.
 
 ## Boundaries
 
