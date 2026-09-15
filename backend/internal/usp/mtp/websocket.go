@@ -3,6 +3,7 @@ package mtp
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -210,12 +211,10 @@ func (w *WebSocket) handle(ctx context.Context, h Handler) http.HandlerFunc {
 		// application principal, then reject any caller-supplied eid mismatch
 		// before a Conn can enter the registry.
 		if w.cfg.PrincipalAuthenticator != nil {
-			var leafCert = func() *x509.Certificate {
-				if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-					return nil
-				}
-				return r.TLS.PeerCertificates[0]
-			}()
+			var leafCert *x509.Certificate
+			if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+				leafCert = r.TLS.PeerCertificates[0]
+			}
 			p, authErr := authenticateCertificate(r.Context(), w.cfg.PrincipalAuthenticator, leafCert)
 			if authErr != nil {
 				w.log.Warn("mtp: rejecting WebSocket whose certificate is not an enabled USP principal", "remote", r.RemoteAddr, "error", authErr)
