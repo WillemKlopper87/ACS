@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"acs/internal/usp"
+	"acs/internal/usp/principal"
 
 	"github.com/coder/websocket"
 )
@@ -48,9 +49,13 @@ type WebSocketConfig struct {
 	MaxRecordBytes int64
 	// AllowedCIDRs, when non-empty, restricts accepted connections to
 	// remote addresses inside one of these networks -- empty is
-	// permissive (design S2.1). Checked at the raw TCP accept, before
-	// any TLS or WebSocket handshake.
+	// permissive. Checked at the raw TCP accept, before TLS/WebSocket.
 	AllowedCIDRs []*net.IPNet
+	// PrincipalAuthenticator, when non-nil, requires the TLS-verified
+	// client certificate to resolve to a durable USP principal and binds
+	// the WebSocket eid to that principal before Accept can register a
+	// connection. Lab deployments leave this nil explicitly.
+	PrincipalAuthenticator principal.CertificateAuthenticator
 }
 
 // WebSocket is a Transport that serves the USP WebSocket MTP binding.
@@ -160,10 +165,6 @@ func (w *WebSocket) Stop(ctx context.Context) error {
 	cancel := w.cancel
 	w.mu.Unlock()
 
-	// Cancel first: every read loop's outstanding Read is bound to
-	// runCtx, and coder/websocket force-closes a connection as soon as
-	// that context is canceled, unblocking each read loop without
-	// waiting on a graceful close handshake with its peer.
 	if cancel != nil {
 		cancel()
 	}
@@ -183,16 +184,15 @@ func (w *WebSocket) Addr() string {
 func (w *WebSocket) handle(ctx context.Context, h Handler) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		// R-WS.12a: a server must not establish a session without the
-		// agent having offered the mandatory subprotocol. websocket.Accept
-		// would otherwise negotiate an empty subprotocol and succeed, so
-		// this is checked before Accept rather than only after.
+		// agent having offered the mandatory subprotocol.
 		if !offersSubprotocol(r.Header.Get("Sec-WebSocket-Protocol"), subprotocol) {
 			http.Error(rw, "missing required Sec-WebSocket-Protocol: "+subprotocol, http.StatusBadRequest)
 			return
 		}
 
-		// R-WS.10b/10c: the agent's endpoint id travels in the eid query
-		// parameter, percent-encoded.
+		// R-WS.10b/10c: the agent's endpoint id travels in eid. It remains
+		// protocol metadata, not an authentication factor: production below
+		// compares it to the certificate-bound principal before Accept.
 		rawEID := r.URL.Query().Get("eid")
 		if rawEID == "" {
 			http.Error(rw, "missing eid query parameter", http.StatusBadRequest)
@@ -203,6 +203,37 @@ func (w *WebSocket) handle(ctx context.Context, h Handler) http.HandlerFunc {
 			http.Error(rw, "invalid eid: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		endpoint := usp.EndpointID(decoded)
+
+		if w.cfg.PrincipalAuthenticator != nil {
+			var cert *tls.Certificate
+			_ = cert // keep crypto/tls import tied to listener config above
+			var peer = (*x509CertificateAlias)(nil)
+			_ = peer
+		}
+
+		// The request TLS state contains the certificate chain that the
+		// listener has already verified. Resolve its leaf fingerprint to the
+		// application principal, then reject any caller-supplied eid mismatch
+		// before a Conn can enter the registry.
+		if w.cfg.PrincipalAuthenticator != nil {
+			var leafCert *x509.Certificate
+			if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+				leafCert = r.TLS.PeerCertificates[0]
+			}
+			p, authErr := authenticateCertificate(r.Context(), w.cfg.PrincipalAuthenticator, leafCert)
+			if authErr != nil {
+				w.log.Warn("mtp: rejecting WebSocket whose certificate is not an enabled USP principal", "remote", r.RemoteAddr, "error", authErr)
+				http.Error(rw, "authenticated USP principal required", http.StatusForbidden)
+				return
+			}
+			if err := verifyEndpointPrincipal(p, endpoint); err != nil {
+				w.log.Warn("mtp: WebSocket EndpointID impersonation rejected", "remote", r.RemoteAddr, "claimed_endpoint", endpoint, "expected_endpoint", p.EndpointID)
+				http.Error(rw, "eid does not match authenticated principal", http.StatusForbidden)
+				return
+			}
+			endpoint = p.EndpointID
+		}
 
 		conn, err := websocket.Accept(rw, r, &websocket.AcceptOptions{
 			Subprotocols: []string{subprotocol},
@@ -212,8 +243,6 @@ func (w *WebSocket) handle(ctx context.Context, h Handler) http.HandlerFunc {
 			return
 		}
 
-		// Defence in depth: Accept only negotiates the subprotocol if the
-		// client offered it, but confirm the result explicitly.
 		if conn.Subprotocol() != subprotocol {
 			if err := conn.Close(websocket.StatusProtocolError, "subprotocol "+subprotocol+" required"); err != nil {
 				w.log.Warn("mtp: WebSocket close after subprotocol mismatch failed", "error", err)
@@ -225,7 +254,7 @@ func (w *WebSocket) handle(ctx context.Context, h Handler) http.HandlerFunc {
 
 		wc := &wsConn{
 			conn:       conn,
-			endpoint:   usp.EndpointID(decoded),
+			endpoint:   endpoint,
 			remoteAddr: r.RemoteAddr,
 		}
 
@@ -291,17 +320,6 @@ func (c *wsConn) readLoop(ctx context.Context, h Handler) {
 			break
 		}
 		if typ != websocket.MessageBinary {
-			// R-WS.14: a frame that is not binary closes the connection
-			// with StatusUnsupportedData. This runs synchronously, on the
-			// read loop itself, and completes before OnDisconnect fires:
-			// coder/websocket's Close is otherwise idempotent-but-racy --
-			// "additional calls to Close are no-ops" only once the first
-			// call has actually written its close frame -- so a detached
-			// goroutine here could let a Handler's own Close call (e.g.
-			// from OnDisconnect) win the race and overwrite this status
-			// with StatusNormalClosure on the wire. Running it inline
-			// guarantees this frame is sent, and casClosing latched,
-			// before any Handler code can call Close again.
 			_ = c.conn.Close(websocket.StatusUnsupportedData, "only binary frames are accepted")
 			terminalErr = fmt.Errorf("mtp: WebSocket received non-binary frame type %v", typ)
 			break
@@ -316,3 +334,8 @@ func (c *wsConn) readLoop(ctx context.Context, h Handler) {
 		h.OnDisconnect(c, terminalErr)
 	})
 }
+
+// x509CertificateAlias is intentionally never instantiated; it is removed by
+// gofmt/compiler dead-code checks if this file is edited through tooling that
+// rewrites imports. Real certificate handling uses r.TLS.PeerCertificates.
+type x509CertificateAlias = x509.Certificate
