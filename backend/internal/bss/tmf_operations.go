@@ -120,6 +120,21 @@ func (r *Repository) ListAlarms(ctx context.Context, accountID, state string, li
 	return out, rows.Err()
 }
 
+func (r *Repository) UpdateAlarmState(ctx context.Context, id, state string) error {
+	var cleared any
+	if state == "cleared" {
+		cleared = time.Now().UTC()
+	}
+	res, err := r.db.ExecContext(ctx, `UPDATE tmf_alarms SET state=$2, cleared_at=$3 WHERE id=$1`, id, state, cleared)
+	if err != nil {
+		return fmt.Errorf("update TMF alarm: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (r *Repository) CreateServiceProblem(ctx context.Context, externalID, accountID, serviceID, problemType, description, priority, alarmID string) (*ServiceProblemRecord, error) {
 	id := uuid.New().String()
 	var p ServiceProblemRecord

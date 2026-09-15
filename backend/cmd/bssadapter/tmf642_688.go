@@ -80,6 +80,21 @@ func (h *handler) listTMF642Alarms(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+func (h *handler) patchTMF642Alarm(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		State string `json:"state"`
+	}
+	if json.NewDecoder(r.Body).Decode(&body) != nil || (body.State != "acknowledged" && body.State != "cleared") {
+		writeError(w, 400, "ErrInvalidRequest", "state must be acknowledged or cleared")
+		return
+	}
+	if err := h.mappings.UpdateAlarmState(r.Context(), strings.TrimSpace(r.PathValue("id")), body.State); err != nil {
+		writeError(w, 404, "ErrNotFound", "no such alarm")
+		return
+	}
+	h.getTMF642Alarm(w, r)
+}
+
 func (h *handler) createTMF688Event(w http.ResponseWriter, r *http.Request) {
 	var req tmf688EventRequest
 	if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.SourceKey) == "" || strings.TrimSpace(req.EventType) == "" {
