@@ -3,12 +3,18 @@
 #
 # The device-facing CWMP/USP listeners terminate their own TLS. The operator
 # console/API use the host quickstart's plain-HTTP servers only as loopback
-# upstreams and MUST be published through a real HTTPS reverse proxy/load
-# balancer. Configure these public origins before running this wrapper:
+# upstreams and MUST be published through one real HTTPS reverse proxy/load
+# balancer origin. Configure the same public origin for both values before
+# running this wrapper; the ingress routes API paths to 127.0.0.1:8080 and SPA
+# traffic to 127.0.0.1:5173:
 #
 #   ACS_FRONTEND_BASE_URL=https://acs.example.com
-#   ACS_API_PUBLIC_URL=https://acs.example.com        # same-origin proxy, or
-#   ACS_API_PUBLIC_URL=https://api.acs.example.com    # separate API origin
+#   ACS_API_PUBLIC_URL=https://acs.example.com
+#
+# A separate browser API origin is deliberately not supported by this host
+# launcher because cmd/api does not currently define a reviewed CORS trust
+# policy. Add that as a separate security-reviewed change rather than widening
+# the production trust boundary implicitly.
 #
 # Also configure the CWMP/USP TLS certificate/key paths,
 # ACS_USP_CLIENT_CA_CERT, and the restrictive USP CIDR allowlist in the
@@ -26,8 +32,8 @@ export ACS_DEPLOYMENT_PROFILE=production
 # it also contains lab-friendly transport defaults. Preserve production values
 # that the operator explicitly exported before this wrapper was invoked, then
 # restore them after sourcing the stable file. This makes both supported forms
-# in the comment above real: edit ~/.acs-secrets.env OR supply environment
-# overrides for a particular deployment.
+# above real: edit ~/.acs-secrets.env OR supply environment overrides for a
+# particular deployment.
 declare -A production_overrides=()
 for var in \
   ACS_TLS_CERT ACS_TLS_KEY ACS_TLS_MIN_VERSION ACS_MTLS_CA_CERT ACS_AUTH_ALLOW_BASIC \
@@ -59,5 +65,5 @@ export ACS_ENV_ALREADY_LOADED="1"
 
 # ACS_DEPLOYMENT_PROFILE remains exported across exec; start.sh runs the shared
 # production preflight, keeps console/API on loopback, and builds the browser
-# bundle against ACS_API_PUBLIC_URL.
+# bundle against the same-origin ACS_API_PUBLIC_URL.
 exec "$ROOT/scripts/start.sh"
