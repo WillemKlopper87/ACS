@@ -28,6 +28,32 @@ type tmf642AlarmRequest struct {
 	Details         map[string]any `json:"details"`
 }
 
+func (h *handler) getTMF688Event(w http.ResponseWriter, r *http.Request) {
+	e, err := h.mappings.FindEvent(r.Context(), strings.TrimSpace(r.PathValue("id")))
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	if e == nil {
+		writeError(w, 404, "ErrNotFound", "no such event")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": e.ID, "href": "/tmf-api/eventManagement/v4/event/" + e.ID, "eventType": e.EventType, "eventTime": e.EventTime, "sourceKey": e.SourceKey, "accountId": e.AccountID, "deviceId": e.DeviceID, "serviceId": e.ServiceID, "event": json.RawMessage(e.Payload)})
+}
+
+func (h *handler) getTMF642Alarm(w http.ResponseWriter, r *http.Request) {
+	a, err := h.mappings.FindAlarm(r.Context(), strings.TrimSpace(r.PathValue("id")))
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	if a == nil {
+		writeError(w, 404, "ErrNotFound", "no such alarm")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": a.ID, "href": "/tmf-api/alarmManagement/v4/alarm/" + a.ID, "alarmType": a.AlarmType, "perceivedSeverity": a.Severity, "state": a.State, "probableCause": a.ProbableCause, "specificProblem": a.SpecificProblem, "sourceKey": a.SourceKey, "accountId": a.AccountID, "deviceId": a.DeviceID, "serviceId": a.ServiceID, "details": json.RawMessage(a.Details), "raisedAt": a.RaisedAt, "clearedAt": a.ClearedAt})
+}
+
 func (h *handler) createTMF688Event(w http.ResponseWriter, r *http.Request) {
 	var req tmf688EventRequest
 	if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.SourceKey) == "" || strings.TrimSpace(req.EventType) == "" {
