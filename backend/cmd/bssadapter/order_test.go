@@ -12,10 +12,12 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"acs/internal/bss"
 	"acs/internal/observability"
 	"acs/internal/store"
+	"acs/internal/tmf/telemetry"
 )
 
 // newOrderTestHandler mirrors newMappingTestHandler (mapping_test.go):
@@ -118,6 +120,51 @@ func TestCreateOrderSuccessWritesPendingThenDispatched(t *testing.T) {
 	}
 	if order.DeviceID != deviceID {
 		t.Errorf("order.DeviceID = %q, want %q", order.DeviceID, deviceID)
+	}
+}
+
+// TestBSSOrderToTMFAssuranceFlow proves the cross-service persistence path
+// used by the emulator qualification: a BSS order is dispatched through the
+// ACS client, a device fault becomes a TMF event and alarm, and the alarm and
+// event can be correlated into a TMF service problem.
+func TestBSSOrderToTMFAssuranceFlow(t *testing.T) {
+	ctx, h, db := newOrderTestHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-assurance"})
+	}))
+	const accountID, deviceID = "acct-assurance", "22222222-2222-2222-2222-222222222222"
+	seedOrderDevice(t, ctx, db, accountID, deviceID)
+
+	body, _ := json.Marshal(createOrderRequest{ExternalOrderID: "ord-assurance", AccountID: accountID, Action: "SUSPEND"})
+	req := httptest.NewRequest(http.MethodPost, "/bss/v1/orders", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.createOrder(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("order status = %d, want 202; body: %s", rec.Code, rec.Body.String())
+	}
+	order, err := h.mappings.FindOrder(ctx, "ord-assurance")
+	if err != nil || order == nil || order.Status != bss.OrderStatusDispatched || order.CommandKey != "ck-assurance" {
+		t.Fatalf("dispatched order = %+v, err=%v", order, err)
+	}
+
+	at := time.Now().UTC()
+	if err := telemetry.PublishFault(ctx, h.mappings, telemetry.Fault{AccountID: accountID, DeviceID: deviceID, JobID: "job-assurance", Protocol: "CWMP", Code: "9002", Message: "CPE timeout", At: at}); err != nil {
+		t.Fatalf("PublishFault: %v", err)
+	}
+	events, err := h.mappings.ListEvents(ctx, accountID, 10)
+	if err != nil || len(events) != 1 || events[0].EventType != "DeviceFault" {
+		t.Fatalf("events = %+v, err=%v", events, err)
+	}
+	alarms, err := h.mappings.ListAlarms(ctx, accountID, "", 10)
+	if err != nil || len(alarms) != 1 || alarms[0].State != "raised" {
+		t.Fatalf("alarms = %+v, err=%v", alarms, err)
+	}
+	problem, err := h.mappings.CreateServiceProblemRich(ctx, "problem-assurance", accountID, "", "deviceFault", "CPE timeout", "P1", alarms[0].ID, []string{events[0].ID}, []string{deviceID}, "serviceUnavailable", "critical", "CWMP timeout")
+	if err != nil {
+		t.Fatalf("CreateServiceProblemRich: %v", err)
+	}
+	if problem.RelatedAlarmID != alarms[0].ID || len(problem.RelatedEventIDs) != 1 || problem.RelatedEventIDs[0] != events[0].ID || problem.AffectedResourceIDs[0] != deviceID {
+		t.Fatalf("problem correlation = %+v", problem)
 	}
 }
 
