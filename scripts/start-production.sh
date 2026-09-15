@@ -1,9 +1,12 @@
 #!/bin/bash
 # Production entry point for the host-based ACS stack.
 #
-# Configure TLS certificate/key paths and the USP CIDR allowlist in the
-# environment or ~/.acs-secrets.env before invoking this wrapper. The normal
-# scripts/start.sh remains the compatibility-first lab/field-test quickstart.
+# Before invoking this wrapper, configure the CWMP/USP TLS certificate and key
+# paths, ACS_USP_CLIENT_CA_CERT, and the restrictive USP CIDR allowlist in the
+# environment or ~/.acs-secrets.env. Each production USP agent must also have
+# a pre-provisioned certificate-fingerprint -> device/EndpointID/MQTT-topic
+# binding in usp_transport_principals. The normal scripts/start.sh remains the
+# compatibility-first lab/field-test quickstart.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
