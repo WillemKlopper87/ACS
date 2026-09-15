@@ -38,11 +38,16 @@ validate_https_origin() {
 import sys
 from urllib.parse import urlsplit
 
-raw = sys.argv[1]
-u = urlsplit(raw)
+u = urlsplit(sys.argv[1])
+try:
+    _ = u.port
+    valid_port = True
+except ValueError:
+    valid_port = False
 valid = (
     u.scheme == "https"
-    and bool(u.netloc)
+    and bool(u.hostname)
+    and valid_port
     and u.path in ("", "/")
     and not u.query
     and not u.fragment
@@ -52,7 +57,7 @@ valid = (
 raise SystemExit(0 if valid else 1)
 PY
   then
-    echo "ERROR: $name must be an HTTPS origin with no path/query/fragment, e.g. https://acs.example.com (got '${value:-<unset>}')." >&2
+    echo "ERROR: $name must be a valid HTTPS origin with no path/query/fragment, e.g. https://acs.example.com (got '${value:-<unset>}')." >&2
     exit 1
   fi
 }
@@ -63,17 +68,21 @@ if [ "$PROFILE" = "production" ]; then
   FRONTEND_PUBLIC_URL="${ACS_FRONTEND_BASE_URL%/}"
   API_PUBLIC_URL="${ACS_API_PUBLIC_URL%/}"
 
-  # The TLS ingress is the only public operator surface. These two listeners
-  # stay private even when the host itself has a public address. The shared
-  # security preflight below additionally requires both browser-facing URLs to
-  # be the same origin because cmd/api has no cross-origin trust policy.
+  # The TLS ingress is the only public operator surface. Every deliberately
+  # plain-HTTP host control listener stays loopback-only even if persisted lab
+  # defaults were manually changed. Keep internal service URLs aligned with
+  # those forced listeners before running the fail-closed preflight.
   export ACS_API_ADDR="127.0.0.1:8080"
+  export ACS_BSS_ADDR="127.0.0.1:8090"
+  export ACS_USP_HTTP_ADDR="127.0.0.1:8092"
   export ACS_FRONTEND_BIND="127.0.0.1"
+  export ACS_INTERNAL_API_URL="http://127.0.0.1:8080"
+  export ACS_BSS_ADAPTER_URL="http://127.0.0.1:8090"
 
   # One shared fail-closed production gate covers device transports, operator
-  # ingress, monitoring exposure, TLS floors and plaintext compatibility flags.
-  # Running it here means direct production use of start.sh cannot bypass the
-  # checks that start-production.sh relies on.
+  # ingress, host control listeners, monitoring exposure, TLS floors and
+  # plaintext compatibility flags. Running it here means direct production use
+  # of start.sh cannot bypass the checks that start-production.sh relies on.
   "$ROOT/scripts/security-preflight.sh"
 else
   FRONTEND_PUBLIC_URL=""
@@ -281,9 +290,9 @@ echo "USP controller ID: $ACS_USP_CONTROLLER_ID"
 echo "(credentials/settings are also saved in ~/.acs-secrets.env)"
 if [ "${ACS_PROMETHEUS_PUBLIC:-}" = "1" ]; then
   echo ""
-  echo "WARNING: Prometheus has no login in this dev mode. Restrict 9090/tcp"
-  echo "         in the security group to your test IP/CIDR; do not expose it"
-  echo "         broadly for a production deployment."
+echo "WARNING: Prometheus has no login in this dev mode. Restrict 9090/tcp"
+echo "         in the security group to your test IP/CIDR; do not expose it"
+echo "         broadly for a production deployment."
 fi
 echo ""
 echo "Logs:   $LOG_DIR/{acs,api,bssadapter,uspc,frontend}.log"
