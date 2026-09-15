@@ -67,27 +67,27 @@ type serviceConfig struct {
 	TLSCert        string
 	TLSKey         string
 	AllowPlaintext bool
+	// TLSClientCA is the PEM CA bundle used to verify agent client
+	// certificates. Production requires it because mTLS is the
+	// cryptographic transport principal for both MQTT and WebSocket.
+	TLSClientCA string
 
 	HTTPAddr string
 
 	// PostgresDSN is this controller's connection string for the
-	// identity reconciler (internal/devices, via internal/store.Open).
-	// Required, fail-closed -- there is no sensible default for a DSN,
-	// mirroring cmd/bssadapter's ACS_POSTGRES_DSN handling (its main.go).
+	// identity reconciler and durable USP transport-principal authority.
 	PostgresDSN string
 
-	// AllowedCIDRs is the network-level half of the USP agent allowlist
-	// (design docs/superpowers/specs/2026-09-12-usp-agent-allowlist-design.md
-	// S2.1). Lab keeps the historical empty-is-permissive behaviour;
-	// production requires at least one non-universal network.
+	// AllowedCIDRs is the network-level half of the USP agent allowlist.
+	// Lab keeps the historical empty-is-permissive behaviour; production
+	// requires at least one non-universal network. It is defence in depth,
+	// not an identity signal.
 	AllowedCIDRs []*net.IPNet
 }
 
 // loadConfig reads and validates cmd/uspc's configuration via getenv,
 // rather than the process environment directly, so it is testable
-// without os.Setenv. Every rule is fail-closed: a bad or missing value
-// is an error, never a silently-applied default (defaults exist only
-// for genuinely optional knobs -- listen addresses and paths).
+// without os.Setenv. Every production security requirement fails closed.
 func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, error) {
 	var problems []string
 
@@ -106,8 +106,12 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 
 	tlsCert := getenv("ACS_USP_TLS_CERT")
 	tlsKey := getenv("ACS_USP_TLS_KEY")
+	clientCA := getenv("ACS_USP_CLIENT_CA_CERT")
 	if (tlsCert == "") != (tlsKey == "") {
 		problems = append(problems, "ACS_USP_TLS_CERT and ACS_USP_TLS_KEY must both be set or both be empty")
+	}
+	if clientCA != "" && (tlsCert == "" || tlsKey == "") {
+		problems = append(problems, "ACS_USP_CLIENT_CA_CERT requires ACS_USP_TLS_CERT and ACS_USP_TLS_KEY")
 	}
 
 	allowPlaintext := getenv("ACS_USP_ALLOW_PLAINTEXT") == "true"
@@ -119,6 +123,9 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 	}
 	if profile == deploymentProfileProduction && (tlsCert == "" || tlsKey == "") {
 		problems = append(problems, "ACS_DEPLOYMENT_PROFILE=production requires ACS_USP_TLS_CERT and ACS_USP_TLS_KEY")
+	}
+	if profile == deploymentProfileProduction && clientCA == "" {
+		problems = append(problems, "ACS_DEPLOYMENT_PROFILE=production requires ACS_USP_CLIENT_CA_CERT for mTLS agent authentication")
 	}
 
 	postgresDSN := getenv("ACS_USP_POSTGRES_DSN")
@@ -161,6 +168,7 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 
 		TLSCert:        tlsCert,
 		TLSKey:         tlsKey,
+		TLSClientCA:    clientCA,
 		AllowPlaintext: allowPlaintext,
 
 		HTTPAddr: envOrDefault(getenv, log, "ACS_USP_HTTP_ADDR", ":8092"),
