@@ -46,6 +46,7 @@ func newACSMux(cwmpHandler http.HandlerFunc, metrics *observability.Metrics, db 
 	// session, use cookie/IP fallback, evaluate policies or dispatch queued
 	// work. The production transport guard remains the outermost boundary.
 	cwmpHandler = bootstrapCWMPGuard(cwmpHandler, metrics, db)
+	cwmpHandler = bootstrapCWMPGraduationGuard(cwmpHandler, metrics, db)
 	mux.HandleFunc("/", metrics.InstrumentHTTP(cwmpRouteLabel, productionCWMPGuard(cwmpHandler)))
 	mux.Handle("GET /metrics", metrics.Handler())
 	mux.Handle("GET /healthz", observability.LivenessHandler())
