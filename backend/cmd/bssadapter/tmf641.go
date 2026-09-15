@@ -45,10 +45,19 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "ErrInvalidRequest", "externalId, accountId, and orderItem are required")
 		return
 	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFExecute, req.AccountID) {
+		return
+	}
 	if existing, err := h.mappings.FindServiceOrder(r.Context(), req.ExternalID); err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
 	} else if existing != nil {
+		// externalId is an idempotency key, not an authority boundary. Never
+		// let a tenant replay another tenant's key to retrieve its order.
+		if existing.AccountID != req.AccountID {
+			writeError(w, 404, "ErrNotFound", "no such service order")
+			return
+		}
 		items, _ := h.mappings.ServiceOrderItems(r.Context(), existing.ID)
 		writeJSON(w, 200, tmf641OrderResponse(existing, items))
 		return
@@ -180,21 +189,12 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 			}
 			if _, dispatchErr := h.dispatchOrder(r.Context(), req.ExternalID+":"+strconv.Itoa(i), req.AccountID, "MODIFY_WIFI", mapping.DeviceID, params); dispatchErr != nil {
 				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", dispatchErr.Error())
-				if errors.Is(dispatchErr, bss.ErrACSUnreachable) {
-					items[i].Status = "FAILED"
-					for j := i + 1; j < len(items); j++ {
-						_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[j].ID, "SKIPPED", "previous item failed")
-						items[j].Status = "SKIPPED"
-					}
-					break
-				} else {
-					items[i].Status = "FAILED"
-					for j := i + 1; j < len(items); j++ {
-						_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[j].ID, "SKIPPED", "previous item failed")
-						items[j].Status = "SKIPPED"
-					}
-					break
+				items[i].Status = "FAILED"
+				for j := i + 1; j < len(items); j++ {
+					_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[j].ID, "SKIPPED", "previous item failed")
+					items[j].Status = "SKIPPED"
 				}
+				break
 			}
 			items[i].Status = "DISPATCHED"
 			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "DISPATCHED", "")
@@ -224,6 +224,9 @@ func (h *handler) getTMF641Order(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "ErrNotFound", "no such service order")
 		return
 	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, order.AccountID) {
+		return
+	}
 	items, err := h.mappings.ServiceOrderItems(r.Context(), order.ID)
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
@@ -233,7 +236,15 @@ func (h *handler) getTMF641Order(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) listTMF641Orders(w http.ResponseWriter, r *http.Request) {
-	orders, err := h.mappings.ListServiceOrders(r.Context(), strings.TrimSpace(r.URL.Query().Get("accountId")), 100)
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountId"))
+	if accountID == "" {
+		writeError(w, 400, "ErrInvalidRequest", "accountId query parameter is required")
+		return
+	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, accountID) {
+		return
+	}
+	orders, err := h.mappings.ListServiceOrders(r.Context(), accountID, 100)
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
@@ -257,9 +268,31 @@ func (h *handler) cancelTMF641Order(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "ErrInvalidRequest", "only state=cancelled is supported")
 		return
 	}
+	order, err := h.mappings.FindServiceOrder(r.Context(), id)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	if order == nil {
+		writeError(w, 404, "ErrNotFound", "no such service order")
+		return
+	}
+	if !h.authorizeTMF(w, r, bss.ScopeTMFExecute, order.AccountID) {
+		return
+	}
 	if err := h.mappings.CancelServiceOrder(r.Context(), id); err != nil {
 		writeError(w, 409, "ErrConflict", "service order cannot be cancelled after execution begins")
 		return
 	}
-	h.getTMF641Order(w, r)
+	order, err = h.mappings.FindServiceOrder(r.Context(), id)
+	if err != nil || order == nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	items, err := h.mappings.ServiceOrderItems(r.Context(), order.ID)
+	if err != nil {
+		writeError(w, 500, "ErrInternal", "internal error")
+		return
+	}
+	writeJSON(w, 200, tmf641OrderResponse(order, items))
 }

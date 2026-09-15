@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"acs/internal/bss"
@@ -27,23 +28,35 @@ import (
 // --- Section 1: onboarding/setup -------------------------------------------
 
 type createBSSOAuthClientRequest struct {
-	Name string `json:"name"`
+	Name         string   `json:"name"`
+	Scopes       []string `json:"scopes"`
+	AccountIDs   []string `json:"account_ids"`
+	GlobalAccess bool     `json:"global_access"`
 }
 
 // createBSSOAuthClient registers a new OAuth2 client-credentials
 // integration — the client_secret is returned exactly once, here, same
 // "shown once" rule as every other generated credential in this app.
+// Access policy is mandatory-by-construction: an empty scope list is a
+// valid disabled integration, while any granted scope must be bound to
+// explicit accounts or deliberate fleet-wide access.
 func (h *handler) createBSSOAuthClient(w http.ResponseWriter, r *http.Request) {
 	var req createBSSOAuthClientRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
+	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
-	client, secret, err := h.bssOAuthClients.CreateClient(r.Context(), req.Name)
+	policy := bss.OAuthPolicy{Scopes: req.Scopes, AccountIDs: req.AccountIDs, GlobalAccess: req.GlobalAccess}
+	client, secret, err := h.bssOAuthClients.CreateClientWithPolicy(r.Context(), req.Name, policy)
+	if errors.Is(err, bss.ErrInvalidOAuthPolicy) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		h.logger.Error("failed to create bss oauth client", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -51,7 +64,8 @@ func (h *handler) createBSSOAuthClient(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := operatorFromRequest(r)
 	if err := h.auditor.Record(r.Context(), actor, "", "BSSOAuthClientCreated", map[string]any{
-		"name": req.Name, "client_id": client.ClientID,
+		"name": req.Name, "client_id": client.ClientID, "scopes": client.Scopes,
+		"account_ids": client.AccountIDs, "global_access": client.GlobalAccess,
 	}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}

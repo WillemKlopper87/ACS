@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -21,6 +22,41 @@ func TestSignAndVerifyJWT_RoundTrip(t *testing.T) {
 	}
 	if got.Subject != claims.Subject || got.Role != claims.Role {
 		t.Errorf("VerifyJWT roundtrip = %+v, want subject=%q role=%q", got, claims.Subject, claims.Role)
+	}
+}
+
+func TestSignAndVerifyJWT_MachinePolicyRoundTrip(t *testing.T) {
+	secret := []byte("test-signing-secret")
+	now := time.Now().UTC().Truncate(time.Second)
+	claims := Claims{
+		Subject: "bss-client:client-1", Role: "bss_client", IssuedAt: now, ExpiresAt: now.Add(time.Hour),
+		Scopes: []string{"tmf:read", "tmf:execute"}, AccountIDs: []string{"acct-a", "acct-b"},
+	}
+
+	token, err := SignJWT(secret, claims)
+	if err != nil {
+		t.Fatalf("SignJWT: %v", err)
+	}
+	got, err := VerifyJWT(secret, token)
+	if err != nil {
+		t.Fatalf("VerifyJWT: %v", err)
+	}
+	if !reflect.DeepEqual(got.Scopes, claims.Scopes) || !reflect.DeepEqual(got.AccountIDs, claims.AccountIDs) || got.GlobalAccess {
+		t.Fatalf("machine policy roundtrip = %+v, want scopes=%v accounts=%v global=false", got, claims.Scopes, claims.AccountIDs)
+	}
+
+	claims.GlobalAccess = true
+	claims.AccountIDs = nil
+	token, err = SignJWT(secret, claims)
+	if err != nil {
+		t.Fatalf("SignJWT global: %v", err)
+	}
+	got, err = VerifyJWT(secret, token)
+	if err != nil {
+		t.Fatalf("VerifyJWT global: %v", err)
+	}
+	if !got.GlobalAccess || len(got.AccountIDs) != 0 {
+		t.Fatalf("global machine policy roundtrip = %+v", got)
 	}
 }
 
