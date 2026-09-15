@@ -26,9 +26,12 @@ func discardLogger() *slog.Logger {
 func clearCPEAuthEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv(config.DevModeEnv, "")
+	t.Setenv("ACS_DIGEST_USERNAME", "")
 	t.Setenv("ACS_DIGEST_PASSWORD", "")
 	t.Setenv("ACS_MTLS_CA_CERT", "")
 	t.Setenv("ACS_CREDENTIAL_ENCRYPTION_KEY", "")
+	t.Setenv("ACS_CWMP_BOOTSTRAP_USERNAME", "")
+	t.Setenv("ACS_CWMP_BOOTSTRAP_PASSWORD", "")
 }
 
 func clearCWMPTransportEnv(t *testing.T) {
@@ -173,6 +176,71 @@ func TestValidateCPEAuthStartupStillValidatesConfiguredSharedSecret(t *testing.T
 	if !strings.Contains(err.Error(), "ACS_DIGEST_PASSWORD") {
 		t.Fatalf("error = %q, want ACS_DIGEST_PASSWORD validation failure", err)
 	}
+}
+
+func TestValidateCPEAuthStartupBootstrapScope(t *testing.T) {
+	t.Run("strong explicit bootstrap pair accepted", func(t *testing.T) {
+		clearCPEAuthEnv(t)
+		clearCWMPTransportEnv(t)
+		t.Setenv("ACS_CREDENTIAL_ENCRYPTION_KEY", "device-credential-key-material-32b")
+		t.Setenv("ACS_CWMP_BOOTSTRAP_USERNAME", "cwmp-bootstrap")
+		t.Setenv("ACS_CWMP_BOOTSTRAP_PASSWORD", "bootstrap-password-material-32b")
+
+		if err := validateCPEAuthStartup(discardLogger(), testCPEAuthSecrets()...); err != nil {
+			t.Fatalf("valid bootstrap configuration rejected: %v", err)
+		}
+	})
+
+	t.Run("username without password fails closed", func(t *testing.T) {
+		clearCPEAuthEnv(t)
+		clearCWMPTransportEnv(t)
+		t.Setenv("ACS_CREDENTIAL_ENCRYPTION_KEY", "device-credential-key-material-32b")
+		t.Setenv("ACS_CWMP_BOOTSTRAP_USERNAME", "cwmp-bootstrap")
+
+		err := validateCPEAuthStartup(discardLogger(), testCPEAuthSecrets()...)
+		if err == nil || !strings.Contains(err.Error(), "ACS_CWMP_BOOTSTRAP") {
+			t.Fatalf("partial bootstrap configuration error = %v, want fail closed", err)
+		}
+	})
+
+	t.Run("password without username fails closed", func(t *testing.T) {
+		clearCPEAuthEnv(t)
+		clearCWMPTransportEnv(t)
+		t.Setenv("ACS_CREDENTIAL_ENCRYPTION_KEY", "device-credential-key-material-32b")
+		t.Setenv("ACS_CWMP_BOOTSTRAP_PASSWORD", "bootstrap-password-material-32b")
+
+		err := validateCPEAuthStartup(discardLogger(), testCPEAuthSecrets()...)
+		if err == nil || !strings.Contains(err.Error(), "ACS_CWMP_BOOTSTRAP") {
+			t.Fatalf("partial bootstrap configuration error = %v, want fail closed", err)
+		}
+	})
+
+	t.Run("weak bootstrap password rejected", func(t *testing.T) {
+		clearCPEAuthEnv(t)
+		clearCWMPTransportEnv(t)
+		t.Setenv("ACS_CREDENTIAL_ENCRYPTION_KEY", "device-credential-key-material-32b")
+		t.Setenv("ACS_CWMP_BOOTSTRAP_USERNAME", "cwmp-bootstrap")
+		t.Setenv("ACS_CWMP_BOOTSTRAP_PASSWORD", "short")
+
+		err := validateCPEAuthStartup(discardLogger(), testCPEAuthSecrets()...)
+		if err == nil || !strings.Contains(err.Error(), "ACS_CWMP_BOOTSTRAP_PASSWORD") {
+			t.Fatalf("weak bootstrap password error = %v, want secret validation failure", err)
+		}
+	})
+
+	t.Run("bootstrap and legacy fleet usernames must differ", func(t *testing.T) {
+		clearCPEAuthEnv(t)
+		clearCWMPTransportEnv(t)
+		t.Setenv("ACS_DIGEST_USERNAME", "shared-name")
+		t.Setenv("ACS_DIGEST_PASSWORD", "shared-password-material-32b")
+		t.Setenv("ACS_CWMP_BOOTSTRAP_USERNAME", "shared-name")
+		t.Setenv("ACS_CWMP_BOOTSTRAP_PASSWORD", "bootstrap-password-material-32b")
+
+		err := validateCPEAuthStartup(discardLogger(), testCPEAuthSecrets()...)
+		if err == nil || !strings.Contains(err.Error(), "must be distinct") {
+			t.Fatalf("scope-collision error = %v, want distinct username failure", err)
+		}
+	})
 }
 
 func TestPerDeviceOnlyDigestRejectsUnknownCredential(t *testing.T) {

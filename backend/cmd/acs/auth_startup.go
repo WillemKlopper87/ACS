@@ -63,6 +63,32 @@ func validateCWMPTransportStartup(profile string) error {
 	}
 }
 
+// validateCWMPBootstrapStartup validates the deliberately narrow bootstrap
+// credential used only for first-contact CWMP enrollment. It is separate from
+// ACS_DIGEST_USERNAME/PASSWORD so the legacy fleet-wide compatibility secret
+// cannot accidentally become a production onboarding identity.
+func validateCWMPBootstrapStartup(logger *slog.Logger) error {
+	username := strings.TrimSpace(os.Getenv("ACS_CWMP_BOOTSTRAP_USERNAME"))
+	password := os.Getenv("ACS_CWMP_BOOTSTRAP_PASSWORD")
+	passwordConfigured := strings.TrimSpace(password) != ""
+
+	if username == "" && !passwordConfigured {
+		return nil
+	}
+	if username == "" || !passwordConfigured {
+		return errors.New("ACS_CWMP_BOOTSTRAP_USERNAME and ACS_CWMP_BOOTSTRAP_PASSWORD must be configured together")
+	}
+	if sharedUsername := strings.TrimSpace(os.Getenv("ACS_DIGEST_USERNAME")); sharedUsername != "" && username == sharedUsername {
+		return errors.New("ACS_CWMP_BOOTSTRAP_USERNAME must be distinct from ACS_DIGEST_USERNAME")
+	}
+
+	return config.Validate(logger, config.Secret{
+		Env:      "ACS_CWMP_BOOTSTRAP_PASSWORD",
+		MinBytes: 16,
+		Purpose:  "authenticates constrained first-contact CWMP bootstrap sessions",
+	})
+}
+
 // validateCPEAuthStartup validates the profile, transport configuration and
 // secrets used by cmd/acs before it opens the database and constructs the
 // Digest authenticator. It is the early startup gate main() already calls, so
@@ -109,6 +135,9 @@ func validateCPEAuthStartup(logger *slog.Logger, authSecrets ...config.Secret) e
 		optionalAuthSecrets[i].Optional = true
 	}
 	if err := config.Validate(logger, optionalAuthSecrets...); err != nil {
+		return err
+	}
+	if err := validateCWMPBootstrapStartup(logger); err != nil {
 		return err
 	}
 
