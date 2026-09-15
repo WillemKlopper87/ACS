@@ -14,6 +14,14 @@ import (
 // withAuth remains the authentication/revocation gate; this helper is the
 // finer-grained northbound authorization gate.
 func (h *handler) tmfPrincipal(w http.ResponseWriter, r *http.Request, requiredScope string) (*auth.Claims, bool) {
+	// Match withAuth's explicit no-credential development/test mode. Production
+	// startup rejects this configuration unless the insecure override is set,
+	// while direct handler tests rely on it to exercise TMF behavior without
+	// manufacturing an unrelated authentication fixture for every case.
+	if h.token == "" && len(h.oauthSigningSecret) == 0 {
+		return &auth.Claims{Role: bssClientRole, Scopes: bss.AllTMFScopes(), GlobalAccess: true}, true
+	}
+
 	got := r.Header.Get("Authorization")
 
 	// The legacy shared token predates per-integration policy. Keep it as an
