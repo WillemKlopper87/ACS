@@ -57,7 +57,7 @@ func TestReconcilerAuthenticatedPrincipalAllowsBoundIdentity(t *testing.T) {
 	}})
 
 	c := &captureConn{id: agent}
-	ob := &usp.OnBoardRequest{OUI: "00:25:c2", ProductClass: "Gateway", SerialNumber: "SN12345"}
+	ob := &usp.OnBoardRequest{OUI: "0025C2", ProductClass: "Gateway", SerialNumber: "SN12345"}
 	if err := r.onBoard(context.Background(), c, ob); err != nil {
 		t.Fatalf("bound identity rejected: %v", err)
 	}
