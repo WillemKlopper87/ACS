@@ -24,12 +24,12 @@ func TestNormalizeOAuthPolicy(t *testing.T) {
 		{
 			name: "global scoped",
 			in:   OAuthPolicy{Scopes: []string{ScopeTMFRead}, GlobalAccess: true},
-			want: OAuthPolicy{Scopes: []string{ScopeTMFRead}, GlobalAccess: true},
+			want: OAuthPolicy{Scopes: []string{ScopeTMFRead}, AccountIDs: []string{}, GlobalAccess: true},
 		},
 		{
 			name: "empty policy allowed and fail closed",
 			in:   OAuthPolicy{},
-			want: OAuthPolicy{},
+			want: OAuthPolicy{Scopes: []string{}, AccountIDs: []string{}},
 		},
 		{
 			name:    "unsupported scope",
