@@ -2,9 +2,12 @@ package mtp
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"acs/internal/usp"
@@ -30,6 +33,40 @@ func TestAuthenticatedWebSocketRequiresControllerEndpointID(t *testing.T) {
 	}, nil)
 	if err == nil {
 		t.Fatal("authenticated WebSocket without ControllerEndpointID succeeded")
+	}
+}
+
+// The eid query parameter is protocol metadata controlled by the peer. Prove
+// the transport compares it to the certificate-bound principal before the
+// WebSocket upgrade and before Handler.OnConnect can register the connection.
+func TestAuthenticatedWebSocketRejectsEIDSubstitutionBeforeUpgrade(t *testing.T) {
+	p := &principal.Principal{EndpointID: usp.EndpointID("os::trusted-agent")}
+	cert := &x509.Certificate{Raw: []byte("trusted-agent-certificate")}
+	ws, err := NewWebSocket(WebSocketConfig{
+		Addr:                   "127.0.0.1:0",
+		TLS:                    &tls.Config{},
+		ControllerEndpointID:   testControllerEID,
+		PrincipalAuthenticator: staticPrincipalAuth{p: p},
+	}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := newRecordingHandler()
+	req := httptest.NewRequest(http.MethodGet, "https://acs.example/usp?eid=os%3A%3Aother-agent", nil)
+	req.Header.Set("Sec-WebSocket-Protocol", subprotocol)
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+	rr := httptest.NewRecorder()
+
+	ws.handle(context.Background(), h).ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusForbidden)
+	}
+	h.mu.Lock()
+	connects := len(h.connects)
+	h.mu.Unlock()
+	if connects != 0 {
+		t.Fatalf("OnConnect called %d time(s) for mismatched certificate-bound eid; want 0", connects)
 	}
 }
 
@@ -59,7 +96,7 @@ func TestMQTTTopicACLIsPrincipalScoped(t *testing.T) {
 
 	writeCases := map[string]bool{
 		controller: true,
-		controller + replyToKey + EscapeReplyTo(p.MQTTTopic):        true,
+		controller + replyToKey + EscapeReplyTo(p.MQTTTopic):         true,
 		controller + replyToKey + EscapeReplyTo("/usp/agent/other"): false,
 		"/usp/agent/trusted": false,
 		"/other":             false,
@@ -71,7 +108,7 @@ func TestMQTTTopicACLIsPrincipalScoped(t *testing.T) {
 	}
 
 	readCases := map[string]bool{
-		p.MQTTTopic:          true,
+		p.MQTTTopic:           true,
 		p.MQTTTopic + "/#":   true,
 		p.MQTTTopic + "/one": true,
 		"/usp/agent/other":   false,
