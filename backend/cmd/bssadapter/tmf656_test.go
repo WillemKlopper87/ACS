@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"acs/internal/bss"
 	"bytes"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestTMFPageAndFieldSelection(t *testing.T) {
@@ -23,12 +25,15 @@ func TestTMFPageAndFieldSelection(t *testing.T) {
 
 func TestTMF656RejectsRelatedEventFromAnotherAccount(t *testing.T) {
 	ctx, h, db := newTMF640TestHandler(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	var eventID string
 	if err := db.QueryRowContext(ctx, `INSERT INTO tmf_events (id,source_key,account_id,event_type,payload) VALUES (gen_random_uuid(),'audit-event','acct-b','fault','{}') RETURNING id`).Scan(&eventID); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(map[string]any{"accountId": "acct-a", "problemType": "outage", "description": "impact", "relatedEventIds": []string{eventID}})
 	req := httptest.NewRequest(http.MethodPost, "/tmf-api/serviceProblemManagement/v4/serviceProblem", bytes.NewReader(body))
+	req = req.WithContext(ctx)
 	res := httptest.NewRecorder()
 	h.createTMF656Problem(res, req)
 	if res.Code != http.StatusBadRequest {
