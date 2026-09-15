@@ -66,6 +66,12 @@ func PublishRecovery(ctx context.Context, sink Sink, accountID, deviceID, protoc
 	if sink == nil || strings.TrimSpace(accountID) == "" || strings.TrimSpace(deviceID) == "" || strings.TrimSpace(code) == "" {
 		return fmt.Errorf("invalid recovery or nil TMF sink")
 	}
+	at := time.Now().UTC()
+	key := SourceKey(protocol, deviceID, "recovery|"+code+"|"+at.Format(time.RFC3339Nano))
+	payload, _ := json.Marshal(map[string]any{"protocol": protocol, "faultCode": code, "conditionKey": ConditionKey(protocol, deviceID, code), "recoveredAt": at})
+	if _, err := sink.CreateEvent(ctx, key, accountID, deviceID, "", "DeviceRecovered", payload, at); err != nil {
+		return err
+	}
 	return sink.ClearAlarm(ctx, accountID, deviceID, ConditionKey(protocol, deviceID, code))
 }
 

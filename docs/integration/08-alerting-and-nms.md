@@ -35,7 +35,7 @@ Device faults are persisted in TMF688 and the corresponding alarm is persisted i
 {"protocol":"CWMP","jobId":"job-123","faultCode":"9002","message":"Download failed"}
 ```
 
-Use the TMF representation's `accountId`, `deviceId`, `sourceKey`, alarm severity, state, `raisedAt`, and `clearedAt` to create and close an NMS incident. Recovery currently closes the durable TMF642 alarm; the receiver should reconcile alarm state through TMF642 when clearing incidents. Do not use the body alone as a deduplication key.
+Use the TMF representation's `accountId`, `deviceId`, `sourceKey`, alarm severity, state, `raisedAt`, and `clearedAt` to create and close an NMS incident. Recovery creates a `DeviceRecovered` TMF688 event and clears the durable TMF642 alarm. Do not use the body alone as a deduplication key.
 
 ## Alertmanager integration
 
