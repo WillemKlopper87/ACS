@@ -1,0 +1,96 @@
+package bss
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type ServiceOrder struct {
+	ID          string
+	ExternalID  string
+	AccountID   string
+	RawRequest  json.RawMessage
+	CreatedAt   time.Time
+	CancelledAt *time.Time
+}
+
+type ServiceOrderItem struct {
+	ID              string
+	OrderID         string
+	Seq             int
+	Action          string
+	Role            string
+	MappingID       string
+	ExternalOrderID string
+	Status          string
+	LastError       string
+	CompletedAt     *time.Time
+}
+
+var ErrServiceOrderExists = errors.New("service order already exists")
+
+func (r *Repository) CreateServiceOrder(ctx context.Context, externalID, accountID string, raw json.RawMessage, items []ServiceOrderItem) (*ServiceOrder, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin service order: %w", err)
+	}
+	defer tx.Rollback()
+	id := uuid.New().String()
+	var order ServiceOrder
+	err = tx.QueryRowContext(ctx, `INSERT INTO service_orders (id, external_id, account_id, raw_request) VALUES ($1,$2,$3,$4) RETURNING id, external_id, account_id, raw_request, created_at`, id, externalID, accountID, raw).Scan(&order.ID, &order.ExternalID, &order.AccountID, &order.RawRequest, &order.CreatedAt)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrServiceOrderExists
+		}
+		return nil, fmt.Errorf("insert service order: %w", err)
+	}
+	for i := range items {
+		item := &items[i]
+		if item.ID == "" {
+			item.ID = uuid.New().String()
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO service_order_items (id, order_id, seq, action, role, mapping_id, external_order_id, status, last_error, completed_at) VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,'')::uuid,NULLIF($7,''),$8,NULLIF($9,''),$10)`, item.ID, id, item.Seq, item.Action, item.Role, item.MappingID, item.ExternalOrderID, item.Status, item.LastError, item.CompletedAt)
+		if err != nil {
+			return nil, fmt.Errorf("insert service order item: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit service order: %w", err)
+	}
+	return &order, nil
+}
+
+func (r *Repository) FindServiceOrder(ctx context.Context, externalID string) (*ServiceOrder, error) {
+	var order ServiceOrder
+	err := r.db.QueryRowContext(ctx, `SELECT id, external_id, account_id, raw_request, created_at, cancelled_at FROM service_orders WHERE external_id=$1`, externalID).Scan(&order.ID, &order.ExternalID, &order.AccountID, &order.RawRequest, &order.CreatedAt, &order.CancelledAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find service order: %w", err)
+	}
+	return &order, nil
+}
+
+func (r *Repository) ServiceOrderItems(ctx context.Context, orderID string) ([]ServiceOrderItem, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, order_id, seq, action, COALESCE(role,''), COALESCE(mapping_id::text,''), COALESCE(external_order_id,''), status, COALESCE(last_error,''), completed_at FROM service_order_items WHERE order_id=$1 ORDER BY seq`, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("list service order items: %w", err)
+	}
+	defer rows.Close()
+	var out []ServiceOrderItem
+	for rows.Next() {
+		var item ServiceOrderItem
+		if err := rows.Scan(&item.ID, &item.OrderID, &item.Seq, &item.Action, &item.Role, &item.MappingID, &item.ExternalOrderID, &item.Status, &item.LastError, &item.CompletedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
