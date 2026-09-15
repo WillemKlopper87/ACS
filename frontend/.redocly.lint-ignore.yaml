@@ -1,0 +1,10 @@
+# Temporary, narrowly-scoped lint exceptions for the five alerting operations
+# introduced on main without summaries. Keep operation-summary enabled globally;
+# remove these entries when the alerting OpenAPI operations are completed.
+../backend/openapi.yaml:
+  operation-summary:
+    - '#/paths/~1api~1v1~1alert-policies/get/summary'
+    - '#/paths/~1api~1v1~1alert-policies/post/summary'
+    - '#/paths/~1api~1v1~1alert-policies~1{id}/delete/summary'
+    - '#/paths/~1api~1v1~1alert-incidents/get/summary'
+    - '#/paths/~1api~1v1~1alert-incidents~1{id}/patch/summary'
