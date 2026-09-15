@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -132,20 +133,9 @@ func TestValidateCPEAuthStartupAppliesProductionTLSDefault(t *testing.T) {
 	if err := validateCPEAuthStartup(discardLogger(), testCPEAuthSecrets()...); err != nil {
 		t.Fatalf("valid production startup rejected: %v", err)
 	}
-	if got := strings.TrimSpace(testGetenv("ACS_TLS_MIN_VERSION")); got != "1.2" {
+	if got := strings.TrimSpace(os.Getenv("ACS_TLS_MIN_VERSION")); got != "1.2" {
 		t.Fatalf("ACS_TLS_MIN_VERSION after production startup = %q, want 1.2", got)
 	}
-}
-
-func testGetenv(key string) string {
-	return strings.TrimSpace(getenvForTest(key))
-}
-
-// getenvForTest is a tiny seam kept local to this test file so assertions on
-// environment normalization are explicit without changing production APIs.
-var getenvForTest = func(key string) string {
-	// testing.T.Setenv restores the process environment after each test.
-	return getenv(key)
 }
 
 func TestValidateCPEAuthStartupAllowsPerDeviceDigestOnly(t *testing.T) {
