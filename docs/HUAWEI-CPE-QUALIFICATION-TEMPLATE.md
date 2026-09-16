@@ -5,6 +5,10 @@ field notes. Do not commit subscriber secrets, full serial numbers, passwords,
 Authorization headers, Wi-Fi PSKs or private management addresses where those
 are sensitive.
 
+For the N5368X security qualification, follow
+`HUAWEI-N5368X-SECURE-QUALIFICATION.md` before continuing with the generic
+parameter, Connection Request, diagnostics and northbound checks below.
+
 ## Device and build
 
 - ACS commit/tag:
@@ -19,7 +23,10 @@ are sensitive.
 - Data-model root:
 - Network topology: direct / NAT / APN / VPN / lab LAN
 - Protocol: CWMP / USP / both
-- Compatibility overrides used (exact values and justification):
+- ACS deployment profile: lab / production
+- Dedicated CWMP bootstrap configured: yes / no
+- Credential encryption configured: yes / no (never record the key)
+- Compatibility overrides used (exact non-secret values and justification):
 
 ## First contact
 
@@ -27,11 +34,33 @@ are sensitive.
 - ACS URL reachable: PASS / FAIL
 - `AuthenticationFailure` observed: yes / no
 - Digest algorithm observed:
-- Authenticated Inform: PASS / FAIL
+- Bootstrap username identifier (username only; no password):
+- Authenticated bootstrap Inform: PASS / FAIL / N/A
 - CWMP namespace:
 - BOOTSTRAP/BOOT/PERIODIC behavior:
 - Empty session close behavior:
 - Notes:
+
+## Secure bootstrap and credential graduation
+
+- Established-device bootstrap rejection checked: PASS / FAIL / N/A
+- Normal jobs/policies/firmware/diagnostics withheld during bootstrap: PASS / FAIL
+- Pending CWMP credential ID/version (non-secret metadata only):
+- Initial credential state: PENDING / other:
+- Credential-installation command key:
+- Username parameter path:
+- Password parameter path:
+- Credential-install SPV result/fault:
+- Generated password absent from retained evidence: PASS / FAIL
+- Unique-credential reconnect observed: PASS / FAIL / BLOCKED
+- Bound OUI/ProductClass/Serial matched on reconnect: PASS / FAIL / BLOCKED
+- Credential state after bound reconnect: ACTIVE / PENDING / other:
+- `PENDING -> ACTIVE` occurred only after bound Inform: PASS / FAIL / BLOCKED
+- Wrong-device/identity-substitution rejection evidence: PASS / FAIL / automated-only / N/A
+- Post-graduation bootstrap rejected: PASS / FAIL / BLOCKED
+- Manual credential-installation step required by firmware: yes / no
+- Graduation capture/evidence IDs:
+- Notes / BLOCKED reason:
 
 ## Parameter model
 
@@ -57,6 +86,7 @@ are sensitive.
 - Connection Request URL supplied: yes / no
 - Mode: direct / STUN / Annex G / routed-VPN
 - Digest challenge algorithm/qop:
+- Device-specific Connection Request credential used: PASS / FAIL / N/A
 - Command key:
 - HTTP result:
 - Event 6 Inform observed: PASS / FAIL
@@ -66,7 +96,7 @@ are sensitive.
 
 - IPPing: PASS / FAIL / N/A
 - TraceRoute: PASS / FAIL / N/A
-- Reboot + reconnect: PASS / FAIL / N/A
+- Reboot + unique-credential reconnect: PASS / FAIL / N/A
 - ACS/network interruption recovery: PASS / FAIL / N/A
 - Upload/Download/TransferComplete: PASS / FAIL / N/A
 - Firmware upgrade: PASS / FAIL / N/A
@@ -82,7 +112,9 @@ are sensitive.
 ## Capture/redaction
 
 - Capture export reviewed: PASS / FAIL
-- Secrets redacted: PASS / FAIL
+- Authorization values redacted: PASS / FAIL
+- Generated CWMP password absent: PASS / FAIL
+- Other secrets redacted: PASS / FAIL
 - Evidence retained at / linked issue:
 
 ## Vendor-profile output
