@@ -223,8 +223,8 @@ func TestDigest_PerDeviceLookup(t *testing.T) {
 	if identity.BoundDeviceID != "device-1-id" {
 		t.Errorf("Identity.BoundDeviceID = %q, want %q (audit C-1)", identity.BoundDeviceID, "device-1-id")
 	}
-	if len(activated) != 1 || activated[0] != "cr-device-1" {
-		t.Errorf("OnAuthenticated calls = %v, want [cr-device-1]", activated)
+	if len(activated) != 0 {
+		t.Errorf("OnAuthenticated calls during HTTP proof = %v, want none until caller validates bound Inform identity", activated)
 	}
 	if ok, _, _ := d.Verify(mk("cr-device-1", "wrong", "00000002")); ok {
 		t.Error("per-device credential with wrong password accepted")
@@ -232,8 +232,8 @@ func TestDigest_PerDeviceLookup(t *testing.T) {
 	if ok, _, _ := d.Verify(mk("cr-unknown", "device-1-password", "00000003")); ok {
 		t.Error("unknown per-device username accepted")
 	}
-	// The shared credential keeps working alongside, without the hook, and
-	// asserts no device binding (audit C-1: shared credential = no identity).
+	// The shared credential keeps working alongside and asserts no device
+	// binding; verification remains side-effect-free for it too.
 	ok, _, identity = d.Verify(mk("cpe-device", "s3cret", "00000004"))
 	if !ok {
 		t.Error("shared credential rejected once Lookup is set")
@@ -241,8 +241,8 @@ func TestDigest_PerDeviceLookup(t *testing.T) {
 	if identity.BoundDeviceID != "" {
 		t.Errorf("shared credential Identity.BoundDeviceID = %q, want empty", identity.BoundDeviceID)
 	}
-	if len(activated) != 1 {
-		t.Errorf("OnAuthenticated fired for the shared credential: %v", activated)
+	if len(activated) != 0 {
+		t.Errorf("OnAuthenticated fired during authentication instead of caller-controlled identity binding: %v", activated)
 	}
 }
 

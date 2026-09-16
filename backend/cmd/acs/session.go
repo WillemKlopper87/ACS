@@ -148,6 +148,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		bound.credentialDeviceID = identity.BoundDeviceID
+		bound.credentialUsername = identity.Username
 		authMode = devices.AuthModeDigest
 	}
 
@@ -223,14 +224,14 @@ func (h *handler) captureAuthFailure(ctx context.Context, ip string) {
 }
 
 // inboundIdentity is what this request's credential asserts about device
-// identity (audit C-1). At most one field is ever set: mtlsNaturalKey for
-// an mTLS-authenticated request whose leaf certificate's CommonName names
-// a specific device (by convention, that device's oui_serial natural
-// key), credentialDeviceID for a per-device Digest/Basic credential.
-// Both empty means the shared fleet credential authenticated the
-// request, which — same as today — asserts no device identity to bind.
+// identity (audit C-1). mTLS sets mtlsNaturalKey. A per-device Digest/Basic
+// credential sets both credentialDeviceID and credentialUsername so the
+// caller can first enforce the device binding and only then run any credential
+// lifecycle hook. All fields empty means the shared fleet credential asserted
+// no device-specific identity.
 type inboundIdentity struct {
 	credentialDeviceID string
+	credentialUsername string
 	mtlsNaturalKey     string
 }
 
@@ -269,6 +270,12 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 				"bound_device_id", bound.credentialDeviceID, "claimed_natural_key", naturalKey, "remote", r.RemoteAddr)
 			http.Error(w, "device identity mismatch", http.StatusForbidden)
 			return
+		}
+		// HTTP Digest proof alone must never graduate a PENDING credential.
+		// Only after the Inform's natural identity resolves to the exact
+		// credential-bound DeviceID may the caller-owned lifecycle hook run.
+		if bound.credentialUsername != "" && h.auth.OnAuthenticated != nil {
+			h.auth.OnAuthenticated(bound.credentialUsername)
 		}
 	}
 	if bound.mtlsNaturalKey != "" && bound.mtlsNaturalKey != naturalKey {

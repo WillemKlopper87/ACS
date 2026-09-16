@@ -101,11 +101,12 @@ func validateCWMPBootstrapStartup(logger *slog.Logger) error {
 // two legacy/global sources here therefore prevented the safest supported
 // production posture -- per-device Digest only -- from starting at all.
 //
-// When the shared Digest password is absent, ACS_CREDENTIAL_ENCRYPTION_KEY
-// becomes required. Besides decrypting device_credentials, main.go uses it
-// as DigestAuthenticator.NonceSecret in that mode. Requiring it here keeps
-// per-device-only Digest nonces keyed with operator-provided secret material
-// rather than falling back to the empty shared password.
+// ACS_CREDENTIAL_ENCRYPTION_KEY is required whenever the shared Digest
+// password is absent, and also whenever production bootstrap graduation is
+// enabled. In the first case it signs Digest nonces and decrypts stored device
+// credentials; in the second it additionally guarantees the newly generated
+// per-device bootstrap password is encrypted at rest even if a legacy shared
+// Digest password remains configured only for compatibility/nonces.
 func validateCPEAuthStartup(logger *slog.Logger, authSecrets ...config.Secret) error {
 	if logger == nil {
 		logger = slog.Default()
@@ -141,11 +142,12 @@ func validateCPEAuthStartup(logger *slog.Logger, authSecrets ...config.Secret) e
 		return err
 	}
 
+	bootstrapGraduationEnabled := profile == acsDeploymentProfileProduction && strings.TrimSpace(os.Getenv("ACS_CWMP_BOOTSTRAP_USERNAME")) != ""
 	credentialKey := config.Secret{
 		Env:      "ACS_CREDENTIAL_ENCRYPTION_KEY",
 		MinBytes: 16,
-		Purpose:  "decrypts per-device CWMP Digest credentials and signs Digest nonces when no shared Digest password is configured",
-		Optional: strings.TrimSpace(os.Getenv("ACS_DIGEST_PASSWORD")) != "",
+		Purpose:  "encrypts/decrypts per-device CWMP Digest credentials and signs Digest nonces when no shared Digest password is configured",
+		Optional: strings.TrimSpace(os.Getenv("ACS_DIGEST_PASSWORD")) != "" && !bootstrapGraduationEnabled,
 	}
 	return config.Validate(logger, credentialKey)
 }
