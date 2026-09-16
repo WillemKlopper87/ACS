@@ -178,7 +178,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	} else if cookie, err := r.Cookie("acs_session"); err == nil {
 		deviceKey = cookie.Value
 	}
-	if bound.sharedCredential && h.sharedCredentialBootstrapOnly {
+	if bound.sharedCredential && h.sharedCredentialBootstrapOnly && env.Body.Inform == nil {
 		http.Error(w, "shared credential is restricted to device bootstrap", http.StatusForbidden)
 		return
 	}
