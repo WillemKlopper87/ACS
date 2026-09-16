@@ -45,11 +45,12 @@ export ACS_PRODUCTION_BIND_ADDRESS=10.20.0.10
 export ACS_PRODUCTION_ALLOWED_CIDRS=10.30.0.0/16,10.40.0.0/16
 export ACS_PRODUCTION_TLS_CERT=/etc/letsencrypt/live/acs.example/fullchain.pem
 export ACS_PRODUCTION_TLS_KEY=/etc/letsencrypt/live/acs.example/privkey.pem
+export ACS_PRODUCTION_USP_CLIENT_CA_CERT=/etc/acs/tls/usp-client-ca.pem
 source scripts/gen-production-env.sh
 ```
 
 This requires readable TLS material, refuses wildcard listener addresses,
-uses TLS 1.2 or newer, disables Basic/plaintext transport, restricts USP
+uses TLS 1.2 or newer, disables Basic/plaintext transport, restricts CWMP and USP
 source networks, and keeps the shared CWMP credential bootstrap-only.
 Established devices must use their own CWMP credential or mTLS identity.
 

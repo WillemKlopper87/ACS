@@ -176,8 +176,13 @@ export ACS_PRODUCTION_BIND_ADDRESS=10.20.0.10
 export ACS_PRODUCTION_ALLOWED_CIDRS=10.30.0.0/16
 export ACS_PRODUCTION_TLS_CERT=/etc/acs/tls/fullchain.pem
 export ACS_PRODUCTION_TLS_KEY=/etc/acs/tls/privkey.pem
+export ACS_PRODUCTION_USP_CLIENT_CA_CERT=/etc/acs/tls/usp-client-ca.pem
 source scripts/gen-production-env.sh
 ```
+
+The generated profile applies the management CIDRs to both CWMP and USP,
+requires a non-wildcard device-plane bind, and configures the USP client CA
+used by the durable certificate-principal authentication layer.
 
 Restart the host services after generating the profile and run
 `scripts/field-preflight.sh`. Do not set

@@ -58,6 +58,11 @@ const (
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: levelFromEnv()}))
+	devicePlane, err := loadDevicePlaneConfig(os.Getenv)
+	if err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
 
 	dsn := os.Getenv("ACS_POSTGRES_DSN")
 	if dsn == "" {
@@ -223,10 +228,10 @@ func main() {
 
 	mux := newACSMux(h.handleCWMP, metrics, db)
 
-	addr := envOr("ACS_ADDR", ":7547")
+	addr := devicePlane.Addr
 	server := &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: restrictRemoteCIDRs(mux, devicePlane.AllowedCIDRs),
 		// CPE HTTP stacks are slow and often on lossy last-mile links —
 		// generous per-request timeouts, but never unbounded, so a stalled
 		// connection can't hold a socket forever. IdleTimeout covers the
@@ -237,8 +242,8 @@ func main() {
 		IdleTimeout:       5 * time.Minute,
 	}
 
-	certFile := os.Getenv("ACS_TLS_CERT")
-	keyFile := os.Getenv("ACS_TLS_KEY")
+	certFile := devicePlane.TLSCert
+	keyFile := devicePlane.TLSKey
 
 	// TLS compatibility floor. Go 1.22+ raised the crypto/tls *server*
 	// default minimum to TLS 1.2 and removed RSA-key-exchange cipher
@@ -249,7 +254,7 @@ func main() {
 	// permissive TLS 1.0 floor with the legacy suites explicitly enabled,
 	// which is standard practice for a public CWMP endpoint; set
 	// ACS_TLS_MIN_VERSION=1.2 to harden once the fleet is known-modern.
-	tlsCfg := &tls.Config{}
+	tlsCfg := &tls.Config{MinVersion: devicePlane.TLSMinVersion}
 	switch v := envOr("ACS_TLS_MIN_VERSION", "1.0"); v {
 	case "1.0":
 		tlsCfg.MinVersion = tls.VersionTLS10

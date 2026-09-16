@@ -16,6 +16,7 @@ if [ ! -f "$SECRETS_FILE" ]; then
   echo "Generating new ACS credentials -> $SECRETS_FILE"
   cat > "$SECRETS_FILE" <<EOF
 export ACS_POSTGRES_DSN="postgres://acs:acs@localhost:5432/acs?sslmode=disable"
+export ACS_DEPLOYMENT_PROFILE="lab"
 
 export ACS_DIGEST_USERNAME="acs-device"
 export ACS_DIGEST_PASSWORD="$(openssl rand -base64 16)"
@@ -38,6 +39,7 @@ export ACS_INTERNAL_SERVICE_TOKEN="$(openssl rand -base64 32)"
 export ACS_BSS_OAUTH_SIGNING_SECRET="$(openssl rand -base64 32)"
 
 export ACS_ADDR=":7547"
+export ACS_CWMP_ALLOWED_CIDRS=""
 export ACS_API_ADDR=":8080"
 export ACS_STUN_ADDR=":3478"
 # Keep the BSS northbound port host-local in the quickstart. Put a TLS
@@ -102,6 +104,12 @@ else
   fi
   if ! grep -q '^export ACS_CWMP_ALLOW_SHARED_ESTABLISHED=' "$SECRETS_FILE"; then
     echo 'export ACS_CWMP_ALLOW_SHARED_ESTABLISHED="false"' >> "$SECRETS_FILE"
+  fi
+  if ! grep -q '^export ACS_DEPLOYMENT_PROFILE=' "$SECRETS_FILE"; then
+    echo 'export ACS_DEPLOYMENT_PROFILE="lab"' >> "$SECRETS_FILE"
+  fi
+  if ! grep -q '^export ACS_CWMP_ALLOWED_CIDRS=' "$SECRETS_FILE"; then
+    echo 'export ACS_CWMP_ALLOWED_CIDRS=""' >> "$SECRETS_FILE"
   fi
   if grep -q '^export ACS_CONNECTION_REQUEST_PASSWORD=""$' "$SECRETS_FILE"; then
     sed -i "s|^export ACS_CONNECTION_REQUEST_PASSWORD=\"\"$|export ACS_CONNECTION_REQUEST_PASSWORD=\"$(openssl rand -base64 16)\"|" "$SECRETS_FILE"
@@ -180,6 +188,7 @@ chmod 600 "$COMPOSE_ENV"
 # from the already-resolved values every time this script runs.
 {
   echo "ACS_POSTGRES_DSN=$ACS_POSTGRES_DSN"
+  echo "ACS_DEPLOYMENT_PROFILE=${ACS_DEPLOYMENT_PROFILE:-lab}"
   echo "ACS_DIGEST_USERNAME=$ACS_DIGEST_USERNAME"
   echo "ACS_DIGEST_PASSWORD=$ACS_DIGEST_PASSWORD"
   echo "ACS_CWMP_ALLOW_SHARED_ESTABLISHED=${ACS_CWMP_ALLOW_SHARED_ESTABLISHED:-false}"
@@ -192,6 +201,7 @@ chmod 600 "$COMPOSE_ENV"
   echo "ACS_INTERNAL_SERVICE_TOKEN=$ACS_INTERNAL_SERVICE_TOKEN"
   echo "ACS_BSS_OAUTH_SIGNING_SECRET=$ACS_BSS_OAUTH_SIGNING_SECRET"
   echo "ACS_ADDR=$ACS_ADDR"
+  echo "ACS_CWMP_ALLOWED_CIDRS=${ACS_CWMP_ALLOWED_CIDRS:-}"
   echo "ACS_API_ADDR=$ACS_API_ADDR"
   echo "ACS_STUN_ADDR=$ACS_STUN_ADDR"
   echo "ACS_BSS_ADDR=$ACS_BSS_ADDR"
