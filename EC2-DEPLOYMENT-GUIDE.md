@@ -14,8 +14,11 @@ clones the repo (§3), and builds + starts the whole stack (§4-§6):
 curl -fsSL https://raw.githubusercontent.com/WillemKlopper87/ACS/main/scripts/quickstart.sh | bash
 ```
 
-Safe to rerun (e.g. after a `git pull`) — every step skips work that's
-already done, and it ends by calling `scripts/start.sh`, which always
+The command fetches `main` from GitHub. On an existing installation it
+fetches, checks out, and pulls the configured `GIT_REF` (default: `main`)
+before rebuilding, so it deploys the latest merged commit. It refuses a
+conflicting Git update rather than discarding local changes. Every package
+step is idempotent, and it ends by calling `scripts/start.sh`, which always
 stops whatever was running first. See the comment block at the top of
 `scripts/quickstart.sh` for the environment variables that control it
 (`REPO_URL`, `GIT_REF`, `GO_VERSION`, `ACS_PUBLIC_IP`, etc.) — in
@@ -32,15 +35,16 @@ cd ~/ACS
 ./scripts/start.sh
 ```
 
-This builds real binaries (not `go run`), backgrounds all three services
-(cmd/acs, cmd/api, frontend) with `nohup` + PID files, and prints the
+This builds real binaries (not `go run`), backgrounds the CWMP gateway,
+operator API, BSS/TMF adapter, USP controller, and frontend with `nohup` +
+PID files, and prints the
 console URL and login credentials at the end. Safe to rerun any time —
 it stops whatever was running first. If you pull a fresh `git clone`,
 run `chmod +x scripts/*.sh` once (Windows git doesn't always preserve
 the executable bit across the repo).
 
 ```bash
-./scripts/logs.sh    # tail all three logs together — watch for a device's first Inform here
+./scripts/logs.sh    # tail the application logs together — watch for a device's first Inform here
 ./scripts/stop.sh     # stop everything cleanly
 ```
 
@@ -67,23 +71,29 @@ troubleshooting something the script doesn't cover.
 
 ### 1.2 Security Group — Inbound Rules
 
-**Open these ports** to allow CPE devices, the console, and operators to reach the ACS:
+Open only the ports needed for the selected test protocol. Use the CPE
+management ranges or known test source addresses for device-plane ports and
+the operator/VPN range for management ports. Do not use `0.0.0.0/0` for the
+operator API, console, Grafana, or Prometheus.
 
 | Port | Protocol | CIDR | Purpose |
 |---|---|---|---|
-| `7547` | TCP | `0.0.0.0/0` | **CWMP gateway** — CPE devices send Inform and RPC over this port. Must be reachable from the internet. |
-| `3478` | UDP | `0.0.0.0/0` | **STUN server** — CPE devices use this for NAT traversal and UDP Connection Request binding. Optional if STUN is disabled on devices. |
-| `8080` | TCP | `0.0.0.0/0` | **REST API** — the console's backend calls and direct operator API access. If behind a corporate VPN or single office, restrict to that CIDR instead. |
-| `5173` | TCP | `0.0.0.0/0` | **Console (frontend)** — the actual web UI you open in a browser. Easy to miss since it's not mentioned anywhere else this early — if you can't load the console after deploying, this is the first thing to check. |
+| `7547` | TCP | `<cpe-management-cidrs>` | **CWMP gateway** — CPE Inform/RPC traffic. The production profile also enforces `ACS_CWMP_ALLOWED_CIDRS` in the application. |
+| `3478` | UDP | `<cpe-management-cidrs>` | **STUN server** — optional NAT traversal and UDP Connection Request binding. |
+| `9877` | TCP | `<usp-agent-cidrs>` | **USP WebSocket** — lab uses plaintext; production terminates TLS and authenticates a certificate-bound agent principal. |
+| `1883` / `8883` | TCP | `<usp-agent-cidrs>` | **USP MQTT** — `1883` is lab plaintext; production uses TLS on `8883`. Open only the one you use. |
+| `8080` | TCP | `<operator-cidr>` | **REST API** for the lab profile. Production binds it to loopback behind one authenticated HTTPS ingress. |
+| `5173` | TCP | `<operator-cidr>` | **Lab console**. Production binds it to loopback behind the same HTTPS origin as the API. |
+| `3000` / `9090` | TCP | `<operator-cidr>` | Optional direct Grafana/Prometheus access for a controlled lab. Prefer SSH tunnels; production forbids direct publication. |
 | `5432` | TCP | (none) | **PostgreSQL** — only for local connections; never expose to the internet. Leave closed. |
-| `22` | TCP | `<your-ip>/32` or `0.0.0.0/0` | **SSH** — your management access. Restrict to your IP or VPN. |
+| `22` | TCP | `<your-ip>/32` | **SSH** — management access; use your IP, VPN, or a bastion security group. |
 
 **Summary**:
 ```
-Inbound: 7547/tcp from 0.0.0.0/0  (CWMP)
-Inbound: 3478/udp from 0.0.0.0/0  (STUN)
-Inbound: 8080/tcp from 0.0.0.0/0  (API)
-Inbound: 5173/tcp from 0.0.0.0/0  (console — restrict if you prefer)
+Inbound: 7547/tcp from <cpe-cidrs>     (CWMP)
+Inbound: 3478/udp from <cpe-cidrs>     (STUN, optional)
+Inbound: 9877/tcp or 8883/tcp from <usp-agent-cidrs> (USP, if used)
+Inbound: 8080/tcp and 5173/tcp from <operator-cidr>  (lab only)
 Inbound: 22/tcp from <your-cidr>   (SSH)
 Outbound: allow all (default)
 ```
@@ -109,15 +119,15 @@ sudo apt-get install -y \
   gnupg \
   lsb-release
 
-# Install Go 1.22+
-curl -fsSL https://go.dev/dl/go1.22.0.linux-amd64.tar.gz -o /tmp/go.tar.gz
+# Install the Go version currently pinned by scripts/quickstart.sh/backend/go.mod
+curl -fsSL https://go.dev/dl/go1.26.6.linux-amd64.tar.gz -o /tmp/go.tar.gz
 sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf /tmp/go.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
 
-# Install Node.js 20 LTS (for frontend build)
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# Install Node.js 22 LTS (for frontend build)
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
 # Install Docker (for PostgreSQL container)
@@ -140,9 +150,15 @@ Copy the script to the instance and run it, or paste the commands one by one.
 
 ## 3. Clone the Repository from GitHub
 
-The repo (`WillemKlopper87/ACS`) is **private**, so plain `git clone` over
-HTTPS with no credentials will fail with a 404/permission error. Use one of
-the two options below.
+Clone `main` directly when the repository is public. If GitHub returns a
+404/permission error because repository visibility has been restricted, use
+one of the authenticated options below.
+
+```bash
+git clone --branch main https://github.com/WillemKlopper87/ACS.git ~/ACS
+cd ~/ACS
+git rev-parse HEAD
+```
 
 ### Option A: SSH deploy key (recommended)
 
@@ -505,6 +521,10 @@ On your CPE (e.g., ZTE ZOWEE 5G CPE Max 6), set:
 | `ManagementServer.STUNServerPort` | `3478` |
 
 Save the settings. The CPE should send a **BOOTSTRAP** Inform within moments.
+The shared Digest credential is intentionally limited to onboarding a new
+identity. After enrollment, use the device's unique ACS credential or mTLS;
+the shared credential cannot claim an established device or continue its
+session traffic.
 
 ### 7.3 Verify device appears in console
 
@@ -523,6 +543,10 @@ Then refresh the console Dashboard — the device should appear in the "DEVICES"
 processes that survive a dropped SSH session — systemd is a further
 step up (auto-start on instance reboot, `systemctl` control, journal
 logging) once you're past initial testing.
+
+The examples below cover only `cmd/acs` and `cmd/api`; they are not a complete
+replacement for `scripts/start.sh`, which also manages the BSS/TMF adapter,
+USP controller, frontend, PostgreSQL, Prometheus, Alertmanager, and Grafana.
 
 Two things below are easy to get wrong, so this section builds them
 explicitly rather than by analogy to the manual steps in §5:
@@ -699,6 +723,10 @@ git pull origin main
 ./scripts/start.sh   # rebuilds binaries + frontend, restarts everything
 ```
 
+For the one-command installer, rerunning `scripts/quickstart.sh` performs the
+fetch/checkout/pull automatically. Confirm the deployed revision with
+`git rev-parse HEAD` and compare it with the `main` commit shown on GitHub.
+
 **If you set up systemd services (§9) instead:**
 
 ```bash
@@ -723,7 +751,12 @@ sudo systemctl restart nginx  # or restart your HTTP server
 
 Before going to production:
 
-- [ ] Enable TLS on CWMP (set `ACS_TLS_CERT` and `ACS_TLS_KEY` to valid certificates — Let's Encrypt works)
+- [ ] Allocate an Elastic IP or stable DNS name before provisioning CPEs.
+- [ ] Set the protected bind address, CPE/USP CIDRs, server TLS certificate,
+      key, and USP client CA; run `source scripts/gen-production-env.sh`, then
+      start with `scripts/start-production.sh`.
+- [ ] Run `scripts/security-preflight.sh` and `scripts/field-preflight.sh`.
+- [ ] Provision each USP agent's certificate-fingerprint principal before it connects.
 - [x] JWT signing (`ACS_JWT_SIGNING_SECRET`, min 32 bytes) — no longer a
       pre-production step: `cmd/api` refuses to start without it, so if the
       service is running at all this is already satisfied. The only way past
@@ -740,7 +773,9 @@ Before going to production:
 - [ ] Set up auto-scaling or a second instance as warm standby
 - [ ] Document your deployment, credentials handling, and backup strategy
 
-See `deployment-testing-onboarding-guide.md` §7 for the full environment variable reference (all three binaries) — this checklist only calls out the ones easy to miss.
+See `deployment-testing-onboarding-guide.md` §7 for the full environment
+variable reference for the host services — this checklist only calls out the
+ones easy to miss.
 
 ---
 
