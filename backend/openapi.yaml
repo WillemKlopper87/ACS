@@ -801,6 +801,18 @@ paths:
                         path: { type: string }
                         standard: { type: boolean }
                         discovered: { type: boolean }
+                  values:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      required: [path, value, raw, updated_at, source]
+                      properties:
+                        path: { type: string }
+                        value: {}
+                        raw: { type: string }
+                        unit: { type: string }
+                        updated_at: { type: string, format: date-time }
+                        source: { type: string }
 
   # --- Diagnostics ---
   /api/v1/devices/{id}/diagnostics/ping:

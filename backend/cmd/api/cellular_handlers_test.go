@@ -23,7 +23,9 @@ func TestBuildCellularCapabilitiesResponseUsesDiscoveredReadOnlyPaths(t *testing
 		},
 		DiscoveredAt: assigned,
 	}
-	got := buildCellularCapabilitiesResponse(device, discovery)
+	got := buildCellularCapabilitiesResponse(device, discovery, map[string]parameters.CachedValue{
+		"Device.Cellular.Interface.1.RSRP": {Value: "-97", UpdatedAt: assigned, Source: parameters.SourceGetValues},
+	})
 	if got.Resolutions["rsrp"].Path != "Device.Cellular.Interface.1.RSRP" || !got.Resolutions["rsrp"].Standard {
 		t.Fatalf("rsrp resolution = %+v, want discovered read-only standard path", got.Resolutions["rsrp"])
 	}
@@ -33,13 +35,16 @@ func TestBuildCellularCapabilitiesResponseUsesDiscoveredReadOnlyPaths(t *testing
 	if got.Profile.ID == nil || *got.Profile.ID != "zyxel.nr7303.eu01v1f" || !got.Profile.Qualified {
 		t.Fatalf("profile provenance = %+v, want qualified assigned profile", got.Profile)
 	}
+	if got.Values["rsrp"].Value != float64(-97) {
+		t.Fatalf("normalized RSRP = %#v", got.Values["rsrp"])
+	}
 }
 
 func TestBuildCellularCapabilitiesResponseDoesNotGuessTR098OrUnknownFields(t *testing.T) {
 	device := &devices.Device{ID: "device-2", DataModelRoot: devices.DataModelRootIGD1}
 	got := buildCellularCapabilitiesResponse(device, &parameters.DiscoveredNames{
 		Names: map[string]bool{"Device.X_VENDOR.Unrelated": false},
-	})
+	}, nil)
 	if len(got.Resolutions) != 0 {
 		t.Fatalf("resolutions = %+v, want none for TR-098 without cellular evidence", got.Resolutions)
 	}

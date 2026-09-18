@@ -33,6 +33,16 @@ type cellularCapabilitiesResponse struct {
 	Profile       cellularProfileProvenance               `json:"profile"`
 	DiscoveredAt  *string                                 `json:"discovered_at"`
 	Resolutions   map[string]cellularCapabilityResolution `json:"resolutions"`
+	Values        map[string]cellularTelemetryValue       `json:"values"`
+}
+
+type cellularTelemetryValue struct {
+	Path      string `json:"path"`
+	Value     any    `json:"value"`
+	Raw       string `json:"raw"`
+	Unit      string `json:"unit,omitempty"`
+	UpdatedAt string `json:"updated_at"`
+	Source    string `json:"source"`
 }
 
 type cellularProfileProvenance struct {
@@ -43,7 +53,7 @@ type cellularProfileProvenance struct {
 	AssignedAt *string `json:"assigned_at"`
 }
 
-func buildCellularCapabilitiesResponse(device *devices.Device, discovered *parameters.DiscoveredNames) cellularCapabilitiesResponse {
+func buildCellularCapabilitiesResponse(device *devices.Device, discovered *parameters.DiscoveredNames, cached map[string]parameters.CachedValue) cellularCapabilitiesResponse {
 	var discoveredNames map[string]bool
 	var discoveredAt *string
 	if discovered != nil {
@@ -61,6 +71,7 @@ func buildCellularCapabilitiesResponse(device *devices.Device, discovered *param
 		profile.AssignedAt = &value
 	}
 	resolutions := make(map[string]cellularCapabilityResolution, len(cellularCapabilityFields))
+	values := make(map[string]cellularTelemetryValue)
 	for _, field := range cellularCapabilityFields {
 		resolution, ok := adapters.ResolveCellularReadPath(device.DataModelRoot, field, "1", discoveredNames)
 		if !ok {
@@ -69,10 +80,14 @@ func buildCellularCapabilitiesResponse(device *devices.Device, discovered *param
 		resolutions[string(field)] = cellularCapabilityResolution{
 			Path: resolution.Path, Standard: resolution.Standard, Discovered: resolution.Discovered,
 		}
+		if value, present := cached[resolution.Path]; present {
+			normalized := adapters.NormalizeCellularValue(value.Value)
+			values[string(field)] = cellularTelemetryValue{Path: resolution.Path, Value: normalized.Value, Raw: value.Value, UpdatedAt: value.UpdatedAt.Format(time.RFC3339), Source: value.Source}
+		}
 	}
 	return cellularCapabilitiesResponse{
 		DeviceID: device.ID, DataModelRoot: device.DataModelRoot, Profile: profile,
-		DiscoveredAt: discoveredAt, Resolutions: resolutions,
+		DiscoveredAt: discoveredAt, Resolutions: resolutions, Values: values,
 	}
 }
 
@@ -89,5 +104,11 @@ func (h *handler) getCellularCapabilities(w http.ResponseWriter, r *http.Request
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, buildCellularCapabilitiesResponse(device, discovered))
+	cached, err := h.params.Get(r.Context(), device.ID)
+	if err != nil {
+		h.logger.Error("failed to read cached cellular telemetry", "err", err, "device_id", device.ID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, buildCellularCapabilitiesResponse(device, discovered, cached))
 }
