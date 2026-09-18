@@ -5,11 +5,14 @@ package main
 import (
 	"acs/internal/devices"
 	"acs/internal/devices/adapters"
+	"acs/internal/diagnostics"
 	"acs/internal/jobs"
 	"acs/internal/parameters"
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -328,4 +331,50 @@ func (h *handler) createDiagnosticsTraceroute(w http.ResponseWriter, r *http.Req
 		"command_key": job.CommandKey,
 		"status":      job.Status,
 	})
+}
+
+type tr143Request struct {
+	URL string `json:"url"`
+}
+
+func (h *handler) createTR143(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	_, ok := h.getScopedDevice(w, r, id)
+	if !ok {
+		return
+	}
+	var req tr143Request
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
+		http.Error(w, "url is required", http.StatusBadRequest)
+		return
+	}
+	allowed := strings.Split(os.Getenv("ACS_TR143_ALLOWED_HOSTS"), ",")
+	if err := diagnostics.ValidateTR143Target(req.URL, allowed); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	discovered, err := h.params.GetNames(r.Context(), id)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	var names map[string]bool
+	if discovered != nil {
+		names = discovered.Names
+	}
+	capability := adapters.ResolveTR143Capability(names)
+	jobType, prefix := jobs.TypeDiagnosticsDownload, capability.DownloadPath
+	if r.PathValue("direction") == "upload" {
+		jobType, prefix = jobs.TypeDiagnosticsUpload, capability.UploadPath
+	}
+	if prefix == "" {
+		http.Error(w, "device has not advertised this TR-143 capability", http.StatusConflict)
+		return
+	}
+	job, err := h.jobs.CreateWithMaxAttempts(r.Context(), id, jobType, map[string]string{"url": req.URL, "prefix": prefix}, operatorFromRequest(r), 15)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"command_key": job.CommandKey, "status": job.Status})
 }

@@ -60,6 +60,10 @@ func diagTraceroutePollPaths(prefix string) []string {
 	}
 }
 
+func diagTR143PollPaths(prefix string) []string {
+	return []string{prefix + "DiagnosticsState", prefix + "ROMTime", prefix + "BOMTime", prefix + "EOMTime", prefix + "TestBytesReceived", prefix + "TestBytesSent", prefix + "TotalBytesReceived", prefix + "TotalBytesSent"}
+}
+
 // renderJobRequest turns a leased job into the CWMP RPC request bytes to
 // send the CPE.
 func (h *handler) renderJobRequest(job *jobs.Job) (body []byte, ok bool) {
@@ -144,6 +148,24 @@ func (h *handler) renderJobRequest(job *jobs.Job) (body []byte, ok bool) {
 			return cwmp.RenderSetParameterValues(id, params, job.CommandKey), true
 		}
 		return cwmp.RenderGetParameterValues(id, diagTraceroutePollPaths(prefix)), true
+
+	case jobs.TypeDiagnosticsDownload, jobs.TypeDiagnosticsUpload:
+		var payload struct {
+			URL    string `json:"url"`
+			Prefix string `json:"prefix"`
+		}
+		if err := json.Unmarshal(job.Payload, &payload); err != nil {
+			return nil, false
+		}
+		prefix := payload.Prefix
+		if prefix == "" {
+			prefix = "Device.IP.Diagnostics." + map[bool]string{true: "UploadDiagnostics.", false: "DownloadDiagnostics."}[job.Type == jobs.TypeDiagnosticsUpload]
+		}
+		if job.Attempts <= 1 {
+			params := []cwmp.ParameterValueStruct{{Name: prefix + "URL", Value: payload.URL}, {Name: prefix + "DiagnosticsState", Value: "Requested"}}
+			return cwmp.RenderSetParameterValues(id, params, job.CommandKey), true
+		}
+		return cwmp.RenderGetParameterValues(id, diagTR143PollPaths(prefix)), true
 
 	case jobs.TypeAddObject:
 		var payload jobs.AddObjectPayload
@@ -389,6 +411,42 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 			if err := h.jobs.MarkFailed(ctx, job.ID, "", state); err != nil {
 				h.logger.Error("failed to mark job failed", "err", err, "job_id", job.ID)
 			}
+			h.auditFailure(ctx, deviceID, job, "", state)
+		}
+
+	case jobs.TypeDiagnosticsDownload, jobs.TypeDiagnosticsUpload:
+		if job.Attempts <= 1 {
+			if body.SetParameterValuesResponse == nil {
+				h.markUnexpectedResponse(ctx, deviceID, job)
+				return
+			}
+			h.requeueDiagnostic(ctx, deviceID, job, "TR-143 triggered, awaiting result")
+			return
+		}
+		if body.GetParameterValuesResponse == nil {
+			h.markUnexpectedResponse(ctx, deviceID, job)
+			return
+		}
+		list := body.GetParameterValuesResponse.ParameterList
+		h.cacheParameterValues(ctx, deviceID, list, parameters.SourceGetValues)
+		prefix := "Device.IP.Diagnostics.DownloadDiagnostics."
+		if job.Type == jobs.TypeDiagnosticsUpload {
+			prefix = "Device.IP.Diagnostics.UploadDiagnostics."
+		}
+		var payload struct {
+			Prefix string `json:"prefix"`
+		}
+		_ = json.Unmarshal(job.Payload, &payload)
+		if payload.Prefix != "" {
+			prefix = payload.Prefix
+		}
+		switch state := diagnosticsState(list, prefix); state {
+		case "Requested", "":
+			h.requeueDiagnostic(ctx, deviceID, job, "TR-143 still running")
+		case "Complete":
+			h.markJobSuccess(ctx, deviceID, job)
+		default:
+			_ = h.jobs.MarkFailed(ctx, job.ID, "", state)
 			h.auditFailure(ctx, deviceID, job, "", state)
 		}
 

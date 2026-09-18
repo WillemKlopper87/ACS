@@ -145,6 +145,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	routePerm("POST", "/api/v1/devices/{id}/parameters/refresh-wifi-clients", operators.PermDiagnosticsRun, h.refreshWifiClients)
 	routePerm("POST", "/api/v1/devices/{id}/diagnostics/ping", operators.PermDiagnosticsRun, h.createDiagnosticsPing)
 	routePerm("POST", "/api/v1/devices/{id}/diagnostics/traceroute", operators.PermDiagnosticsRun, h.createDiagnosticsTraceroute)
+	routePerm("POST", "/api/v1/devices/{id}/diagnostics/tr143/{direction}", operators.PermDiagnosticsRun, h.createTR143)
 	routePerm("POST", "/api/v1/devices/{id}/objects", operators.PermDevicesWrite, h.createAddObject)
 	routePerm("POST", "/api/v1/devices/{id}/objects/delete", operators.PermDevicesWrite, h.createDeleteObject)
 	routePerm("POST", "/api/v1/devices/{id}/reboot", operators.PermDevicesWrite, h.createReboot)

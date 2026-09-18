@@ -84,6 +84,16 @@ type DiagnosticsTraceroutePayload struct {
 	Prefix string `json:"prefix,omitempty"`
 }
 
+type DiagnosticsDownloadPayload struct {
+	URL    string `json:"url"`
+	Prefix string `json:"prefix"`
+}
+
+type DiagnosticsUploadPayload struct {
+	URL    string `json:"url"`
+	Prefix string `json:"prefix"`
+}
+
 // AddObjectPayload is the payload shape for an ADD_OBJECT job.
 // ObjectPath is the parent path ending in "." (e.g. "Device.WiFi.SSID.")
 // — the CPE picks the new instance number and returns it, recorded on

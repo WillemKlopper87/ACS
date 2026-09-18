@@ -29,6 +29,8 @@ const (
 	TypeFirmwareDownload       = "FIRMWARE_DOWNLOAD"
 	TypeDiagnosticsPing        = "DIAGNOSTICS_PING"
 	TypeDiagnosticsTraceroute  = "DIAGNOSTICS_TRACEROUTE"
+	TypeDiagnosticsDownload    = "DIAGNOSTICS_DOWNLOAD"
+	TypeDiagnosticsUpload      = "DIAGNOSTICS_UPLOAD"
 	TypeAddObject              = "ADD_OBJECT"
 	TypeDeleteObject           = "DELETE_OBJECT"
 	TypeReboot                 = "REBOOT"
@@ -64,7 +66,7 @@ const (
 // in-session RPCs — cmd/acs picks which one to render by checking
 // job.Attempts (build plan §4 Phase 5).
 var sessionDispatchableTypes = []string{
-	TypeSetParameter, TypeGetParameter, TypeFirmwareDownload, TypeDiagnosticsPing, TypeDiagnosticsTraceroute,
+	TypeSetParameter, TypeGetParameter, TypeFirmwareDownload, TypeDiagnosticsPing, TypeDiagnosticsTraceroute, TypeDiagnosticsDownload, TypeDiagnosticsUpload,
 	TypeAddObject, TypeDeleteObject, TypeReboot, TypeFactoryReset,
 	TypeScheduleInform, TypeSetParameterAttributes, TypeGetParameterAttributes, TypeUpload,
 	TypeParameterDiscovery,
@@ -456,6 +458,10 @@ func newCommandKey(jobType string) string {
 		prefix = "diag"
 	case TypeDiagnosticsTraceroute:
 		prefix = "trace"
+	case TypeDiagnosticsDownload:
+		prefix = "diagdown"
+	case TypeDiagnosticsUpload:
+		prefix = "diagup"
 	case TypeAddObject:
 		prefix = "addobj"
 	case TypeDeleteObject:

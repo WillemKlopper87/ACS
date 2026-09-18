@@ -834,6 +834,30 @@ paths:
                       download_path: { type: string }
                       upload_path: { type: string }
 
+  /api/v1/devices/{id}/diagnostics/tr143/{direction}:
+    post:
+      tags: [Diagnostics]
+      summary: Queue a capability-gated TR-143 download or upload diagnostic
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - name: direction
+          in: path
+          required: true
+          schema: { type: string, enum: [download, upload] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, format: uri }
+      responses:
+        "202": { description: Accepted }
+        "400": { description: Invalid or disallowed target URL }
+        "409": { description: Device capability not discovered }
+
   # --- Diagnostics ---
   /api/v1/devices/{id}/diagnostics/ping:
     post:
