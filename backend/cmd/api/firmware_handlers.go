@@ -11,10 +11,24 @@ import (
 
 	"github.com/google/uuid"
 
+	"acs/internal/devices"
 	"acs/internal/firmware"
 	"acs/internal/jobs"
 	"acs/internal/transfer"
 )
+
+// ErrFirmwareProfileUnqualified is returned when a device has an explicit
+// vendor fallback profile. Such profiles are useful for read-only telemetry,
+// but are not sufficient evidence for an irreversible firmware operation.
+var ErrFirmwareProfileUnqualified = errors.New("device firmware profile is not qualified")
+
+func firmwareProfileAllowsDownload(device *devices.Device) bool {
+	// Devices without an assignment predate model-aware profiles (or have not
+	// completed identity discovery yet). Keep those devices compatible with the
+	// legacy firmware workflow; an explicit, known-unqualified assignment is
+	// the fail-closed case.
+	return device == nil || device.ProfileID == nil || device.ProfileQualified
+}
 
 // Expiring transfer-token lifetimes (audit P0.3). Firmware download
 // URLs live long enough to survive a delayed Download RPC plus an
@@ -212,6 +226,10 @@ func (h *handler) createFirmwareDownload(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "firmware image not found", http.StatusBadRequest)
 		return
 	}
+	if errors.Is(err, ErrFirmwareProfileUnqualified) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		h.logger.Error("failed to queue firmware download", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -229,6 +247,14 @@ func (h *handler) createFirmwareDownload(w http.ResponseWriter, r *http.Request)
 // dispatcher (rollout_handlers.go, build plan §4 Phase 7), so both build
 // the exact same payload shape rather than two copies drifting apart.
 func (h *handler) queueFirmwareDownload(ctx context.Context, deviceID, firmwareImageID string, delaySeconds int, operator string) (*jobs.Job, error) {
+	device, err := h.devices.Get(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	if !firmwareProfileAllowsDownload(device) {
+		return nil, fmt.Errorf("%w: device %s requires a model-qualified profile", ErrFirmwareProfileUnqualified, deviceID)
+	}
+
 	img, err := h.firmware.Get(ctx, firmwareImageID)
 	if err != nil {
 		return nil, err

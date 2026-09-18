@@ -767,6 +767,41 @@ paths:
                   names: { type: object, additionalProperties: { type: boolean } }
                   discovered_at: { type: string, format: date-time, nullable: true }
 
+  /api/v1/devices/{id}/cellular-capabilities:
+    get:
+      tags: [Diagnostics]
+      summary: Resolve evidence-backed canonical cellular read paths without polling or authorizing writes
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [device_id, data_model_root, profile, resolutions]
+                properties:
+                  device_id: { type: string }
+                  data_model_root: { type: string }
+                  discovered_at: { type: string, format: date-time, nullable: true }
+                  profile:
+                    type: object
+                    properties:
+                      id: { type: string, nullable: true }
+                      matched_by: { type: string, nullable: true }
+                      qualified: { type: boolean }
+                      evidence: { type: object }
+                      assigned_at: { type: string, format: date-time, nullable: true }
+                  resolutions:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      required: [path, standard, discovered]
+                      properties:
+                        path: { type: string }
+                        standard: { type: boolean }
+                        discovered: { type: boolean }
+
   # --- Diagnostics ---
   /api/v1/devices/{id}/diagnostics/ping:
     post:
