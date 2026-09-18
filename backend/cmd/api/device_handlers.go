@@ -429,8 +429,12 @@ func (h *handler) validateWritableParameters(ctx context.Context, deviceID strin
 	if discovered == nil {
 		return nil
 	}
+	return validateDiscoveredWritableParameters(discovered.Names, payload)
+}
+
+func validateDiscoveredWritableParameters(names map[string]bool, payload jobs.SetParameterPayload) error {
 	for _, parameter := range payload.Parameters {
-		writable, exists := discovered.Names[parameter.Name]
+		writable, exists := names[parameter.Name]
 		if !exists {
 			return fmt.Errorf("parameter %q is not supported by the discovered device model", parameter.Name)
 		}
