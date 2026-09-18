@@ -80,6 +80,7 @@ var uspDispatchableTypes = []string{
 	jobs.TypeDiagnosticsPing,
 	jobs.TypeDiagnosticsTraceroute,
 	jobs.TypeParameterDiscovery,
+	jobs.TypeFirmwareDownload,
 }
 
 // dispatchSweepInterval sets how often periodicSweep re-checks every
@@ -208,7 +209,7 @@ func (d *dispatcher) tryDispatch(ctx context.Context, deviceID string) error {
 	}
 
 	leaseCtx, cancel := context.WithTimeout(ctx, dbCallTimeout)
-	job, err := d.jobsRepo.LeaseForTypes(leaseCtx, deviceID, uspDispatchableTypes)
+	job, err := d.jobsRepo.LeaseForUSPTypes(leaseCtx, deviceID, uspDispatchableTypes)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("dispatcher: lease job for device %s: %w", deviceID, err)

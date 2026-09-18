@@ -348,6 +348,34 @@ func TestBuildUSPRequestDiagnosticsTraceroute(t *testing.T) {
 	}
 }
 
+func TestBuildUSPRequestFirmwareDownloadAfterDiscovery(t *testing.T) {
+	job := mustJob(t, jobs.TypeFirmwareDownload, jobs.FirmwareDownloadPayload{
+		USPInstance: "Device.FirmwareImage.2.",
+		URL:         "https://fw.example/image.bin",
+		FileSize:    1234,
+		Username:    "fw-user",
+		Password:    "fw-secret",
+	})
+	wire, err := buildUSPRequest("m-fw", job)
+	if err != nil {
+		t.Fatalf("buildUSPRequest: %v", err)
+	}
+	msg, err := usp.DecodeMsg(wire)
+	if err != nil {
+		t.Fatalf("DecodeMsg: %v", err)
+	}
+	op := msg.GetBody().GetRequest().GetOperate()
+	if op == nil || op.GetCommand() != "Device.FirmwareImage.2.Download()" {
+		t.Fatalf("operate command = %q, want Device.FirmwareImage.2.Download()", op.GetCommand())
+	}
+	args := op.GetInputArgs()
+	for key, want := range map[string]string{"URL": "https://fw.example/image.bin", "FileSize": "1234", "AutoActivate": "true", "Username": "fw-user", "Password": "fw-secret"} {
+		if args[key] != want {
+			t.Errorf("input_args[%q] = %q, want %q", key, args[key], want)
+		}
+	}
+}
+
 func TestBuildUSPRequestParameterDiscovery(t *testing.T) {
 	job := mustJob(t, jobs.TypeParameterDiscovery, jobs.ParameterDiscoveryPayload{
 		Root:         "Device.",

@@ -40,6 +40,9 @@ type FirmwareDownloadPayload struct {
 	FileSize        int64  `json:"file_size"`
 	TargetFilename  string `json:"target_filename"`
 	DelaySeconds    int    `json:"delay_seconds"`
+	// USPInstance is populated only after USP FirmwareImage instance
+	// discovery. Empty preserves the safe unsupported-over-USP behavior.
+	USPInstance string `json:"usp_instance,omitempty"`
 }
 
 // DiagnosticsPingPayload is the payload shape for a DIAGNOSTICS_PING job

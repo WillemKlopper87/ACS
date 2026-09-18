@@ -150,19 +150,24 @@ func buildUSPRequest(msgID string, job *jobs.Job) ([]byte, error) {
 		return usp.EncodeGetSupportedDM(msgID, []string{payload.Root}, false, true, true, true)
 
 	case jobs.TypeFirmwareDownload:
-		// Device.FirmwareImage.{i}.Download()'s InputArguments are
-		// known with reasonable confidence (URL mandatory,
-		// AutoActivate mandatory boolean, Username/Password/FileSize/
-		// CheckSumAlgorithm/CheckSum optional -- TR-181 2.18.1 USP data
-		// model XML), but Device.FirmwareImage is a multi-instance
-		// table (typically one active + one standby slot on a real
-		// device): sending Download() requires first knowing which
-		// instance to target, which means a discovery round-trip
-		// (GetInstances or Get on "Device.FirmwareImage.") this plan
-		// does not build. Not a confidence gap on the arguments --
-		// purely the missing instance-selection step. A later plan can
-		// add the discovery step and revisit this.
-		return nil, ErrUnsupportedOverUSP
+		var payload jobs.FirmwareDownloadPayload
+		if err := json.Unmarshal(job.Payload, &payload); err != nil {
+			return nil, fmt.Errorf("unmarshal FIRMWARE_DOWNLOAD payload: %w", err)
+		}
+		if payload.USPInstance == "" {
+			return nil, ErrUnsupportedOverUSP
+		}
+		command, args, err := usp.FirmwareDownloadOperation(payload.USPInstance, payload.URL, payload.FileSize, true)
+		if err != nil {
+			return nil, err
+		}
+		if payload.Username != "" {
+			args["Username"] = payload.Username
+		}
+		if payload.Password != "" {
+			args["Password"] = payload.Password
+		}
+		return usp.EncodeOperate(msgID, command, job.CommandKey, true, args)
 
 	default:
 		// The five CWMP-only types (CONNECTION_REQUEST, SCHEDULE_INFORM,

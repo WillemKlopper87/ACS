@@ -47,19 +47,37 @@ func (r *Repository) Lease(ctx context.Context, deviceID string) (*Job, error) {
 // sessionDispatchableTypes, so every existing caller's behavior is
 // unchanged.
 func (r *Repository) LeaseForTypes(ctx context.Context, deviceID string, types []string) (*Job, error) {
+	return r.leaseForTypes(ctx, deviceID, types, false)
+}
+
+// LeaseForUSPTypes is the USP-specific variant of LeaseForTypes. Firmware
+// downloads are only USP-dispatchable after discovery selected a concrete
+// Device.FirmwareImage.{i}. instance; excluding payloads without that field
+// keeps an old CWMP job from starving the USP queue.
+func (r *Repository) LeaseForUSPTypes(ctx context.Context, deviceID string, types []string) (*Job, error) {
+	return r.leaseForTypes(ctx, deviceID, types, true)
+}
+
+func (r *Repository) leaseForTypes(ctx context.Context, deviceID string, types []string, uspOnly bool) (*Job, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin lease tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	row := tx.QueryRowContext(ctx, `
-		SELECT `+jobColumns+` FROM jobs
+	query := `
+		SELECT ` + jobColumns + ` FROM jobs
 		WHERE device_id = $1 AND status = 'QUEUED' AND type = ANY($2)
+	`
+	if uspOnly {
+		query += ` AND (type <> 'FIRMWARE_DOWNLOAD' OR COALESCE(payload->>'usp_instance', '') <> '')`
+	}
+	query += `
 		ORDER BY created_at ASC
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
-	`, deviceID, types)
+	`
+	row := tx.QueryRowContext(ctx, query, deviceID, types)
 
 	job, err := scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
