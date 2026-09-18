@@ -105,6 +105,19 @@ type ProfileMatch struct {
 	Qualified bool
 }
 
+// ProfileID returns the stable identifier used when persisting a catalog
+// assignment. It is derived from catalog metadata rather than filenames.
+func ProfileID(cat Catalog) string {
+	vendor, model := vendorKey(cat.Vendor), vendorKey(cat.Model)
+	if vendor == "" {
+		return model
+	}
+	if model == "" {
+		return vendor
+	}
+	return vendor + "." + model
+}
+
 // MatchProfile selects a profile for a reported manufacturer and ProductClass.
 // Model matching is normalized exact matching rather than fuzzy substring
 // matching: accepting a near-looking ProductClass could apply unsafe vendor

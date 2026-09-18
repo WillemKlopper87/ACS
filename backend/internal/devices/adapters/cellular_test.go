@@ -33,6 +33,40 @@ func TestCellularPathCandidatesUsePortableTR181Objects(t *testing.T) {
 	}
 }
 
+func TestResolveCellularReadPathAcceptsReadOnlyStandardEvidence(t *testing.T) {
+	got, ok := ResolveCellularReadPath(devices.DataModelRootDevice2, CellularRSRP, "1", map[string]bool{
+		"Device.Cellular.Interface.1.RSRP": false,
+		"Device.XVendor.Radio.RSRP":        true,
+	})
+	if !ok || got.Path != "Device.Cellular.Interface.1.RSRP" || !got.Standard || got.Discovered {
+		t.Fatalf("resolution = %#v, ok=%v", got, ok)
+	}
+}
+
+func TestResolveCellularReadPathPrefersStandardCandidate(t *testing.T) {
+	got, ok := ResolveCellularReadPath(devices.DataModelRootDevice2, CellularRSSI, "1", map[string]bool{
+		"Device.Cellular.Interface.1.RSSI":    true,
+		"Device.XVendor.Radio.SignalStrength": true,
+	})
+	if !ok || got.Path != "Device.Cellular.Interface.1.RSSI" || !got.Standard || got.Discovered {
+		t.Fatalf("resolution = %#v, ok=%v", got, ok)
+	}
+}
+
+func TestResolveCellularReadPathRequiresEvidenceForNonPortableField(t *testing.T) {
+	if got, ok := ResolveCellularReadPath(devices.DataModelRootDevice2, CellularBand, "1", map[string]bool{
+		"Device.XVendor.Radio.Unrelated": true,
+	}); ok || got.Path != "" {
+		t.Fatalf("unexpected resolution = %#v, ok=%v", got, ok)
+	}
+}
+
+func TestResolveCellularReadPathDoesNotGuessTR098(t *testing.T) {
+	if got, ok := ResolveCellularReadPath(devices.DataModelRootIGD1, CellularRSRP, "1", nil); ok || got.Path != "" {
+		t.Fatalf("unexpected TR-098 resolution = %#v, ok=%v", got, ok)
+	}
+}
+
 func TestNormalizeCellularValue(t *testing.T) {
 	cases := []struct {
 		name string

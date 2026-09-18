@@ -7,6 +7,7 @@ import (
 	"acs/internal/captures"
 	"acs/internal/cwmp"
 	"acs/internal/devices"
+	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
 	"acs/internal/parameters"
 	"bytes"
@@ -15,6 +16,7 @@ import (
 	"compress/zlib"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -306,6 +308,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	h.assignDeviceProfile(ctx, device, inform.DeviceId)
 
 	h.captureInbound(ctx, naturalKey, remoteIP(r), device.ID, "Inform",
 		fmt.Sprintf("Inform (events: %v)", events), inform, r.Header.Get("Authorization"))
@@ -381,6 +384,33 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(cwmp.RenderInformResponseNS(respID, ns))
+}
+
+// assignDeviceProfile records catalog provenance after identity persistence.
+// Exact model matches are qualified; vendor fallbacks remain read-only.
+func (h *handler) assignDeviceProfile(ctx context.Context, device *devices.Device, id cwmp.DeviceID) {
+	if h.profiles == nil || device == nil {
+		return
+	}
+	match := h.profiles.MatchProfile(id.Manufacturer, id.ProductClass)
+	if match.MatchedBy == "" {
+		if err := h.devices.ClearProfileAssignment(ctx, device.ID); err != nil {
+			h.logger.Warn("failed to clear stale device profile", "err", err, "device_id", device.ID)
+		}
+		return
+	}
+	evidence, err := json.Marshal(map[string]string{
+		"manufacturer": id.Manufacturer, "product_class": id.ProductClass,
+		"catalog_vendor": match.Catalog.Vendor, "catalog_model": match.Catalog.Model,
+		"spec_version": match.Catalog.SpecVersion, "source": "cwmp_inform",
+	})
+	if err != nil {
+		h.logger.Warn("failed to encode device profile evidence", "err", err, "device_id", device.ID)
+		return
+	}
+	if err := h.devices.AssignProfile(ctx, device.ID, adapters.ProfileID(match.Catalog), match.MatchedBy, match.Qualified, evidence); err != nil {
+		h.logger.Warn("failed to assign device profile", "err", err, "device_id", device.ID)
+	}
 }
 
 // captureInbound writes a redacted capture_events row for every ACTIVE

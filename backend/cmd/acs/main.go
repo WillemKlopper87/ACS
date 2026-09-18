@@ -27,6 +27,7 @@ import (
 	"acs/internal/config"
 	"acs/internal/credentials"
 	"acs/internal/devices"
+	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
 	"acs/internal/observability"
 	"acs/internal/parameters"
@@ -212,6 +213,7 @@ func main() {
 		templates:          templates.NewRepository(db),
 		captures:           captureRepo,
 		tmfEvents:          bss.NewRepository(db),
+		profiles:           adapters.NewRegistry(),
 		captureMaxDuration: captureMaxDuration,
 		ipLimiter:          ratelimit.New(ipRate, ipBurst, rateLimitIdleTTL),
 		deviceLimiter:      ratelimit.New(deviceRate, deviceBurst, rateLimitIdleTTL),
@@ -416,6 +418,7 @@ type handler struct {
 	templates *templates.Repository
 	captures  *captures.Repository
 	tmfEvents telemetry.Sink
+	profiles  *adapters.Registry
 
 	captureMaxDuration time.Duration
 

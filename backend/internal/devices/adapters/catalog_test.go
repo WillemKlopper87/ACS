@@ -155,3 +155,12 @@ func TestRegistryMatchesQualifiedModelBeforeVendorFallback(t *testing.T) {
 		t.Fatalf("vendor fallback = vendor %q qualified %v, want Zyxel/false", vendor, qualified)
 	}
 }
+
+func TestProfileIDIsStableFromCatalogMetadata(t *testing.T) {
+	if got := ProfileID(Catalog{Vendor: "Zyxel", Model: "NR7303-EU01V1F"}); got != "zyxel.nr7303eu01v1f" {
+		t.Fatalf("ProfileID = %q, want zyxel.nr7303eu01v1f", got)
+	}
+	if got := ProfileID(Catalog{Vendor: "TP-Link"}); got != "tplink" {
+		t.Fatalf("vendor-only ProfileID = %q, want tplink", got)
+	}
+}

@@ -11,6 +11,15 @@ import (
 // and CPEs commonly expose an optional value on a related object.
 type CellularField string
 
+// CellularReadResolution records the evidence used to resolve a canonical
+// cellular read. It is intentionally read-only evidence: callers must not use
+// this result to authorize a write.
+type CellularReadResolution struct {
+	Path       string
+	Standard   bool
+	Discovered bool
+}
+
 const (
 	CellularStatus        CellularField = "status"
 	CellularAccessPoint   CellularField = "access_point"
@@ -63,6 +72,63 @@ func CellularPathCandidates(root string, field CellularField, instance string) [
 		CellularBytesReceived: {prefix + "Stats.BytesReceived"},
 	}
 	return append([]string(nil), paths[field]...)
+}
+
+// ResolveCellularReadPath resolves one canonical cellular field from the
+// portable TR-181 candidates and, when supplied, the device's discovered
+// parameter names. Discovered names are accepted only when their leaf matches
+// a conservative field-specific vocabulary; arbitrary paths are never
+// guessed. The returned bool is false when the device has no evidence for the
+// requested field.
+func ResolveCellularReadPath(root string, field CellularField, instance string, discovered map[string]bool) (CellularReadResolution, bool) {
+	for _, path := range CellularPathCandidates(root, field, instance) {
+		// Discovery's bool is writability, not presence. Read-only telemetry
+		// is valid evidence for a read and must not be skipped.
+		if len(discovered) == 0 {
+			return CellularReadResolution{Path: path, Standard: true}, true
+		}
+		if _, present := discovered[path]; present {
+			return CellularReadResolution{Path: path, Standard: true}, true
+		}
+	}
+	if len(discovered) == 0 {
+		return CellularReadResolution{}, false
+	}
+	standard := make(map[string]struct{})
+	for _, path := range CellularPathCandidates(root, field, instance) {
+		standard[path] = struct{}{}
+	}
+	for path := range discovered {
+		if _, isStandard := standard[path]; isStandard {
+			continue
+		}
+		if cellularLeafMatches(field, lastPathSegment(path)) {
+			return CellularReadResolution{Path: path, Discovered: true}, true
+		}
+	}
+	return CellularReadResolution{}, false
+}
+
+func cellularLeafMatches(field CellularField, leaf string) bool {
+	compact := strings.ToUpper(strings.NewReplacer("_", "", "-", "", " ", "").Replace(leaf))
+	aliases := map[CellularField][]string{
+		CellularStatus:      {"STATUS", "REGISTRATIONSTATUS", "SERVICESTATUS"},
+		CellularAccessPoint: {"APN", "ACCESSPOINT"},
+		CellularSIMStatus:   {"SIMSTATUS", "USIMSTATUS"},
+		CellularIMSI:        {"IMSI"}, CellularICCID: {"ICCID"}, CellularIMEI: {"IMEI"},
+		CellularOperator: {"OPERATOR", "CARRIER", "NETWORKNAME", "PLMN"},
+		CellularCellID:   {"CELLID", "CELLIDENTITY", "ECGI", "NRCELLID"},
+		CellularRAT:      {"RAT", "RADIOACCESS", "CURRENTACCESSTECHNOLOGY", "NETWORKTYPE"},
+		CellularBand:     {"BAND", "BANDNUMBER"}, CellularChannel: {"CHANNEL", "ARFCN"},
+		CellularRSSI: {"RSSI", "SIGNALSTRENGTH"}, CellularRSRP: {"RSRP"}, CellularRSRQ: {"RSRQ"},
+		CellularBytesSent: {"BYTESSENT"}, CellularBytesReceived: {"BYTESRECEIVED"},
+	}
+	for _, alias := range aliases[field] {
+		if compact == alias {
+			return true
+		}
+	}
+	return false
 }
 
 // CellularValue is a normalized read result while retaining the CPE's raw
