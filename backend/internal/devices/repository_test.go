@@ -66,6 +66,54 @@ func TestUpsertFromInformSetsCWMPManagementProtocol(t *testing.T) {
 	}
 }
 
+func TestProfileAssignmentPersistsProvenanceAndCanBeCleared(t *testing.T) {
+	ctx, r := newDevicesTestRepo(t)
+	id := cwmp.DeviceID{OUI: "001349", ProductClass: "NR7303-EU01V1F", SerialNumber: "PROFILE-1"}
+	d, err := r.UpsertFromInform(ctx, id, []string{"0 BOOTSTRAP"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := []byte(`{"manufacturer":"Zyxel","product_class":"NR7303-EU01V1F","source":"cwmp_inform"}`)
+	if err := r.AssignProfile(ctx, d.ID, "zyxel.nr7303-eu01v1f", "model", true, evidence); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Get(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ProfileID == nil || *got.ProfileID != "zyxel.nr7303-eu01v1f" || got.ProfileMatchedBy == nil || *got.ProfileMatchedBy != "model" || !got.ProfileQualified {
+		t.Fatalf("assignment = %#v", got)
+	}
+	if string(got.ProfileEvidence) != string(evidence) {
+		t.Fatalf("evidence = %s, want %s", got.ProfileEvidence, evidence)
+	}
+	if err := r.ClearProfileAssignment(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err = r.Get(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ProfileID != nil || got.ProfileMatchedBy != nil || got.ProfileQualified || string(got.ProfileEvidence) != "{}" {
+		t.Fatalf("cleared assignment = %#v", got)
+	}
+}
+
+func TestProfileAssignmentRejectsInvalidProvenanceAndJSON(t *testing.T) {
+	ctx, r := newDevicesTestRepo(t)
+	id := cwmp.DeviceID{OUI: "001349", ProductClass: "NR7303", SerialNumber: "PROFILE-2"}
+	d, err := r.UpsertFromInform(ctx, id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.AssignProfile(ctx, d.ID, "profile", "guess", false, []byte(`{}`)); err == nil {
+		t.Fatal("invalid provenance accepted")
+	}
+	if err := r.AssignProfile(ctx, d.ID, "profile", "vendor", false, []byte(`not-json`)); err == nil {
+		t.Fatal("invalid JSON accepted")
+	}
+}
+
 // managementProtocols reads the column directly — it is not part of the
 // Device struct (a scan-shape decision out of scope for this task), so
 // tests that need to assert on it query it themselves.

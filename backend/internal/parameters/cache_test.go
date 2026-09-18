@@ -186,3 +186,28 @@ func TestInvalidateSubtreeNormalizesTrailingDot(t *testing.T) {
 		t.Errorf("cache has %d keys after InvalidateSubtree, want 2 (the sibling .10. instance's own two params)", len(got))
 	}
 }
+
+func TestCapabilitiesRoundTripAndRefreshWritableIndex(t *testing.T) {
+	ctx, r, deviceID := newParametersTestRepo(t)
+	capabilities := []SupportedCapability{
+		{Path: "Device.WiFi.SSID.1.Enable", Writable: true, ValueType: "BOOL", ValueChange: "VALUE_CHANGE_ALLOWED"},
+		{Path: "Device.Cellular.Interface.1.RSRP", Writable: false, ValueType: "INT"},
+	}
+	if err := r.SaveCapabilities(ctx, deviceID, capabilities); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.GetCapabilities(ctx, deviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(capabilities) || got[0].Path != capabilities[0].Path || !got[0].Writable {
+		t.Fatalf("capabilities = %#v", got)
+	}
+	names, err := r.GetNames(ctx, deviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names == nil || !names.Names[capabilities[0].Path] || names.Names[capabilities[1].Path] {
+		t.Fatalf("writable compatibility index = %#v", names)
+	}
+}

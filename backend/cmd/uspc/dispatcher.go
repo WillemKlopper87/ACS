@@ -360,7 +360,8 @@ type responseOutcome struct {
 	// response containing at least one parameter. It uses the same
 	// protocol-neutral cache as CWMP discovery: true means the controller
 	// may write the parameter, false means it is known read-only.
-	discoveredNames map[string]bool
+	discoveredNames        map[string]bool
+	discoveredCapabilities []parameters.SupportedCapability
 }
 
 // classifyResponse inspects msg.GetBody().GetResponse()'s actual
@@ -571,6 +572,7 @@ func classifyOperateResp(msgType string, resp *uspproto.OperateResp) responseOut
 func classifyGetSupportedDMResp(msgType string, resp *uspproto.GetSupportedDMResp) responseOutcome {
 	params := make(map[string]string)
 	discoveredNames := make(map[string]bool)
+	var capabilities []parameters.SupportedCapability
 	for _, r := range resp.GetReqObjResults() {
 		if r.GetErrCode() != 0 {
 			params[r.GetReqObjPath()] = fmt.Sprintf("error %d: %s", r.GetErrCode(), r.GetErrMsg())
@@ -584,13 +586,14 @@ func classifyGetSupportedDMResp(msgType string, resp *uspproto.GetSupportedDMRes
 					continue
 				}
 				discoveredNames[name] = parameter.GetAccess() == uspproto.GetSupportedDMResp_PARAM_READ_WRITE || parameter.GetAccess() == uspproto.GetSupportedDMResp_PARAM_WRITE_ONLY
+				capabilities = append(capabilities, parameters.SupportedCapability{Path: name, Writable: discoveredNames[name], ValueType: parameter.GetValueType().String(), ValueChange: parameter.GetValueChange().String()})
 			}
 		}
 	}
 	if len(discoveredNames) == 0 {
 		discoveredNames = nil
 	}
-	return responseOutcome{detail: dispatchResultDetail{MsgType: msgType, Params: params}, discoveredNames: discoveredNames}
+	return responseOutcome{detail: dispatchResultDetail{MsgType: msgType, Params: params}, discoveredNames: discoveredNames, discoveredCapabilities: capabilities}
 }
 
 // handleResponse reports whether msg answers one of this dispatcher's
@@ -662,6 +665,11 @@ func (d *dispatcher) handleResponse(from usp.EndpointID, msg *uspproto.Msg) (mat
 			// RPC into a false failure. Operators still receive the discovery
 			// summary, while callers safely fall back to canonical mappings.
 			d.log.Warn("uspc: dispatcher: persist USP discovered parameter names", "job_id", entry.job.ID, "device_id", entry.job.DeviceID, "error", err)
+		}
+		if len(outcome.discoveredCapabilities) > 0 {
+			if err := d.paramsRepo.SaveCapabilities(ctx, entry.job.DeviceID, outcome.discoveredCapabilities); err != nil {
+				d.log.Warn("uspc: dispatcher: persist USP capability metadata", "job_id", entry.job.ID, "device_id", entry.job.DeviceID, "error", err)
+			}
 		}
 	}
 	d.resolveSuccess(ctx, entry.job, from, outcome.detail)

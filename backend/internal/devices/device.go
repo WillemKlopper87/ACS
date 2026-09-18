@@ -2,7 +2,10 @@
 // trimmed to the Phase 1 subset — see migrations/0001_devices.sql).
 package devices
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Device is a row of the devices table.
 type Device struct {
@@ -35,6 +38,12 @@ type Device struct {
 	Label     *string
 	Latitude  *float64
 	Longitude *float64
+	// Assignment provenance is descriptive only; it never grants write access.
+	ProfileID         *string
+	ProfileMatchedBy  *string
+	ProfileQualified  bool
+	ProfileEvidence   json.RawMessage
+	ProfileAssignedAt *time.Time
 }
 
 // Data model root values (design doc v3 §7.1's data_model_root check

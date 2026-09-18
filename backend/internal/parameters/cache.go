@@ -331,6 +331,67 @@ func (r *Repository) SaveNames(ctx context.Context, deviceID string, writableByN
 	return nil
 }
 
+// SupportedCapability is the protocol-neutral subset of USP GetSupportedDM
+// metadata retained for future capability-gated operations. Names remains the
+// compatibility cache consumed by existing write guards.
+type SupportedCapability struct {
+	Path        string   `json:"path"`
+	Writable    bool     `json:"writable"`
+	ValueType   string   `json:"value_type,omitempty"`
+	ValueChange string   `json:"value_change,omitempty"`
+	Commands    []string `json:"commands,omitempty"`
+	Events      []string `json:"events,omitempty"`
+}
+
+// SaveCapabilities replaces the discovered capability snapshot while keeping
+// the legacy names JSON unchanged for existing readers and deployments.
+func (r *Repository) SaveCapabilities(ctx context.Context, deviceID string, capabilities []SupportedCapability) error {
+	names := make(map[string]bool, len(capabilities))
+	for _, c := range capabilities {
+		if c.Path != "" {
+			names[c.Path] = c.Writable
+		}
+	}
+	capJSON, err := json.Marshal(capabilities)
+	if err != nil {
+		return fmt.Errorf("marshal discovered capabilities: %w", err)
+	}
+	namesJSON, err := json.Marshal(names)
+	if err != nil {
+		return fmt.Errorf("marshal discovered parameter names: %w", err)
+	}
+	_, err = r.db.ExecContext(ctx, `
+		INSERT INTO device_parameter_names (device_id, names, capabilities, discovered_at)
+		VALUES ($1, $2::jsonb, $3::jsonb, now())
+		ON CONFLICT (device_id) DO UPDATE SET names = EXCLUDED.names,
+			capabilities = EXCLUDED.capabilities, discovered_at = now()
+	`, deviceID, namesJSON, capJSON)
+	if err != nil {
+		return fmt.Errorf("save discovered capabilities: %w", err)
+	}
+	return nil
+}
+
+// GetCapabilities returns the latest USP capability metadata. Older rows and
+// installations upgraded from the names-only schema return an empty slice.
+func (r *Repository) GetCapabilities(ctx context.Context, deviceID string) ([]SupportedCapability, error) {
+	var raw []byte
+	if err := r.db.QueryRowContext(ctx, `SELECT capabilities FROM device_parameter_names WHERE device_id = $1`, deviceID).Scan(&raw); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get discovered capabilities: %w", err)
+	}
+	var out []SupportedCapability
+	if len(raw) == 0 {
+		return out, nil
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("unmarshal discovered capabilities: %w", err)
+	}
+	return out, nil
+}
+
 // DiscoveredNames is one device's stored parameter-name tree plus when it
 // was last (re)discovered.
 type DiscoveredNames struct {
