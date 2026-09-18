@@ -61,10 +61,28 @@ func TestCellularDiagnosticParamsFiltersReadOnlyRFParams(t *testing.T) {
 	}
 }
 
+func TestCellularDiagnosticParamsFromNamesUsesLiveDeviceTree(t *testing.T) {
+	got := CellularDiagnosticParamsFromNames(map[string]bool{
+		"Device.Cellular.Interface.1.RSRP":  false,
+		"Device.X_ZYXEL_Cellular.NR5G_Band": false,
+		"Device.WiFi.SSID.1.SSID":           true,
+		"Device.Cellular.Interface.1.IMEI":  false,
+	})
+	want := []string{"Device.Cellular.Interface.1.RSRP", "Device.X_ZYXEL_Cellular.NR5G_Band"}
+	if len(got) != len(want) {
+		t.Fatalf("diagnostic paths = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("diagnostic paths[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestLoadCatalogsParsesEmbeddedVendorFiles(t *testing.T) {
 	catalogs := LoadCatalogs()
 
-	for _, vendor := range []string{"huawei", "nokia", "zyxel", "teltonika"} {
+	for _, vendor := range []string{"huawei", "nokia", "zyxel", "teltonika", "zte", "tplink"} {
 		cat, ok := catalogs[vendor]
 		if !ok {
 			t.Errorf("expected catalog for vendor %q", vendor)
@@ -73,6 +91,9 @@ func TestLoadCatalogsParsesEmbeddedVendorFiles(t *testing.T) {
 		if len(cat.Parameters) == 0 {
 			t.Errorf("vendor %q catalog has no parameters", vendor)
 		}
+	}
+	if got := catalogs["zyxel"].Model; got != "NR7303-EU01V1F" {
+		t.Errorf("Zyxel catalog model = %q, want NR7303-EU01V1F", got)
 	}
 }
 
@@ -87,6 +108,8 @@ func TestRegistryMatchCellularDiagnostics(t *testing.T) {
 		{"HUAWEI TECHNOLOGIES CO.,LTD", "Huawei"},
 		{"Nokia", "Nokia"},
 		{"Teltonika Networks", "Teltonika"},
+		{"ZTE Corporation", "ZTE"},
+		{"TP Link Technologies Co., Ltd.", "TP-Link"},
 	}
 	for _, tt := range tests {
 		vendor, paths := r.MatchCellularDiagnostics(tt.manufacturer)

@@ -84,9 +84,21 @@ var actionRegistry = map[string]actionTranslator{
 // discovered dataModelRoot. dataModelRoot may be "" (devices.DataModelRootUnknown)
 // for actions, like SUSPEND/ACTIVATE, that don't need it at all.
 func Translate(action string, params map[string]string, wg WalledGardenConfig, dataModelRoot string) ([]ParameterWrite, error) {
+	return TranslateWithCapabilities(action, params, wg, dataModelRoot, nil)
+}
+
+// TranslateWithCapabilities is Translate with optional device-discovery
+// evidence. Passing nil keeps the established compatibility fallback for a
+// device that has not yet completed discovery. Passing a non-nil map makes
+// canonical writes capability-aware: a BSS order is rejected before queuing
+// if the device reported none of the known candidate paths as writable.
+func TranslateWithCapabilities(action string, params map[string]string, wg WalledGardenConfig, dataModelRoot string, discovered map[string]bool) ([]ParameterWrite, error) {
 	translator, ok := actionRegistry[action]
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedAction, action)
+	}
+	if action == "MODIFY_WIFI" {
+		return translateModifyWifiWithCapabilities(params, dataModelRoot, discovered)
 	}
 	return translator(params, wg, dataModelRoot)
 }
@@ -99,13 +111,23 @@ func translateWalledGarden(wg WalledGardenConfig, value string) ([]ParameterWrit
 }
 
 func translateModifyWifi(params map[string]string, dataModelRoot string) ([]ParameterWrite, error) {
+	return translateModifyWifiWithCapabilities(params, dataModelRoot, nil)
+}
+
+func translateModifyWifiWithCapabilities(params map[string]string, dataModelRoot string, discovered map[string]bool) ([]ParameterWrite, error) {
 	var out []ParameterWrite
 	if ssid := params["wifi_ssid"]; ssid != "" {
-		path, _ := adapters.ResolvePath(dataModelRoot, adapters.WiFiSSID)
+		path, err := adapters.ResolveWritablePath(dataModelRoot, adapters.WiFiSSID, discovered)
+		if err != nil {
+			return nil, fmt.Errorf("%w: Wi-Fi SSID: %v", ErrUnsupportedAction, err)
+		}
 		out = append(out, ParameterWrite{Name: path, Value: ssid, Type: "string"})
 	}
 	if pass := params["wifi_password"]; pass != "" {
-		path, _ := adapters.ResolvePath(dataModelRoot, adapters.WiFiKeyPassphrase)
+		path, err := adapters.ResolveWritablePath(dataModelRoot, adapters.WiFiKeyPassphrase, discovered)
+		if err != nil {
+			return nil, fmt.Errorf("%w: Wi-Fi passphrase: %v", ErrUnsupportedAction, err)
+		}
 		out = append(out, ParameterWrite{Name: path, Value: pass, Type: "string"})
 	}
 	if len(out) == 0 {

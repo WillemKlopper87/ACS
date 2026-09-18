@@ -199,6 +199,11 @@ func isServiceRoute(r *http.Request) bool {
 		return true
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/v1/devices/") && strings.Count(p, "/") == 4:
 		return true // GET /api/v1/devices/{id}
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/v1/devices/") && strings.HasSuffix(p, "/parameter-names") && strings.Count(p, "/") == 5:
+		// The BSS adapter needs the persisted capability evidence to choose
+		// a valid canonical write path. It remains constrained to one
+		// device's names, rather than gaining general parameter-cache access.
+		return true
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/v1/jobs/"):
 		return true
 	}

@@ -20,10 +20,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"acs/internal/bss"
@@ -290,6 +292,13 @@ func (h *handler) createWebhookSubscription(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "target_url, secret, and at least one event_type are required")
 		return
 	}
+	if req.AccountID == nil {
+		if !h.authorizeBSSFleet(w, r) {
+			return
+		}
+	} else if !h.authorizeBSSAccount(w, r, *req.AccountID) {
+		return
+	}
 	// audit H-7: validate at save time too, not only at delivery.
 	if u, err := url.Parse(req.TargetURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "target_url must be a valid http/https URL")
@@ -310,7 +319,22 @@ func (h *handler) createWebhookSubscription(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *handler) listWebhookSubscriptions(w http.ResponseWriter, r *http.Request) {
-	subs, err := h.webhooks.ListSubscriptions(r.Context())
+	accountID := strings.TrimSpace(r.URL.Query().Get("account_id"))
+	var (
+		subs []bss.WebhookSubscription
+		err  error
+	)
+	if accountID == "" {
+		if !h.authorizeBSSFleet(w, r) {
+			return
+		}
+		subs, err = h.webhooks.ListSubscriptions(r.Context())
+	} else {
+		if !h.authorizeBSSAccount(w, r, accountID) {
+			return
+		}
+		subs, err = h.webhooks.ListSubscriptionsForAccount(r.Context(), accountID)
+	}
 	if err != nil {
 		h.logger.Error("failed to list webhook subscriptions", "err", err)
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
@@ -325,6 +349,23 @@ func (h *handler) listWebhookSubscriptions(w http.ResponseWriter, r *http.Reques
 
 func (h *handler) deleteWebhookSubscription(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	sub, err := h.webhooks.SubscriptionByID(r.Context(), id)
+	if errors.Is(err, bss.ErrSubscriptionNotFound) {
+		writeError(w, http.StatusNotFound, "ErrNotFound", "webhook subscription not found")
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to resolve webhook subscription", "err", err, "id", id)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+	if sub.AccountID == nil {
+		if !h.authorizeBSSFleet(w, r) {
+			return
+		}
+	} else if !h.authorizeBSSAccount(w, r, *sub.AccountID) {
+		return
+	}
 	if err := h.webhooks.DeleteSubscription(r.Context(), id); err != nil {
 		if err == bss.ErrSubscriptionNotFound {
 			writeError(w, http.StatusNotFound, "ErrNotFound", "webhook subscription not found")

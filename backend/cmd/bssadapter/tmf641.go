@@ -166,17 +166,7 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 				}
 				break
 			}
-			dev, lookupErr := h.acs.GetDevice(r.Context(), mapping.DeviceID)
-			if lookupErr != nil {
-				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", lookupErr.Error())
-				items[i].Status = "FAILED"
-				for j := i + 1; j < len(items); j++ {
-					_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[j].ID, "SKIPPED", "previous item failed")
-					items[j].Status = "SKIPPED"
-				}
-				break
-			}
-			params, translateErr := bss.Translate("MODIFY_WIFI", item.Parameters, h.walledGarden, dev.DataModelRoot)
+			params, translateErr := h.translateActionForDevice(r.Context(), "MODIFY_WIFI", item.Parameters, mapping.DeviceID)
 			if translateErr != nil {
 				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", translateErr.Error())
 				items[i].Status = "FAILED"

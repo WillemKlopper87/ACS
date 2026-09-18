@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<cwmp:cwmpDataModel vendor="Zyxel" model="NR7101" specVersion="TR-181 i2">
+<!--
+  Conservative baseline for the Zyxel NR7303-EU01V1F outdoor 5G CPE.
+  The device supports TR-069 and TR-369 with a TR-181 Device:2 model.
+  This is deliberately limited to standard paths: GetParameterNames
+  (CWMP) and GetSupportedDM (USP) remain authoritative for a particular
+  firmware image and for any X_ZYXEL_* extensions.
+-->
+<cwmp:cwmpDataModel vendor="Zyxel" model="NR7303-EU01V1F" specVersion="TR-181 Issue 2">
   <object name="Device." access="readOnly">
     <!-- TR-181 Standard Cellular Interface -->
     <object name="Cellular.Interface.1." access="readOnly">
@@ -14,19 +21,11 @@
         <parameter name="ICCID" type="string" access="readOnly"/>
       </object>
       
-      <object name="Stats." access="readOnly">
-        <parameter name="RSRP" type="int" access="readOnly"/>
-        <parameter name="RSRQ" type="int" access="readOnly"/>
-        <parameter name="SNR" type="int" access="readOnly"/>
-      </object>
+      <!-- TR-181 places radio-level RSRP/RSRQ/RSSI on Interface, not Stats. -->
+      <parameter name="RSRP" type="int" access="readOnly"/>
+      <parameter name="RSRQ" type="int" access="readOnly"/>
+      <parameter name="RSSI" type="int" access="readOnly"/>
     </object>
 
-    <!-- Zyxel Proprietary Management -->
-    <object name="X_ZYXEL_Cellular." access="readOnly">
-      <parameter name="NR5G_Band" type="string" access="readOnly"/>
-      <parameter name="CarrierAggregation" type="boolean" access="readOnly"/>
-      <parameter name="ModulationDL" type="string" access="readOnly"/>
-      <parameter name="ModulationUL" type="string" access="readOnly"/>
-    </object>
   </object>
 </cwmp:cwmpDataModel>

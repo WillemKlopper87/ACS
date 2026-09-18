@@ -54,7 +54,26 @@ func (r *Repository) FindOrder(ctx context.Context, externalOrderID string) (*Or
 		SELECT external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
 		FROM bss_orders WHERE external_order_id = $1
 	`, externalOrderID)
+	return scanOrder(row, "find order")
+}
 
+// FindOrderByCommandKey resolves a BSS-owned ACS job back to its account.
+// It deliberately returns nil for jobs not created through the BSS adapter:
+// the legacy BSS status endpoint must never become an account-scoped OAuth
+// client's side channel into arbitrary operator jobs.
+func (r *Repository) FindOrderByCommandKey(ctx context.Context, commandKey string) (*OrderRecord, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
+		FROM bss_orders WHERE command_key = $1
+	`, commandKey)
+	return scanOrder(row, "find order by command key")
+}
+
+type orderScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanOrder(row orderScanner, operation string) (*OrderRecord, error) {
 	var rec OrderRecord
 	var deviceID, commandKey, lastError sql.NullString
 	var paramsJSON []byte
@@ -63,7 +82,7 @@ func (r *Repository) FindOrder(ctx context.Context, externalOrderID string) (*Or
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("find order: %w", err)
+		return nil, fmt.Errorf("%s: %w", operation, err)
 	}
 	rec.DeviceID = deviceID.String
 	rec.CommandKey = commandKey.String

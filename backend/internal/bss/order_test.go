@@ -85,6 +85,17 @@ func TestMarkDispatchedSetsCommandKeyAndStatus(t *testing.T) {
 	if rec.CommandKey != "cmd-key-123" {
 		t.Errorf("CommandKey = %q, want cmd-key-123", rec.CommandKey)
 	}
+	byKey, err := r.FindOrderByCommandKey(ctx, "cmd-key-123")
+	if err != nil || byKey == nil {
+		t.Fatalf("FindOrderByCommandKey: record=%+v err=%v", byKey, err)
+	}
+	if byKey.ExternalOrderID != "ord-2" || byKey.AccountID != "acct-1" {
+		t.Errorf("FindOrderByCommandKey = %+v, want ord-2/acct-1", byKey)
+	}
+	missing, err := r.FindOrderByCommandKey(ctx, "not-a-bss-job")
+	if err != nil || missing != nil {
+		t.Errorf("FindOrderByCommandKey unknown = %+v, %v; want nil, nil", missing, err)
+	}
 }
 
 func TestMarkDispatchFailedIncrementsAttemptsAndStaysPending(t *testing.T) {

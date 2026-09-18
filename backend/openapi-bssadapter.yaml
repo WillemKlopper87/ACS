@@ -113,6 +113,31 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: "#/components/schemas/Mapping" } }
 
+  /bss/v1/mappings/{account_id}/capabilities:
+    get:
+      tags: [Mappings]
+      summary: Read the mapped device's discovered data-model root and writable parameter paths for safe OSS action planning
+      parameters:
+        - { name: account_id, in: path, required: true, schema: { type: string } }
+        - { name: role, in: query, required: false, schema: { type: string, enum: [gateway, ont, extender, stb, ata, other] }, description: "Optional. Defaults to gateway." }
+      responses:
+        "200":
+          description: Capability evidence only; parameter values and credentials are never returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account_id, device_id, role, data_model_root, discovery_complete, writable_parameters]
+                properties:
+                  account_id: { type: string }
+                  device_id: { type: string }
+                  role: { type: string }
+                  data_model_root: { type: string, enum: [DEVICE2, IGD1, UNKNOWN] }
+                  discovery_complete: { type: boolean }
+                  writable_parameters: { type: array, items: { type: string } }
+        "404": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+
   /bss/v1/orders:
     post:
       tags: [Orders]
@@ -143,6 +168,41 @@ paths:
         "404": { description: ErrDeviceNotMapped, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
         "502": { description: ErrACSUnreachable, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
 
+  /bss/v1/actions/preflight:
+    post:
+      tags: [Orders]
+      summary: Validate and resolve an action against the mapped device without creating an order or queuing a CPE job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_id, action]
+              properties:
+                account_id: { type: string }
+                action: { type: string, enum: [MODIFY_WIFI, SUSPEND, ACTIVATE] }
+                role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "Optional. Defaults to gateway." }
+                parameters: { type: object, additionalProperties: { type: string } }
+      responses:
+        "200":
+          description: Resolved device and canonical parameter writes; no state was changed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account_id, device_id, action, parameters]
+                properties:
+                  account_id: { type: string }
+                  device_id: { type: string }
+                  action: { type: string }
+                  parameters:
+                    type: array
+                    items: { $ref: "#/components/schemas/ParameterWrite" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+
   /bss/v1/jobs/{command_key}:
     get:
       tags: [Jobs]
@@ -166,7 +226,7 @@ paths:
               type: object
               required: [target_url, secret, event_types]
               properties:
-                account_id: { type: string, nullable: true, description: "Omit for a fleet-wide subscription" }
+                account_id: { type: string, nullable: true, description: "Required for account-scoped OAuth clients. Omit only with a globally-authorized client or the deprecated shared token." }
                 target_url: { type: string }
                 secret: { type: string, description: "HMAC-SHA256 signing secret — deliveries carry Webhook-Id, Webhook-Timestamp, and Webhook-Signature: v1,<hex>, where <hex> is HMAC-SHA256 over '<Webhook-Id>.<Webhook-Timestamp>.<raw body>', hex-encoded" }
                 event_types: { type: array, items: { type: string, example: JOB_COMPLETED } }
@@ -174,7 +234,9 @@ paths:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/WebhookSubscription" } } } }
     get:
       tags: [Webhooks]
-      summary: List this caller's webhook subscriptions
+      summary: List one account's subscriptions, or every subscription for a globally-authorized caller
+      parameters:
+        - { name: account_id, in: query, required: false, schema: { type: string }, description: "Required for account-scoped OAuth clients; omit only with global authorization." }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/WebhookSubscription" } } } } } } }
 
@@ -236,6 +298,14 @@ components:
         command_key: { type: string }
         status: { type: string }
         timestamp: { type: string, format: date-time }
+
+    ParameterWrite:
+      type: object
+      required: [name, value]
+      properties:
+        name: { type: string, description: "Resolved device data-model path" }
+        value: { type: string }
+        type: { type: string, example: string }
 
     JobStatus:
       type: object

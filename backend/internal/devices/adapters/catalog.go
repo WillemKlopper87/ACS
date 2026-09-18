@@ -110,7 +110,20 @@ func LoadCatalogs() map[string]Catalog {
 		if err != nil {
 			panic(fmt.Sprintf("adapters: %s: %v", e.Name(), err))
 		}
-		catalogs[strings.ToLower(cat.Vendor)] = cat
+		catalogs[vendorKey(cat.Vendor)] = cat
 	}
 	return catalogs
+}
+
+// vendorKey makes manufacturer matching tolerant of punctuation and legal
+// suffixes reported by CPEs (for example, "TP-Link", "TP Link", and
+// "TP-LINK TECHNOLOGIES CO., LTD.").
+func vendorKey(value string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(value) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

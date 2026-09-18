@@ -20,7 +20,11 @@
 // slice of it: the paths *this codebase* already assumes.
 package adapters
 
-import "acs/internal/devices"
+import (
+	"fmt"
+
+	"acs/internal/devices"
+)
 
 // CanonicalParameter names a parameter this codebase needs to read or
 // write independent of which data model a device actually speaks —
@@ -124,6 +128,32 @@ func ResolvePath(root string, p CanonicalParameter) (string, bool) {
 		return "", false
 	}
 	return cands[0], true
+}
+
+// ResolveWritablePath selects the first preferred canonical path that the
+// device's own discovery result says is writable. A nil discovery result
+// preserves the compatibility fallback used before discovery existed. Once a
+// device has reported a tree, however, silently selecting a path outside that
+// evidence turns an avoidable vendor-specific 9005/9008 fault into a job.
+//
+// Discovery maps a path to its Writable flag. A present false value is useful
+// evidence: the parameter exists but cannot be used for a write. This matters
+// for TR-098 Wi-Fi credentials, where vendors commonly expose both candidate
+// paths but allow writes to only one of them.
+func ResolveWritablePath(root string, p CanonicalParameter, discovered map[string]bool) (string, error) {
+	candidates := ResolvePathCandidates(root, p)
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no canonical path is registered for %q", p)
+	}
+	if discovered == nil {
+		return candidates[0], nil
+	}
+	for _, candidate := range candidates {
+		if discovered[candidate] {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("device discovery reports no writable path for canonical parameter %q", p)
 }
 
 // Diagnostic kinds for DiagnosticsPrefix.

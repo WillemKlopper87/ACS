@@ -108,6 +108,14 @@ type getParametersResponse struct {
 	Parameters map[string]CachedParameter `json:"parameters"`
 }
 
+// DiscoveredParameterNames mirrors GET /api/v1/devices/{id}/parameter-names.
+// Names is nil when the device has not completed discovery; an empty, non-nil
+// map is a completed discovery that found no usable parameters.
+type DiscoveredParameterNames struct {
+	Names        map[string]bool `json:"names"`
+	DiscoveredAt *string         `json:"discovered_at"`
+}
+
 // ErrDeviceLookupNotFound mirrors a 404 from GET /api/v1/devices/{id}.
 // Named distinctly from mapping.go's ErrDeviceNotFound (a different
 // lookup: oui_serial -> device, for account-mapping creation) even though
@@ -227,4 +235,40 @@ func (c *ACSClient) GetParameters(ctx context.Context, deviceID string, paths []
 		return nil, fmt.Errorf("decode ACS response: %w", err)
 	}
 	return out.Parameters, nil
+}
+
+// GetParameterNames retrieves the device's persisted parameter discovery
+// result. The BSS adapter uses this only for canonical writes, so a known
+// read-only or absent vendor path fails before it becomes an ACS job.
+func (c *ACSClient) GetParameterNames(ctx context.Context, deviceID string) (map[string]bool, error) {
+	url := fmt.Sprintf("%s/api/v1/devices/%s/parameter-names", c.baseURL, deviceID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build parameter names request: %w", err)
+	}
+	c.setAuth(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrACSUnreachable, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrDeviceLookupNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status from ACS: %d", resp.StatusCode)
+	}
+
+	var out DiscoveredParameterNames
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode parameter names response: %w", err)
+	}
+	if out.DiscoveredAt == nil {
+		return nil, nil
+	}
+	if out.Names == nil {
+		return map[string]bool{}, nil
+	}
+	return out.Names, nil
 }

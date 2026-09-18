@@ -46,7 +46,7 @@ Compatibility must not become a reason to disable authentication globally. Prefe
 | Huawei | 5G CPE Pro, N5368X 5G Outdoor CPE | TR-181 (expected) | ✅ | ✅ (shared path) | ✅ (shared path) | not yet | — | The N5368X (V200R001C00SPC340T) offers a `Connection request Authentication: Digest-SHA256` setting; both auth directions now implement SHA-256, so it needs no weakening of that setting. The secure field path must additionally prove constrained bootstrap -> credential-install SPV -> unique bound reconnect before this row is marked qualified; use `HUAWEI-N5368X-SECURE-QUALIFICATION.md`. Some firmware may block remote `ManagementServer.Username/Password` rewrite; record that as firmware-scoped BLOCKED/manual graduation rather than falling back to a shared normal-management identity. Bare `WLANConfiguration.{i}.KeyPassphrase` is advertised but non-writable on EchoLife ONTs (HG8546M, HG8145V5, HG8245H, EG8141A5); writes must target `PreSharedKey.1.KeyPassphrase`, which is now the preferred TR-098 candidate. A TR-098 device implementing only the bare form is a known unqualified case until writability-aware candidate selection lands. |
 | Nokia | FastMile 5G | TR-181 | ✅ | ✅ | ✅ | not yet | — | |
 | Teltonika | RUTX50 | TR-181 | ✅ | ✅ | ✅ | not yet | — | |
-| Zyxel | NR7101 / NR5103 | TR-181 | ✅ (primary mock profile) | ✅ | ✅ | not yet | — | |
+| Zyxel | NR7303-EU01V1F | TR-181 Issue 2, TR-069 and TR-369/USP | ✅ baseline profile | ✅ | ✅ | field validation pending | — | The catalog is limited to standard TR-181 cellular paths. Run parameter discovery after onboarding; its discovered writable tree is authoritative for the installed firmware and Zyxel extensions. |
 
 ## Protocol capabilities
 

@@ -27,6 +27,7 @@ import (
 	"acs/internal/captures"
 	"acs/internal/devices"
 	"acs/internal/jobs"
+	"acs/internal/parameters"
 	"acs/internal/usp"
 	"acs/internal/usp/mtp"
 	"acs/internal/usp/uspproto"
@@ -124,6 +125,10 @@ type dispatcher struct {
 	// a nil h.captures: a quiet no-op, not a panic.
 	captures *captures.Repository
 	devices  deviceOUIResolver
+	// paramsRepo persists the capability tree returned by USP
+	// GetSupportedDM. It is deliberately optional so DB-free dispatcher
+	// tests and deployments that only need job execution remain valid.
+	paramsRepo *parameters.Repository
 
 	mu      sync.Mutex
 	pending map[string]pendingDispatch
@@ -351,6 +356,11 @@ type responseOutcome struct {
 	stillPending bool
 	uspErr       *usp.USPError
 	detail       dispatchResultDetail
+	// discoveredNames is populated only by a successful GetSupportedDM
+	// response containing at least one parameter. It uses the same
+	// protocol-neutral cache as CWMP discovery: true means the controller
+	// may write the parameter, false means it is known read-only.
+	discoveredNames map[string]bool
 }
 
 // classifyResponse inspects msg.GetBody().GetResponse()'s actual
@@ -560,14 +570,27 @@ func classifyOperateResp(msgType string, resp *uspproto.OperateResp) responseOut
 // unlike a partial Add/Delete/Set write).
 func classifyGetSupportedDMResp(msgType string, resp *uspproto.GetSupportedDMResp) responseOutcome {
 	params := make(map[string]string)
+	discoveredNames := make(map[string]bool)
 	for _, r := range resp.GetReqObjResults() {
 		if r.GetErrCode() != 0 {
 			params[r.GetReqObjPath()] = fmt.Sprintf("error %d: %s", r.GetErrCode(), r.GetErrMsg())
 			continue
 		}
 		params[r.GetReqObjPath()] = fmt.Sprintf("%d supported objects discovered", len(r.GetSupportedObjs()))
+		for _, obj := range r.GetSupportedObjs() {
+			for _, parameter := range obj.GetSupportedParams() {
+				name := resolvedParameterPath(obj.GetSupportedObjPath(), parameter.GetParamName())
+				if name == "" {
+					continue
+				}
+				discoveredNames[name] = parameter.GetAccess() == uspproto.GetSupportedDMResp_PARAM_READ_WRITE || parameter.GetAccess() == uspproto.GetSupportedDMResp_PARAM_WRITE_ONLY
+			}
+		}
 	}
-	return responseOutcome{detail: dispatchResultDetail{MsgType: msgType, Params: params}}
+	if len(discoveredNames) == 0 {
+		discoveredNames = nil
+	}
+	return responseOutcome{detail: dispatchResultDetail{MsgType: msgType, Params: params}, discoveredNames: discoveredNames}
 }
 
 // handleResponse reports whether msg answers one of this dispatcher's
@@ -632,6 +655,14 @@ func (d *dispatcher) handleResponse(from usp.EndpointID, msg *uspproto.Msg) (mat
 	if outcome.uspErr != nil {
 		d.classifyAndFail(ctx, entry.job, from, outcome.uspErr, "msg_id", msgID)
 		return true
+	}
+	if entry.job.Type == jobs.TypeParameterDiscovery && outcome.discoveredNames != nil && d.paramsRepo != nil {
+		if err := d.paramsRepo.SaveNames(ctx, entry.job.DeviceID, outcome.discoveredNames); err != nil {
+			// A failed capability-cache write must not turn a completed device
+			// RPC into a false failure. Operators still receive the discovery
+			// summary, while callers safely fall back to canonical mappings.
+			d.log.Warn("uspc: dispatcher: persist USP discovered parameter names", "job_id", entry.job.ID, "device_id", entry.job.DeviceID, "error", err)
+		}
 	}
 	d.resolveSuccess(ctx, entry.job, from, outcome.detail)
 	return true

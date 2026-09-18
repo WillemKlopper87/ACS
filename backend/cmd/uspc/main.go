@@ -123,6 +123,7 @@ func run(logger *slog.Logger) error {
 	disp.captures = capturesRepo
 	disp.devices = repo
 	paramsRepo := parameters.NewRepository(db)
+	disp.paramsRepo = paramsRepo
 	subsRepo := subscriptions.NewRepository(db)
 	subsReconciler := newSubscriptionReconciler(subsRepo, cfg.ControllerID, logger)
 	h := &handler{

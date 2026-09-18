@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -178,6 +179,8 @@ func main() {
 	mux.HandleFunc("POST /bss/v1/oauth/token", metrics.InstrumentHTTP("POST /bss/v1/oauth/token", h.issueOAuthToken))
 	mux.HandleFunc("POST /bss/v1/mappings", metrics.InstrumentHTTP("POST /bss/v1/mappings", h.createMapping))
 	mux.HandleFunc("GET /bss/v1/mappings/{account_id}", metrics.InstrumentHTTP("GET /bss/v1/mappings/{account_id}", h.listMappings))
+	mux.HandleFunc("GET /bss/v1/mappings/{account_id}/capabilities", metrics.InstrumentHTTP("GET /bss/v1/mappings/{account_id}/capabilities", h.getMappedDeviceCapabilities))
+	mux.HandleFunc("POST /bss/v1/actions/preflight", metrics.InstrumentHTTP("POST /bss/v1/actions/preflight", h.preflightAction))
 	mux.HandleFunc("POST /bss/v1/orders", metrics.InstrumentHTTP("POST /bss/v1/orders", h.createOrder))
 	mux.HandleFunc("GET /bss/v1/jobs/{command_key}", metrics.InstrumentHTTP("GET /bss/v1/jobs/{command_key}", h.getJob))
 	mux.HandleFunc("POST /bss/v1/webhooks", metrics.InstrumentHTTP("POST /bss/v1/webhooks", h.createWebhookSubscription))
@@ -185,6 +188,12 @@ func main() {
 	mux.HandleFunc("DELETE /bss/v1/webhooks/{id}", metrics.InstrumentHTTP("DELETE /bss/v1/webhooks/{id}", h.deleteWebhookSubscription))
 	mux.HandleFunc("GET /tmf-api/serviceInventoryManagement/v4/service", metrics.InstrumentHTTP("GET /tmf-api/serviceInventoryManagement/v4/service", h.listTMF638Services))
 	mux.HandleFunc("GET /tmf-api/serviceInventoryManagement/v4/service/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceInventoryManagement/v4/service/{id}", h.getTMF638Service))
+	// TMF640 uses the same service projection and order engine as the legacy
+	// BSS routes. Keep these registrations adjacent to TMF638 so the two
+	// northbound service views cannot silently drift into different exposure
+	// states (the handlers are intentionally implemented in tmf640.go).
+	mux.HandleFunc("GET /tmf-api/serviceActivationAndConfiguration/v4/service", metrics.InstrumentHTTP("GET /tmf-api/serviceActivationAndConfiguration/v4/service", h.listServices))
+	mux.HandleFunc("GET /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", h.getService))
 	mux.HandleFunc("POST /tmf-api/serviceProblemManagement/v4/serviceProblem", metrics.InstrumentHTTP("POST /tmf-api/serviceProblemManagement/v4/serviceProblem", h.createTMF656Problem))
 	mux.HandleFunc("GET /tmf-api/serviceProblemManagement/v4/serviceProblem/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceProblemManagement/v4/serviceProblem/{id}", h.getTMF656Problem))
 	mux.HandleFunc("GET /tmf-api/serviceProblemManagement/v4/serviceProblem", metrics.InstrumentHTTP("GET /tmf-api/serviceProblemManagement/v4/serviceProblem", h.listTMF656Problems))
@@ -523,6 +532,9 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "account_id and oui_serial are required")
 		return
 	}
+	if !h.authorizeBSSAccount(w, r, req.AccountID) {
+		return
+	}
 
 	// Resolve and validate device_uuid *before* writing anything. Doing
 	// this after AssignDevice used to commit the row, then reject the
@@ -584,6 +596,9 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) listMappings(w http.ResponseWriter, r *http.Request) {
 	accountID := r.PathValue("account_id")
+	if !h.authorizeBSSAccount(w, r, accountID) {
+		return
+	}
 	list, err := h.mappings.ListByAccount(r.Context(), accountID)
 	if err != nil {
 		h.logger.Error("failed to list mappings", "err", err, "account_id", accountID)
@@ -601,6 +616,63 @@ func (h *handler) listMappings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+// getMappedDeviceCapabilities exposes only the protocol-neutral evidence an
+// account's BSS/OSS integration needs for action planning: the mapped device,
+// its discovered data-model root, and the writable parameter paths reported
+// by CWMP discovery. It does not expose cached values or credentials.
+func (h *handler) getMappedDeviceCapabilities(w http.ResponseWriter, r *http.Request) {
+	accountID := r.PathValue("account_id")
+	if !h.authorizeBSSAccount(w, r, accountID) {
+		return
+	}
+	mapping, err := h.mappings.ActiveDeviceForAccount(r.Context(), accountID, roleOrDefault(r.URL.Query().Get("role")))
+	if errors.Is(err, bss.ErrNoDeviceForRole) {
+		writeError(w, http.StatusNotFound, "ErrDeviceNotMapped", "no active device is assigned to this account in the requested role")
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to resolve device capabilities", "err", err, "account_id", accountID)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+	device, err := h.acs.GetDevice(r.Context(), mapping.DeviceID)
+	if errors.Is(err, bss.ErrACSUnreachable) {
+		writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
+		return
+	}
+	if errors.Is(err, bss.ErrDeviceLookupNotFound) {
+		writeError(w, http.StatusNotFound, "ErrDeviceNotFound", "the mapped device no longer exists")
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to load device capabilities", "err", err, "device_id", mapping.DeviceID)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+	names, err := h.acs.GetParameterNames(r.Context(), mapping.DeviceID)
+	if errors.Is(err, bss.ErrACSUnreachable) {
+		writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to load discovered parameter names", "err", err, "device_id", mapping.DeviceID)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+	writable := make([]string, 0, len(names))
+	for name, canWrite := range names {
+		if canWrite {
+			writable = append(writable, name)
+		}
+	}
+	sort.Strings(writable)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"account_id": accountID, "device_id": mapping.DeviceID, "role": mapping.Role,
+		"data_model_root": device.DataModelRoot, "discovery_complete": names != nil,
+		"writable_parameters": writable,
+	})
+}
+
 // --- Workflow B: orders ----------------------------------------------------
 
 type createOrderRequest struct {
@@ -610,6 +682,23 @@ type createOrderRequest struct {
 	Action          string            `json:"action"`
 	Role            string            `json:"role"` // optional; defaults to gateway
 	Parameters      map[string]string `json:"parameters"`
+}
+
+// actionPreflightRequest intentionally has no external_order_id: this is a
+// validation-only operation and must never reserve idempotency state or queue
+// a device job.
+type actionPreflightRequest struct {
+	AccountID  string            `json:"account_id"`
+	Action     string            `json:"action"`
+	Role       string            `json:"role"`
+	Parameters map[string]string `json:"parameters"`
+}
+
+type actionPreflightResponse struct {
+	AccountID  string               `json:"account_id"`
+	DeviceID   string               `json:"device_id"`
+	Action     string               `json:"action"`
+	Parameters []bss.ParameterWrite `json:"parameters"`
 }
 
 type orderResponse struct {
@@ -655,6 +744,45 @@ func (h *handler) respondWithExistingOrder(w http.ResponseWriter, r *http.Reques
 		Status: status.Status, Timestamp: time.Now().UTC(),
 	})
 	return true
+}
+
+// preflightAction resolves a BSS action against the account's active device
+// without mutating the BSS outbox or CPE. It is the northbound capability
+// check integrations can use to fail fast on an unsupported vendor path rather
+// than discovering that fact after an asynchronous order has been submitted.
+func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
+	var req actionPreflightRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AccountID == "" || req.Action == "" {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "account_id and action are required")
+		return
+	}
+	if !h.authorizeBSSAccount(w, r, req.AccountID) {
+		return
+	}
+	mapping, err := h.mappings.ActiveDeviceForAccount(r.Context(), req.AccountID, roleOrDefault(req.Role))
+	if errors.Is(err, bss.ErrNoDeviceForRole) {
+		writeError(w, http.StatusNotFound, "ErrDeviceNotMapped", "no active device is assigned to this account in the requested role")
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to resolve account device for preflight", "err", err, "account_id", req.AccountID)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+	params, err := h.translateActionForDevice(r.Context(), req.Action, req.Parameters, mapping.DeviceID)
+	if errors.Is(err, bss.ErrACSUnreachable) {
+		writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
+		return
+	}
+	if errors.Is(err, bss.ErrDeviceLookupNotFound) {
+		writeError(w, http.StatusNotFound, "ErrDeviceNotFound", "the mapped device no longer exists")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "ErrUnsupportedAction", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, actionPreflightResponse{AccountID: req.AccountID, DeviceID: mapping.DeviceID, Action: req.Action, Parameters: params})
 }
 
 // dispatchOrder runs the outbox's write-ahead-then-dispatch sequence
@@ -724,6 +852,25 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 	return commandKey, nil
 }
 
+// translateActionForDevice turns a northbound business action into a device
+// write using both the device's discovered data-model root and, when present,
+// its persisted writable-parameter evidence. This keeps all BSS/TMF callers
+// from reintroducing a static vendor path after discovery has told us better.
+func (h *handler) translateActionForDevice(ctx context.Context, action string, input map[string]string, deviceID string) ([]bss.ParameterWrite, error) {
+	if action != "MODIFY_WIFI" {
+		return bss.Translate(action, input, h.walledGarden, "")
+	}
+	dev, err := h.acs.GetDevice(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	discovered, err := h.acs.GetParameterNames(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return bss.TranslateWithCapabilities(action, input, h.walledGarden, dev.DataModelRoot, discovered)
+}
+
 // createOrder implements Workflow B, idempotently: a retried
 // external_order_id is answered from bss_orders (with the order's
 // *current* status, not a stale "QUEUED") instead of dispatching a
@@ -750,6 +897,9 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "external_order_id, account_id, and action are required")
 		return
 	}
+	if !h.authorizeBSSAccount(w, r, req.AccountID) {
+		return
+	}
 
 	if existing, err := h.mappings.FindOrder(r.Context(), req.ExternalOrderID); err != nil {
 		h.logger.Error("failed to check order idempotency", "err", err, "external_order_id", req.ExternalOrderID)
@@ -771,28 +921,16 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only MODIFY_WIFI's canonical WiFi paths depend on the device's data
-	// model root (build plan §10's data_model_root branching gap) —
-	// SUSPEND/ACTIVATE write a deployer-configured walled-garden
-	// parameter directly, so they don't pay for this extra internal-API
-	// round-trip or gain a new failure mode they didn't have before.
-	dataModelRoot := ""
-	if req.Action == "MODIFY_WIFI" {
-		dev, err := h.acs.GetDevice(r.Context(), mapping.DeviceID)
+	params, err := h.translateActionForDevice(r.Context(), req.Action, req.Parameters, mapping.DeviceID)
+	if err != nil {
 		if errors.Is(err, bss.ErrACSUnreachable) {
 			writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
 			return
 		}
-		if err != nil {
-			h.logger.Error("failed to resolve device for order translation", "err", err, "device_id", mapping.DeviceID)
-			writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		if errors.Is(err, bss.ErrDeviceLookupNotFound) {
+			writeError(w, http.StatusNotFound, "ErrDeviceNotFound", "the mapped device no longer exists")
 			return
 		}
-		dataModelRoot = dev.DataModelRoot
-	}
-
-	params, err := bss.Translate(req.Action, req.Parameters, h.walledGarden, dataModelRoot)
-	if err != nil {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", err.Error())
 		return
 	}
@@ -834,6 +972,20 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) getJob(w http.ResponseWriter, r *http.Request) {
 	commandKey := r.PathValue("command_key")
+	order, err := h.mappings.FindOrderByCommandKey(r.Context(), commandKey)
+	if err != nil {
+		h.logger.Error("failed to resolve BSS order for job", "err", err, "command_key", commandKey)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+	if order == nil || !h.authorizeBSSAccount(w, r, order.AccountID) {
+		// Report a job outside the BSS outbox exactly like an unknown job.
+		// This prevents account-scoped OAuth clients from probing ACS job IDs.
+		if order == nil {
+			writeError(w, http.StatusNotFound, "ErrJobNotFound", "no BSS order with that command_key")
+		}
+		return
+	}
 	status, err := h.acs.GetJobStatus(r.Context(), commandKey)
 	if errors.Is(err, bss.ErrJobNotFound) {
 		writeError(w, http.StatusNotFound, "ErrJobNotFound", "no job with that command_key")

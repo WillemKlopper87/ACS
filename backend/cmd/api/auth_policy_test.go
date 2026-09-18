@@ -40,6 +40,7 @@ func TestWithJWTAuth_CredentialPlacement(t *testing.T) {
 		{"service token on allowed route", "PUT", "/api/v1/devices/d1/parameters", svc, "", 200},
 		{"service token on job status", "GET", "/api/v1/jobs/key-1", svc, "", 200},
 		{"service token on device lookup", "GET", "/api/v1/devices/d1", svc, "", 200},
+		{"service token on device capability lookup", "GET", "/api/v1/devices/d1/parameter-names", svc, "", 200},
 		{"service token on operator management is refused", "POST", "/api/v1/auth/operators", svc, "", 403},
 		{"service token on device list is refused", "GET", "/api/v1/devices", svc, "", 403},
 		{"service token in query is refused", "GET", "/api/v1/devices/d1/cli/connect", "", svc, 401},

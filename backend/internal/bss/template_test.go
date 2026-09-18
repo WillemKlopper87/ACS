@@ -69,6 +69,29 @@ func TestTranslateModifyWifiIGD1(t *testing.T) {
 	}
 }
 
+func TestTranslateModifyWifiUsesDiscoveredWritableAlternate(t *testing.T) {
+	const primary = "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase"
+	const alternate = "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase"
+
+	params, err := TranslateWithCapabilities("MODIFY_WIFI", map[string]string{"wifi_password": "OldButGold123"}, WalledGardenConfig{}, devices.DataModelRootIGD1, map[string]bool{
+		primary:   false,
+		alternate: true,
+	})
+	if err != nil {
+		t.Fatalf("TranslateWithCapabilities: %v", err)
+	}
+	if len(params) != 1 || params[0].Name != alternate {
+		t.Fatalf("params = %+v, want writable alternate %q", params, alternate)
+	}
+}
+
+func TestTranslateModifyWifiRejectsKnownUnsupportedPath(t *testing.T) {
+	_, err := TranslateWithCapabilities("MODIFY_WIFI", map[string]string{"wifi_password": "x"}, WalledGardenConfig{}, devices.DataModelRootIGD1, map[string]bool{})
+	if !errors.Is(err, ErrUnsupportedAction) {
+		t.Errorf("err = %v, want ErrUnsupportedAction", err)
+	}
+}
+
 func TestTranslateModifyWifiPartial(t *testing.T) {
 	params, err := Translate("MODIFY_WIFI", map[string]string{"wifi_ssid": "OnlySSID"}, WalledGardenConfig{}, devices.DataModelRootDevice2)
 	if err != nil {

@@ -85,6 +85,46 @@ func (r *WebhookRepository) ListSubscriptions(ctx context.Context) ([]WebhookSub
 	return out, rows.Err()
 }
 
+// ListSubscriptionsForAccount returns only subscriptions owned by one
+// account. Fleet-wide subscriptions are intentionally excluded: an
+// account-scoped BSS OAuth client must never discover another integration's
+// fleet receiver through an account listing.
+func (r *WebhookRepository) ListSubscriptionsForAccount(ctx context.Context, accountID string) ([]WebhookSubscription, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, account_id, target_url, secret, event_types, created_at
+		FROM webhook_subscriptions WHERE account_id = $1 ORDER BY created_at ASC`, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("list account webhook subscriptions: %w", err)
+	}
+	defer rows.Close()
+	var out []WebhookSubscription
+	for rows.Next() {
+		s, err := scanSubscription(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
+// SubscriptionByID returns a subscription for authorization before a
+// destructive action. It deliberately returns ErrSubscriptionNotFound so the
+// caller can make both missing and cross-account rows non-enumerable.
+func (r *WebhookRepository) SubscriptionByID(ctx context.Context, id string) (*WebhookSubscription, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, account_id, target_url, secret, event_types, created_at
+		FROM webhook_subscriptions WHERE id = $1`, id)
+	s, err := scanSubscription(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrSubscriptionNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get webhook subscription: %w", err)
+	}
+	return s, nil
+}
+
 func (r *WebhookRepository) DeleteSubscription(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM webhook_subscriptions WHERE id = $1`, id)
 	if err != nil {

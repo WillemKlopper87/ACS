@@ -1470,6 +1470,32 @@ func TestGetSupportedDMCapturesSummary(t *testing.T) {
 	}
 }
 
+func TestGetSupportedDMCapturesParameterWriteability(t *testing.T) {
+	outcome := classifyGetSupportedDMResp("GET_SUPPORTED_DM_RESP", &uspproto.GetSupportedDMResp{
+		ReqObjResults: []*uspproto.GetSupportedDMResp_RequestedObjectResult{{
+			ReqObjPath: "Device.",
+			SupportedObjs: []*uspproto.GetSupportedDMResp_SupportedObjectResult{{
+				SupportedObjPath: "Device.WiFi.SSID.{i}.",
+				SupportedParams: []*uspproto.GetSupportedDMResp_SupportedParamResult{
+					{ParamName: "Enable", Access: uspproto.GetSupportedDMResp_PARAM_READ_WRITE},
+					{ParamName: "Status", Access: uspproto.GetSupportedDMResp_PARAM_READ_ONLY},
+					{ParamName: "Device.WiFi.SSID.{i}.Alias", Access: uspproto.GetSupportedDMResp_PARAM_WRITE_ONLY},
+				},
+			}},
+		}},
+	})
+
+	if got := outcome.discoveredNames["Device.WiFi.SSID.{i}.Enable"]; !got {
+		t.Errorf("Enable writable = %t, want true", got)
+	}
+	if got := outcome.discoveredNames["Device.WiFi.SSID.{i}.Status"]; got {
+		t.Errorf("Status writable = %t, want false", got)
+	}
+	if got := outcome.discoveredNames["Device.WiFi.SSID.{i}.Alias"]; !got {
+		t.Errorf("qualified Alias writable = %t, want true", got)
+	}
+}
+
 // ---------------------------------------------------------------------
 // Single-flight dispatch tests (final review, Important Finding 2).
 // ---------------------------------------------------------------------

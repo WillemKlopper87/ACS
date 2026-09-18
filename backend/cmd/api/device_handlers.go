@@ -564,7 +564,7 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 				result.Error = "device not found"
 				break
 			}
-			_, paths := h.vendors.MatchCellularDiagnostics(device.Manufacturer)
+			_, paths := h.cellularDiagnosticPaths(r.Context(), device)
 			job, err := h.jobs.Create(r.Context(), deviceID, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, operator)
 			if err != nil {
 				result.Error = err.Error()

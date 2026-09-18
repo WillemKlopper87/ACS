@@ -175,3 +175,39 @@ func TestACSClientGetParametersUnreachable(t *testing.T) {
 		t.Fatalf("GetParameters against an unreachable ACS = %v, want ErrACSUnreachable", err)
 	}
 }
+
+func TestACSClientGetParameterNamesPreservesDiscoveryAbsence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/devices/dev-1/parameter-names" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"names": map[string]bool{}, "discovered_at": nil})
+	}))
+	defer server.Close()
+
+	names, err := NewACSClient(server.URL, time.Second, "").GetParameterNames(t.Context(), "dev-1")
+	if err != nil {
+		t.Fatalf("GetParameterNames: %v", err)
+	}
+	if names != nil {
+		t.Errorf("names = %v, want nil for an undiscovered device", names)
+	}
+}
+
+func TestACSClientGetParameterNames(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"names":         map[string]bool{"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase": true},
+			"discovered_at": "2026-09-16T10:00:00Z",
+		})
+	}))
+	defer server.Close()
+
+	names, err := NewACSClient(server.URL, time.Second, "").GetParameterNames(t.Context(), "dev-1")
+	if err != nil {
+		t.Fatalf("GetParameterNames: %v", err)
+	}
+	if !names["InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase"] {
+		t.Errorf("names = %v, want discovered writable path", names)
+	}
+}

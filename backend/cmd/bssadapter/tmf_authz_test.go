@@ -84,3 +84,47 @@ func TestTMFLegacyTokenRetainsExplicitCompatibilityAccess(t *testing.T) {
 		t.Fatalf("legacy compatibility principal = %+v, ok=%v", claims, ok)
 	}
 }
+
+func TestAuthorizeBSSAccountEnforcesOAuthAccountPolicy(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	h := &handler{oauthSigningSecret: secret}
+	r := httptest.NewRequest(http.MethodPost, "/bss/v1/orders", nil)
+	r.Header.Set("Authorization", "Bearer "+tmfTestToken(t, secret, []string{bss.ScopeTMFExecute}, []string{"acct-a"}, false))
+
+	rr := httptest.NewRecorder()
+	if !h.authorizeBSSAccount(rr, r, "acct-a") {
+		t.Fatalf("allowed account rejected: %d %s", rr.Code, rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	if h.authorizeBSSAccount(rr, r, "acct-b") {
+		t.Fatal("cross-account legacy BSS request was accepted")
+	}
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("cross-account status = %d, want 404", rr.Code)
+	}
+}
+
+func TestAuthorizeBSSAccountRetainsLegacyCompatibility(t *testing.T) {
+	h := &handler{token: "legacy-shared-token"}
+	r := httptest.NewRequest(http.MethodPost, "/bss/v1/orders", nil)
+	r.Header.Set("Authorization", "Bearer legacy-shared-token")
+	rr := httptest.NewRecorder()
+	if !h.authorizeBSSAccount(rr, r, "any-account") {
+		t.Fatalf("legacy token rejected: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestAuthorizeBSSFleetRejectsAccountScopedOAuthClient(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	h := &handler{oauthSigningSecret: secret}
+	r := httptest.NewRequest(http.MethodPost, "/bss/v1/webhooks", nil)
+	r.Header.Set("Authorization", "Bearer "+tmfTestToken(t, secret, []string{bss.ScopeTMFRead}, []string{"acct-a"}, false))
+	rr := httptest.NewRecorder()
+	if h.authorizeBSSFleet(rr, r) {
+		t.Fatal("account-scoped OAuth client was allowed to create a fleet-wide subscription")
+	}
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rr.Code)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"acs/internal/devices"
 	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
+	"context"
 	"encoding/json"
 	"net/http"
 )
@@ -105,7 +106,7 @@ func (h *handler) refreshCellularDiagnostics(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	vendor, paths := h.vendors.MatchCellularDiagnostics(device.Manufacturer)
+	vendor, paths := h.cellularDiagnosticPaths(r.Context(), device)
 
 	job, err := h.jobs.Create(r.Context(), id, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, operatorFromRequest(r))
 	if err != nil {
@@ -120,6 +121,26 @@ func (h *handler) refreshCellularDiagnostics(w http.ResponseWriter, r *http.Requ
 		"matched_vendor": vendor,
 		"parameters":     paths,
 	})
+}
+
+// cellularDiagnosticPaths prefers the device's discovered model over a
+// vendor baseline. This lets every Zyxel 5G firmware expose its own
+// X_ZYXEL_* radio metrics without the ACS having to guess or ship one XML
+// profile per firmware image. Static profiles remain the safe pre-discovery
+// fallback.
+func (h *handler) cellularDiagnosticPaths(ctx context.Context, device *devices.Device) (string, []string) {
+	vendor, fallback := h.vendors.MatchCellularDiagnostics(device.Manufacturer)
+	if h.params == nil {
+		return vendor, fallback
+	}
+	discovered, err := h.params.GetNames(ctx, device.ID)
+	if err != nil || discovered == nil {
+		return vendor, fallback
+	}
+	if paths := adapters.CellularDiagnosticParamsFromNames(discovered.Names); len(paths) > 0 {
+		return vendor, paths
+	}
+	return vendor, fallback
 }
 
 // refreshWifiClients queues a GET_PARAMETER job over the whole WiFi

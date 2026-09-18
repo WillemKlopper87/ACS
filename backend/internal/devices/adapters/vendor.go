@@ -1,6 +1,9 @@
 package adapters
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // cellularDiagnosticKeywords identify RF/signal-quality telemetry
 // parameters within a vendor's catalog — the same parameters a GenieACS
@@ -33,6 +36,30 @@ func (c Catalog) CellularDiagnosticParams() []string {
 			}
 		}
 	}
+	return out
+}
+
+// CellularDiagnosticParamsFromNames selects RF diagnostics from a device's
+// discovered TR-181 or vendor-extension tree. Unlike a static catalog, this
+// works for every firmware variant of a vendor family (and for unknown
+// vendors) after discovery. The bool values describe writability, which is
+// irrelevant to a read operation; their presence is the capability evidence.
+func CellularDiagnosticParamsFromNames(names map[string]bool) []string {
+	seen := make(map[string]struct{})
+	for path := range names {
+		leaf := strings.ToUpper(lastPathSegment(path))
+		for _, keyword := range cellularDiagnosticKeywords {
+			if strings.Contains(leaf, keyword) {
+				seen[path] = struct{}{}
+				break
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for path := range seen {
+		out = append(out, path)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -76,7 +103,7 @@ func NewRegistry() *Registry {
 // mfr.includes(...) matching a GenieACS provision script uses). Falls
 // back to the generic TR-181 Cellular path set if nothing matches.
 func (r *Registry) MatchCellularDiagnostics(manufacturer string) (vendor string, paths []string) {
-	mfr := strings.ToLower(manufacturer)
+	mfr := vendorKey(manufacturer)
 	for key, cat := range r.catalogs {
 		if key != "" && strings.Contains(mfr, key) {
 			return cat.Vendor, cat.CellularDiagnosticParams()

@@ -80,3 +80,65 @@ func (h *handler) authorizeTMF(w http.ResponseWriter, r *http.Request, requiredS
 	}
 	return tmfAccountAllowed(w, claims, accountID)
 }
+
+// authorizeBSSAccount applies an OAuth client's account policy to legacy
+// /bss/v1 routes. Those endpoints predate per-integration OAuth scopes, so
+// their compatibility contract intentionally keeps the shared token and the
+// no-credential lab profile globally privileged. OAuth clients, however,
+// must not gain cross-account access merely by using an older endpoint.
+func (h *handler) authorizeBSSAccount(w http.ResponseWriter, r *http.Request, accountID string) bool {
+	if h.token == "" && len(h.oauthSigningSecret) == 0 {
+		return true
+	}
+
+	got := r.Header.Get("Authorization")
+	if h.token != "" {
+		want := "Bearer " + h.token
+		if len(got) == len(want) && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1 {
+			return true
+		}
+	}
+	bearer, ok := strings.CutPrefix(got, "Bearer ")
+	if !ok || len(h.oauthSigningSecret) == 0 {
+		writeError(w, http.StatusUnauthorized, "invalid_token", "authentication required")
+		return false
+	}
+	claims, err := auth.VerifyJWT(h.oauthSigningSecret, bearer)
+	if err != nil || claims.Role != bssClientRole {
+		writeError(w, http.StatusUnauthorized, "invalid_token", "authentication required")
+		return false
+	}
+	return tmfAccountAllowed(w, claims, accountID)
+}
+
+// authorizeBSSFleet is the explicit escalation required for a fleet-wide
+// legacy BSS operation, such as a webhook with no account_id. Scoped OAuth
+// clients must name an allowed account instead; accepting a null account here
+// would turn an account-scoped integration into a fleet event subscriber.
+func (h *handler) authorizeBSSFleet(w http.ResponseWriter, r *http.Request) bool {
+	if h.token == "" && len(h.oauthSigningSecret) == 0 {
+		return true
+	}
+	got := r.Header.Get("Authorization")
+	if h.token != "" {
+		want := "Bearer " + h.token
+		if len(got) == len(want) && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1 {
+			return true
+		}
+	}
+	bearer, ok := strings.CutPrefix(got, "Bearer ")
+	if !ok || len(h.oauthSigningSecret) == 0 {
+		writeError(w, http.StatusUnauthorized, "invalid_token", "authentication required")
+		return false
+	}
+	claims, err := auth.VerifyJWT(h.oauthSigningSecret, bearer)
+	if err != nil || claims.Role != bssClientRole {
+		writeError(w, http.StatusUnauthorized, "invalid_token", "authentication required")
+		return false
+	}
+	if !claims.GlobalAccess {
+		writeError(w, http.StatusNotFound, "ErrNotFound", "resource not found")
+		return false
+	}
+	return true
+}

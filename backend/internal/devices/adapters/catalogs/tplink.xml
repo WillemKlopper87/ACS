@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Conservative, discovery-first baseline for TP-Link 5G CPE families. -->
+<cwmp:cwmpDataModel vendor="TP-Link" model="5G CPE family" specVersion="TR-181 Issue 2">
+  <object name="Device." access="readOnly">
+    <object name="Cellular.Interface.1." access="readOnly">
+      <parameter name="RSRP" type="int" access="readOnly"/>
+      <parameter name="RSRQ" type="int" access="readOnly"/>
+      <parameter name="RSSI" type="int" access="readOnly"/>
+    </object>
+  </object>
+</cwmp:cwmpDataModel>

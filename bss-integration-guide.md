@@ -108,6 +108,20 @@ Content-Type: application/json
 
 `action` must currently be `MODIFY_WIFI`. `parameters` needs at least one of `wifi_ssid` / `wifi_password` — either alone is fine (only the fields you send get written).
 
+Before dispatching this action, the adapter uses the device's latest
+parameter-discovery result to select a known writable vendor path. If a
+device has completed discovery but exposes no writable path for the requested
+setting, the request fails with `400 ErrInvalidRequest` instead of queuing a
+job that the CPE will reject. Devices that have not yet completed discovery
+retain the documented compatibility fallback; integrations should trigger and
+wait for discovery during onboarding to receive the stronger preflight.
+
+To validate an action without reserving an order ID or queueing a CPE job,
+call `POST /bss/v1/actions/preflight` with `account_id`, `action`, optional
+`role`, and the same `parameters` object. A successful response identifies
+the mapped device and the exact resolved parameter writes. This is the
+recommended integration gate before submitting a bulk campaign.
+
 An order also accepts an optional `role`, resolved the same way a mapping's role is: an order that names no role targets the account's `gateway`. The order dispatches against whichever device is currently the *active* assignment for that role on the account — not whichever device was most recently touched — so if an account has more than one device (a gateway and an extender, say), naming the role is how you address the right one.
 
 #### 2. ACS Immediate Response — captured, `202 Accepted`

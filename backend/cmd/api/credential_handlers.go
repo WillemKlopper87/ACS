@@ -77,19 +77,40 @@ func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	userParam, passParam := adapters.ManagementServerConnectionRequestUser, adapters.ManagementServerConnectionRequestPass
+	if credType == credentials.TypeCWMPDigest {
+		userParam, passParam = adapters.ManagementServerUsername, adapters.ManagementServerPassword
+	}
+	// A completed discovery result is authoritative for canonical writes. It
+	// prevents rotating a credential through a known-missing/read-only path on
+	// a vendor-specific tree; absent discovery preserves the legacy fallback.
+	discovered, err := h.params.GetNames(r.Context(), id)
+	if err != nil {
+		h.logger.Error("failed to read discovered parameters for credential rotation", "err", err, "device_id", id)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	var names map[string]bool
+	if discovered != nil {
+		names = discovered.Names
+	}
+	usernamePath, err := adapters.ResolveWritablePath(device.DataModelRoot, userParam, names)
+	if err != nil {
+		http.Error(w, "device does not expose a writable credential username parameter: "+err.Error(), http.StatusConflict)
+		return
+	}
+	passwordPath, err := adapters.ResolveWritablePath(device.DataModelRoot, passParam, names)
+	if err != nil {
+		http.Error(w, "device does not expose a writable credential password parameter: "+err.Error(), http.StatusConflict)
+		return
+	}
+
 	username, password, err := credentials.GenerateUsernamePassword()
 	if err != nil {
 		h.logger.Error("failed to generate credential", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-
-	userParam, passParam := adapters.ManagementServerConnectionRequestUser, adapters.ManagementServerConnectionRequestPass
-	if credType == credentials.TypeCWMPDigest {
-		userParam, passParam = adapters.ManagementServerUsername, adapters.ManagementServerPassword
-	}
-	usernamePath, _ := adapters.ResolvePath(device.DataModelRoot, userParam)
-	passwordPath, _ := adapters.ResolvePath(device.DataModelRoot, passParam)
 
 	job, err := h.jobs.Create(r.Context(), id, jobs.TypeSetParameter, jobs.SetParameterPayload{
 		Parameters: []jobs.ParameterWrite{

@@ -117,3 +117,26 @@ func TestIGD1PassphrasePrefersPreSharedKey(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveWritablePathUsesDiscoveryEvidence(t *testing.T) {
+	const primary = "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase"
+	const alternate = "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase"
+
+	got, err := ResolveWritablePath(devices.DataModelRootIGD1, WiFiKeyPassphrase, map[string]bool{
+		primary:   false,
+		alternate: true,
+	})
+	if err != nil {
+		t.Fatalf("ResolveWritablePath: %v", err)
+	}
+	if got != alternate {
+		t.Errorf("path = %q, want writable alternate %q", got, alternate)
+	}
+}
+
+func TestResolveWritablePathRejectsUnsupportedDiscoveredTree(t *testing.T) {
+	_, err := ResolveWritablePath(devices.DataModelRootIGD1, WiFiKeyPassphrase, map[string]bool{})
+	if err == nil {
+		t.Fatal("ResolveWritablePath succeeded with no discovered candidate")
+	}
+}
