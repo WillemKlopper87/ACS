@@ -78,7 +78,8 @@ func PublishRecovery(ctx context.Context, sink Sink, accountID, deviceID, protoc
 // CellularStateChange is one field's observed transition, used only for the
 // event payload — the alarm/fault lifecycle is untouched by cellular state.
 type CellularStateChange struct {
-	Old, New string
+	Old string `json:"old"`
+	New string `json:"new"`
 }
 
 // PublishCellularStateChanged records a normalized cellular state transition

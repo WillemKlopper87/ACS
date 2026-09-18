@@ -101,6 +101,21 @@ func TestPublishCellularStateChangedEmitsEvent(t *testing.T) {
 	}
 }
 
+// TestCellularStateChangeJSONShapeIsLowerCamel locks in the wire shape
+// documented in bss-integration-guide.md §4.3: a webhook subscriber decodes
+// this payload with an ordinary JSON library, so "Old"/"New" (Go's default
+// field-name marshaling, no tags) would silently break every consumer that
+// followed the docs.
+func TestCellularStateChangeJSONShapeIsLowerCamel(t *testing.T) {
+	body, err := json.Marshal(CellularStateChange{Old: "LTE", New: "NR"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(body), `{"old":"LTE","new":"NR"}`; got != want {
+		t.Fatalf("json = %s, want %s", got, want)
+	}
+}
+
 func TestPublishFaultDeduplicationKeyIsStableAcrossRetries(t *testing.T) {
 	a := SourceKey("USP", "dev", "job|7|bad")
 	b := SourceKey("USP", "dev", "job|7|bad")

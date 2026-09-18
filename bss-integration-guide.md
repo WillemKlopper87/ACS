@@ -297,7 +297,7 @@ isn't needed for standard internet-facing B2B integrations.
 
 ## 4. Webhook Notifications
 
-Push-based job completion callbacks, as an alternative to polling Workflow C. Two independent background loops in `cmd/bssadapter` drive this: a notify loop (every 10s) checks each order's job status the same way Workflow C does and enqueues a delivery per matching subscription once the job goes terminal; a delivery loop (every 10s) drains due deliveries with exponential backoff.
+Push-based callbacks, as an alternative to polling Workflow C or the device cellular-capabilities endpoint. Three independent background loops in `cmd/bssadapter` drive this against the same `webhook_subscriptions` table: a `JOB_COMPLETED` notify loop (every 10s) checks each order's job status the same way Workflow C does; a TMF event-fanout loop (every 10s) matches newly recorded `DeviceFault`/`DeviceRecovered`/`CellularStateChanged` events against subscriptions by `event_types`; a delivery loop (every 10s) drains due deliveries from either source with exponential backoff.
 
 ### 4.1 Subscribe
 
@@ -310,11 +310,18 @@ Content-Type: application/json
   "account_id": "ACC-88203",
   "target_url": "https://your-bss.example.com/webhooks/acs",
   "secret": "a-shared-secret-you-choose",
-  "event_types": ["JOB_COMPLETED"]
+  "event_types": ["JOB_COMPLETED", "DeviceFault", "DeviceRecovered", "CellularStateChanged"]
 }
 ```
 
-`account_id` is optional — omit it for a fleet-wide subscription (every account's completed orders). `secret` is yours to generate and store; it's never returned by any endpoint after creation and is used to sign every delivery (§4.3). `event_types` currently supports only `JOB_COMPLETED`.
+`account_id` is optional — omit it for a fleet-wide subscription. `secret` is yours to generate and store; it's never returned by any endpoint after creation and is used to sign every delivery (§4.3). `event_types` is any subset of:
+
+| Event type | Fires when | §4.3 shape |
+|---|---|---|
+| `JOB_COMPLETED` | A `/bss/v1/orders` or TMF641 job reaches a terminal status | "Order jobs" |
+| `DeviceFault` | A CWMP/USP session reports a fault, or a job fails | "TMF events" |
+| `DeviceRecovered` | A previously faulted device reports a qualifying recovery signal | "TMF events" |
+| `CellularStateChanged` | A device's registration status, SIM status, operator, cell, RAT, or APN changes | "TMF events" |
 
 Response (`201 Created`):
 
@@ -323,7 +330,7 @@ Response (`201 Created`):
   "id": "3fa2e6c1-...",
   "account_id": "ACC-88203",
   "target_url": "https://your-bss.example.com/webhooks/acs",
-  "event_types": ["JOB_COMPLETED"],
+  "event_types": ["JOB_COMPLETED", "DeviceFault", "DeviceRecovered", "CellularStateChanged"],
   "created_at": "2026-08-06T10:12:00Z"
 }
 ```
@@ -344,7 +351,7 @@ Authorization: Bearer <token>
 
 ### 4.3 Delivery
 
-Once an order's underlying job reaches a terminal status (`SUCCESS`, `FAILED`, or `TIMEOUT`), every matching subscription (fleet-wide, or scoped to that order's `account_id`) receives one `POST` to its `target_url`:
+**Order jobs.** Once an order's underlying job reaches a terminal status (`SUCCESS`, `FAILED`, or `TIMEOUT`), every matching subscription (fleet-wide, or scoped to that order's `account_id`) receives one `POST` to its `target_url`:
 
 ```json
 {
@@ -359,6 +366,28 @@ Once an order's underlying job reaches a terminal status (`SUCCESS`, `FAILED`, o
 ```
 
 (`fault_code`/`fault_string` are also present, `null` unless `status` is `FAILED`.)
+
+**TMF events.** `DeviceFault`, `DeviceRecovered`, and `CellularStateChanged` share one envelope — `event` is the type-specific payload:
+
+```json
+{
+  "eventId": "b8023d31-...",
+  "eventType": "CellularStateChanged",
+  "eventTime": "2026-09-18T10:41:02Z",
+  "sourceKey": "acs-fault-...",
+  "accountId": "ACC-88203",
+  "deviceId": "5f65a4ef-...",
+  "serviceId": null,
+  "event": {
+    "protocol": "CWMP",
+    "changes": {
+      "Device.Cellular.Interface.1.CurrentAccessTechnology": {"old": "LTE", "new": "NR"}
+    }
+  }
+}
+```
+
+`event` for `DeviceFault` is `{"protocol", "jobId", "faultCode", "message"}`; for `DeviceRecovered` it's `{"protocol", "faultCode", "conditionKey", "recoveredAt"}`. `changes` keys are the raw parameter path the device reported (not a fixed vocabulary — CWMP paths and USP paths differ per device); each value is the field's old/new string. `CellularStateChanged` intentionally excludes continuous telemetry (RSSI/RSRP/byte counters) — poll `GET /api/v1/devices/{id}/cellular-capabilities` for those.
 
 Each delivery carries `Content-Type: application/json` plus:
 
