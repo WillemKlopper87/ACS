@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 
 	"acs/internal/captures"
 	"acs/internal/devices"
+	"acs/internal/devices/adapters"
 	"acs/internal/parameters"
 	"acs/internal/tmf/telemetry"
 	"acs/internal/usp"
@@ -63,6 +65,7 @@ type handler struct {
 	subscriptions *subscriptionReconciler
 	paramsRepo    *parameters.Repository
 	devicesRepo   *devices.Repository
+	profiles      *adapters.Registry
 	captures      *captures.Repository
 	tmfEvents     telemetry.Sink
 
@@ -698,6 +701,7 @@ func (h *handler) resolveAndMarkReconciled(c mtp.Conn) {
 			h.log.Warn("uspc: reconciled connection but failed to resolve its natural key for capture matching", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", agentRow.DeviceID, "error", err)
 		} else {
 			h.setNaturalKey(c, dev.OUISerial)
+			h.assignDeviceProfile(ctx, dev)
 		}
 	}
 
@@ -719,6 +723,28 @@ func (h *handler) resolveAndMarkReconciled(c mtp.Conn) {
 		if err := h.subscriptions.reconcile(subsCtx, agentRow.DeviceID, c); err != nil {
 			h.log.Warn("uspc: reconciled connection but failed to trigger subscription reconciliation for its device", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", agentRow.DeviceID, "error", err)
 		}
+	}
+}
+
+func (h *handler) assignDeviceProfile(ctx context.Context, device *devices.Device) {
+	if h.profiles == nil || device == nil || h.devicesRepo == nil {
+		return
+	}
+	match := h.profiles.MatchProfile(device.Manufacturer, device.ProductClass)
+	if match.MatchedBy == "" {
+		_ = h.devicesRepo.ClearProfileAssignment(ctx, device.ID)
+		return
+	}
+	evidence, err := json.Marshal(map[string]string{
+		"manufacturer": device.Manufacturer, "product_class": device.ProductClass,
+		"catalog_vendor": match.Catalog.Vendor, "catalog_model": match.Catalog.Model,
+		"spec_version": match.Catalog.SpecVersion, "source": "usp_identity",
+	})
+	if err != nil {
+		return
+	}
+	if err := h.devicesRepo.AssignProfile(ctx, device.ID, adapters.ProfileID(match.Catalog), match.MatchedBy, match.Qualified, evidence); err != nil {
+		h.log.Warn("uspc: failed to assign device profile", "device_id", device.ID, "error", err)
 	}
 }
 

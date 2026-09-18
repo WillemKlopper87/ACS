@@ -37,6 +37,7 @@ import (
 	"acs/internal/bss"
 	"acs/internal/captures"
 	"acs/internal/devices"
+	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
 	"acs/internal/observability"
 	"acs/internal/parameters"
@@ -137,6 +138,7 @@ func run(logger *slog.Logger) error {
 		subscriptions: subsReconciler,
 		paramsRepo:    paramsRepo,
 		devicesRepo:   repo,
+		profiles:      adapters.NewRegistry(),
 		captures:      capturesRepo,
 		tmfEvents:     bss.NewRepository(db),
 	}
