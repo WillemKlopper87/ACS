@@ -89,11 +89,43 @@ var genericCellularFallback = []string{
 // Registry holds every vendor's parsed catalog, loaded once at startup.
 // Read-only after construction, safe for concurrent use.
 type Registry struct {
-	catalogs map[string]Catalog // keyed by lowercased vendor name
+	catalogs []Catalog
 }
 
 func NewRegistry() *Registry {
-	return &Registry{catalogs: LoadCatalogs()}
+	return &Registry{catalogs: LoadCatalogList()}
+}
+
+// ProfileMatch describes how a catalog was selected. Exact model matches are
+// qualification evidence; vendor matches are deliberately labelled fallback
+// so callers do not mistake a family baseline for a tested device pack.
+type ProfileMatch struct {
+	Catalog   Catalog
+	MatchedBy string // "model", "vendor", or ""
+	Qualified bool
+}
+
+// MatchProfile selects a profile for a reported manufacturer and ProductClass.
+// Model matching is normalized exact matching rather than fuzzy substring
+// matching: accepting a near-looking ProductClass could apply unsafe vendor
+// extension paths to a different CPE. Manufacturer-only selection remains a
+// conservative read-only fallback for pre-discovery diagnostics.
+func (r *Registry) MatchProfile(manufacturer, productClass string) ProfileMatch {
+	mfr, model := vendorKey(manufacturer), vendorKey(productClass)
+	for _, cat := range r.catalogs {
+		if vendorKey(cat.Vendor) == "" || !strings.Contains(mfr, vendorKey(cat.Vendor)) {
+			continue
+		}
+		if model != "" && model == vendorKey(cat.Model) {
+			return ProfileMatch{Catalog: cat, MatchedBy: "model", Qualified: true}
+		}
+	}
+	for _, cat := range r.catalogs {
+		if key := vendorKey(cat.Vendor); key != "" && strings.Contains(mfr, key) {
+			return ProfileMatch{Catalog: cat, MatchedBy: "vendor"}
+		}
+	}
+	return ProfileMatch{}
 }
 
 // MatchCellularDiagnostics returns the cellular/RF diagnostic parameter
@@ -103,11 +135,20 @@ func NewRegistry() *Registry {
 // mfr.includes(...) matching a GenieACS provision script uses). Falls
 // back to the generic TR-181 Cellular path set if nothing matches.
 func (r *Registry) MatchCellularDiagnostics(manufacturer string) (vendor string, paths []string) {
-	mfr := vendorKey(manufacturer)
-	for key, cat := range r.catalogs {
-		if key != "" && strings.Contains(mfr, key) {
-			return cat.Vendor, cat.CellularDiagnosticParams()
-		}
+	match := r.MatchProfile(manufacturer, "")
+	if match.MatchedBy != "" {
+		return match.Catalog.Vendor, match.Catalog.CellularDiagnosticParams()
 	}
 	return "", append([]string(nil), genericCellularFallback...)
+}
+
+// MatchCellularDiagnosticsForDevice is the model-aware counterpart to the
+// compatibility method above. It returns whether the paths came from a
+// qualified exact profile so APIs can surface that provenance to operators.
+func (r *Registry) MatchCellularDiagnosticsForDevice(manufacturer, productClass string) (vendor string, paths []string, qualified bool) {
+	match := r.MatchProfile(manufacturer, productClass)
+	if match.MatchedBy != "" {
+		return match.Catalog.Vendor, match.Catalog.CellularDiagnosticParams(), match.Qualified
+	}
+	return "", append([]string(nil), genericCellularFallback...), false
 }

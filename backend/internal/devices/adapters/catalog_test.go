@@ -133,3 +133,25 @@ func TestRegistryMatchCellularDiagnosticsFallback(t *testing.T) {
 		t.Errorf("expected generic fallback paths, got %v", paths)
 	}
 }
+
+func TestRegistryMatchesQualifiedModelBeforeVendorFallback(t *testing.T) {
+	r := NewRegistry()
+
+	vendor, paths, qualified := r.MatchCellularDiagnosticsForDevice(
+		"Zyxel Communications Corp.", "NR7303-EU01V1F")
+	if vendor != "Zyxel" || !qualified {
+		t.Fatalf("qualified match = vendor %q qualified %v, want Zyxel/true", vendor, qualified)
+	}
+	if len(paths) == 0 {
+		t.Fatal("qualified profile returned no diagnostic paths")
+	}
+
+	// A different Zyxel ProductClass must not be silently treated as the
+	// NR7303 pack. It remains eligible only for the conservative vendor
+	// baseline until discovery or a dedicated profile qualifies it.
+	vendor, _, qualified = r.MatchCellularDiagnosticsForDevice(
+		"Zyxel Communications Corp.", "NR5103")
+	if vendor != "Zyxel" || qualified {
+		t.Fatalf("vendor fallback = vendor %q qualified %v, want Zyxel/false", vendor, qualified)
+	}
+}

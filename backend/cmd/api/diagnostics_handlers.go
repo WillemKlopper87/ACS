@@ -106,7 +106,7 @@ func (h *handler) refreshCellularDiagnostics(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	vendor, paths := h.cellularDiagnosticPaths(r.Context(), device)
+	vendor, paths, qualified := h.cellularDiagnosticPaths(r.Context(), device)
 
 	job, err := h.jobs.Create(r.Context(), id, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, operatorFromRequest(r))
 	if err != nil {
@@ -116,10 +116,11 @@ func (h *handler) refreshCellularDiagnostics(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"command_key":    job.CommandKey,
-		"status":         job.Status,
-		"matched_vendor": vendor,
-		"parameters":     paths,
+		"command_key":       job.CommandKey,
+		"status":            job.Status,
+		"matched_vendor":    vendor,
+		"profile_qualified": qualified,
+		"parameters":        paths,
 	})
 }
 
@@ -128,19 +129,19 @@ func (h *handler) refreshCellularDiagnostics(w http.ResponseWriter, r *http.Requ
 // X_ZYXEL_* radio metrics without the ACS having to guess or ship one XML
 // profile per firmware image. Static profiles remain the safe pre-discovery
 // fallback.
-func (h *handler) cellularDiagnosticPaths(ctx context.Context, device *devices.Device) (string, []string) {
-	vendor, fallback := h.vendors.MatchCellularDiagnostics(device.Manufacturer)
+func (h *handler) cellularDiagnosticPaths(ctx context.Context, device *devices.Device) (string, []string, bool) {
+	vendor, fallback, qualified := h.vendors.MatchCellularDiagnosticsForDevice(device.Manufacturer, device.ProductClass)
 	if h.params == nil {
-		return vendor, fallback
+		return vendor, fallback, qualified
 	}
 	discovered, err := h.params.GetNames(ctx, device.ID)
 	if err != nil || discovered == nil {
-		return vendor, fallback
+		return vendor, fallback, qualified
 	}
 	if paths := adapters.CellularDiagnosticParamsFromNames(discovered.Names); len(paths) > 0 {
-		return vendor, paths
+		return vendor, paths, qualified
 	}
-	return vendor, fallback
+	return vendor, fallback, qualified
 }
 
 // refreshWifiClients queues a GET_PARAMETER job over the whole WiFi

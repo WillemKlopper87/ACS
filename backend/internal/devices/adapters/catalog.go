@@ -92,12 +92,26 @@ func flattenObject(obj xmlObject, prefix string, out *[]CatalogParameter) {
 // binary, not user input, so a malformed one is a build error, not a
 // runtime condition callers should have to handle.
 func LoadCatalogs() map[string]Catalog {
+	catalogs := make(map[string]Catalog)
+	for _, cat := range LoadCatalogList() {
+		// Preserve the historical vendor-keyed view for callers that need a
+		// conservative vendor baseline. Model-aware callers must use Registry.
+		catalogs[vendorKey(cat.Vendor)] = cat
+	}
+	return catalogs
+}
+
+// LoadCatalogList parses every embedded profile without discarding profiles
+// that share a manufacturer. A vendor can legitimately have several CPE
+// models (and, later, firmware-qualified variants); a map keyed only by vendor
+// silently selected whichever embedded file happened to be read last.
+func LoadCatalogList() []Catalog {
 	entries, err := catalogsFS.ReadDir("catalogs")
 	if err != nil {
 		panic(fmt.Sprintf("adapters: read embedded catalogs: %v", err))
 	}
 
-	catalogs := make(map[string]Catalog, len(entries))
+	catalogs := make([]Catalog, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".xml") {
 			continue
@@ -110,7 +124,7 @@ func LoadCatalogs() map[string]Catalog {
 		if err != nil {
 			panic(fmt.Sprintf("adapters: %s: %v", e.Name(), err))
 		}
-		catalogs[vendorKey(cat.Vendor)] = cat
+		catalogs = append(catalogs, cat)
 	}
 	return catalogs
 }
