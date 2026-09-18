@@ -12,7 +12,6 @@
 package main
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -165,10 +164,6 @@ func (h *handler) proxyWebGUI(w http.ResponseWriter, r *http.Request) {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 30 * time.Second,
 		IdleConnTimeout:       60 * time.Second,
-		// Embedded device admin UIs live on self-signed certs; the
-		// device-network policy, not the certificate, is the trust
-		// boundary here — same reasoning as the CWMP channel itself.
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
