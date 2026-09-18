@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"acs/internal/devices"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -107,6 +108,50 @@ func ResolveCellularReadPath(root string, field CellularField, instance string, 
 		}
 	}
 	return CellularReadResolution{}, false
+}
+
+// CellularStateFields is the subset of cellular fields that represent a
+// discrete operational state rather than continuous telemetry. Signal levels
+// and byte counters change on almost every poll and are deliberately
+// excluded so a BSS/OSS event export stays a meaningful state-change stream
+// instead of a copy of every poll interval.
+var CellularStateFields = []CellularField{
+	CellularStatus, CellularAccessPoint, CellularSIMStatus,
+	CellularOperator, CellularCellID, CellularRAT,
+}
+
+// cellularInstancePattern extracts the interface/access-point instance
+// number from a reported path so a standard candidate can be reconstructed
+// for exact comparison; it defaults to instance "1" when absent.
+var cellularInstancePattern = regexp.MustCompile(`\.(?:Interface|AccessPoint)\.(\d+)\.`)
+
+// MatchCellularStatePath identifies whether a reported parameter path
+// corresponds to one of CellularStateFields. It first checks the path
+// against the exact standard Device:2 candidate for each field — this
+// matters because two standard leaves share the same last segment (the
+// top-level interface Status and the nested USIM Status), and a bare
+// leaf-alias comparison alone would conflate them. Only when no standard
+// candidate matches does it fall back to the conservative leaf-alias
+// vocabulary used for vendor/discovered paths.
+func MatchCellularStatePath(path string) (CellularField, bool) {
+	instance := "1"
+	if m := cellularInstancePattern.FindStringSubmatch(path); m != nil {
+		instance = m[1]
+	}
+	for _, field := range CellularStateFields {
+		for _, candidate := range CellularPathCandidates(devices.DataModelRootDevice2, field, instance) {
+			if candidate == path {
+				return field, true
+			}
+		}
+	}
+	leaf := lastPathSegment(path)
+	for _, field := range CellularStateFields {
+		if cellularLeafMatches(field, leaf) {
+			return field, true
+		}
+	}
+	return "", false
 }
 
 func cellularLeafMatches(field CellularField, leaf string) bool {

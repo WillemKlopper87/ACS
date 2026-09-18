@@ -77,6 +77,30 @@ func TestQualifyingRecoveryEventRequiresPositiveSignal(t *testing.T) {
 	}
 }
 
+func TestPublishCellularStateChangedRequiresChanges(t *testing.T) {
+	f := &fakeSink{}
+	err := PublishCellularStateChanged(context.Background(), f, "acct-1", "dev-1", "CWMP", nil, time.Unix(1, 0))
+	if err == nil {
+		t.Fatal("expected error for empty change set")
+	}
+	if f.events != 0 {
+		t.Fatalf("no event should be published for an empty change set, got %d", f.events)
+	}
+}
+
+func TestPublishCellularStateChangedEmitsEvent(t *testing.T) {
+	f := &fakeSink{}
+	changes := map[string]CellularStateChange{
+		"Device.Cellular.Interface.1.CurrentAccessTechnology": {Old: "LTE", New: "NR"},
+	}
+	if err := PublishCellularStateChanged(context.Background(), f, "acct-1", "dev-1", "CWMP", changes, time.Unix(5, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if f.events != 1 || f.alarms != 0 {
+		t.Fatalf("expected exactly one event and no alarm, got %#v", f)
+	}
+}
+
 func TestPublishFaultDeduplicationKeyIsStableAcrossRetries(t *testing.T) {
 	a := SourceKey("USP", "dev", "job|7|bad")
 	b := SourceKey("USP", "dev", "job|7|bad")

@@ -75,6 +75,30 @@ func PublishRecovery(ctx context.Context, sink Sink, accountID, deviceID, protoc
 	return sink.ClearAlarm(ctx, accountID, deviceID, ConditionKey(protocol, deviceID, code))
 }
 
+// CellularStateChange is one field's observed transition, used only for the
+// event payload — the alarm/fault lifecycle is untouched by cellular state.
+type CellularStateChange struct {
+	Old, New string
+}
+
+// PublishCellularStateChanged records a normalized cellular state transition
+// (registration status, operator, cell, RAT, SIM status, APN) as a TMF event
+// so BSS/OSS integrations can subscribe to it the same way they subscribe to
+// DeviceFault/DeviceRecovered, without polling the device API. Unlike a
+// fault, this never raises or clears an alarm.
+func PublishCellularStateChanged(ctx context.Context, sink Sink, accountID, deviceID, protocol string, changes map[string]CellularStateChange, at time.Time) error {
+	if sink == nil || strings.TrimSpace(deviceID) == "" || len(changes) == 0 {
+		return fmt.Errorf("invalid cellular state change or nil TMF sink")
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	key := SourceKey(protocol, deviceID, "cellular|"+at.Format(time.RFC3339Nano))
+	payload, _ := json.Marshal(map[string]any{"protocol": protocol, "changes": changes})
+	_, err := sink.CreateEvent(ctx, key, accountID, deviceID, "", "CellularStateChanged", payload, at)
+	return err
+}
+
 func severity(code string) string {
 	if strings.Contains(strings.ToLower(code), "timeout") {
 		return "major"

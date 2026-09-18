@@ -33,6 +33,47 @@ func TestCellularPathCandidatesUsePortableTR181Objects(t *testing.T) {
 	}
 }
 
+func TestMatchCellularStatePathMatchesStateFields(t *testing.T) {
+	cases := map[string]CellularField{
+		"Device.Cellular.Interface.1.Status":                  CellularStatus,
+		"Device.Cellular.AccessPoint.1.APN":                   CellularAccessPoint,
+		"Device.Cellular.Interface.1.USIM.1.Status":           CellularSIMStatus,
+		"Device.XVendor.Cellular.NetworkName":                 CellularOperator,
+		"Device.XVendor.Cellular.CellIdentity":                CellularCellID,
+		"Device.Cellular.Interface.1.CurrentAccessTechnology": CellularRAT,
+	}
+	for path, want := range cases {
+		got, ok := MatchCellularStatePath(path)
+		if !ok || got != want {
+			t.Fatalf("path %q: got (%v, %v), want %v", path, got, ok, want)
+		}
+	}
+}
+
+func TestMatchCellularStatePathDisambiguatesSharedStatusLeaf(t *testing.T) {
+	got, ok := MatchCellularStatePath("Device.Cellular.Interface.1.Status")
+	if !ok || got != CellularStatus {
+		t.Fatalf("top-level Status: got (%v, %v), want %v", got, ok, CellularStatus)
+	}
+	got, ok = MatchCellularStatePath("Device.Cellular.Interface.1.USIM.1.Status")
+	if !ok || got != CellularSIMStatus {
+		t.Fatalf("nested USIM Status: got (%v, %v), want %v", got, ok, CellularSIMStatus)
+	}
+}
+
+func TestMatchCellularStatePathExcludesContinuousTelemetry(t *testing.T) {
+	for _, path := range []string{
+		"Device.Cellular.Interface.1.RSSI",
+		"Device.Cellular.Interface.1.RSRP",
+		"Device.Cellular.Interface.1.Stats.BytesSent",
+		"Device.Cellular.Interface.1.USIM.1.IMSI",
+	} {
+		if _, ok := MatchCellularStatePath(path); ok {
+			t.Fatalf("path %q must not match a state field", path)
+		}
+	}
+}
+
 func TestResolveCellularReadPathAcceptsReadOnlyStandardEvidence(t *testing.T) {
 	got, ok := ResolveCellularReadPath(devices.DataModelRootDevice2, CellularRSRP, "1", map[string]bool{
 		"Device.Cellular.Interface.1.RSRP": false,

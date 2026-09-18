@@ -10,6 +10,7 @@ import (
 	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
 	"acs/internal/parameters"
+	"acs/internal/tmf/telemetry"
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
@@ -711,8 +712,71 @@ func (h *handler) cacheParameterValues(ctx context.Context, deviceID string, lis
 	for _, p := range list {
 		values[p.Name] = parameters.CachedValue{Value: p.Value, UpdatedAt: now, Source: source}
 	}
+	changes := h.detectCellularStateChanges(ctx, deviceID, list)
 	if err := h.params.Upsert(ctx, deviceID, values); err != nil {
 		h.logger.Error("failed to upsert parameter cache", "err", err, "device_id", deviceID, "source", source)
+		return
+	}
+	h.publishCellularStateChanges(ctx, deviceID, changes, now)
+}
+
+// detectCellularStateChanges compares reported cellular state paths against
+// the previously cached value, before the new values overwrite it. It only
+// looks at CellularStateFields (registration status, operator, cell, RAT,
+// SIM status, APN) — continuous telemetry such as RSSI is deliberately
+// excluded so a BSS/OSS event subscriber sees state transitions, not every
+// poll interval.
+func (h *handler) detectCellularStateChanges(ctx context.Context, deviceID string, list []cwmp.ParameterValueStruct) map[string]telemetry.CellularStateChange {
+	if h.tmfEvents == nil {
+		return nil
+	}
+	var candidates map[string]cwmp.ParameterValueStruct
+	for _, p := range list {
+		if _, ok := adapters.MatchCellularStatePath(p.Name); !ok {
+			continue
+		}
+		if candidates == nil {
+			candidates = make(map[string]cwmp.ParameterValueStruct)
+		}
+		candidates[p.Name] = p
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	cached, err := h.params.Get(ctx, deviceID)
+	if err != nil {
+		h.logger.Warn("failed to read cached cellular state for change detection", "err", err, "device_id", deviceID)
+		return nil
+	}
+	var changes map[string]telemetry.CellularStateChange
+	for path, p := range candidates {
+		old, existed := cached[path]
+		if existed && old.Value == p.Value {
+			continue
+		}
+		if changes == nil {
+			changes = make(map[string]telemetry.CellularStateChange)
+		}
+		changes[path] = telemetry.CellularStateChange{Old: old.Value, New: p.Value}
+	}
+	return changes
+}
+
+func (h *handler) publishCellularStateChanges(ctx context.Context, deviceID string, changes map[string]telemetry.CellularStateChange, at time.Time) {
+	if h.tmfEvents == nil || len(changes) == 0 {
+		return
+	}
+	d, err := h.devices.Get(ctx, deviceID)
+	if err != nil {
+		h.logger.Warn("failed to load device for cellular state event", "error", err, "device_id", deviceID)
+		return
+	}
+	account := ""
+	if d.CustomerID != nil {
+		account = *d.CustomerID
+	}
+	if err := telemetry.PublishCellularStateChanged(ctx, h.tmfEvents, account, deviceID, "CWMP", changes, at); err != nil {
+		h.logger.Warn("failed to publish cellular state event", "error", err, "device_id", deviceID)
 	}
 }
 
