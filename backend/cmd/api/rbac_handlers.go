@@ -136,6 +136,13 @@ func (h *handler) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
+	if h.mailer == nil || !h.mailer.Configured() {
+		// Keep the public response indistinguishable from an unknown user,
+		// but never create a bearer reset token that cannot be delivered.
+		h.logger.Warn("password reset requested while SMTP is not configured", "operator_id", op.ID)
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
 
 	token, expiresAt, err := h.operators.CreateResetToken(r.Context(), op.ID)
 	if err != nil {

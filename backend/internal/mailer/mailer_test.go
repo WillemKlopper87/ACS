@@ -2,6 +2,7 @@ package mailer
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -25,12 +26,7 @@ func TestConfigConfigured(t *testing.T) {
 	}
 }
 
-// TestSendUnconfiguredLogsInsteadOfSending is the deliberate dev-mode
-// fallback the package doc calls out: with no SMTP host set, Send must
-// never attempt a real network call, must not error, and must put the
-// message somewhere an operator testing the reset flow can actually see
-// it (the log).
-func TestSendUnconfiguredLogsInsteadOfSending(t *testing.T) {
+func TestSendUnconfiguredRefusesWithoutLoggingSecrets(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 	m := New(Config{}, logger)
@@ -40,19 +36,13 @@ func TestSendUnconfiguredLogsInsteadOfSending(t *testing.T) {
 	}
 
 	err := m.Send("operator@example.com", "Password reset", "reset link: https://example.com/reset?token=abc")
-	if err != nil {
-		t.Fatalf("Send with no SMTP configured should not error, got: %v", err)
+	if !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("Send with no SMTP configured error = %v, want ErrNotConfigured", err)
 	}
 
 	logged := buf.String()
-	if !strings.Contains(logged, "operator@example.com") {
-		t.Errorf("logged output should contain the recipient, got: %s", logged)
-	}
-	if !strings.Contains(logged, "Password reset") {
-		t.Errorf("logged output should contain the subject, got: %s", logged)
-	}
-	if !strings.Contains(logged, "reset link") {
-		t.Errorf("logged output should contain the body (the actual reset link, for dev convenience), got: %s", logged)
+	if strings.Contains(logged, "reset link") || strings.Contains(logged, "token=abc") {
+		t.Errorf("unconfigured Send logged sensitive content: %s", logged)
 	}
 }
 

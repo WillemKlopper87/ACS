@@ -5,17 +5,19 @@
 //
 // "Off unless configured, loud warning when it isn't" — this project's
 // existing convention (credential encryption, Digest auth, mTLS, walled
-// garden) applies here too: with no SMTP host configured, Send logs the
-// message instead of emailing it, which is also just genuinely convenient
-// in development (the reset link is right there in the server log, no
-// mail server needed to test the flow end to end).
+// garden) applies here too: with no SMTP host configured, Send refuses
+// delivery. Transactional message bodies can contain bearer reset links and
+// must never be written to application logs.
 package mailer
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/smtp"
 )
+
+var ErrNotConfigured = errors.New("SMTP is not configured")
 
 type Config struct {
 	Host     string
@@ -45,13 +47,12 @@ func (m *Mailer) Configured() bool {
 	return m.cfg.Configured()
 }
 
-// Send delivers a plain-text email, or logs it at Info level if no SMTP
-// host is configured — see the package doc comment for why that's the
-// deliberate fallback, not an error.
+// Send delivers a plain-text email. It deliberately refuses an unconfigured
+// mailer rather than logging the body, which can contain a password-reset
+// bearer token.
 func (m *Mailer) Send(to, subject, body string) error {
 	if !m.cfg.Configured() {
-		m.logger.Info("SMTP not configured — logging email instead of sending", "to", to, "subject", subject, "body", body)
-		return nil
+		return ErrNotConfigured
 	}
 
 	addr := m.cfg.Host + ":" + m.cfg.Port
