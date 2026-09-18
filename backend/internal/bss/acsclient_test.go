@@ -39,6 +39,21 @@ func TestACSClientSetParameters(t *testing.T) {
 	}
 }
 
+func TestACSClientSetParametersWithIdempotency(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Idempotency-Key"); got != "bss:order-1:set-parameters" {
+			t.Errorf("Idempotency-Key = %q", got)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(queueResponse{CommandKey: "setparam_idempotent", Status: "QUEUED"})
+	}))
+	defer server.Close()
+	key, err := NewACSClient(server.URL, time.Second, "").SetParametersWithIdempotency(t.Context(), "dev-1", []ParameterWrite{{Name: "x", Value: "y"}}, "bss:order-1:set-parameters")
+	if err != nil || key != "setparam_idempotent" {
+		t.Fatalf("key=%q err=%v", key, err)
+	}
+}
+
 func TestACSClientSetParametersSendsServiceToken(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -8,9 +8,11 @@ package jobs
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -70,22 +72,24 @@ var sessionDispatchableTypes = []string{
 
 // Job is a row of the jobs table.
 type Job struct {
-	ID           string
-	CommandKey   string
-	DeviceID     string
-	Type         string
-	Status       string
-	Payload      json.RawMessage
-	Attempts     int
-	MaxAttempts  int
-	CreatedBy    string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	StartedAt    *time.Time
-	CompletedAt  *time.Time
-	FaultCode    *string
-	FaultString  *string
-	ResultDetail json.RawMessage
+	ID             string
+	CommandKey     string
+	DeviceID       string
+	Type           string
+	Status         string
+	Payload        json.RawMessage
+	Attempts       int
+	MaxAttempts    int
+	CreatedBy      string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	StartedAt      *time.Time
+	CompletedAt    *time.Time
+	FaultCode      *string
+	FaultString    *string
+	ResultDetail   json.RawMessage
+	IdempotencyKey *string
+	RequestHash    *string
 }
 
 type Repository struct {
@@ -97,7 +101,10 @@ func NewRepository(db *sql.DB) *Repository {
 }
 
 const jobColumns = `id, command_key, device_id, type, status, payload, attempts, max_attempts,
-	created_by, created_at, updated_at, started_at, completed_at, fault_code, fault_string, result_detail`
+	created_by, created_at, updated_at, started_at, completed_at, fault_code, fault_string, result_detail,
+	idempotency_key, request_hash`
+
+var ErrIdempotencyConflict = errors.New("idempotency key was already used with a different request")
 
 // prefixedJobColumns qualifies jobColumns with a table alias for queries
 // that join jobs against another table.
@@ -127,6 +134,43 @@ func (r *Repository) Create(ctx context.Context, deviceID, jobType string, paylo
 		id, commandKey, deviceID, jobType, payloadJSON, nullIfEmpty(createdBy))
 
 	return scanJob(row)
+}
+
+// CreateWithIdempotency atomically returns the original job when a caller
+// repeats the same device/type/payload/key combination. A changed payload
+// under the same key is rejected rather than silently replayed.
+func (r *Repository) CreateWithIdempotency(ctx context.Context, deviceID, jobType string, payload any, createdBy, key string) (*Job, error) {
+	if strings.TrimSpace(key) == "" {
+		return r.Create(ctx, deviceID, jobType, payload, createdBy)
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal job payload: %w", err)
+	}
+	hash := fmt.Sprintf("%x", sha256.Sum256(payloadJSON))
+	row := r.db.QueryRowContext(ctx, `INSERT INTO jobs (id, command_key, device_id, type, status, payload, created_by, idempotency_key, request_hash)
+		VALUES ($1,$2,$3,$4,'QUEUED',$5,$6,$7,$8)
+		ON CONFLICT (device_id,type,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+		RETURNING `+jobColumns, uuid.New().String(), newCommandKey(jobType), deviceID, jobType, payloadJSON, nullIfEmpty(createdBy), key, hash)
+	job, err := scanJob(row)
+	if err == nil {
+		return job, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	existing, err := r.findByIdempotency(ctx, deviceID, jobType, key)
+	if err != nil {
+		return nil, err
+	}
+	if existing.RequestHash == nil || *existing.RequestHash != hash {
+		return nil, ErrIdempotencyConflict
+	}
+	return existing, nil
+}
+
+func (r *Repository) findByIdempotency(ctx context.Context, deviceID, jobType, key string) (*Job, error) {
+	return scanJob(r.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE device_id=$1 AND type=$2 AND idempotency_key=$3`, deviceID, jobType, key))
 }
 
 // CreateWithMaxAttempts is Create, but overrides the table's default
@@ -348,11 +392,12 @@ func scanJob(s scanner) (*Job, error) {
 	var createdBy sql.NullString
 	var startedAt, completedAt sql.NullTime
 	var faultCode, faultString sql.NullString
+	var idempotencyKey, requestHash sql.NullString
 	var resultDetail []byte
 
 	if err := s.Scan(&j.ID, &j.CommandKey, &j.DeviceID, &j.Type, &j.Status, &j.Payload,
 		&j.Attempts, &j.MaxAttempts, &createdBy, &j.CreatedAt, &j.UpdatedAt,
-		&startedAt, &completedAt, &faultCode, &faultString, &resultDetail); err != nil {
+		&startedAt, &completedAt, &faultCode, &faultString, &resultDetail, &idempotencyKey, &requestHash); err != nil {
 		return nil, fmt.Errorf("scan job: %w", err)
 	}
 	if resultDetail != nil {
@@ -375,6 +420,12 @@ func scanJob(s scanner) (*Job, error) {
 	}
 	if faultString.Valid {
 		j.FaultString = &faultString.String
+	}
+	if idempotencyKey.Valid {
+		j.IdempotencyKey = &idempotencyKey.String
+	}
+	if requestHash.Valid {
+		j.RequestHash = &requestHash.String
 	}
 	return &j, nil
 }

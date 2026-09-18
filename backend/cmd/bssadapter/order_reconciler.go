@@ -44,7 +44,7 @@ func (h *handler) reconcilePendingOrders(ctx context.Context) {
 		return
 	}
 	for _, order := range orders {
-		commandKey, err := h.acs.SetParameters(ctx, order.DeviceID, order.Parameters)
+		commandKey, err := h.acs.SetParametersWithIdempotency(ctx, order.DeviceID, order.Parameters, "bss:"+order.ExternalOrderID+":set-parameters")
 		if err != nil {
 			if markErr := h.mappings.MarkDispatchFailed(ctx, order.ExternalOrderID, err.Error()); markErr != nil {
 				h.logger.Error("failed to record dispatch retry failure", "err", markErr, "external_order_id", order.ExternalOrderID)

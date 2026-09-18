@@ -54,6 +54,12 @@ type queueResponse struct {
 // SetParameters calls PUT /api/v1/devices/{id}/parameters and returns the
 // queued job's command_key.
 func (c *ACSClient) SetParameters(ctx context.Context, deviceID string, params []ParameterWrite) (commandKey string, err error) {
+	return c.SetParametersWithIdempotency(ctx, deviceID, params, "")
+}
+
+// SetParametersWithIdempotency preserves the BSS external order identity
+// across retries so the ACS can replay the original job after a crash window.
+func (c *ACSClient) SetParametersWithIdempotency(ctx context.Context, deviceID string, params []ParameterWrite, idempotencyKey string) (commandKey string, err error) {
 	body, err := json.Marshal(setParametersRequest{Parameters: params})
 	if err != nil {
 		return "", fmt.Errorf("marshal parameter write: %w", err)
@@ -65,6 +71,9 @@ func (c *ACSClient) SetParameters(ctx context.Context, deviceID string, params [
 		return "", fmt.Errorf("build parameter write request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if strings.TrimSpace(idempotencyKey) != "" {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
 	c.setAuth(req)
 
 	resp, err := c.http.Do(req)

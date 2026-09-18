@@ -474,8 +474,12 @@ func (h *handler) putParameters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, err := h.jobs.Create(r.Context(), id, jobs.TypeSetParameter, payload, operatorFromRequest(r))
+	job, err := h.jobs.CreateWithIdempotency(r.Context(), id, jobs.TypeSetParameter, payload, operatorFromRequest(r), r.Header.Get("Idempotency-Key"))
 	if err != nil {
+		if errors.Is(err, jobs.ErrIdempotencyConflict) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		h.logger.Error("failed to queue parameter write", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

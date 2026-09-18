@@ -814,7 +814,7 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 		return "", err
 	}
 
-	commandKey, err = h.acs.SetParameters(ctx, deviceID, params)
+	commandKey, err = h.acs.SetParametersWithIdempotency(ctx, deviceID, params, "bss:"+externalOrderID+":set-parameters")
 	if err != nil {
 		if markErr := h.mappings.MarkDispatchFailed(ctx, externalOrderID, err.Error()); markErr != nil {
 			h.logger.Error("failed to record dispatch failure", "err", markErr, "external_order_id", externalOrderID)
