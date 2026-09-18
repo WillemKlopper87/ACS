@@ -106,7 +106,7 @@ Content-Type: application/json
 }
 ```
 
-`action` must currently be `MODIFY_WIFI`. `parameters` needs at least one of `wifi_ssid` / `wifi_password` — either alone is fine (only the fields you send get written).
+`action` must currently be `MODIFY_WIFI`. `parameters` needs at least one of `wifi_ssid` / `wifi_password` / `wifi_enabled` — any subset is fine (only the fields you send get written). `wifi_enabled` accepts `"true"`/`"false"` or `"1"`/`"0"`.
 
 Before dispatching this action, the adapter uses the device's latest
 parameter-discovery result to select a known writable vendor path. If a
@@ -395,16 +395,14 @@ Each delivery carries `Content-Type: application/json` plus:
 |---|---|
 | `Webhook-Id` | Unique delivery id. Stable across retries of the same delivery — use it as your idempotency key. |
 | `Webhook-Timestamp` | Unix seconds at send time. Fresh per attempt. |
-| `Webhook-Signature` | `v1,<hex>` where `<hex>` is HMAC-SHA256 over `<Webhook-Id>.<Webhook-Timestamp>.<raw body>` using your subscription secret. |
+| `Webhook-Signature` | `v1,<mac>` — HMAC-SHA256 over `<Webhook-Id>.<Webhook-Timestamp>.<raw body>` using your subscription secret. Encoding depends on your secret's format — see below. |
 | `X-Webhook-Event` | Event type. |
 
-This scheme is modelled on [Standard Webhooks](https://www.standardwebhooks.com/)
-(same `<id>.<timestamp>.<body>` signed-string construction and header
-names) but is **not wire-compatible** with it: `<hex>` above is
-hex-encoded HMAC-SHA256 with a plain shared secret, whereas Standard
-Webhooks base64-encodes the MAC and expects a `whsec_`-prefixed,
-base64-decoded secret. Verify against the construction documented here,
-not with an off-the-shelf Standard Webhooks verifier library.
+This scheme is modelled on [Standard Webhooks](https://www.standardwebhooks.com/) (same `<id>.<timestamp>.<body>` signed-string construction and header names), and is **genuinely wire-compatible with it** — verifiable with an off-the-shelf svix/standardwebhooks library — **when your subscription secret is a real Standard Webhooks secret**: `whsec_` followed by base64, the exact shape those libraries' own dashboards generate. With such a secret, the base64 payload after `whsec_` is base64-decoded to the actual HMAC key, and `<mac>` above is base64-encoded.
+
+If your secret does **not** start with `whsec_` (or what follows isn't valid base64), delivery falls back to this ACS's original scheme: the secret is used as raw key bytes, and `<mac>` is hex-encoded — not wire-compatible with a stock Standard Webhooks verifier, so you'd verify against the construction documented here instead. This is what every subscription predating this change already uses, unaffected.
+
+**To opt into full compatibility**, create your subscription with a `whsec_`-prefixed base64 secret instead of an arbitrary string — for example, generate one the same way svix's dashboard would: `"whsec_" + base64(24 random bytes)`.
 
 **Breaking change:** the old `X-Webhook-Signature` header (a body-only
 HMAC, with no id or timestamp bound in) has been removed, not deprecated.

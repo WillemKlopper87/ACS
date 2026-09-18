@@ -3,6 +3,7 @@ package bss
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"acs/internal/devices/adapters"
 )
@@ -143,8 +144,34 @@ func translateModifyWifiWithCapabilities(params map[string]string, dataModelRoot
 		}
 		out = append(out, ParameterWrite{Name: path, Value: pass, Type: "string"})
 	}
+	if raw := params["wifi_enabled"]; raw != "" {
+		value, err := cwmpBoolean(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%w: wifi_enabled: %v", ErrInvalidParameters, err)
+		}
+		path, err := adapters.ResolveWritablePath(dataModelRoot, adapters.WiFiEnable, discovered)
+		if err != nil {
+			return nil, fmt.Errorf("%w: Wi-Fi enable: %v", ErrUnsupportedAction, err)
+		}
+		out = append(out, ParameterWrite{Name: path, Value: value, Type: "boolean"})
+	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("%w: MODIFY_WIFI requires at least one of wifi_ssid, wifi_password", ErrInvalidParameters)
+		return nil, fmt.Errorf("%w: MODIFY_WIFI requires at least one of wifi_ssid, wifi_password, wifi_enabled", ErrInvalidParameters)
 	}
 	return out, nil
+}
+
+// cwmpBoolean normalizes a BSS-supplied boolean string to TR-069's
+// xsd:boolean wire form ("0"/"1"), accepting the common human-friendly
+// spellings a JSON caller is likely to send rather than forcing them to
+// already know CWMP's convention.
+func cwmpBoolean(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true":
+		return "1", nil
+	case "0", "false":
+		return "0", nil
+	default:
+		return "", fmt.Errorf("must be true/false or 1/0, got %q", raw)
+	}
 }

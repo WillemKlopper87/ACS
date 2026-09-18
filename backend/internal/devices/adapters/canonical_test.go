@@ -23,6 +23,7 @@ func TestResolvePathIGD1(t *testing.T) {
 		ManagementServerConnectionRequestPass: "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword",
 		WiFiSSID:                              "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
 		WiFiKeyPassphrase:                     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase",
+		WiFiEnable:                            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable",
 	}
 	for canonical, want := range cases {
 		got, ok := ResolvePath(devices.DataModelRootIGD1, canonical)

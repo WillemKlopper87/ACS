@@ -17,7 +17,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -237,25 +239,67 @@ func (h *handler) sendWebhookDelivery(ctx context.Context, client *http.Client, 
 	return ok
 }
 
-// webhookSignature signs a delivery using a scheme modelled on Standard
-// Webhooks' signed-string construction: HMAC-SHA256 over
-// "<msg-id>.<timestamp>.<payload>", hex-encoded (Standard Webhooks itself
-// base64-encodes the MAC and uses a whsec_-prefixed, base64-decoded
-// secret -- deliberately not replicated here, so this is not wire-compatible
-// with off-the-shelf Standard Webhooks verifier libraries).
+// webhookSecretKeyMaterial resolves the HMAC key and output encoding for a
+// subscription secret. A secret of the form "whsec_<base64>" is the actual
+// Standard Webhooks secret convention (the dashboard-generated form every
+// svix/standardwebhooks client library expects) -- when present, its
+// base64 payload is decoded to raw key bytes and the signature is
+// base64-encoded, making delivery fully wire-compatible with an
+// off-the-shelf Standard Webhooks verifier, not just its header names and
+// signed-string construction.
 //
-// Binding the id and timestamp into the signed string is what makes the
-// signature non-replayable. Signing the body alone -- which this worker
-// used to do -- produces a token an interceptor can resend forever, with
-// the consumer unable to tell the difference.
+// A secret without that prefix is used exactly as before (raw string
+// bytes, hex-encoded output) -- every subscription created before this
+// existed keeps verifying the same way it always has; nothing breaks
+// retroactively. A malformed whsec_ secret (bad base64) also falls back to
+// this path rather than failing delivery outright, since a garbled secret
+// will fail verification either way and this at least keeps trying.
+func webhookSecretKeyMaterial(secret string) (key []byte, base64Output bool) {
+	if trimmed, ok := strings.CutPrefix(secret, "whsec_"); ok {
+		if decoded, err := base64.StdEncoding.DecodeString(trimmed); err == nil {
+			return decoded, true
+		}
+	}
+	return []byte(secret), false
+}
+
+// webhookSignature signs a delivery using Standard Webhooks' signed-string
+// construction: HMAC-SHA256 over "<msg-id>.<timestamp>.<payload>". Binding
+// the id and timestamp into the signed string, not just the body, is what
+// makes the signature non-replayable and lets a receiver dedupe retries --
+// a body-only HMAC (this worker's original scheme) gives it neither.
+//
+// The output encoding depends on the secret (see webhookSecretKeyMaterial):
+// a whsec_-format secret gets the real Standard Webhooks wire format
+// (base64 MAC, base64-decoded key); any other secret keeps the hex
+// encoding this worker has always used, for backward compatibility.
 func webhookSignature(secret, msgID, timestamp string, payload []byte) string {
-	mac := hmac.New(sha256.New, []byte(secret))
+	key, base64Output := webhookSecretKeyMaterial(secret)
+	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(msgID))
 	mac.Write([]byte("."))
 	mac.Write([]byte(timestamp))
 	mac.Write([]byte("."))
 	mac.Write(payload)
-	return hex.EncodeToString(mac.Sum(nil))
+	sum := mac.Sum(nil)
+	if base64Output {
+		return base64.StdEncoding.EncodeToString(sum)
+	}
+	return hex.EncodeToString(sum)
+}
+
+// generateWebhookSecret returns a fresh Standard-Webhooks-format secret
+// (24 random bytes, base64-encoded, whsec_-prefixed) -- the same shape
+// svix's own dashboard generates. Offered so an integrator creating a
+// subscription can opt into full Standard Webhooks wire compatibility
+// without hand-rolling the format themselves; a caller is always free to
+// supply their own secret (whsec_-prefixed or not) instead.
+func generateWebhookSecret() (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return "whsec_" + base64.StdEncoding.EncodeToString(raw), nil
 }
 
 // --- subscription management REST endpoints ---

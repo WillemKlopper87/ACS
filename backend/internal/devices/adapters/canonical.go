@@ -40,6 +40,11 @@ const (
 	ManagementServerPassword              CanonicalParameter = "management_server.password"
 	WiFiSSID                              CanonicalParameter = "wifi.ssid"
 	WiFiKeyPassphrase                     CanonicalParameter = "wifi.key_passphrase"
+	// WiFiEnable is the SSID's own Enable flag (not the radio's) — TR-181's
+	// Device.WiFi.SSID.{i}.Enable and TR-098's WLANConfiguration.{i}.Enable
+	// are both spec-mandatory, boolean, and unambiguous, the same bar every
+	// other entry in this registry is held to.
+	WiFiEnable CanonicalParameter = "wifi.enable"
 )
 
 // device2Paths is the TR-181 (Device:2) resolution — matches every literal
@@ -54,6 +59,7 @@ var device2Paths = map[CanonicalParameter]string{
 	ManagementServerPassword:              "Device.ManagementServer.Password",
 	WiFiSSID:                              "Device.WiFi.SSID.1.SSID",
 	WiFiKeyPassphrase:                     "Device.WiFi.AccessPoint.1.Security.KeyPassphrase",
+	WiFiEnable:                            "Device.WiFi.SSID.1.Enable",
 }
 
 // igd1Paths mirrors device2Paths for TR-098 (InternetGatewayDevice:1).
@@ -75,6 +81,7 @@ var igd1Paths = map[CanonicalParameter]string{
 	ManagementServerPassword:              "InternetGatewayDevice.ManagementServer.Password",
 	WiFiSSID:                              "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
 	WiFiKeyPassphrase:                     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase",
+	WiFiEnable:                            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable",
 }
 
 // igd1PathAlternates lists additional, less-preferred TR-098 locations for

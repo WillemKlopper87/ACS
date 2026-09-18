@@ -102,6 +102,84 @@ func TestTranslateModifyWifiPartial(t *testing.T) {
 	}
 }
 
+// TestTranslateModifyWifiEnabled covers the wifi.enable canonical
+// parameter widening MODIFY_WIFI to more than SSID/passphrase, resolved
+// through the same capability-aware ResolveWritablePath path.
+func TestTranslateModifyWifiEnabled(t *testing.T) {
+	params, err := Translate("MODIFY_WIFI", map[string]string{"wifi_enabled": "true"}, WalledGardenConfig{}, devices.DataModelRootDevice2)
+	if err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	if len(params) != 1 || params[0].Name != "Device.WiFi.SSID.1.Enable" || params[0].Value != "1" || params[0].Type != "boolean" {
+		t.Fatalf("params = %+v, want a single boolean Enable write of \"1\"", params)
+	}
+}
+
+// TestTranslateModifyWifiEnabledFalse proves the human-friendly "false"
+// spelling normalizes to CWMP's xsd:boolean wire form "0", not the literal
+// string "false" (which most CPEs would reject or silently misinterpret).
+func TestTranslateModifyWifiEnabledFalse(t *testing.T) {
+	params, err := Translate("MODIFY_WIFI", map[string]string{"wifi_enabled": "false"}, WalledGardenConfig{}, devices.DataModelRootDevice2)
+	if err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	if len(params) != 1 || params[0].Value != "0" {
+		t.Fatalf("params = %+v, want Enable=\"0\"", params)
+	}
+}
+
+// TestTranslateModifyWifiEnabledIGD1 proves the TR-098 root resolves to
+// the WLANConfiguration Enable leaf, mirroring how SSID/passphrase already
+// branch on dataModelRoot.
+func TestTranslateModifyWifiEnabledIGD1(t *testing.T) {
+	params, err := Translate("MODIFY_WIFI", map[string]string{"wifi_enabled": "1"}, WalledGardenConfig{}, devices.DataModelRootIGD1)
+	if err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	if len(params) != 1 || params[0].Name != "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable" {
+		t.Fatalf("params = %+v, want the IGD1 Enable leaf", params)
+	}
+}
+
+// TestTranslateModifyWifiEnabledRejectsGarbage proves an unrecognized
+// value is rejected before ever reaching the device, rather than being
+// forwarded as a literal string a CPE would silently misinterpret.
+func TestTranslateModifyWifiEnabledRejectsGarbage(t *testing.T) {
+	_, err := Translate("MODIFY_WIFI", map[string]string{"wifi_enabled": "yes please"}, WalledGardenConfig{}, devices.DataModelRootDevice2)
+	if !errors.Is(err, ErrInvalidParameters) {
+		t.Errorf("err = %v, want ErrInvalidParameters", err)
+	}
+}
+
+// TestTranslateModifyWifiEnabledCombinesWithOtherFields proves
+// wifi_enabled composes with wifi_ssid/wifi_password in one order rather
+// than being mutually exclusive.
+func TestTranslateModifyWifiEnabledCombinesWithOtherFields(t *testing.T) {
+	params, err := Translate("MODIFY_WIFI", map[string]string{
+		"wifi_ssid":    "Combined",
+		"wifi_enabled": "true",
+	}, WalledGardenConfig{}, devices.DataModelRootDevice2)
+	if err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	if len(params) != 2 {
+		t.Fatalf("params = %+v, want both the SSID and Enable writes", params)
+	}
+}
+
+// TestTranslateModifyWifiEnabledRespectsCapabilityGate proves
+// wifi_enabled is rejected, not silently guessed at, when the device's own
+// discovery evidence says the Enable leaf isn't writable -- the same
+// capability gate wifi_ssid/wifi_password already go through.
+func TestTranslateModifyWifiEnabledRespectsCapabilityGate(t *testing.T) {
+	_, err := TranslateWithCapabilities("MODIFY_WIFI", map[string]string{"wifi_enabled": "true"}, WalledGardenConfig{}, devices.DataModelRootDevice2, map[string]bool{
+		"Device.WiFi.SSID.1.Enable": false,
+	})
+	if !errors.Is(err, ErrUnsupportedAction) {
+		t.Errorf("err = %v, want ErrUnsupportedAction", err)
+	}
+}
+
 func TestTranslateModifyWifiRejectsEmptyParams(t *testing.T) {
 	_, err := Translate("MODIFY_WIFI", map[string]string{}, WalledGardenConfig{}, devices.DataModelRootDevice2)
 	if !errors.Is(err, ErrInvalidParameters) {
