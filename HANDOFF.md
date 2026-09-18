@@ -22,6 +22,20 @@ reviewer would have done differently. Read this before the 90 KB build plan.
 > remain unsupported. A production backup/restore drill, external CI branch
 > protection, and organization-level security/licensing approvals must also be
 > recorded before release.
+>
+> **CGNAT addendum — 2026-09-18:** the §12/★2 claim below that Annex G UDP
+> Connection Request "is not implemented" is stale. It now is
+> (`internal/connreq/annexg.go`), wired into `connreq_worker.go`'s fallback
+> chain (direct GET → Annex G UDP → `PERIODIC_FALLBACK_ONLY`), but — like
+> the rest of this file — still unverified against a real STUN-capable CPE.
+> Annex G only helps ordinary NAT; it cannot fix symmetric CGNAT, where the
+> reflexive address/port STUN learns isn't reachable from a third party
+> either. For a device that exhausts both paths, the worker now queues a
+> one-time `PeriodicInformInterval` tightening (default 300s) so future
+> jobs land within minutes of being queued instead of waiting out whatever
+> default interval the CPE shipped with — the best available mitigation
+> for CWMP, short of a persistent-connection transport (which USP's
+> WebSocket/MQTT support already provides for that protocol).
 
 ---
 

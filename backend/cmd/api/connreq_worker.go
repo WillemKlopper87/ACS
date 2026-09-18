@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"acs/internal/connreq"
@@ -23,6 +24,19 @@ const (
 	connReqGETTimeout   = 10 * time.Second       // v3 §5.6 pseudocode's own default
 	connReqDefaultWait  = 30 * time.Second
 	connReqMaxWait      = 120 * time.Second
+
+	// cgnatPeriodicInformTarget is how aggressively the ACS asks a
+	// CGNAT-stuck device to check back in on its own, once both direct and
+	// Annex G Connection Request have failed to raise a session. STUN
+	// can't fix symmetric NAT (the reflexive address/port it learns isn't
+	// reachable from an arbitrary third party either) -- a shorter
+	// self-initiated check-in is the only lever left. 5 minutes sits
+	// inside the "tens of seconds to low minutes" range cmd/uspc's own
+	// dispatchSweepInterval comment documents for CWMP's periodic-Inform
+	// ecosystem: enough to make queued jobs land within minutes instead of
+	// whatever (often hours-long) default the CPE shipped with, without
+	// turning every such device into a session-every-few-seconds load.
+	cgnatPeriodicInformTarget = 300 // seconds
 )
 
 // connectionRequestWorker is the background loop that turns queued
@@ -206,6 +220,7 @@ func (w *connectionRequestWorker) process(ctx context.Context, job *jobs.Job) {
 	_ = w.jobs.MarkTimeout(ctx, job.ID, "HTTP_200_NO_INFORM: no Inform with EventCode 6 within the wait window")
 	w.logger.Warn("connection request timed out waiting for inform", "device_id", device.ID, "job_id", job.ID)
 	w.audit(ctx, device.ID, job, "HTTP_200_NO_INFORM")
+	w.tightenPeriodicInform(ctx, device)
 }
 
 // attemptAnnexG sends the Annex G UDP wake-up (internal/connreq.SendUDP)
@@ -248,6 +263,28 @@ func (w *connectionRequestWorker) attemptAnnexG(ctx context.Context, device *dev
 	_ = w.jobs.MarkTimeout(ctx, job.ID, connreq.OutcomeUDPNoInform+": no Inform with EventCode 6 within the wait window after the UDP wake-up")
 	w.logger.Warn("annex g connection request timed out waiting for inform", "device_id", device.ID, "job_id", job.ID)
 	w.audit(ctx, device.ID, job, connreq.OutcomeUDPNoInform)
+	w.tightenPeriodicInform(ctx, device)
+}
+
+// tightenPeriodicInform queues a one-time SetParameterValues lowering a
+// CGNAT-stuck device's own check-in interval, once both direct and Annex G
+// Connection Request have failed to raise a session (see
+// cgnatPeriodicInformTarget). It's idempotency-keyed per device so repeated
+// failed connection-request attempts don't requeue it, and it deliberately
+// doesn't wait for or confirm the result -- like any other queued job, it
+// lands whenever the device's *current* (possibly long) interval next
+// brings it in, and every job after that benefits from the new one.
+func (w *connectionRequestWorker) tightenPeriodicInform(ctx context.Context, device *devices.Device) {
+	path := "Device.ManagementServer.PeriodicInformInterval"
+	if device.DataModelRoot == devices.DataModelRootIGD1 {
+		path = "InternetGatewayDevice.ManagementServer.PeriodicInformInterval"
+	}
+	payload := jobs.SetParameterPayload{Parameters: []jobs.ParameterWrite{
+		{Name: path, Value: strconv.Itoa(cgnatPeriodicInformTarget), Type: "xsd:unsignedInt"},
+	}}
+	if _, err := w.jobs.CreateWithIdempotency(ctx, device.ID, jobs.TypeSetParameter, payload, "system:cgnat-fallback", "cgnat-periodic-inform-tighten"); err != nil {
+		w.logger.Warn("failed to queue periodic-inform tightening for CGNAT-stuck device", "err", err, "device_id", device.ID)
+	}
 }
 
 // audit records the ConnectionRequest action (design doc v3 §11.8 lists
