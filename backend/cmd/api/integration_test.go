@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"acs/internal/alerting"
 	"acs/internal/auth"
 	"acs/internal/bss"
 	"acs/internal/captures"
@@ -489,6 +490,50 @@ func TestIntegration_H3SubResourceIsolation(t *testing.T) {
 			t.Errorf("bob revoke his own vpn peer → %d, want 204", r.code)
 		}
 	})
+}
+
+func TestIntegration_AlertTenantIsolation(t *testing.T) {
+	e := newTestEnv(t)
+	custA, custB := e.customer("Customer A"), e.customer("Customer B")
+	devA := e.device("A001", &custA)
+	devB := e.device("B001", &custB)
+	e.operator("alice", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custA})
+	e.operator("bob", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custB})
+	e.grant(operators.RoleManager, operators.PermPolicyManage)
+
+	policyB, err := e.h.alertPolicies.Create(e.ctx, alerting.Policy{
+		Name: "Bob device policy", Scope: alerting.ScopeDevice, DeviceID: devB,
+		FaultPriorities: map[string]alerting.Priority{}, Steps: []alerting.EscalationStep{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	incidentB, err := e.h.alertIncidents.Open(e.ctx, "bob-account", devB, "test-condition", alerting.P2, "bob only", nil, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if r := e.call("alice", "GET", "/api/v1/alert-policies", nil); r.code != http.StatusOK || strings.Contains(r.body, policyB.ID) {
+		t.Errorf("alice alert-policy list leaks bob policy: %d %s", r.code, r.body)
+	}
+	if r := e.call("alice", "DELETE", "/api/v1/alert-policies/"+policyB.ID, nil); r.code != http.StatusNotFound {
+		t.Errorf("alice delete bob policy = %d, want 404", r.code)
+	}
+	if r := e.call("alice", "POST", "/api/v1/alert-policies", map[string]any{
+		"name": "foreign", "scope": "device", "device_id": devB,
+	}); r.code != http.StatusNotFound {
+		t.Errorf("alice create policy for bob device = %d, want 404", r.code)
+	}
+	if r := e.call("alice", "GET", "/api/v1/alert-incidents", nil); r.code != http.StatusOK || strings.Contains(r.body, incidentB.ID) || strings.Contains(r.body, "bob only") {
+		t.Errorf("alice incident list leaks bob incident: %d %s", r.code, r.body)
+	}
+	if r := e.call("alice", "PATCH", "/api/v1/alert-incidents/"+incidentB.ID+"?state=acknowledged", nil); r.code != http.StatusNotFound {
+		t.Errorf("alice acknowledge bob incident = %d, want 404", r.code)
+	}
+	if r := e.call("bob", "PATCH", "/api/v1/alert-incidents/"+incidentB.ID+"?state=acknowledged", nil); r.code != http.StatusNoContent {
+		t.Errorf("bob acknowledge own incident = %d %s, want 204", r.code, r.body)
+	}
+	_ = devA // keeps both customer fixtures explicit in this isolation test.
 }
 
 // TestIntegration_ZeroScopeDenyByDefault is the P0.1 acceptance gate
