@@ -2,7 +2,9 @@ package devices
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -84,7 +86,17 @@ func TestProfileAssignmentPersistsProvenanceAndCanBeCleared(t *testing.T) {
 	if got.ProfileID == nil || *got.ProfileID != "zyxel.nr7303-eu01v1f" || got.ProfileMatchedBy == nil || *got.ProfileMatchedBy != "model" || !got.ProfileQualified {
 		t.Fatalf("assignment = %#v", got)
 	}
-	if string(got.ProfileEvidence) != string(evidence) {
+	// Compared as decoded values, not raw bytes: Postgres jsonb storage
+	// canonicalizes key order on write, so a round-tripped column is never
+	// guaranteed to come back byte-identical to what was inserted.
+	var gotEvidence, wantEvidence map[string]any
+	if err := json.Unmarshal(got.ProfileEvidence, &gotEvidence); err != nil {
+		t.Fatalf("decode stored evidence: %v", err)
+	}
+	if err := json.Unmarshal(evidence, &wantEvidence); err != nil {
+		t.Fatalf("decode expected evidence: %v", err)
+	}
+	if !reflect.DeepEqual(gotEvidence, wantEvidence) {
 		t.Fatalf("evidence = %s, want %s", got.ProfileEvidence, evidence)
 	}
 	if err := r.ClearProfileAssignment(ctx, d.ID); err != nil {

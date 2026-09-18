@@ -3,12 +3,17 @@ package resourceinventory
 import "acs/internal/tmf/common"
 
 // ProjectFields converts a canonical Resource into the JSON object emitted by
-// the v5 adapter. id and href are always retained so projected list results
-// remain individually addressable; every other field follows ?fields=.
+// the v5 adapter. id, href and @type are always retained -- @type is TMF
+// identity metadata a consumer needs to know what it's looking at even under
+// a narrow ?fields= projection, the same reason id/href survive it -- and
+// every other field follows ?fields=.
 func ProjectFields(resource Resource, fields common.Fields) map[string]any {
 	out := map[string]any{
 		"id":   resource.ID,
 		"href": resource.Href,
+	}
+	if resource.Type != "" {
+		out["@type"] = resource.Type
 	}
 	if fields.Includes("name") && resource.Name != "" {
 		out["name"] = resource.Name
@@ -42,9 +47,6 @@ func ProjectFields(resource Resource, fields common.Fields) map[string]any {
 	}
 	if fields.Includes("@baseType") && resource.BaseType != "" {
 		out["@baseType"] = resource.BaseType
-	}
-	if fields.Includes("@type") && resource.Type != "" {
-		out["@type"] = resource.Type
 	}
 	return out
 }

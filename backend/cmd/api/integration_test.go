@@ -133,6 +133,8 @@ func newTestEnv(t *testing.T) *testEnv {
 		bssOAuthClients:  bss.NewOAuthRepository(db),
 		bssHTTPClient:    &http.Client{Timeout: time.Second},
 		vpnPeers:         vpnRepo,
+		alertPolicies:    alerting.NewRepository(db),
+		alertIncidents:   alerting.NewIncidentRepository(db),
 
 		captures:           captures.NewRepository(db),
 		captureMaxDuration: 30 * time.Minute,
