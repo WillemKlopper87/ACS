@@ -9,12 +9,19 @@ import (
 	"net/http"
 
 	"acs/internal/alerting"
+	"acs/internal/devices"
 )
 
 func (h *handler) listAlertPolicies(w http.ResponseWriter, r *http.Request) {
 	items, err := h.alertPolicies.List(r.Context())
 	if err != nil {
 		http.Error(w, "internal error", 500)
+		return
+	}
+	items, err = h.filterAlertPolicies(r, items)
+	if err != nil {
+		h.logger.Error("failed to scope alert policies", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if items == nil {
@@ -31,6 +38,14 @@ func (h *handler) createAlertPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateAlertPolicy(p); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if ok, err := h.alertPolicyInScope(r, p); err != nil {
+		h.logger.Error("failed to scope alert policy", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	} else if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	p.Enabled = true
@@ -87,11 +102,69 @@ func validateAlertPolicy(p alerting.Policy) error {
 }
 
 func (h *handler) deleteAlertPolicy(w http.ResponseWriter, r *http.Request) {
-	if err := h.alertPolicies.Delete(r.Context(), r.PathValue("id")); errors.Is(err, sql.ErrNoRows) {
+	p, err := h.alertPolicies.Get(r.Context(), r.PathValue("id"))
+	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "not found", 404)
+		return
 	} else if err != nil {
 		http.Error(w, "internal error", 500)
-	} else {
-		w.WriteHeader(204)
+		return
+	}
+	ok, err := h.alertPolicyInScope(r, *p)
+	if err != nil {
+		h.logger.Error("failed to scope alert policy", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err := h.alertPolicies.Delete(r.Context(), p.ID); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handler) filterAlertPolicies(r *http.Request, policies []alerting.Policy) ([]alerting.Policy, error) {
+	filtered := make([]alerting.Policy, 0, len(policies))
+	for _, p := range policies {
+		ok, err := h.alertPolicyInScope(r, p)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered, nil
+}
+
+// alertPolicyInScope makes fleet and BSS-account-targeted policies
+// platform-global controls. Scoped operators may only manage a group or
+// device policy whose owning customer is in their assignment.
+func (h *handler) alertPolicyInScope(r *http.Request, p alerting.Policy) (bool, error) {
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil || !scoped {
+		return err == nil, err
+	}
+	switch p.Scope {
+	case alerting.ScopeFleet, alerting.ScopeTenant:
+		return false, nil
+	case alerting.ScopeGroup:
+		g, err := h.groups.Get(r.Context(), p.GroupID)
+		if errors.Is(err, devices.ErrGroupNotFound) {
+			return false, nil
+		}
+		return err == nil && deviceInScope(g.CustomerID, customerIDs), err
+	case alerting.ScopeDevice:
+		d, err := h.devices.Get(r.Context(), p.DeviceID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return err == nil && deviceInScope(d.CustomerID, customerIDs), err
+	default:
+		return false, nil
 	}
 }

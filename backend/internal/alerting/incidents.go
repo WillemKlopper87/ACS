@@ -108,6 +108,19 @@ func (r *IncidentRepository) List(ctx context.Context, state string) ([]Incident
 	return out, rows.Err()
 }
 
+// Get returns an incident by opaque ID so callers can enforce device tenancy
+// before acknowledging, suppressing, recovering, or closing it.
+func (r *IncidentRepository) Get(ctx context.Context, id string) (*Incident, error) {
+	var i Incident
+	var raw []byte
+	err := r.db.QueryRowContext(ctx, `SELECT id,tenant_id,device_id::text,condition_key,priority,summary,state,escalation_stage,first_seen_at,last_seen_at,next_escalation_at,acknowledged_at,COALESCE(acknowledged_by,''),recovered_at,details FROM alert_incidents WHERE id=$1`, id).Scan(&i.ID, &i.TenantID, &i.DeviceID, &i.ConditionKey, &i.Priority, &i.Summary, &i.State, &i.EscalationStage, &i.FirstSeenAt, &i.LastSeenAt, &i.NextEscalationAt, &i.AcknowledgedAt, &i.AcknowledgedBy, &i.RecoveredAt, &raw)
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(raw, &i.Details)
+	return &i, nil
+}
+
 func (r *IncidentRepository) Due(ctx context.Context, limit int) ([]Incident, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id,tenant_id,device_id::text,condition_key,priority,summary,state,escalation_stage,first_seen_at,last_seen_at,next_escalation_at,acknowledged_at,COALESCE(acknowledged_by,''),recovered_at,details FROM alert_incidents WHERE state='open' AND next_escalation_at IS NOT NULL AND next_escalation_at <= now() ORDER BY next_escalation_at LIMIT $1`, limit)
 	if err != nil {

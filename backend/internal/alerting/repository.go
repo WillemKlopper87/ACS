@@ -72,6 +72,26 @@ func (r *Repository) List(ctx context.Context) ([]Policy, error) {
 	return out, rows.Err()
 }
 
+// Get returns one policy so API callers can authorize its target before a
+// destructive operation. Policy IDs are otherwise opaque across tenants.
+func (r *Repository) Get(ctx context.Context, id string) (*Policy, error) {
+	var p Policy
+	var priorities, steps []byte
+	var seconds int
+	err := r.db.QueryRowContext(ctx, `SELECT id,name,scope,COALESCE(tenant_id,''),COALESCE(group_id::text,''),COALESCE(device_id::text,''),COALESCE(customer_tier,''),enabled,fault_priorities,offline_after_seconds,steps FROM alert_policies WHERE id=$1`, id).Scan(&p.ID, &p.Name, &p.Scope, &p.TenantID, &p.GroupID, &p.DeviceID, &p.CustomerTier, &p.Enabled, &priorities, &seconds, &steps)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(priorities, &p.FaultPriorities); err != nil {
+		return nil, err
+	}
+	p.OfflineAfter = time.Duration(seconds) * time.Second
+	if err := json.Unmarshal(steps, &p.Steps); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 func (r *Repository) Delete(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, "DELETE FROM alert_policies WHERE id=$1", id)
 	if err != nil {
