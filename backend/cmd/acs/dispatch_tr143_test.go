@@ -65,7 +65,7 @@ func TestComputeTR143ResultUploadUsesTestBytesSent(t *testing.T) {
 // throughput.
 func TestComputeTR143ResultToleratesMissingTimestamps(t *testing.T) {
 	const prefix = "Device.IP.Diagnostics.DownloadDiagnostics."
-	list := tr143Params(prefix + "TestBytesReceived", "500")
+	list := tr143Params(prefix+"TestBytesReceived", "500")
 	got := computeTR143Result(list, prefix, false)
 	if got.TestBytes != 500 {
 		t.Errorf("test bytes = %d, want 500", got.TestBytes)

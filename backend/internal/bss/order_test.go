@@ -367,3 +367,49 @@ func TestUnnotifiedOrdersOnlyReturnsDispatched(t *testing.T) {
 		t.Fatalf("UnnotifiedOrders = %+v, want exactly [ord-dispatched]", unnotified)
 	}
 }
+
+// TestOrdersForDeviceReturnsOnlyDispatchedMostRecentFirst covers
+// reconcile.go's own contract: PENDING_DISPATCH/DEAD_LETTERED orders never
+// reached the CPE and must be excluded (they'd only produce false drift),
+// and the ones that remain come back newest first.
+func TestOrdersForDeviceReturnsOnlyDispatchedMostRecentFirst(t *testing.T) {
+	ctx, r := newMappingTestRepo(t)
+	seedDevice(t, ctx, r, orderDeviceID, "S-ORDER-RECON")
+	params := []ParameterWrite{{Name: "Device.WiFi.SSID.1.SSID", Value: "v", Type: "string"}}
+
+	if err := r.InsertPending(ctx, "ord-recon-pending", "acct-1", "MODIFY_WIFI", orderDeviceID, params); err != nil {
+		t.Fatalf("InsertPending pending: %v", err)
+	}
+	if err := r.InsertPending(ctx, "ord-recon-old", "acct-1", "MODIFY_WIFI", orderDeviceID, params); err != nil {
+		t.Fatalf("InsertPending old: %v", err)
+	}
+	if err := r.MarkDispatched(ctx, "ord-recon-old", "ck-old"); err != nil {
+		t.Fatalf("MarkDispatched old: %v", err)
+	}
+	if err := r.InsertPending(ctx, "ord-recon-new", "acct-1", "MODIFY_WIFI", orderDeviceID, params); err != nil {
+		t.Fatalf("InsertPending new: %v", err)
+	}
+	if err := r.MarkDispatched(ctx, "ord-recon-new", "ck-new"); err != nil {
+		t.Fatalf("MarkDispatched new: %v", err)
+	}
+	deadParams := []ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
+	if err := r.InsertPending(ctx, "ord-recon-dead", "acct-1", "MODIFY_WIFI", orderDeviceID, deadParams); err != nil {
+		t.Fatalf("InsertPending dead: %v", err)
+	}
+	for i := 0; i < 8; i++ {
+		if err := r.MarkDispatchFailed(ctx, "ord-recon-dead", "simulated failure"); err != nil {
+			t.Fatalf("MarkDispatchFailed: %v", err)
+		}
+	}
+
+	got, err := r.OrdersForDevice(ctx, orderDeviceID, 0)
+	if err != nil {
+		t.Fatalf("OrdersForDevice: %v", err)
+	}
+	if len(got) != 2 || got[0].ExternalOrderID != "ord-recon-new" || got[1].ExternalOrderID != "ord-recon-old" {
+		t.Fatalf("OrdersForDevice = %+v, want exactly [ord-recon-new, ord-recon-old] in that order", got)
+	}
+	if got[0].CreatedAt.IsZero() {
+		t.Error("CreatedAt was not populated")
+	}
+}

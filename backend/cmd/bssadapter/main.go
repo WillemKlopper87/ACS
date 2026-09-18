@@ -183,6 +183,7 @@ func main() {
 	mux.HandleFunc("POST /bss/v1/actions/preflight", metrics.InstrumentHTTP("POST /bss/v1/actions/preflight", h.preflightAction))
 	mux.HandleFunc("POST /bss/v1/orders", metrics.InstrumentHTTP("POST /bss/v1/orders", h.createOrder))
 	mux.HandleFunc("GET /bss/v1/jobs/{command_key}", metrics.InstrumentHTTP("GET /bss/v1/jobs/{command_key}", h.getJob))
+	mux.HandleFunc("GET /bss/v1/devices/{device_id}/reconciliation", metrics.InstrumentHTTP("GET /bss/v1/devices/{device_id}/reconciliation", h.getReconciliation))
 	mux.HandleFunc("POST /bss/v1/webhooks", metrics.InstrumentHTTP("POST /bss/v1/webhooks", h.createWebhookSubscription))
 	mux.HandleFunc("GET /bss/v1/webhooks", metrics.InstrumentHTTP("GET /bss/v1/webhooks", h.listWebhookSubscriptions))
 	mux.HandleFunc("DELETE /bss/v1/webhooks/{id}", metrics.InstrumentHTTP("DELETE /bss/v1/webhooks/{id}", h.deleteWebhookSubscription))

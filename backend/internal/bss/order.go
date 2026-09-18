@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Order status values (design S3). PENDING_DISPATCH is written before
@@ -45,6 +46,10 @@ type OrderRecord struct {
 	Status          string
 	Attempts        int
 	LastError       string
+	// CreatedAt is only populated by OrdersForDevice -- every other
+	// lookup here predates needing it and scanOrder's shared column list
+	// doesn't select it, so it stays the zero value elsewhere.
+	CreatedAt time.Time
 }
 
 // FindOrder looks up a previously-recorded order by its BSS-assigned
@@ -67,6 +72,45 @@ func (r *Repository) FindOrderByCommandKey(ctx context.Context, commandKey strin
 		FROM bss_orders WHERE command_key = $1
 	`, commandKey)
 	return scanOrder(row, "find order by command key")
+}
+
+// OrdersForDevice returns a device's dispatched orders, most recent first
+// — the BSS-recorded half of reconciliation (reconcile.go): what this
+// system last told the device to become, as opposed to what the device's
+// parameter cache currently reports. Only DISPATCHED orders are returned
+// (a job was actually queued for them); PENDING_DISPATCH/DEAD_LETTERED
+// orders never reached the CPE and would only produce false drift.
+func (r *Repository) OrdersForDevice(ctx context.Context, deviceID string, limit int) ([]OrderRecord, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, COALESCE(last_error, ''), created_at
+		FROM bss_orders WHERE device_id = $1 AND status = $2
+		ORDER BY created_at DESC LIMIT $3`, deviceID, OrderStatusDispatched, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list orders for device: %w", err)
+	}
+	defer rows.Close()
+
+	var out []OrderRecord
+	for rows.Next() {
+		var rec OrderRecord
+		var deviceIDCol, commandKey sql.NullString
+		var paramsJSON []byte
+		if err := rows.Scan(&rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceIDCol, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &rec.LastError, &rec.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan order for device: %w", err)
+		}
+		rec.DeviceID = deviceIDCol.String
+		rec.CommandKey = commandKey.String
+		if len(paramsJSON) > 0 {
+			if err := json.Unmarshal(paramsJSON, &rec.Parameters); err != nil {
+				return nil, fmt.Errorf("unmarshal order parameters: %w", err)
+			}
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
 }
 
 type orderScanner interface {

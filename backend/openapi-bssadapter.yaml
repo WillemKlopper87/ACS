@@ -214,6 +214,22 @@ paths:
         "404": { description: ErrJobNotFound, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
         "502": { description: ErrACSUnreachable, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
 
+  /bss/v1/devices/{device_id}/reconciliation:
+    get:
+      tags: [Jobs]
+      summary: Compare this device's BSS order history against its current ACS-reported parameter state
+      description: >-
+        Read-only drift detection: for each canonical parameter a dispatched
+        order last touched, reports whether the device's current cache
+        matches, drifted, or the order's job is still unconfirmed. Nothing
+        here queues a corrective order.
+      parameters:
+        - { name: device_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceReconciliation" } } } }
+        "404": { description: No BSS order history for that device, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "502": { description: ErrACSUnreachable, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
   /bss/v1/webhooks:
     post:
       tags: [Webhooks]
@@ -228,8 +244,8 @@ paths:
               properties:
                 account_id: { type: string, nullable: true, description: "Required for account-scoped OAuth clients. Omit only with a globally-authorized client or the deprecated shared token." }
                 target_url: { type: string }
-                secret: { type: string, description: "HMAC-SHA256 signing secret — deliveries carry Webhook-Id, Webhook-Timestamp, and Webhook-Signature: v1,<hex>, where <hex> is HMAC-SHA256 over '<Webhook-Id>.<Webhook-Timestamp>.<raw body>', hex-encoded" }
-                event_types: { type: array, items: { type: string, example: JOB_COMPLETED } }
+                secret: { type: string, description: "HMAC-SHA256 signing secret — deliveries carry Webhook-Id, Webhook-Timestamp, and Webhook-Signature: v1,<mac> over '<Webhook-Id>.<Webhook-Timestamp>.<raw body>'. A whsec_<base64> secret (real Standard Webhooks format) gets base64-decoded key material and a base64-encoded <mac>, fully wire-compatible with an off-the-shelf Standard Webhooks verifier; any other secret keeps the legacy raw-key, hex-encoded scheme." }
+                event_types: { type: array, items: { type: string, enum: [JOB_COMPLETED, DeviceFault, DeviceRecovered, CellularStateChanged] } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/WebhookSubscription" } } } }
     get:
@@ -328,3 +344,22 @@ components:
         target_url: { type: string }
         event_types: { type: array, items: { type: string } }
         created_at: { type: string, format: date-time }
+
+    ReconciliationField:
+      type: object
+      properties:
+        path: { type: string, description: "Resolved device data-model path the order wrote" }
+        intended_value: { type: string, description: "The value the most recent order for this path sent" }
+        actual_value: { type: string, description: "The device's currently cached value — omitted when status is unconfirmed or unverifiable" }
+        actual_updated_at: { type: string, format: date-time }
+        status: { type: string, enum: [match, drift, unknown, unconfirmed, unverifiable] }
+        external_order_id: { type: string }
+        ordered_at: { type: string, format: date-time }
+
+    DeviceReconciliation:
+      type: object
+      properties:
+        device_id: { type: string }
+        account_id: { type: string }
+        checked_at: { type: string, format: date-time }
+        fields: { type: array, items: { $ref: "#/components/schemas/ReconciliationField" } }

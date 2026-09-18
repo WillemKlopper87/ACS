@@ -21,6 +21,7 @@ Read this section first — it tells you what you can integrate against today ve
 | Order dispatch — `MODIFY_WIFI` | **Live** |
 | Order dispatch — `SUSPEND` / `ACTIVATE` | **Not configured by default.** Returns `400 ErrInvalidRequest` until an operator sets a real per-vendor walled-garden parameter. See §2.2. |
 | Job status polling (Workflow C) | **Live** |
+| Reconciliation / drift detection (Workflow D) | **Live.** Read-only; never queues a corrective order itself. |
 | Idempotent order retry | **Live** |
 | Webhook notifications (§4) | **Live.** Corrected 2026-08-11 — this section previously said "not implemented"; it was, by the time that was written. Subscribe via `POST /bss/v1/webhooks`. |
 | Authentication | **Live**: OAuth2 client-credentials (recommended, per-integration) + optional mTLS. Legacy shared token still accepted but deprecated. See §3. |
@@ -194,6 +195,56 @@ Captured response:
 `status` is one of `QUEUED`, `RPC_SENT`, `SUCCESS`, `FAILED`. On `FAILED`, `fault_code`/`fault_string` are populated with the CWMP fault the router returned.
 
 Unknown `command_key` → `404 ErrJobNotFound`.
+
+### Workflow D: Reconciliation — does the device actually have what you last ordered?
+
+```http
+GET /bss/v1/devices/{device_id}/reconciliation
+Authorization: Bearer <token>
+```
+
+Read-only drift detection. For every canonical parameter your most recent dispatched orders touched, reports whether the device's current ACS-reported value matches, has drifted, or can't yet be judged:
+
+```json
+{
+  "device_id": "65ee0038-6583-4075-b54b-246655b0fd90",
+  "account_id": "ACC-88203",
+  "checked_at": "2026-09-18T11:02:00Z",
+  "fields": [
+    {
+      "path": "Device.WiFi.SSID.1.SSID",
+      "intended_value": "HomeNet",
+      "actual_value": "HomeNet",
+      "actual_updated_at": "2026-09-18T10:55:12Z",
+      "status": "match",
+      "external_order_id": "ORD-2026-0804-12",
+      "ordered_at": "2026-09-18T10:50:00Z"
+    },
+    {
+      "path": "Device.WiFi.SSID.1.Enable",
+      "intended_value": "1",
+      "actual_value": "0",
+      "status": "drift",
+      "external_order_id": "ORD-2026-0804-14",
+      "ordered_at": "2026-09-18T10:59:00Z"
+    }
+  ]
+}
+```
+
+Only the single most recent order that touched each path is considered — an older order's confirmed value is never substituted in for a newer, still-in-flight one, even if the older value happens to still match. `status` is one of:
+
+| Status | Meaning |
+|---|---|
+| `match` | The device's cached value equals what was last ordered. |
+| `drift` | The device's cached value differs from what was last ordered. |
+| `unknown` | The device has never reported this path (or its cache is empty). |
+| `unconfirmed` | The most recent order for this path hasn't (yet) succeeded — there's no confirmed intent to compare against, so `actual_value` is omitted. |
+| `unverifiable` | The path looks like a credential (password/passphrase). CPEs routinely mask these on read, so comparing them would produce false drift on essentially every device; `actual_value` is omitted. |
+
+This endpoint queues nothing — a confirmed `drift` is a signal for you (or an operator) to decide what to do about, most likely by submitting a fresh order for the same action.
+
+A device with no BSS order history at all → `404` (indistinguishable from an unknown device id, same non-enumeration principle as Workflow C).
 
 ---
 
