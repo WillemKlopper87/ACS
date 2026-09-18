@@ -6,6 +6,7 @@ import (
 	"acs/internal/devices"
 	"acs/internal/jobs"
 	"acs/internal/operators"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -412,6 +413,34 @@ func buildSetParameterPayload(inputs []parameterInput) (jobs.SetParameterPayload
 	return payload, nil
 }
 
+// validateWritableParameters makes direct operator writes obey the same
+// device-capability boundary as BSS/OSS action translation. Before discovery
+// there is no evidence to evaluate, so established bootstrap workflows keep
+// working. Once a CPE has advertised its tree, a missing or read-only path is
+// rejected locally instead of becoming a delayed device-side fault.
+func (h *handler) validateWritableParameters(ctx context.Context, deviceID string, payload jobs.SetParameterPayload) error {
+	if h.params == nil {
+		return nil
+	}
+	discovered, err := h.params.GetNames(ctx, deviceID)
+	if err != nil {
+		return fmt.Errorf("read discovered parameter capabilities: %w", err)
+	}
+	if discovered == nil {
+		return nil
+	}
+	for _, parameter := range payload.Parameters {
+		writable, exists := discovered.Names[parameter.Name]
+		if !exists {
+			return fmt.Errorf("parameter %q is not supported by the discovered device model", parameter.Name)
+		}
+		if !writable {
+			return fmt.Errorf("parameter %q is read-only on the discovered device model", parameter.Name)
+		}
+	}
+	return nil
+}
+
 type putParametersRequest struct {
 	Parameters []parameterInput `json:"parameters"`
 }
@@ -434,6 +463,10 @@ func (h *handler) putParameters(w http.ResponseWriter, r *http.Request) {
 	payload, err := buildSetParameterPayload(req.Parameters)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.validateWritableParameters(r.Context(), id, payload); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 
@@ -542,6 +575,10 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 
 		switch req.Action {
 		case jobs.TypeSetParameter:
+			if err := h.validateWritableParameters(r.Context(), deviceID, setParamPayload); err != nil {
+				result.Error = err.Error()
+				break
+			}
 			job, err := h.jobs.Create(r.Context(), deviceID, jobs.TypeSetParameter, setParamPayload, operator)
 			if err != nil {
 				result.Error = err.Error()

@@ -224,6 +224,11 @@ func (h *handler) applyTemplate(w http.ResponseWriter, r *http.Request) {
 			results = append(results, result)
 			continue
 		}
+		if err := h.validateWritableParameters(r.Context(), deviceID, payload); err != nil {
+			result.Error = err.Error()
+			results = append(results, result)
+			continue
+		}
 		job, err := h.jobs.Create(r.Context(), deviceID, jobs.TypeSetParameter, payload, "template:"+t.Name+" ("+operator+")")
 		if err != nil {
 			result.Error = err.Error()
