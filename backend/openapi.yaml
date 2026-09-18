@@ -814,6 +814,26 @@ paths:
                         updated_at: { type: string, format: date-time }
                         source: { type: string }
 
+  /api/v1/devices/{id}/diagnostics-capabilities:
+    get:
+      tags: [Diagnostics]
+      summary: Report discovered diagnostics capabilities without running a test
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  discovered_at: { type: string, format: date-time, nullable: true }
+                  tr143:
+                    type: object
+                    properties:
+                      download_path: { type: string }
+                      upload_path: { type: string }
+
   # --- Diagnostics ---
   /api/v1/devices/{id}/diagnostics/ping:
     post:

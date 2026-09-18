@@ -6,9 +6,11 @@ import (
 	"acs/internal/devices"
 	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
+	"acs/internal/parameters"
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 type createConnectionRequestRequest struct {
@@ -122,6 +124,37 @@ func (h *handler) refreshCellularDiagnostics(w http.ResponseWriter, r *http.Requ
 		"profile_qualified": qualified,
 		"parameters":        paths,
 	})
+}
+
+// getDiagnosticsCapabilities reports only diagnostics objects the device
+// advertised during discovery. It does not run a throughput test or accept a
+// target URL; those operations require a later, separately rate-limited job.
+func (h *handler) getDiagnosticsCapabilities(w http.ResponseWriter, r *http.Request) {
+	device, ok := h.getScopedDevice(w, r, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	discovered, err := h.params.GetNames(r.Context(), device.ID)
+	if err != nil {
+		h.logger.Error("failed to read diagnostics capabilities", "err", err, "device_id", device.ID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	var names map[string]bool
+	if discovered != nil {
+		names = discovered.Names
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"discovered_at": discoveredAtString(discovered),
+		"tr143":         adapters.ResolveTR143Capability(names),
+	})
+}
+
+func discoveredAtString(discovered *parameters.DiscoveredNames) any {
+	if discovered == nil {
+		return nil
+	}
+	return discovered.DiscoveredAt.Format(time.RFC3339)
 }
 
 // cellularDiagnosticPaths prefers the device's discovered model over a

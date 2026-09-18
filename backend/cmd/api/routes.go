@@ -156,6 +156,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	routePerm("POST", "/api/v1/devices/{id}/discover-parameters", operators.PermDiagnosticsRun, h.createParameterDiscovery)
 	route("GET", "/api/v1/devices/{id}/parameter-names", ro, h.getParameterNames)
 	route("GET", "/api/v1/devices/{id}/cellular-capabilities", ro, h.getCellularCapabilities)
+	route("GET", "/api/v1/devices/{id}/diagnostics-capabilities", ro, h.getDiagnosticsCapabilities)
 	routePerm("POST", "/api/v1/devices/{id}/cli/credentials", operators.PermCLIAccess, h.createCLICredential)
 	route("GET", "/api/v1/devices/{id}/cli/credentials", ro, h.listCLICredentials)
 	routePerm("DELETE", "/api/v1/devices/{id}/cli/credentials/{credential_id}", operators.PermCLIAccess, h.deleteCLICredential)
