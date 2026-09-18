@@ -431,6 +431,19 @@ func (h *handler) handleValueChange(c mtp.Conn, vc *usp.ValueChange) {
 	h.checkSubscriptionID(c, deviceID, vc.SubscriptionID)
 
 	if h.paramsRepo != nil {
+		field, isCellularState := adapters.MatchCellularStatePath(vc.ParamPath)
+		var previous string
+		var hadPrevious bool
+		if isCellularState && h.tmfEvents != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+			if cached, err := h.paramsRepo.Get(ctx, deviceID); err == nil {
+				if v, present := cached[vc.ParamPath]; present {
+					previous, hadPrevious = v.Value, true
+				}
+			}
+			cancel()
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
 		err := h.paramsRepo.Upsert(ctx, deviceID, map[string]parameters.CachedValue{
 			vc.ParamPath: {Value: vc.ParamValue, Source: parameters.SourceUSPNotify, UpdatedAt: time.Now()},
@@ -438,6 +451,8 @@ func (h *handler) handleValueChange(c mtp.Conn, vc *usp.ValueChange) {
 		cancel()
 		if err != nil {
 			h.log.Warn("uspc: failed to upsert ValueChange into the parameter cache", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "param_path", vc.ParamPath, "error", err)
+		} else if isCellularState && h.tmfEvents != nil && (!hadPrevious || previous != vc.ParamValue) {
+			h.publishCellularStateChanged(deviceID, field, vc.ParamPath, previous, vc.ParamValue)
 		}
 	} else {
 		h.log.Warn("uspc: paramsRepo not wired, dropping ValueChange", "endpoint", c.Endpoint(), "mtp", c.Kind(), "device_id", deviceID, "param_path", vc.ParamPath)
@@ -447,6 +462,32 @@ func (h *handler) handleValueChange(c mtp.Conn, vc *usp.ValueChange) {
 		return
 	}
 	h.sendNotifyResp(c, vc.SubscriptionID)
+}
+
+// publishCellularStateChanged mirrors handleEvent's TMF fault publication:
+// a best-effort device lookup for account scoping, logged but not fatal on
+// failure. field is only used for the payload key -- USP delivers one
+// ValueChange per parameter, unlike CWMP's batched GetParameterValues, so
+// there is exactly one change to report per call.
+func (h *handler) publishCellularStateChanged(deviceID string, field adapters.CellularField, path, previous, current string) {
+	if h.devicesRepo == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
+	defer cancel()
+	d, err := h.devicesRepo.Get(ctx, deviceID)
+	if err != nil {
+		h.log.Warn("uspc: failed to load device for cellular state event", "device_id", deviceID, "error", err)
+		return
+	}
+	account := ""
+	if d.CustomerID != nil {
+		account = *d.CustomerID
+	}
+	changes := map[string]telemetry.CellularStateChange{path: {Old: previous, New: current}}
+	if err := telemetry.PublishCellularStateChanged(ctx, h.tmfEvents, account, deviceID, "USP", changes, time.Now().UTC()); err != nil {
+		h.log.Warn("uspc: failed to publish cellular state event", "device_id", deviceID, "field", string(field), "error", err)
+	}
 }
 
 // handleObjectCreation invalidates the affected parameter-cache subtree

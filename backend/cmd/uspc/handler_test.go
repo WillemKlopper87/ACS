@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"acs/internal/bss"
 	"acs/internal/devices"
 	"acs/internal/jobs"
 	"acs/internal/observability"
@@ -17,6 +18,7 @@ import (
 	"acs/internal/usp"
 	"acs/internal/usp/mtp"
 	"acs/internal/usp/uspproto"
+	"encoding/json"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
@@ -685,6 +687,73 @@ func TestHandlerValueChangeUpdatesCache(t *testing.T) {
 	}
 	if cv.Source != parameters.SourceUSPNotify {
 		t.Errorf("cached source = %q, want %q", cv.Source, parameters.SourceUSPNotify)
+	}
+}
+
+// fakeTMFSink is a minimal telemetry.Sink recording only what these
+// cellular-state tests need to assert; it never touches the database, so a
+// handler can be given one directly instead of a real *bss.Repository.
+type fakeTMFSink struct {
+	events []struct {
+		eventType, accountID, deviceID string
+		payload                        json.RawMessage
+	}
+}
+
+func (f *fakeTMFSink) CreateEvent(_ context.Context, _, accountID, deviceID, _, eventType string, payload json.RawMessage, _ time.Time) (*bss.EventRecord, error) {
+	f.events = append(f.events, struct {
+		eventType, accountID, deviceID string
+		payload                        json.RawMessage
+	}{eventType, accountID, deviceID, payload})
+	return nil, nil
+}
+func (f *fakeTMFSink) CreateAlarm(context.Context, string, string, string, string, string, string, string, string, json.RawMessage) (*bss.AlarmRecord, error) {
+	return nil, nil
+}
+func (f *fakeTMFSink) ClearAlarm(context.Context, string, string, string) error { return nil }
+
+// TestHandlerValueChangeOnCellularFieldPublishesTMFEvent covers the
+// northbound half of cellular state export: a ValueChange Notify on a
+// canonical cellular state path (here, RAT) must publish
+// CellularStateChanged so a BSS/OSS webhook subscriber sees it, in addition
+// to the ordinary cache update TestHandlerValueChangeUpdatesCache already
+// covers.
+func TestHandlerValueChangeOnCellularFieldPublishesTMFEvent(t *testing.T) {
+	h, deviceID := newNotifyTestHandler(t)
+	sink := &fakeTMFSink{}
+	h.tmfEvents = sink
+	c := &captureConn{id: agent}
+	h.markReconciled(c, deviceID)
+
+	path := "Device.Cellular.Interface.1.CurrentAccessTechnology"
+	msg := valueChangeMsg("sub-vc-1", false, path, "NR")
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg)})
+
+	if len(sink.events) != 1 {
+		t.Fatalf("published events = %+v, want exactly 1", sink.events)
+	}
+	got := sink.events[0]
+	if got.eventType != "CellularStateChanged" || got.deviceID != deviceID {
+		t.Fatalf("event = %+v, want type=CellularStateChanged device_id=%s", got, deviceID)
+	}
+}
+
+// TestHandlerValueChangeOnNonCellularFieldSkipsTMFEvent proves the RAT
+// case above isn't published for every ValueChange -- only cellular state
+// fields qualify, matching WiFi SSID/password writes must not spam the
+// event stream.
+func TestHandlerValueChangeOnNonCellularFieldSkipsTMFEvent(t *testing.T) {
+	h, deviceID := newNotifyTestHandler(t)
+	sink := &fakeTMFSink{}
+	h.tmfEvents = sink
+	c := &captureConn{id: agent}
+	h.markReconciled(c, deviceID)
+
+	msg := valueChangeMsg("sub-vc-1", false, "Device.WiFi.SSID.1.SSID", "MyNetwork")
+	h.OnRecord(mtp.Inbound{Conn: c, Record: recordWire(t, agent, ctrl, msg)})
+
+	if len(sink.events) != 0 {
+		t.Fatalf("published events = %+v, want none for a non-cellular field", sink.events)
 	}
 }
 
