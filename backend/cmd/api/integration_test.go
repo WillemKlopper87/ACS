@@ -495,7 +495,6 @@ func TestIntegration_H3SubResourceIsolation(t *testing.T) {
 func TestIntegration_AlertTenantIsolation(t *testing.T) {
 	e := newTestEnv(t)
 	custA, custB := e.customer("Customer A"), e.customer("Customer B")
-	devA := e.device("A001", &custA)
 	devB := e.device("B001", &custB)
 	e.operator("alice", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custA})
 	e.operator("bob", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custB})
@@ -533,7 +532,6 @@ func TestIntegration_AlertTenantIsolation(t *testing.T) {
 	if r := e.call("bob", "PATCH", "/api/v1/alert-incidents/"+incidentB.ID+"?state=acknowledged", nil); r.code != http.StatusNoContent {
 		t.Errorf("bob acknowledge own incident = %d %s, want 204", r.code, r.body)
 	}
-	_ = devA // keeps both customer fixtures explicit in this isolation test.
 }
 
 // TestIntegration_ZeroScopeDenyByDefault is the P0.1 acceptance gate
