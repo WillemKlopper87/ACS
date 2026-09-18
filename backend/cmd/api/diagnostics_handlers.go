@@ -337,6 +337,11 @@ type tr143Request struct {
 	URL string `json:"url"`
 }
 
+// tr143MaxAttempts mirrors diagPingMaxAttempts/diagTracerouteMaxAttempts —
+// same trigger-then-poll-to-completion shape, same reason for a cap on how
+// many times cmd/acs will requeue the job for another poll.
+const tr143MaxAttempts = 15
+
 func (h *handler) createTR143(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_, ok := h.getScopedDevice(w, r, id)
@@ -363,15 +368,24 @@ func (h *handler) createTR143(w http.ResponseWriter, r *http.Request) {
 		names = discovered.Names
 	}
 	capability := adapters.ResolveTR143Capability(names)
-	jobType, prefix := jobs.TypeDiagnosticsDownload, capability.DownloadPath
-	if r.PathValue("direction") == "upload" {
-		jobType, prefix = jobs.TypeDiagnosticsUpload, capability.UploadPath
+	direction := r.PathValue("direction")
+	if direction != "upload" && direction != "download" {
+		http.Error(w, `direction must be "download" or "upload"`, http.StatusBadRequest)
+		return
 	}
-	if prefix == "" {
+
+	var jobType string
+	var payload any
+	if direction == "upload" {
+		jobType, payload = jobs.TypeDiagnosticsUpload, jobs.DiagnosticsUploadPayload{URL: req.URL, Prefix: capability.UploadPath}
+	} else {
+		jobType, payload = jobs.TypeDiagnosticsDownload, jobs.DiagnosticsDownloadPayload{URL: req.URL, Prefix: capability.DownloadPath}
+	}
+	if (direction == "upload" && capability.UploadPath == "") || (direction == "download" && capability.DownloadPath == "") {
 		http.Error(w, "device has not advertised this TR-143 capability", http.StatusConflict)
 		return
 	}
-	job, err := h.jobs.CreateWithMaxAttempts(r.Context(), id, jobType, map[string]string{"url": req.URL, "prefix": prefix}, operatorFromRequest(r), 15)
+	job, err := h.jobs.CreateWithMaxAttempts(r.Context(), id, jobType, payload, operatorFromRequest(r), tr143MaxAttempts)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

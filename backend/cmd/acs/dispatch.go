@@ -61,7 +61,11 @@ func diagTraceroutePollPaths(prefix string) []string {
 }
 
 func diagTR143PollPaths(prefix string) []string {
-	return []string{prefix + "DiagnosticsState", prefix + "ROMTime", prefix + "BOMTime", prefix + "EOMTime", prefix + "TestBytesReceived", prefix + "TestBytesSent", prefix + "TotalBytesReceived", prefix + "TotalBytesSent"}
+	return []string{
+		prefix + "DiagnosticsState", prefix + "ROMTime", prefix + "BOMTime", prefix + "EOMTime",
+		prefix + "TestBytesReceived", prefix + "TestBytesSent", prefix + "TotalBytesReceived", prefix + "TotalBytesSent",
+		prefix + "TCPOpenRequestTime", prefix + "TCPOpenResponseTime",
+	}
 }
 
 // renderJobRequest turns a leased job into the CWMP RPC request bytes to
@@ -157,6 +161,11 @@ func (h *handler) renderJobRequest(job *jobs.Job) (body []byte, ok bool) {
 		if err := json.Unmarshal(job.Payload, &payload); err != nil {
 			return nil, false
 		}
+		// jobs.DiagnosticsDownloadPayload/DiagnosticsUploadPayload have the
+		// identical two fields, both JSON-tagged the same way, so the
+		// anonymous struct above already decodes either one — kept
+		// anonymous rather than switching on job.Type to unmarshal into
+		// the type-specific struct only to read the same two fields.
 		prefix := payload.Prefix
 		if prefix == "" {
 			prefix = "Device.IP.Diagnostics." + map[bool]string{true: "UploadDiagnostics.", false: "DownloadDiagnostics."}[job.Type == jobs.TypeDiagnosticsUpload]
@@ -444,7 +453,7 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 		case "Requested", "":
 			h.requeueDiagnostic(ctx, deviceID, job, "TR-143 still running")
 		case "Complete":
-			h.markJobSuccess(ctx, deviceID, job)
+			h.markTR143Success(ctx, deviceID, job, list, prefix, job.Type == jobs.TypeDiagnosticsUpload)
 		default:
 			_ = h.jobs.MarkFailed(ctx, job.ID, "", state)
 			h.auditFailure(ctx, deviceID, job, "", state)
@@ -580,6 +589,106 @@ func diagnosticsState(list []cwmp.ParameterValueStruct, prefix string) string {
 		}
 	}
 	return ""
+}
+
+// paramValue looks up one exact parameter name in a GetParameterValues
+// response, or "" if absent — the CPE omits a result parameter it doesn't
+// support rather than reporting it as empty, so absence is the normal case
+// for TCPOpenRequestTime/TCPOpenResponseTime on many CPEs.
+func paramValue(list []cwmp.ParameterValueStruct, name string) string {
+	for _, p := range list {
+		if p.Name == name {
+			return p.Value
+		}
+	}
+	return ""
+}
+
+// parseCWMPDateTime parses a TR-143 xsd:dateTime result parameter
+// (ROMTime/BOMTime/EOMTime/TCPOpen*Time). CPEs report these in RFC3339,
+// sometimes with fractional seconds; TR-069's own convention for "unknown"
+// is the zero date 0001-01-01T00:00:00Z, which this treats as absent
+// rather than a valid instant, since a duration computed against it would
+// be meaningless.
+func parseCWMPDateTime(s string) (time.Time, bool) {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil && t.Year() > 1 {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// tr143Result is the computed detail attached to a completed
+// DIAGNOSTICS_DOWNLOAD/DIAGNOSTICS_UPLOAD job's result_detail (surfaced via
+// GET /jobs/{command_key}), so a caller gets a usable throughput figure
+// instead of having to re-derive it from raw ROM/BOM/EOM timestamps and
+// byte counters themselves.
+type tr143Result struct {
+	Direction          string `json:"direction"`
+	TestBytes          int64  `json:"test_bytes"`
+	TestDurationMS     int64  `json:"test_duration_ms,omitempty"`
+	ThroughputBps      int64  `json:"throughput_bps,omitempty"`
+	TCPOpenTimeMS      int64  `json:"tcp_open_time_ms,omitempty"`
+	ROMTime            string `json:"rom_time,omitempty"`
+	BOMTime            string `json:"bom_time,omitempty"`
+	EOMTime            string `json:"eom_time,omitempty"`
+	TotalBytesSent     int64  `json:"total_bytes_sent,omitempty"`
+	TotalBytesReceived int64  `json:"total_bytes_received,omitempty"`
+}
+
+// computeTR143Result turns a completed TR-143 poll's raw parameters into
+// tr143Result. Test-duration/throughput are only populated when BOM and EOM
+// both parsed and EOM is after BOM — a CPE that didn't populate them
+// (common for those that only support the mandatory subset) still gets its
+// raw byte counters reported, just without a derived rate.
+func computeTR143Result(list []cwmp.ParameterValueStruct, prefix string, upload bool) tr143Result {
+	result := tr143Result{Direction: map[bool]string{true: "upload", false: "download"}[upload]}
+	testBytesName := prefix + "TestBytesReceived"
+	if upload {
+		testBytesName = prefix + "TestBytesSent"
+	}
+	result.TestBytes, _ = strconv.ParseInt(paramValue(list, testBytesName), 10, 64)
+	result.TotalBytesSent, _ = strconv.ParseInt(paramValue(list, prefix+"TotalBytesSent"), 10, 64)
+	result.TotalBytesReceived, _ = strconv.ParseInt(paramValue(list, prefix+"TotalBytesReceived"), 10, 64)
+
+	result.ROMTime = paramValue(list, prefix+"ROMTime")
+	result.BOMTime = paramValue(list, prefix+"BOMTime")
+	result.EOMTime = paramValue(list, prefix+"EOMTime")
+	bom, bomOK := parseCWMPDateTime(result.BOMTime)
+	eom, eomOK := parseCWMPDateTime(result.EOMTime)
+	if bomOK && eomOK && eom.After(bom) && result.TestBytes > 0 {
+		duration := eom.Sub(bom)
+		result.TestDurationMS = duration.Milliseconds()
+		result.ThroughputBps = int64(float64(result.TestBytes*8) / duration.Seconds())
+	}
+
+	openReq, openReqOK := parseCWMPDateTime(paramValue(list, prefix+"TCPOpenRequestTime"))
+	openResp, openRespOK := parseCWMPDateTime(paramValue(list, prefix+"TCPOpenResponseTime"))
+	if openReqOK && openRespOK && openResp.After(openReq) {
+		result.TCPOpenTimeMS = openResp.Sub(openReq).Milliseconds()
+	}
+	return result
+}
+
+// markTR143Success completes a DIAGNOSTICS_DOWNLOAD/DIAGNOSTICS_UPLOAD job
+// with its computed throughput attached, mirroring how the AddObject case
+// above attaches instance_number — the audit trail and job status both get
+// the same detail a caller would otherwise have to recompute by hand.
+func (h *handler) markTR143Success(ctx context.Context, deviceID string, job *jobs.Job, list []cwmp.ParameterValueStruct, prefix string, upload bool) {
+	result := computeTR143Result(list, prefix, upload)
+	if err := h.jobs.MarkSuccessWithDetail(ctx, job.ID, result); err != nil {
+		h.logger.Error("failed to mark job success", "err", err, "job_id", job.ID)
+	}
+	h.metrics.JobsCompletedTotal.WithLabelValues(job.Type, jobs.StatusSuccess).Inc()
+	if err := h.auditor.Record(ctx, "system", deviceID, "JobSucceeded", map[string]any{
+		"job_id": job.ID, "command_key": job.CommandKey, "type": job.Type,
+		"test_bytes": result.TestBytes, "throughput_bps": result.ThroughputBps,
+	}); err != nil {
+		h.logger.Error("failed to write audit record", "err", err)
+	}
+	h.logger.Info("job succeeded", "job_id", job.ID, "command_key", job.CommandKey, "type", job.Type,
+		"device_id", deviceID, "throughput_bps", result.ThroughputBps)
 }
 
 func (h *handler) auditFailure(ctx context.Context, deviceID string, job *jobs.Job, code, msg string) {
