@@ -100,7 +100,20 @@ func TranslateWithCapabilities(action string, params map[string]string, wg Walle
 	if action == "MODIFY_WIFI" {
 		return translateModifyWifiWithCapabilities(params, dataModelRoot, discovered)
 	}
-	return translator(params, wg, dataModelRoot)
+	writes, err := translator(params, wg, dataModelRoot)
+	if err != nil || discovered == nil {
+		return writes, err
+	}
+	for _, write := range writes {
+		writable, exists := discovered[write.Name]
+		if !exists {
+			return nil, fmt.Errorf("%w: parameter %q is not supported by the discovered device model", ErrUnsupportedAction, write.Name)
+		}
+		if !writable {
+			return nil, fmt.Errorf("%w: parameter %q is read-only on the discovered device model", ErrUnsupportedAction, write.Name)
+		}
+	}
+	return writes, nil
 }
 
 func translateWalledGarden(wg WalledGardenConfig, value string) ([]ParameterWrite, error) {

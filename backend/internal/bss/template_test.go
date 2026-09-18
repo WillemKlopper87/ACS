@@ -138,6 +138,25 @@ func TestTranslateSuspendActivateConfigured(t *testing.T) {
 	}
 }
 
+func TestTranslateSuspendRejectsNonWritableDiscoveredWalledGarden(t *testing.T) {
+	wg := WalledGardenConfig{Parameter: "Device.X_VENDOR_WalledGarden.Enable", SuspendValue: "true", ActiveValue: "false"}
+	_, err := TranslateWithCapabilities("SUSPEND", nil, wg, "", map[string]bool{wg.Parameter: false})
+	if !errors.Is(err, ErrUnsupportedAction) {
+		t.Errorf("err = %v, want ErrUnsupportedAction", err)
+	}
+}
+
+func TestTranslateSuspendAcceptsWritableDiscoveredWalledGarden(t *testing.T) {
+	wg := WalledGardenConfig{Parameter: "Device.X_VENDOR_WalledGarden.Enable", SuspendValue: "true", ActiveValue: "false"}
+	params, err := TranslateWithCapabilities("SUSPEND", nil, wg, "", map[string]bool{wg.Parameter: true})
+	if err != nil {
+		t.Fatalf("TranslateWithCapabilities: %v", err)
+	}
+	if len(params) != 1 || params[0].Name != wg.Parameter {
+		t.Errorf("params = %+v, want writable walled-garden parameter", params)
+	}
+}
+
 func TestTranslateUnknownAction(t *testing.T) {
 	_, err := Translate("DELETE_ACCOUNT", nil, WalledGardenConfig{}, "")
 	if !errors.Is(err, ErrUnsupportedAction) {
