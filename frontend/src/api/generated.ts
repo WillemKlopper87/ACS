@@ -1927,6 +1927,181 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/cellular-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resolve evidence-backed canonical cellular read paths without polling or authorizing writes */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            device_id: string;
+                            data_model_root: string;
+                            /** Format: date-time */
+                            discovered_at?: string | null;
+                            profile: {
+                                id?: string | null;
+                                matched_by?: string | null;
+                                qualified?: boolean;
+                                evidence?: Record<string, never>;
+                                /** Format: date-time */
+                                assigned_at?: string | null;
+                            };
+                            resolutions: {
+                                [key: string]: {
+                                    path: string;
+                                    standard: boolean;
+                                    discovered: boolean;
+                                };
+                            };
+                            values?: {
+                                [key: string]: {
+                                    path: string;
+                                    value: unknown;
+                                    raw: string;
+                                    unit?: string;
+                                    /** Format: date-time */
+                                    updated_at: string;
+                                    source: string;
+                                };
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/diagnostics-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report discovered diagnostics capabilities without running a test */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: date-time */
+                            discovered_at?: string | null;
+                            tr143?: {
+                                download_path?: string;
+                                upload_path?: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/diagnostics/tr143/{direction}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue a capability-gated TR-143 download or upload diagnostic */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                    direction: "download" | "upload";
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uri */
+                        url: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Invalid or disallowed target URL */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Device capability not discovered */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/diagnostics/ping": {
         parameters: {
             query?: never;

@@ -11,7 +11,7 @@ services:
     image: postgres:18-alpine
     environment:
       POSTGRES_USER: acs
-      POSTGRES_PASSWORD: ${ACS_POSTGRES_PASSWORD:-acs}
+      POSTGRES_PASSWORD: ${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}
       POSTGRES_DB: acs
     ports:
       - "127.0.0.1:5432:5432"
@@ -125,7 +125,7 @@ services:
       - "3478:3478/udp"
     env_file: .env.containerized
     environment:
-      ACS_POSTGRES_DSN: postgres://acs:${ACS_POSTGRES_PASSWORD:-acs}@postgres:5432/acs?sslmode=disable
+      ACS_POSTGRES_DSN: postgres://acs:${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}@postgres:5432/acs?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
@@ -139,7 +139,7 @@ services:
       - "127.0.0.1:8080:8080"
     env_file: .env.containerized
     environment:
-      ACS_POSTGRES_DSN: postgres://acs:${ACS_POSTGRES_PASSWORD:-acs}@postgres:5432/acs?sslmode=disable
+      ACS_POSTGRES_DSN: postgres://acs:${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}@postgres:5432/acs?sslmode=disable
       ACS_BSS_ADAPTER_URL: http://bssadapter:8090
     depends_on:
       postgres:
@@ -156,7 +156,7 @@ services:
       - "127.0.0.1:8090:8090"
     env_file: .env.containerized
     environment:
-      ACS_POSTGRES_DSN: postgres://acs:${ACS_POSTGRES_PASSWORD:-acs}@postgres:5432/acs?sslmode=disable
+      ACS_POSTGRES_DSN: postgres://acs:${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}@postgres:5432/acs?sslmode=disable
       ACS_INTERNAL_API_URL: http://api:8080
     depends_on:
       postgres:
@@ -175,14 +175,12 @@ services:
       - "127.0.0.1:8092:8092"
     env_file: .env.containerized
     environment:
-      # No database and no dependency on the other services (design
-      # §4.1: cmd/uspc wires protocol to transport only) -- it does not
-      # need postgres/api/bssadapter to be up first. ACS_USP_ALLOW_PLAINTEXT
-      # stands in for a real cert here, same as this compose file's other
-      # dev-friendly defaults; put TLS in front for anything reachable
-      # beyond this host.
+      ACS_USP_POSTGRES_DSN: postgres://acs:${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}@postgres:5432/acs?sslmode=disable
       ACS_USP_CONTROLLER_ID: ${ACS_USP_CONTROLLER_ID:-uspc-containerized}
       ACS_USP_ALLOW_PLAINTEXT: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   frontend:
     build:

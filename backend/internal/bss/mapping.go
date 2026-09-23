@@ -363,6 +363,24 @@ func (r *Repository) ActiveDeviceForAccount(ctx context.Context, accountID, role
 	return m, err
 }
 
+// CurrentAccountForDevice resolves the account that currently owns a device.
+// Historical assignments are deliberately excluded so reassigned devices do
+// not grant their previous account continued access.
+func (r *Repository) CurrentAccountForDevice(ctx context.Context, deviceID string) (string, error) {
+	var accountID string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT account_id FROM account_device_mappings
+		 WHERE device_id = $1 AND unassigned_at IS NULL
+	`, deviceID).Scan(&accountID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("find current device account: %w", err)
+	}
+	return accountID, nil
+}
+
 // GetMappingByID looks up a mapping by its own id, active or historical
 // — TMF640's Service.id is this mapping id (design
 // docs/superpowers/specs/2026-09-13-bss-tmf640-design.md §4.1), and

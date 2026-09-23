@@ -2,6 +2,8 @@
 
 This document is the compatibility contract for onboarding heterogeneous TR-069/CWMP CPEs to ACS. "Mock" means the behaviour is exercised by automated tests; "Real device" means a recorded result against physical hardware. Real-device rows are deliberately not inferred from mocks: firmware-specific hardware qualification remains mandatory before production rollout.
 
+The supported standards scope is deliberately bounded; see [`TMF-TR-BSS-OSS-COMPLETION-PLAN.md`](TMF-TR-BSS-OSS-COMPLETION-PLAN.md) for the completion criteria and standards/version decision gates.
+
 ## Compatibility-first ACS baseline
 
 The CWMP ingress is intentionally tolerant where doing so does not weaken identity or authorization:

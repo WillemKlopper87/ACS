@@ -18,14 +18,15 @@ import (
 // Limiter hands out one token bucket per key — a bearer token, a device
 // OUI+Serial, a client IP, whatever identity a caller has (build plan
 // §7.1's per-surface table). Buckets idle past idleTTL are evicted lazily
-// on the next Allow call, so a churn of one-off keys (e.g. IPs from an
+// by a throttled Allow sweep, so a churn of one-off keys (e.g. IPs from an
 // unauthenticated flood) doesn't grow this map forever.
 type Limiter struct {
-	mu      sync.Mutex
-	buckets map[string]*bucket
-	rate    rate.Limit
-	burst   int
-	idleTTL time.Duration
+	mu        sync.Mutex
+	buckets   map[string]*bucket
+	rate      rate.Limit
+	burst     int
+	idleTTL   time.Duration
+	nextSweep time.Time
 }
 
 type bucket struct {
@@ -50,27 +51,35 @@ func (l *Limiter) Allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.evictIdleLocked()
+	now := time.Now()
+	if !now.Before(l.nextSweep) {
+		l.evictIdleLocked(now)
+		sweepInterval := time.Second
+		if l.idleTTL > 0 && l.idleTTL/4 < sweepInterval {
+			sweepInterval = l.idleTTL / 4
+			if sweepInterval < time.Millisecond {
+				sweepInterval = time.Millisecond
+			}
+		}
+		l.nextSweep = now.Add(sweepInterval)
+	}
 
 	b, ok := l.buckets[key]
 	if !ok {
 		b = &bucket{limiter: rate.NewLimiter(l.rate, l.burst)}
 		l.buckets[key] = b
 	}
-	b.lastSeen = time.Now()
+	b.lastSeen = now
 	return b.limiter.Allow()
 }
 
-// evictIdleLocked drops buckets idle past idleTTL. Full-scan on every
-// Allow call — fine for the small, low-cardinality key sets this is used
-// with today (a handful of bearer tokens or fleet devices, not millions
-// of keys); would need a smarter sweep before this scales past that.
-// Called under l.mu.
-func (l *Limiter) evictIdleLocked() {
+// evictIdleLocked drops buckets idle past idleTTL. Called on a throttled
+// Allow sweep and under l.mu.
+func (l *Limiter) evictIdleLocked(now time.Time) {
 	if l.idleTTL <= 0 {
 		return
 	}
-	cutoff := time.Now().Add(-l.idleTTL)
+	cutoff := now.Add(-l.idleTTL)
 	for k, b := range l.buckets {
 		if b.lastSeen.Before(cutoff) {
 			delete(l.buckets, k)

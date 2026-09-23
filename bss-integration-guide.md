@@ -5,7 +5,7 @@
 > checklist and a roadmap, and points back here for the endpoint-by-endpoint
 > detail. This document remains the workflow reference.
 
-Status: reflects the actual implementation as of 2026-08-11, verified against the running code (not speculative). Originally written 2026-08-04; updated 2026-08-11 to correct the webhooks status below, which shipped in the interim and was previously (wrongly) documented here as not implemented. Updated 2026-09-13: §6's first bullet corrected — it predated role addressing and contradicted §2.  
+Status: `/bss/v1` workflow reference last reconciled 2026-09-23 against the current repository. TMF surfaces and their boundaries are summarized in [`docs/TMF-API-STATUS.md`](docs/TMF-API-STATUS.md); feature availability depends on configuration, exact API surface, and device capability. The current working tree contains uncommitted TMF641 recovery changes; verify merged release behavior before deploying.
 Audience: BSS/CRM integration teams (Salesforce Comm Cloud, Amdocs, Netcracker, custom operator CRM).  
 Implementation: `backend/cmd/bssadapter`, `backend/internal/bss` — see `tr069-acs-build-plan.md` §5 for the design rationale and §9-§10 for everything built since, including the OAuth2 client-credentials rollout.
 
@@ -139,7 +139,7 @@ An order also accepts an optional `role`, resolved the same way a mapping's role
 #### 3. Execution Lifecycle
 
 * The order is translated into TR-069 parameter writes and queued as a job in PostgreSQL.
-* The router applies them the next time it opens a TR-069 session (either on its normal periodic check-in, or sooner once Connection Request wake-up is available — not yet implemented, see the build plan's Phase 3).
+* The router applies them during its next CWMP session. The ACS can attempt a Connection Request to wake a reachable CPE; direct HTTP and STUN/Annex G UDP paths are implemented where the device and network support them. A request is not proof the CPE woke up: verify the subsequent Inform and job state. Behind NAT, qualify the exact APN/STUN configuration and reachability first; see [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) and [`docs/FIELD-CPE-VALIDATION.md`](docs/FIELD-CPE-VALIDATION.md).
 * The ACS confirms the write actually took by reading the parameters back from the device afterward — it does not just trust the router's acknowledgement.
 * Job status becomes `SUCCESS` (or `FAILED` with a fault code/message, e.g. if the router rejected a parameter).
 
@@ -156,9 +156,9 @@ Resubmitting the exact same `external_order_id` — captured response, same job,
 }
 ```
 
-### 2.2 `SUSPEND` / `ACTIVATE` — not yet available
+### 2.2 `SUSPEND` / `ACTIVATE` — requires operator configuration
 
-Captured response for `"action": "SUSPEND"` (`400`):
+When no per-vendor walled-garden parameter is configured, these `/bss/v1/orders` actions are rejected with `400 ErrInvalidRequest`. The exact response text can vary by current implementation; older captured payloads below are historical examples, not a response contract.
 
 ```json
 {
@@ -167,7 +167,7 @@ Captured response for `"action": "SUSPEND"` (`400`):
 }
 ```
 
-This is deliberate, not an oversight: a naive suspend implementation (disabling the router's WAN interface) would cut off the same connection TR-069 uses to reach the device, risking the router becoming unreachable for its own follow-up `ACTIVATE` order. A safe mechanism (firewall/walled-garden redirect rather than interface disable) needs a per-vendor design decision first. If your rollout needs suspend/reactivate, flag it — this is the next thing to design, not build blind.
+This is deliberate: disabling the WAN interface could cut off the management path needed for reactivation. An operator must configure and qualify a safe walled-garden parameter for the target vendor/firmware before enabling these actions.
 
 ---
 
@@ -493,7 +493,7 @@ Every error response has the shape:
 
 ## 6. Known limitations to plan around
 
-- **Device release and swap are not on the API yet.** Multi-device accounts *are* supported — every mapping and order carries a `role` (§2), an account holds at most one active device per role, and an order addresses the role rather than "whichever device was touched last". (An earlier version of this bullet said otherwise; it predated role addressing and contradicted §2.) What is still missing is the write side of assignment lifecycle: **unassigning a device, and swapping one under RMA or upgrade, currently need operator action** — there is no `/bss/v1` endpoint for either. Both are planned to arrive as order items on the TMF641 surface. If your rollout needs programmatic device swap, raise it early.
+- **Device release and swap are not available through `/bss/v1`.** Multi-device accounts are addressed by role. The separate TMF641 Service Ordering API now supports unassign and same-role swap order items; see [`docs/TMF-API-STATUS.md`](docs/TMF-API-STATUS.md) for its current route and behavior.
 - **Idempotency now has a durable outbox, with one disclosed narrow residual.** The order's intent (including the exact device and parameters it will dispatch) is recorded *before* dispatch is attempted, and a background reconciler retries a failed dispatch with exponential backoff, dead-lettering it after 8 attempts (visible via the admin panel's order-status stats; dead-lettered orders are not automatically requeued -- that's an operator decision). A retried `external_order_id` while an order is still pending or dead-lettered returns that order's own current status. Two concurrent requests for the same new `external_order_id`, and any number of concurrently-running adapter instances, are both handled safely -- neither can double-dispatch the same order. The one remaining gap is narrower and shaped differently: a crash in the exact window between dispatch succeeding and that success being recorded can still, in principle, cause the reconciler's retry to double-dispatch. This is not a concurrent-timing issue (that's closed); it needs an actual process crash at that one specific point. A fully exactly-once guarantee would need idempotency-key support on the internal ACS API itself, not yet built.
 - **Rate limiting is live**, per-token (or per-IP when auth is disabled): a token-bucket limiter keyed on your bearer token, defaulting to 5 req/s with a burst of 10 (`ACS_BSS_RATE_LIMIT_PER_SECOND`/`ACS_BSS_RATE_LIMIT_BURST`, set server-side). A `429` means you've exceeded your bucket, not an auth problem — back off and retry rather than treating it as a hard failure.
 - **Request bodies are capped at 1 MiB.** An oversized `POST /bss/v1/orders` or `/mappings` body is rejected with `400` before it reaches mapping/order logic.

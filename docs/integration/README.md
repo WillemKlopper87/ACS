@@ -2,7 +2,7 @@
 
 **For BSS and OSS developers integrating with the ACS platform.**
 
-Version 2026-09-15 · covers the live `/bss/v1` API and the TMF northbound surfaces.
+Version 2026-09-23 · covers the `/bss/v1` API and the currently implemented TMF northbound subset.
 
 The ACS platform manages customer premises equipment (routers, ONTs,
 extenders, set-top boxes) over TR-069/CWMP and USP/TR-369. It does not
@@ -24,8 +24,7 @@ device belongs to which account, and asks it to change device settings.
 ## Machine-readable specification
 
 [`backend/openapi-bssadapter.yaml`](../../backend/openapi-bssadapter.yaml) —
-OpenAPI 3.0.3, covering every `/bss/v1` endpoint. The TMF routes are
-documented in the TMF status page and their version-specific contracts.
+OpenAPI 3.0.3, covering every `/bss/v1` endpoint. A separate OpenAPI file exists for TMF639 only (`backend/openapi-tmf639.yaml`). The other TMF surfaces are summarized in the TMF status page and design notes; their full machine-readable contracts and official CTK validation remain roadmap work.
 
 Generate a client rather than hand-writing one:
 
@@ -74,6 +73,8 @@ drift from the running service.
    status — never a duplicate.
 3. **`429` means slow down, not "authentication failed".** Back off and
    retry.
+
+HTTP idempotency prevents duplicate logical orders for the same `external_order_id`; it is not an end-to-end exactly-once guarantee. A narrow crash window after internal dispatch but before its success is recorded can cause a dispatch retry. See the integration model's known limitations.
 
 All three are covered properly in the [integration model](02-integration-model.md).
 

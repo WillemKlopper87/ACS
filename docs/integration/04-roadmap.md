@@ -8,6 +8,8 @@ The ACS exposes the existing `/bss/v1` integration contract alongside the TMF no
 
 See [TMF API status](../TMF-API-STATUS.md) for routes and behavior, and the machine-readable adapter contract in [`backend/openapi-bssadapter.yaml`](../../backend/openapi-bssadapter.yaml) where applicable.
 
+The broader bounded-completion plan is in [`TMF-TR-BSS-OSS-COMPLETION-PLAN.md`](../TMF-TR-BSS-OSS-COMPLETION-PLAN.md).
+
 ## Next priorities
 
 - Add official TM Forum contract and CTK validation for each selected API version.

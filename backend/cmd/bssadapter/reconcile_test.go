@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"acs/internal/auth"
 	"acs/internal/bss"
 )
 
@@ -88,6 +90,60 @@ func TestGetReconciliationReportsMatchAndDrift(t *testing.T) {
 	}
 	if byPath["Device.WiFi.SSID.1.Enable"].Status != bss.ReconcileDrift {
 		t.Errorf("Enable status = %+v, want drift (ordered 1, device reports 0)", byPath["Device.WiFi.SSID.1.Enable"])
+	}
+}
+
+func TestGetReconciliationUsesCurrentAccountAndFiltersHistory(t *testing.T) {
+	const deviceID = "11111111-1111-1111-1111-111111111111"
+	ctx, h, db := newOrderTestHandler(t, acsRouterStub(t,
+		map[string]string{"ck-old": "SUCCESS", "ck-current": "SUCCESS"},
+		map[string]bss.CachedParameter{"Device.WiFi.SSID.1.SSID": {Value: "CurrentNet"}},
+	))
+	h.oauthSigningSecret = []byte("reconciliation-test-oauth-secret-material")
+	seedOrderDevice(t, ctx, db, "acct-old", deviceID)
+	insertDispatchedOrder(t, ctx, h.mappings, "old-order", "acct-old", deviceID, "ck-old",
+		[]bss.ParameterWrite{{Name: "Device.WiFi.SSID.1.SSID", Value: "FormerNet", Type: "string"}})
+	if _, err := db.ExecContext(ctx, `UPDATE account_device_mappings SET unassigned_at = now(), unassign_reason = 'moved' WHERE device_id = $1 AND unassigned_at IS NULL`, deviceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at) VALUES (gen_random_uuid(), 'acct-current', $1, $2, 'gateway', now())`, deviceID, deviceID+"-serial"); err != nil {
+		t.Fatal(err)
+	}
+	insertDispatchedOrder(t, ctx, h.mappings, "current-order", "acct-current", deviceID, "ck-current",
+		[]bss.ParameterWrite{{Name: "Device.WiFi.SSID.1.SSID", Value: "CurrentNet", Type: "string"}})
+
+	issueToken := func(accountID string) string {
+		t.Helper()
+		now := time.Now()
+		token, err := auth.SignJWT(h.oauthSigningSecret, auth.Claims{Subject: "client", Role: bssClientRole,
+			IssuedAt: now, ExpiresAt: now.Add(time.Hour), AccountIDs: []string{accountID}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	for _, tc := range []struct {
+		accountID  string
+		wantStatus int
+	}{{"acct-old", http.StatusNotFound}, {"acct-current", http.StatusOK}} {
+		req := httptest.NewRequest(http.MethodGet, "/bss/v1/devices/"+deviceID+"/reconciliation", nil)
+		req.Header.Set("Authorization", "Bearer "+issueToken(tc.accountID))
+		req.SetPathValue("device_id", deviceID)
+		rec := httptest.NewRecorder()
+		h.getReconciliation(rec, req)
+		if rec.Code != tc.wantStatus {
+			t.Fatalf("account %s status = %d, want %d; body: %s", tc.accountID, rec.Code, tc.wantStatus, rec.Body.String())
+		}
+		if tc.wantStatus != http.StatusOK {
+			continue
+		}
+		var got bss.DeviceReconciliation
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if got.AccountID != "acct-current" || len(got.Fields) != 1 || got.Fields[0].IntendedValue != "CurrentNet" {
+			t.Fatalf("reconciliation = %+v, want only current account intent", got)
+		}
 	}
 }
 

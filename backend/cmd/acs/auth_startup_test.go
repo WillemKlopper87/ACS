@@ -41,6 +41,7 @@ func clearCWMPTransportEnv(t *testing.T) {
 	t.Setenv("ACS_TLS_KEY", "")
 	t.Setenv("ACS_TLS_MIN_VERSION", "")
 	t.Setenv("ACS_AUTH_ALLOW_BASIC", "")
+	t.Setenv("ACS_CWMP_ALLOW_PLAINTEXT", "true")
 }
 
 func TestLoadACSDeploymentProfile(t *testing.T) {
@@ -69,6 +70,11 @@ func TestValidateCWMPTransportStartupProduction(t *testing.T) {
 	if err := validateCWMPTransportStartup(acsDeploymentProfileLab); err != nil {
 		t.Fatalf("lab compatibility config rejected: %v", err)
 	}
+	t.Setenv("ACS_CWMP_ALLOW_PLAINTEXT", "")
+	if err := validateCWMPTransportStartup(acsDeploymentProfileLab); err == nil {
+		t.Fatal("lab profile without TLS or explicit plaintext opt-in succeeded")
+	}
+	t.Setenv("ACS_CWMP_ALLOW_PLAINTEXT", "true")
 
 	t.Run("tls pair required", func(t *testing.T) {
 		clearCWMPTransportEnv(t)
@@ -132,6 +138,7 @@ func TestValidateCPEAuthStartupAppliesProductionTLSDefault(t *testing.T) {
 	// A configured strong shared secret avoids making this transport-default
 	// regression depend on the per-device credential-key requirement.
 	t.Setenv("ACS_DIGEST_PASSWORD", "production-digest-password-material")
+	t.Setenv("ACS_CREDENTIAL_ENCRYPTION_KEY", "production-device-encryption-key-material")
 
 	if err := validateCPEAuthStartup(discardLogger(), testCPEAuthSecrets()...); err != nil {
 		t.Fatalf("valid production startup rejected: %v", err)

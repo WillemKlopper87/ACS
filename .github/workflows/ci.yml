@@ -140,6 +140,7 @@ jobs:
           ACS_INTERNAL_SERVICE_TOKEN: ci-only-internal-service-token-0123456789abcdef
           ACS_DIGEST_USERNAME: cpe
           ACS_DIGEST_PASSWORD: ci-only-digest-password-0123456789
+          ACS_CWMP_ALLOW_PLAINTEXT: "true"
           ACS_BSS_OAUTH_SIGNING_SECRET: ci-only-bss-oauth-secret-0123456789abcdef
           ACS_API_ADDR: ":18080"
           ACS_ADDR: ":17547"
@@ -177,7 +178,7 @@ jobs:
         # of the usp-subscriptions plan) and were never added here either
         # (tracked-forward gap from Task 3's review) -- added now. -p 1:
         # every one resets the same database.
-        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./internal/subscriptions/ ./internal/parameters/ ./cmd/acs/ ./cmd/uspc/
+        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./internal/subscriptions/ ./internal/parameters/ ./internal/captures/ ./cmd/acs/ ./cmd/uspc/ ./cmd/bssadapter/
       - name: placeholder secrets are refused (fail-closed)
         run: |
           set +e
@@ -193,7 +194,7 @@ jobs:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: build backend images
         run: |
-          for svc in acs api bssadapter; do
+          for svc in acs api bssadapter uspc; do
             docker build -f backend/Dockerfile.$svc -t acs-$svc:ci backend
           done
       - name: build frontend image

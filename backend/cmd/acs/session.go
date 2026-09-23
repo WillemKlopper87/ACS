@@ -208,7 +208,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.dispatch(ctx, w, r, env.Body)
+	h.dispatch(ctx, w, r, env.Body, bound)
 }
 
 // captureAuthFailure records only the fact that a CWMP request failed
@@ -472,7 +472,7 @@ func captureInformBody(inform *cwmp.Inform, authHeader string) *string {
 // RPC was already in flight, complete it with this response/fault; then
 // try to lease the next queued job for the device and send its RPC, or
 // close the session if there's no more work (design doc v3 §5.4).
-func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.Request, body cwmp.InboundBody) {
+func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.Request, body cwmp.InboundBody, bound inboundIdentity) {
 	cookie, err := r.Cookie("acs_session")
 	if err != nil {
 		h.logger.Warn("request outside a known session (missing session cookie); nothing to do", "remote", r.RemoteAddr)
@@ -490,6 +490,21 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 		h.logger.Warn("request for already-closed session", "session_id", cookie.Value, "remote", r.RemoteAddr)
 		h.respondEmpty(w)
 		return
+	}
+	if bound.credentialDeviceID != "" && bound.credentialDeviceID != session.DeviceID {
+		h.logger.Warn("dispatch rejected: authenticated credential is bound to a different device than the session",
+			"session_id", session.ID, "session_device_id", session.DeviceID, "bound_device_id", bound.credentialDeviceID)
+		http.Error(w, "device identity mismatch", http.StatusForbidden)
+		return
+	}
+	if bound.mtlsNaturalKey != "" {
+		device, err := h.devices.Get(ctx, session.DeviceID)
+		if err != nil || device.OUISerial != bound.mtlsNaturalKey {
+			h.logger.Warn("dispatch rejected: mTLS certificate does not match the session's device",
+				"session_id", session.ID, "session_device_id", session.DeviceID, "cert_cn", bound.mtlsNaturalKey)
+			http.Error(w, "device identity mismatch", http.StatusForbidden)
+			return
+		}
 	}
 
 	if session.CurrentJobID != nil {

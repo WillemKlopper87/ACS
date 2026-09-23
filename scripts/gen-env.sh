@@ -14,9 +14,12 @@ SYSTEMD_FILE="$HOME/.acs-secrets.systemd.env"
 
 if [ ! -f "$SECRETS_FILE" ]; then
   echo "Generating new ACS credentials -> $SECRETS_FILE"
+  GENERATED_POSTGRES_PASSWORD="$(openssl rand -hex 24)"
   cat > "$SECRETS_FILE" <<EOF
-export ACS_POSTGRES_DSN="postgres://acs:acs@localhost:5432/acs?sslmode=disable"
+export ACS_POSTGRES_PASSWORD="$GENERATED_POSTGRES_PASSWORD"
+export ACS_POSTGRES_DSN="postgres://acs:$GENERATED_POSTGRES_PASSWORD@localhost:5432/acs?sslmode=disable"
 export ACS_DEPLOYMENT_PROFILE="lab"
+export ACS_CWMP_ALLOW_PLAINTEXT="true"
 
 export ACS_DIGEST_USERNAME="acs-device"
 export ACS_DIGEST_PASSWORD="$(openssl rand -base64 16)"
@@ -107,6 +110,17 @@ else
   fi
   if ! grep -q '^export ACS_DEPLOYMENT_PROFILE=' "$SECRETS_FILE"; then
     echo 'export ACS_DEPLOYMENT_PROFILE="lab"' >> "$SECRETS_FILE"
+  fi
+  if ! grep -q '^export ACS_POSTGRES_PASSWORD=' "$SECRETS_FILE"; then
+    # Older quickstart files used the literal `acs` password in their DSN.
+    # Preserve that existing database credential; new installs above get a
+    # random password.
+    LEGACY_POSTGRES_PASSWORD="$(sed -n 's#^export ACS_POSTGRES_DSN="postgres://[^:]*:\([^@]*\)@.*#\1#p' "$SECRETS_FILE" | head -n 1)"
+    if [ -z "$LEGACY_POSTGRES_PASSWORD" ]; then
+      echo "Cannot infer ACS_POSTGRES_PASSWORD from $SECRETS_FILE's ACS_POSTGRES_DSN" >&2
+      exit 1
+    fi
+    echo "export ACS_POSTGRES_PASSWORD=\"$LEGACY_POSTGRES_PASSWORD\"" >> "$SECRETS_FILE"
   fi
   if ! grep -q '^export ACS_CWMP_ALLOWED_CIDRS=' "$SECRETS_FILE"; then
     echo 'export ACS_CWMP_ALLOWED_CIDRS=""' >> "$SECRETS_FILE"

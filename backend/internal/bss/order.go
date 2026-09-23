@@ -80,14 +80,15 @@ func (r *Repository) FindOrderByCommandKey(ctx context.Context, commandKey strin
 // parameter cache currently reports. Only DISPATCHED orders are returned
 // (a job was actually queued for them); PENDING_DISPATCH/DEAD_LETTERED
 // orders never reached the CPE and would only produce false drift.
-func (r *Repository) OrdersForDevice(ctx context.Context, deviceID string, limit int) ([]OrderRecord, error) {
+func (r *Repository) OrdersForDevice(ctx context.Context, deviceID string, limit int, accountIDs ...string) ([]OrderRecord, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, COALESCE(last_error, ''), created_at
 		FROM bss_orders WHERE device_id = $1 AND status = $2
-		ORDER BY created_at DESC LIMIT $3`, deviceID, OrderStatusDispatched, limit)
+		  AND ($4 = '' OR account_id = $4)
+		ORDER BY created_at DESC LIMIT $3`, deviceID, OrderStatusDispatched, limit, firstAccountID(accountIDs))
 	if err != nil {
 		return nil, fmt.Errorf("list orders for device: %w", err)
 	}
@@ -111,6 +112,13 @@ func (r *Repository) OrdersForDevice(ctx context.Context, deviceID string, limit
 		out = append(out, rec)
 	}
 	return out, rows.Err()
+}
+
+func firstAccountID(accountIDs []string) string {
+	if len(accountIDs) == 0 {
+		return ""
+	}
+	return accountIDs[0]
 }
 
 type orderScanner interface {

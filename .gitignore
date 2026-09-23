@@ -25,3 +25,6 @@ frontend/playwright-report/
 
 # Subagent-driven-development scratch workspace (ledger, briefs, review packages)
 .superpowers/
+
+# Managed worktrees are local development state and can be very large.
+.worktrees/

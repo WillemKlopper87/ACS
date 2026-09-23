@@ -220,6 +220,7 @@ func main() {
 	go h.runOfflineIncidentLoop(ctx)
 	go h.runEscalationLoop(ctx)
 	go h.runOrderReconcileLoop(ctx)
+	go h.runTMF641ReconcileLoop(ctx)
 
 	rateLimitPerSecond := envOrFloat("ACS_BSS_RATE_LIMIT_PER_SECOND", defaultRateLimitPerSecond)
 	rateLimitBurst := envOrInt("ACS_BSS_RATE_LIMIT_BURST", defaultRateLimitBurst)

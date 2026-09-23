@@ -33,11 +33,15 @@ func loadACSDeploymentProfile() (string, error) {
 }
 
 // validateCWMPTransportStartup enforces the transport promises made by the
-// production profile before the database is opened or the listener starts.
-// Lab deliberately retains the compatibility settings used for field
-// qualification of older CPEs.
+// non-lab profiles before the database is opened or the listener starts.
+// Lab deliberately retains compatibility settings for CPE qualification.
 func validateCWMPTransportStartup(profile string) error {
-	if profile != acsDeploymentProfileProduction {
+	if profile == acsDeploymentProfileLab {
+		certFile := strings.TrimSpace(os.Getenv("ACS_TLS_CERT"))
+		keyFile := strings.TrimSpace(os.Getenv("ACS_TLS_KEY"))
+		if (certFile == "" || keyFile == "") && !envBool("ACS_CWMP_ALLOW_PLAINTEXT") {
+			return errors.New("ACS_CWMP_ALLOW_PLAINTEXT=true is required in the lab profile when CWMP TLS is not configured")
+		}
 		return nil
 	}
 
@@ -147,7 +151,7 @@ func validateCPEAuthStartup(logger *slog.Logger, authSecrets ...config.Secret) e
 		Env:      "ACS_CREDENTIAL_ENCRYPTION_KEY",
 		MinBytes: 16,
 		Purpose:  "encrypts/decrypts per-device CWMP Digest credentials and signs Digest nonces when no shared Digest password is configured",
-		Optional: strings.TrimSpace(os.Getenv("ACS_DIGEST_PASSWORD")) != "" && !bootstrapGraduationEnabled,
+		Optional: profile == acsDeploymentProfileLab && strings.TrimSpace(os.Getenv("ACS_DIGEST_PASSWORD")) != "" && !bootstrapGraduationEnabled,
 	}
 	return config.Validate(logger, credentialKey)
 }

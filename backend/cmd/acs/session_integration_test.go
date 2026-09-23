@@ -551,6 +551,28 @@ func TestIntegration_TransferCompleteDeviceBinding(t *testing.T) {
 	if deviceB.ID == "" {
 		t.Fatal("device B not registered")
 	}
+	perDevice["cr-device-b"] = cred{password: "device-b-pass", deviceID: deviceB.ID}
+
+	// A has a queued job and a live session. B's own Digest identity must
+	// not let it use A's cookie to lease that work.
+	jobA, err := h.jobs.Create(ctx, deviceA.ID, jobs.TypeSetParameter,
+		jobs.SetParameterPayload{Parameters: []jobs.ParameterWrite{{Name: "Device.ManagementServer.PeriodicInformInterval", Value: "600", Type: "xsd:unsignedInt"}}}, "binding-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cpeA.cookie = nil
+	cpeA.post(periodicInform(t))
+	if code, body := cpeA.post(""); code != 200 || !strings.Contains(body, "SetParameterValues") {
+		t.Fatalf("device A queued RPC: %d %s", code, body)
+	}
+	forger := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp", user: "cr-device-b", pass: "device-b-pass", cookie: cpeA.cookie}
+	if code, body := forger.post(""); code != http.StatusForbidden {
+		t.Fatalf("device B credential with device A session cookie → %d %s, want 403", code, body)
+	}
+	jobAAfter, _ := h.jobs.ByID(ctx, jobA.ID)
+	if jobAAfter.Status != jobs.StatusRPCSent {
+		t.Errorf("device A job after rejected cookie use = %s, want RPC_SENT", jobAAfter.Status)
+	}
 
 	job, err := h.jobs.Create(ctx, deviceB.ID, jobs.TypeFirmwareDownload, jobs.FirmwareDownloadPayload{
 		FirmwareImageID: "img", FileType: "1 Firmware Upgrade Image", URL: "http://acs.test/fw.bin", FileSize: 1234, TargetFilename: "fw.bin",
@@ -573,7 +595,7 @@ func TestIntegration_TransferCompleteDeviceBinding(t *testing.T) {
 	// Device A's credential (bound to a different device) tries to
 	// complete device B's transfer by knowing its CommandKey.
 	tc := strings.Replace(fixture(t, "transfer_complete.xml"), "fw_20260804_test0001", job.CommandKey, 1)
-	forger := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp", user: "cr-device-a", pass: "device-a-pass"}
+	forger = &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp", user: "cr-device-a", pass: "device-a-pass"}
 	code, body = forger.post(tc)
 	if code != http.StatusForbidden {
 		t.Fatalf("cross-device TransferComplete → %d %s, want 403", code, body)

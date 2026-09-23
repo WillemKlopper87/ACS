@@ -23,7 +23,20 @@ func (h *handler) getReconciliation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	orders, err := h.mappings.OrdersForDevice(r.Context(), deviceID, 0)
+	accountID, err := h.mappings.CurrentAccountForDevice(r.Context(), deviceID)
+	if err != nil {
+		h.logger.Error("failed to resolve current device account for reconciliation", "err", err, "device_id", deviceID)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+	if accountID == "" {
+		writeError(w, http.StatusNotFound, "ErrNotFound", "no BSS order history for that device")
+		return
+	}
+	if !h.authorizeBSSAccount(w, r, accountID) {
+		return
+	}
+	orders, err := h.mappings.OrdersForDevice(r.Context(), deviceID, 0, accountID)
 	if err != nil {
 		h.logger.Error("failed to load orders for reconciliation", "err", err, "device_id", deviceID)
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
@@ -35,9 +48,6 @@ func (h *handler) getReconciliation(w http.ResponseWriter, r *http.Request) {
 		// empty-list, so this can't be used to probe device ids that
 		// exist but were never BSS-managed.
 		writeError(w, http.StatusNotFound, "ErrNotFound", "no BSS order history for that device")
-		return
-	}
-	if !h.authorizeBSSAccount(w, r, orders[0].AccountID) {
 		return
 	}
 
