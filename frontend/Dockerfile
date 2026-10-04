@@ -23,7 +23,7 @@ ARG VITE_ENV_LABEL=
 ENV VITE_ENV_LABEL=$VITE_ENV_LABEL
 RUN npm run build
 
-FROM nginx:1.31.5-alpine3.24
+FROM nginx:1.31.6-alpine3.24
 # Re-declared: an ARG from an earlier stage is not in scope here. This is
 # deliberately the *same* argument the bundle was built with above,
 # because the CSP below must name exactly the origin that JS will call.
