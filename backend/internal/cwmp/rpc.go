@@ -88,7 +88,13 @@ func RenderSetParameterValues(id string, params []ParameterValueStruct, paramete
 	for _, p := range params {
 		sb.WriteString(`<ParameterValueStruct><Name>`)
 		sb.WriteString(escapeXML(p.Name))
-		sb.WriteString(`</Name><Value xsi:type="xsd:string">`)
+		valueType := p.Type
+		switch valueType {
+		case "xsd:string", "xsd:boolean", "xsd:int", "xsd:unsignedInt", "xsd:long", "xsd:unsignedLong", "xsd:dateTime", "xsd:base64Binary", "xsd:hexBinary":
+		default:
+			valueType = "xsd:string"
+		}
+		sb.WriteString(`</Name><Value xsi:type="` + valueType + `">`)
 		sb.WriteString(escapeXML(p.Value))
 		sb.WriteString(`</Value></ParameterValueStruct>`)
 	}

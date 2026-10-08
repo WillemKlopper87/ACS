@@ -211,6 +211,9 @@ func isServiceRoute(r *http.Request) bool {
 }
 
 func isPublicRoute(r *http.Request) bool {
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/bulk-data/") && strings.HasSuffix(r.URL.Path, "/receive") {
+		return true
+	} // receiver-bound, expiring Basic credential is verified by the handler
 	if r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/login" {
 		return true
 	}

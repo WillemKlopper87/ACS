@@ -42,6 +42,9 @@ jobs:
           test -z "$(git status --porcelain -uall -- internal/usp/uspproto/)" || { git status --porcelain -uall -- internal/usp/uspproto/; exit 1; }
         working-directory: backend
       - run: go vet ./...
+      - name: Compatibility qualification runner regression tests
+        run: python3 -m unittest discover -s scripts/tests
+        working-directory: .
       - run: go build ./...
       # Keep a stuck integration test diagnosable instead of consuming the
       # runner indefinitely; the race detector remains fully enabled.
@@ -125,6 +128,8 @@ jobs:
         run: /tmp/migrate
       - name: re-run is a no-op (idempotent, checksums verified)
         run: /tmp/migrate
+      - name: read-only migration readiness check
+        run: /tmp/migrate -check
       - name: concurrent runners serialize on the advisory lock
         run: |
           psql "$ACS_POSTGRES_DSN" -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
@@ -178,7 +183,7 @@ jobs:
         # of the usp-subscriptions plan) and were never added here either
         # (tracked-forward gap from Task 3's review) -- added now. -p 1:
         # every one resets the same database.
-        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./internal/subscriptions/ ./internal/parameters/ ./internal/captures/ ./cmd/acs/ ./cmd/uspc/ ./cmd/bssadapter/
+        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./internal/subscriptions/ ./internal/parameters/ ./internal/bulkdata/ ./internal/captures/ ./cmd/acs/ ./cmd/uspc/ ./cmd/bssadapter/
       - name: placeholder secrets are refused (fail-closed)
         run: |
           set +e

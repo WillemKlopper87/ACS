@@ -112,6 +112,10 @@ func (h *handler) refreshCellularDiagnostics(w http.ResponseWriter, r *http.Requ
 	}
 
 	vendor, paths, qualified := h.cellularDiagnosticPaths(r.Context(), device)
+	if len(paths) == 0 {
+		http.Error(w, "no discovered cellular metrics; run parameter discovery", http.StatusConflict)
+		return
+	}
 
 	job, err := h.jobs.Create(r.Context(), id, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, operatorFromRequest(r))
 	if err != nil {
@@ -177,7 +181,7 @@ func (h *handler) cellularDiagnosticPaths(ctx context.Context, device *devices.D
 	if paths := adapters.CellularDiagnosticParamsFromNames(discovered.Names); len(paths) > 0 {
 		return vendor, paths, qualified
 	}
-	return vendor, fallback, qualified
+	return vendor, nil, false
 }
 
 // refreshWifiClients queues a GET_PARAMETER job over the whole WiFi
@@ -334,7 +338,8 @@ func (h *handler) createDiagnosticsTraceroute(w http.ResponseWriter, r *http.Req
 }
 
 type tr143Request struct {
-	URL string `json:"url"`
+	URL            string `json:"url"`
+	TestFileLength uint64 `json:"test_file_length,omitempty"`
 }
 
 // tr143MaxAttempts mirrors diagPingMaxAttempts/diagTracerouteMaxAttempts —
@@ -373,15 +378,22 @@ func (h *handler) createTR143(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `direction must be "download" or "upload"`, http.StatusBadRequest)
 		return
 	}
+	if req.TestFileLength > 100*1024*1024 {
+		http.Error(w, "test_file_length exceeds 100 MiB limit", http.StatusBadRequest)
+		return
+	}
+	if req.TestFileLength == 0 {
+		req.TestFileLength = 1048576
+	}
 
 	var jobType string
 	var payload any
 	if direction == "upload" {
-		jobType, payload = jobs.TypeDiagnosticsUpload, jobs.DiagnosticsUploadPayload{URL: req.URL, Prefix: capability.UploadPath}
+		jobType, payload = jobs.TypeDiagnosticsUpload, jobs.DiagnosticsUploadPayload{URL: req.URL, Prefix: capability.UploadPath, USPCommand: capability.UploadCommand, TestFileLength: req.TestFileLength}
 	} else {
-		jobType, payload = jobs.TypeDiagnosticsDownload, jobs.DiagnosticsDownloadPayload{URL: req.URL, Prefix: capability.DownloadPath}
+		jobType, payload = jobs.TypeDiagnosticsDownload, jobs.DiagnosticsDownloadPayload{URL: req.URL, Prefix: capability.DownloadPath, USPCommand: capability.DownloadCommand}
 	}
-	if (direction == "upload" && capability.UploadPath == "") || (direction == "download" && capability.DownloadPath == "") {
+	if (direction == "upload" && capability.UploadPath == "" && capability.UploadCommand == "") || (direction == "download" && capability.DownloadPath == "" && capability.DownloadCommand == "") {
 		http.Error(w, "device has not advertised this TR-143 capability", http.StatusConflict)
 		return
 	}

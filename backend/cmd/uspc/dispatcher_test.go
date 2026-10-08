@@ -1494,10 +1494,10 @@ func TestGetSupportedDMCapturesParameterWriteability(t *testing.T) {
 	if got := outcome.discoveredNames["Device.WiFi.SSID.{i}.Alias"]; !got {
 		t.Errorf("qualified Alias writable = %t, want true", got)
 	}
-	if len(outcome.discoveredCapabilities) != 3 {
-		t.Fatalf("capability count = %d, want 3", len(outcome.discoveredCapabilities))
+	if len(outcome.discoveredCapabilities) != 4 {
+		t.Fatalf("capability count = %d, want object plus 3 parameters", len(outcome.discoveredCapabilities))
 	}
-	if got := outcome.discoveredCapabilities[0].Path; got != "Device.WiFi.SSID.{i}.Enable" {
+	if got := outcome.discoveredCapabilities[1].Path; got != "Device.WiFi.SSID.{i}.Enable" {
 		t.Errorf("first capability path = %q, want Enable path", got)
 	}
 }

@@ -1,0 +1,22 @@
+[
+  {
+    "file": "tr-181-2-20-0-cwmp-full.xml",
+    "source": "https://cwmp-data-models.broadband-forum.org/tr-181-2-20-0-cwmp-full.xml",
+    "sha256": "0af33cff27b6013ccf8a6b6def4066c70c5127b4b899345d9a1461adf44dc5a7"
+  },
+  {
+    "file": "tr-181-2-20-0-usp-full.xml",
+    "source": "https://usp-data-models.broadband-forum.org/tr-181-2-20-0-usp-full.xml",
+    "sha256": "c64e3d132db49ce82b63bd03b347e7b06bd3df8df5ba8f1736117a9cf66e71f4"
+  },
+  {
+    "file": "tr-181-2-21-0-cwmp-full.xml",
+    "source": "https://cwmp-data-models.broadband-forum.org/tr-181-2-21-0-cwmp-full.xml",
+    "sha256": "08c3005692d27535c75c2a427a9501ce77a8e9fee69dda2037feef43978d8d77"
+  },
+  {
+    "file": "tr-181-2-21-0-usp-full.xml",
+    "source": "https://usp-data-models.broadband-forum.org/tr-181-2-21-0-usp-full.xml",
+    "sha256": "3fea104fcae8361c0a2261064921ce09ec76d37c43a7766c2b59ef6c5ccce718"
+  }
+]

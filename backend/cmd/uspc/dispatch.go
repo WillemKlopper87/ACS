@@ -48,6 +48,10 @@ func buildUSPRequest(msgID string, job *jobs.Job) ([]byte, error) {
 			return nil, fmt.Errorf("unmarshal GET_PARAMETER payload: %w", err)
 		}
 		// maxDepth 0 = unlimited, matching a CWMP GetParameterValues'
+		if payload.Instances {
+			return usp.EncodeGetInstances(msgID, payload.Paths, true)
+		}
+		// Instance discovery uses a separate USP operation.
 		// unrestricted depth.
 		return usp.EncodeGet(msgID, payload.Paths, 0)
 
@@ -57,6 +61,10 @@ func buildUSPRequest(msgID string, job *jobs.Job) ([]byte, error) {
 			return nil, fmt.Errorf("unmarshal SET_PARAMETER payload: %w", err)
 		}
 		// allowPartial=false: a half-applied Set leaves a device in a
+		if payload.VerificationPending {
+			return usp.EncodeGet(msgID, jobs.VerificationPaths(payload), 0)
+		}
+		// The initial write requests all-or-nothing application.
 		// state no operator asked for.
 		return usp.EncodeSet(msgID, false, groupParametersByObjectPath(payload.Parameters))
 
@@ -137,6 +145,28 @@ func buildUSPRequest(msgID string, job *jobs.Job) ([]byte, error) {
 		}
 		return usp.EncodeOperate(msgID, "Device.IP.Diagnostics.TraceRoute()", job.CommandKey, true, inputArgs)
 
+	case jobs.TypeDiagnosticsDownload:
+		var payload jobs.DiagnosticsDownloadPayload
+		if err := json.Unmarshal(job.Payload, &payload); err != nil {
+			return nil, err
+		}
+		if payload.USPCommand != "Device.IP.Diagnostics.DownloadDiagnostics()" {
+			return nil, ErrUnsupportedOverUSP
+		}
+		return usp.EncodeOperate(msgID, payload.USPCommand, job.CommandKey, true, map[string]string{"DownloadURL": payload.URL, "ProtocolVersion": "Any"})
+	case jobs.TypeDiagnosticsUpload:
+		var payload jobs.DiagnosticsUploadPayload
+		if err := json.Unmarshal(job.Payload, &payload); err != nil {
+			return nil, err
+		}
+		if payload.USPCommand != "Device.IP.Diagnostics.UploadDiagnostics()" {
+			return nil, ErrUnsupportedOverUSP
+		}
+		length := payload.TestFileLength
+		if length == 0 {
+			length = 1048576
+		}
+		return usp.EncodeOperate(msgID, payload.USPCommand, job.CommandKey, true, map[string]string{"UploadURL": payload.URL, "ProtocolVersion": "Any", "TestFileLength": strconv.FormatUint(length, 10)})
 	case jobs.TypeParameterDiscovery:
 		var payload jobs.ParameterDiscoveryPayload
 		if err := json.Unmarshal(job.Payload, &payload); err != nil {
@@ -147,7 +177,7 @@ func buildUSPRequest(msgID string, job *jobs.Job) ([]byte, error) {
 		// hardcoded "Device.". FallbackRoot/IsFallback are for a
 		// caller-side retry-with-fallback pattern that belongs to the
 		// dispatcher (a later task), not here.
-		return usp.EncodeGetSupportedDM(msgID, []string{payload.Root}, false, true, true, true)
+		return usp.EncodeGetSupportedDM(msgID, []string{payload.RequestPath()}, payload.Incremental, true, true, true)
 
 	case jobs.TypeFirmwareDownload:
 		var payload jobs.FirmwareDownloadPayload

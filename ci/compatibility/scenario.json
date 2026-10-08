@@ -1,0 +1,7 @@
+{
+  "name": "portable-device-info-read",
+  "reads": ["Device.DeviceInfo.Manufacturer", "Device.DeviceInfo.ModelName", "Device.DeviceInfo.SoftwareVersion"],
+  "instances": [],
+  "writes": [],
+  "reboot": false
+}

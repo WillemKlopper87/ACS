@@ -91,6 +91,8 @@ type EventStruct struct {
 type ParameterValueStruct struct {
 	Name  string `xml:"Name"`
 	Value string `xml:"Value"`
+	// Type is used for outbound writes; absent types retain the legacy string default.
+	Type string `xml:"-"`
 }
 
 // ParameterInfoStruct is one entry in a GetParameterNamesResponse.

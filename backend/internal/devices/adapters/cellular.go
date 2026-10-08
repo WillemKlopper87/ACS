@@ -1,8 +1,10 @@
 package adapters
 
 import (
+	"acs/internal/datamodel"
 	"acs/internal/devices"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -55,9 +57,9 @@ func CellularPathCandidates(root string, field CellularField, instance string) [
 	paths := map[CellularField][]string{
 		CellularStatus:      {prefix + "Status"},
 		CellularAccessPoint: {"Device.Cellular.AccessPoint." + instance + ".APN"},
-		CellularSIMStatus:   {prefix + "USIM.1.Status"},
-		CellularIMSI:        {prefix + "USIM.1.IMSI"},
-		CellularICCID:       {prefix + "USIM.1.ICCID"},
+		CellularSIMStatus:   {prefix + "USIM.Status", prefix + "USIM.1.Status"},
+		CellularIMSI:        {prefix + "USIM.IMSI", prefix + "USIM.1.IMSI"},
+		CellularICCID:       {prefix + "USIM.ICCID", prefix + "USIM.1.ICCID"},
 		CellularIMEI:        {prefix + "IMEI"},
 		// Operator, cell ID, band and channel are not portable TR-181
 		// leaves. They require a discovered path or model-qualified pack.
@@ -85,25 +87,39 @@ func ResolveCellularReadPath(root string, field CellularField, instance string, 
 	for _, path := range CellularPathCandidates(root, field, instance) {
 		// Discovery's bool is writability, not presence. Read-only telemetry
 		// is valid evidence for a read and must not be skipped.
-		if len(discovered) == 0 {
+		if discovered == nil {
 			return CellularReadResolution{Path: path, Standard: true}, true
 		}
 		if _, present := discovered[path]; present {
 			return CellularReadResolution{Path: path, Standard: true}, true
 		}
+		if _, present := discovered[datamodel.NormalizePath(path)]; present {
+			return CellularReadResolution{Path: path, Standard: true, Discovered: true}, true
+		}
 	}
-	if len(discovered) == 0 {
+	if discovered == nil {
 		return CellularReadResolution{}, false
 	}
 	standard := make(map[string]struct{})
 	for _, path := range CellularPathCandidates(root, field, instance) {
 		standard[path] = struct{}{}
 	}
+	paths := make([]string, 0, len(discovered))
 	for path := range discovered {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
 		if _, isStandard := standard[path]; isStandard {
 			continue
 		}
+		if !strings.Contains(strings.ToLower(path), "cellular") && !strings.Contains(strings.ToLower(path), "mobile") && !strings.Contains(strings.ToLower(path), "5g") {
+			continue
+		}
 		if cellularLeafMatches(field, lastPathSegment(path)) {
+			if strings.Contains(path, "{i}") {
+				path = strings.ReplaceAll(path, "{i}", instance)
+			}
 			return CellularReadResolution{Path: path, Discovered: true}, true
 		}
 	}

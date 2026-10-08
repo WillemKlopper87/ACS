@@ -20,10 +20,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"acs/internal/cwmp"
 	"acs/internal/devices"
 	"acs/internal/jobs"
+	"acs/internal/parameters"
 )
 
 const (
@@ -37,8 +39,15 @@ func (h *handler) autoDiscoverParameters(ctx context.Context, device *devices.De
 		root, fallback = rootIGD1, rootDevice2
 	}
 
-	job, err := h.jobs.Create(ctx, device.ID, jobs.TypeParameterDiscovery,
-		jobs.ParameterDiscoveryPayload{Root: root, FallbackRoot: fallback}, "system:bootstrap-discovery")
+	firmware := ""
+	if values, err := h.params.Get(ctx, device.ID); err == nil {
+		firmware = values["Device.DeviceInfo.SoftwareVersion"].Value
+		if firmware == "" {
+			firmware = values["InternetGatewayDevice.DeviceInfo.SoftwareVersion"].Value
+		}
+	}
+	job, err := h.jobs.CreateWithMaxAttempts(ctx, device.ID, jobs.TypeParameterDiscovery,
+		jobs.ParameterDiscoveryPayload{Root: root, FallbackRoot: fallback, Incremental: true, Firmware: firmware}, "system:bootstrap-discovery", jobs.DiscoveryMaxObjects)
 	if err != nil {
 		h.logger.Error("failed to queue parameter discovery", "err", err, "device_id", device.ID)
 		return
@@ -69,7 +78,7 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 		return
 	}
 
-	empty := body.Fault != nil || body.GetParameterNamesResponse == nil || len(body.GetParameterNamesResponse.ParameterList) == 0
+	empty := body.Fault != nil || body.GetParameterNamesResponse == nil || (len(body.GetParameterNamesResponse.ParameterList) == 0 && payload.Cursor == "")
 
 	if empty {
 		detail := "device returned no parameters under " + payload.Root
@@ -80,19 +89,22 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 			h.logger.Error("failed to mark discovery job failed", "err", err, "job_id", job.ID)
 		}
 
-		if payload.IsFallback || payload.FallbackRoot == "" {
+		if payload.IsFallback || payload.FallbackRoot == "" || payload.Cursor != "" {
 			h.logger.Warn("parameter discovery found no parameters under either root", "device_id", deviceID, "root", payload.Root)
 			return
 		}
 
-		fallback, err := h.jobs.Create(ctx, deviceID, jobs.TypeParameterDiscovery,
-			jobs.ParameterDiscoveryPayload{Root: payload.FallbackRoot, IsFallback: true}, "system:bootstrap-discovery")
+		fallback, err := h.jobs.CreateWithMaxAttempts(ctx, deviceID, jobs.TypeParameterDiscovery,
+			jobs.ParameterDiscoveryPayload{Root: payload.FallbackRoot, IsFallback: true, Incremental: payload.Incremental, Firmware: payload.Firmware}, "system:bootstrap-discovery", jobs.DiscoveryMaxObjects)
 		if err != nil {
 			h.logger.Error("failed to queue parameter discovery fallback", "err", err, "device_id", deviceID)
 			return
 		}
 		h.logger.Info("parameter discovery falling back to other root", "device_id", deviceID,
 			"tried_root", payload.Root, "fallback_root", payload.FallbackRoot, "command_key", fallback.CommandKey)
+		if err := h.jobs.RecordDiscoveryFallback(ctx, job.ID, fallback.CommandKey); err != nil {
+			h.logger.Error("record discovery fallback", "err", err)
+		}
 		return
 	}
 
@@ -100,15 +112,40 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 	writableByName := make(map[string]bool, len(list))
 	writableCount := 0
 	for _, p := range list {
-		writable := p.Writable == "1"
+		writable := p.Writable == "1" || p.Writable == "true"
 		writableByName[p.Name] = writable
 		if writable {
 			writableCount++
 		}
 	}
+	if payload.Incremental {
+		done, err := jobs.AdvanceDiscovery(&payload, writableByName)
+		if err != nil {
+			_ = h.jobs.MarkFailed(ctx, job.ID, "", err.Error())
+			return
+		}
+		if !done {
+			if err := h.jobs.RequeueDiscovery(ctx, job, payload); err != nil {
+				h.logger.Error("persist discovery progress", "err", err)
+			}
+			return
+		}
+		writableByName = payload.Names
+		writableCount = 0
+		for _, writable := range writableByName {
+			if writable {
+				writableCount++
+			}
+		}
+	}
 
-	if err := h.params.SaveNames(ctx, deviceID, writableByName); err != nil {
+	if err := h.params.SaveDiscovery(ctx, deviceID, parameters.DiscoverySnapshot{CommandKey: job.CommandKey, Protocol: "CWMP", Root: payload.Root, Names: writableByName, ExpectedFirmware: payload.Firmware}); err != nil {
 		h.logger.Error("failed to save discovered parameter names", "err", err, "device_id", deviceID)
+		_ = h.jobs.MarkFailed(ctx, job.ID, "", "failed to persist discovery snapshot")
+		if errors.Is(err, parameters.ErrFirmwareChanged) {
+			_ = h.jobs.QueueDiscoveryIfNeeded(ctx, deviceID)
+		}
+		return
 	}
 
 	root := devices.DataModelRootDevice2
@@ -120,7 +157,7 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 	}
 
 	if err := h.jobs.MarkSuccessWithDetail(ctx, job.ID, discoveryResultDetail{
-		Root: payload.Root, ParameterCount: len(list), WritableCount: writableCount,
+		Root: payload.Root, ParameterCount: len(writableByName), WritableCount: writableCount,
 	}); err != nil {
 		h.logger.Error("failed to mark discovery job success", "err", err, "job_id", job.ID)
 	}
@@ -128,10 +165,10 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 
 	if err := h.auditor.Record(ctx, "system", deviceID, "ParameterDiscoveryCompleted", map[string]any{
 		"job_id": job.ID, "command_key": job.CommandKey, "root": payload.Root,
-		"parameter_count": len(list), "writable_count": writableCount,
+		"parameter_count": len(writableByName), "writable_count": writableCount,
 	}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
 	h.logger.Info("parameter discovery completed", "device_id", deviceID, "root", payload.Root,
-		"parameter_count", len(list), "writable_count", writableCount, "command_key", job.CommandKey)
+		"parameter_count", len(writableByName), "writable_count", writableCount, "command_key", job.CommandKey)
 }

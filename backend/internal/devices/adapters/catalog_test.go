@@ -139,8 +139,8 @@ func TestRegistryMatchesQualifiedModelBeforeVendorFallback(t *testing.T) {
 
 	vendor, paths, qualified := r.MatchCellularDiagnosticsForDevice(
 		"Zyxel Communications Corp.", "NR7303-EU01V1F")
-	if vendor != "Zyxel" || !qualified {
-		t.Fatalf("qualified match = vendor %q qualified %v, want Zyxel/true", vendor, qualified)
+	if vendor != "Zyxel" || qualified {
+		t.Fatalf("model-only match = vendor %q qualified %v, want Zyxel/false without firmware evidence", vendor, qualified)
 	}
 	if len(paths) == 0 {
 		t.Fatal("qualified profile returned no diagnostic paths")
@@ -162,5 +162,24 @@ func TestProfileIDIsStableFromCatalogMetadata(t *testing.T) {
 	}
 	if got := ProfileID(Catalog{Vendor: "TP-Link"}); got != "tplink" {
 		t.Fatalf("vendor-only ProfileID = %q, want tplink", got)
+	}
+}
+
+func TestFirmwareProfileRequiresEvidenceAndSelectsVariant(t *testing.T) {
+	r := &Registry{catalogs: []Catalog{
+		{Vendor: "Example", Model: "5G-CPE"},
+		{Vendor: "Example", Model: "5G-CPE", Firmwares: []string{"2.0"}, QualificationEvidence: "lab/report-2.0"},
+	}}
+	if match := r.MatchFirmwareProfile("Example Inc", "5G-CPE", "2.0"); !match.Qualified || match.Catalog.QualificationEvidence != "lab/report-2.0" {
+		t.Fatalf("variant not selected: %+v", match)
+	}
+	for _, version := range []string{"", "1.0", "2.0-beta"} {
+		if r.MatchFirmwareProfile("Example Inc", "5G-CPE", version).Qualified {
+			t.Fatalf("unqualified firmware %q accepted", version)
+		}
+	}
+	r.catalogs[1].QualificationEvidence = ""
+	if r.MatchFirmwareProfile("Example Inc", "5G-CPE", "2.0").Qualified {
+		t.Fatal("missing test evidence accepted")
 	}
 }

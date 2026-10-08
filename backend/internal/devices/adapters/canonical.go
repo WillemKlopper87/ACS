@@ -21,6 +21,7 @@
 package adapters
 
 import (
+	"acs/internal/datamodel"
 	"fmt"
 
 	"acs/internal/devices"
@@ -156,7 +157,7 @@ func ResolveWritablePath(root string, p CanonicalParameter, discovered map[strin
 		return candidates[0], nil
 	}
 	for _, candidate := range candidates {
-		if discovered[candidate] {
+		if discovered[candidate] || discovered[datamodel.NormalizePath(candidate)] {
 			return candidate, nil
 		}
 	}

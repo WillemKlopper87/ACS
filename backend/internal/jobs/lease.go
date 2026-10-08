@@ -71,6 +71,10 @@ func (r *Repository) leaseForTypes(ctx context.Context, deviceID string, types [
 	`
 	if uspOnly {
 		query += ` AND (type <> 'FIRMWARE_DOWNLOAD' OR COALESCE(payload->>'usp_instance', '') <> '')`
+		query += ` AND (type NOT IN ('DIAGNOSTICS_DOWNLOAD','DIAGNOSTICS_UPLOAD') OR COALESCE(payload->>'usp_command','') <> '')`
+	} else {
+		query += ` AND COALESCE(payload->>'instances','false') <> 'true'`
+		query += ` AND (type NOT IN ('DIAGNOSTICS_DOWNLOAD','DIAGNOSTICS_UPLOAD') OR COALESCE(payload->>'usp_command','') = '')`
 	}
 	query += `
 		ORDER BY created_at ASC

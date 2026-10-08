@@ -4,8 +4,10 @@ package adapters
 // throughput-diagnostic objects. Presence is intentionally derived from live
 // discovery; a static catalog alone never authorizes a test against a URL.
 type TR143Capability struct {
-	DownloadPath string `json:"download_path,omitempty"`
-	UploadPath   string `json:"upload_path,omitempty"`
+	DownloadPath    string `json:"download_path,omitempty"`
+	UploadPath      string `json:"upload_path,omitempty"`
+	DownloadCommand string `json:"download_command,omitempty"`
+	UploadCommand   string `json:"upload_command,omitempty"`
 }
 
 // ResolveTR143Capability finds the standard TR-181 diagnostics objects in a
@@ -14,6 +16,12 @@ type TR143Capability struct {
 func ResolveTR143Capability(names map[string]bool) TR143Capability {
 	var capability TR143Capability
 	for path := range names {
+		if path == "Device.IP.Diagnostics.DownloadDiagnostics()" {
+			capability.DownloadCommand = path
+		}
+		if path == "Device.IP.Diagnostics.UploadDiagnostics()" {
+			capability.UploadCommand = path
+		}
 		if path == "Device.IP.Diagnostics.DownloadDiagnostics." || path == "Device.IP.Diagnostics.DownloadDiagnostics" {
 			capability.DownloadPath = "Device.IP.Diagnostics.DownloadDiagnostics."
 		}

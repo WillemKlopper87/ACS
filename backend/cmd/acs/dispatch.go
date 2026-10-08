@@ -78,9 +78,12 @@ func (h *handler) renderJobRequest(job *jobs.Job) (body []byte, ok bool) {
 		if err := json.Unmarshal(job.Payload, &payload); err != nil {
 			return nil, false
 		}
+		if payload.VerificationPending {
+			return cwmp.RenderGetParameterValues(id, jobs.VerificationPaths(payload)), true
+		}
 		params := make([]cwmp.ParameterValueStruct, len(payload.Parameters))
 		for i, p := range payload.Parameters {
-			params[i] = cwmp.ParameterValueStruct{Name: p.Name, Value: p.Value}
+			params[i] = cwmp.ParameterValueStruct{Name: p.Name, Value: p.Value, Type: p.Type}
 		}
 		return cwmp.RenderSetParameterValues(id, params, job.CommandKey), true
 
@@ -155,8 +158,9 @@ func (h *handler) renderJobRequest(job *jobs.Job) (body []byte, ok bool) {
 
 	case jobs.TypeDiagnosticsDownload, jobs.TypeDiagnosticsUpload:
 		var payload struct {
-			URL    string `json:"url"`
-			Prefix string `json:"prefix"`
+			URL            string `json:"url"`
+			Prefix         string `json:"prefix"`
+			TestFileLength uint64 `json:"test_file_length"`
 		}
 		if err := json.Unmarshal(job.Payload, &payload); err != nil {
 			return nil, false
@@ -171,7 +175,18 @@ func (h *handler) renderJobRequest(job *jobs.Job) (body []byte, ok bool) {
 			prefix = "Device.IP.Diagnostics." + map[bool]string{true: "UploadDiagnostics.", false: "DownloadDiagnostics."}[job.Type == jobs.TypeDiagnosticsUpload]
 		}
 		if job.Attempts <= 1 {
-			params := []cwmp.ParameterValueStruct{{Name: prefix + "URL", Value: payload.URL}, {Name: prefix + "DiagnosticsState", Value: "Requested"}}
+			urlLeaf := "DownloadURL"
+			if job.Type == jobs.TypeDiagnosticsUpload {
+				urlLeaf = "UploadURL"
+			}
+			params := []cwmp.ParameterValueStruct{{Name: prefix + urlLeaf, Value: payload.URL}, {Name: prefix + "DiagnosticsState", Value: "Requested"}}
+			if job.Type == jobs.TypeDiagnosticsUpload {
+				length := payload.TestFileLength
+				if length == 0 {
+					length = 1048576
+				}
+				params = append(params, cwmp.ParameterValueStruct{Name: prefix + "TestFileLength", Value: strconv.FormatUint(length, 10), Type: "xsd:unsignedLong"})
+			}
 			return cwmp.RenderSetParameterValues(id, params, job.CommandKey), true
 		}
 		return cwmp.RenderGetParameterValues(id, diagTR143PollPaths(prefix)), true
@@ -233,7 +248,7 @@ func (h *handler) renderJobRequest(job *jobs.Job) (body []byte, ok bool) {
 		if err := json.Unmarshal(job.Payload, &payload); err != nil {
 			return nil, false
 		}
-		return cwmp.RenderGetParameterNames(id, payload.Root, false), true
+		return cwmp.RenderGetParameterNames(id, payload.RequestPath(), payload.Incremental), true
 
 	default:
 		return nil, false
@@ -251,6 +266,9 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 	job, err := h.jobs.ByID(ctx, jobID)
 	if err != nil {
 		h.logger.Error("failed to load in-flight job", "err", err, "job_id", jobID)
+		return
+	}
+	if job.DeviceID != deviceID || job.Status != jobs.StatusRPCSent {
 		return
 	}
 
@@ -276,7 +294,34 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 	switch job.Type {
 	case jobs.TypeSetParameter:
 		if body.SetParameterValuesResponse == nil {
+			var payload jobs.SetParameterPayload
+			if json.Unmarshal(job.Payload, &payload) == nil && payload.VerificationPending && body.GetParameterValuesResponse != nil {
+				actual := map[string]string{}
+				for _, v := range body.GetParameterValuesResponse.ParameterList {
+					actual[v.Name] = v.Value
+				}
+				check := jobs.CompareReadback(payload, actual)
+				success := len(check.Mismatched) == 0 && len(check.Missing) == 0 && len(check.Matched) > 0
+				if err := h.params.RecordOperation(ctx, deviceID, job.CommandKey, "WRITE", success, jobs.VerificationPaths(payload), check, jobs.EvidenceFirmware(job)); err != nil {
+					_ = h.jobs.MarkFailed(ctx, job.ID, "EVIDENCE_FAILED", "failed to persist write verification")
+					return
+				}
+				h.cacheParameterValues(ctx, deviceID, body.GetParameterValuesResponse.ParameterList, parameters.SourceGetValues)
+				if !success {
+					_ = h.jobs.MarkFailed(ctx, job.ID, "READBACK_MISMATCH", "readback did not confirm every readable parameter")
+					return
+				}
+				h.markJobSuccess(ctx, deviceID, job)
+				return
+			}
 			h.markUnexpectedResponse(ctx, deviceID, job)
+			return
+		}
+		var verifyPayload jobs.SetParameterPayload
+		if json.Unmarshal(job.Payload, &verifyPayload) == nil && verifyPayload.Verify && len(jobs.VerificationPaths(verifyPayload)) > 0 {
+			if err := h.jobs.BeginReadback(ctx, job, verifyPayload); err != nil {
+				_ = h.jobs.MarkFailed(ctx, job.ID, "READBACK_QUEUE_FAILED", "failed to queue verification")
+			}
 			return
 		}
 		h.markJobSuccess(ctx, deviceID, job)
@@ -307,8 +352,26 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 			h.markUnexpectedResponse(ctx, deviceID, job)
 			return
 		}
+		var read jobs.GetParameterPayload
+		actual := map[string]string{}
+		for _, value := range body.GetParameterValuesResponse.ParameterList {
+			actual[value.Name] = value.Value
+		}
+		if json.Unmarshal(job.Payload, &read) != nil || len(jobs.MissingReadPaths(read.Paths, actual)) > 0 {
+			_ = h.jobs.MarkFailed(ctx, job.ID, "PARTIAL_READ", "device omitted requested readable parameters")
+			return
+		}
 		h.markJobSuccess(ctx, deviceID, job)
 		h.cacheParameterValues(ctx, deviceID, body.GetParameterValuesResponse.ParameterList, parameters.SourceGetValues)
+		paths := []string{}
+		for _, v := range body.GetParameterValuesResponse.ParameterList {
+			paths = append(paths, v.Name)
+		}
+		if len(paths) > 0 {
+			if err := h.params.RecordOperation(ctx, deviceID, job.CommandKey, "READ", true, paths, map[string]string{"protocol": "CWMP"}, jobs.EvidenceFirmware(job)); err != nil {
+				h.logger.Error("failed to record read evidence", "err", err)
+			}
+		}
 
 	case jobs.TypeFirmwareDownload:
 		if body.DownloadResponse == nil {

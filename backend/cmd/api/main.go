@@ -11,6 +11,7 @@
 package main
 
 import (
+	"acs/internal/bulkdata"
 	"context"
 	"errors"
 	"log/slog"
@@ -395,12 +396,13 @@ func envOrInt(key string, fallback int) int {
 }
 
 type handler struct {
-	logger  *slog.Logger
-	devices *devices.Repository
-	jobs    *jobs.Repository
-	params  *parameters.Repository
-	vendors *adapters.Registry
-	auditor *observability.Auditor
+	bulkData *bulkdata.Repository
+	logger   *slog.Logger
+	devices  *devices.Repository
+	jobs     *jobs.Repository
+	params   *parameters.Repository
+	vendors  *adapters.Registry
+	auditor  *observability.Auditor
 
 	firmware     *firmware.Repository
 	firmwareFS   firmware.Storage

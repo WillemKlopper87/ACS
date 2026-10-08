@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Conservative Device:2 baseline only. RouterOS version, TR-098 root,
+     cellular extensions and enterprise OIDs require live discovery / MIB evidence. -->
+<cwmp:cwmpDataModel vendor="MikroTik" model="RouterOS family" specVersion="TR-181 Issue 2">
+  <object name="Device." access="readOnly">
+    <object name="DeviceInfo." access="readOnly">
+      <parameter name="Manufacturer" type="string" access="readOnly"/>
+      <parameter name="ModelName" type="string" access="readOnly"/>
+      <parameter name="SoftwareVersion" type="string" access="readOnly"/>
+    </object>
+  </object>
+</cwmp:cwmpDataModel>

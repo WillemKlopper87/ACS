@@ -29,7 +29,7 @@ func (h *handler) applyAutoProvisioningTemplates(ctx context.Context, device *de
 		}
 
 		job, err := h.jobs.Create(ctx, device.ID, jobs.TypeSetParameter,
-			jobs.SetParameterPayload{Parameters: params}, "template:"+t.Name)
+			jobs.SetParameterPayload{Parameters: params, Verify: true}, "template:"+t.Name)
 		if err != nil {
 			h.logger.Error("failed to queue auto-provisioning template", "err", err, "template_id", t.ID, "device_id", device.ID)
 			continue

@@ -91,6 +91,394 @@ tags:
     description: CPE-to-ACS file transfer (config backups, log files)
 
 paths:
+  /api/v1/devices/{id}/compatibility:
+    get:
+      tags: [Diagnostics]
+      operationId: GetCompatibilityEvidence
+      summary: Read firmware-specific compatibility stages and capability changes
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+      responses:
+        "200":
+          description: Operation evidence is scoped to the returned paths and installed firmware
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [firmware, connected, discovered, read_tested, write_tested, firmware_qualified]
+                properties:
+                  firmware: { type: string }
+                  connected: { type: boolean }
+                  discovered: { type: boolean }
+                  read_tested: { type: boolean }
+                  write_tested: { type: boolean }
+                  firmware_qualified: { type: boolean }
+                  capability_changes: { type: object, additionalProperties: true }
+                  qualification_evidence: { type: object, additionalProperties: true }
+                  scope: { type: string }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/devices/{id}/instances:
+    get:
+      tags: [Diagnostics]
+      operationId: GetInstanceEvidence
+      summary: Read firmware-bound USP instance evidence
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+      responses:
+        "200":
+          description: Evidence includes collection time and firmware; current validity is limited to one day
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/devices/{id}/discover-instances:
+    post:
+      tags: [Diagnostics]
+      operationId: DiscoverInstances
+      summary: Queue USP GetInstances for concrete object paths
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paths]
+              properties:
+                paths:
+                  type: array
+                  minItems: 1
+                  maxItems: 32
+                  items: { type: string, maxLength: 512 }
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+        "409": { description: Device has no USP agent }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/devices/{id}/5g-telemetry:
+    get:
+      tags: [Diagnostics]
+      operationId: GetFiveGTelemetry
+      summary: Read discovered cellular, session, slice and QoS telemetry with freshness and units
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - { name: protocol, in: query, schema: { type: string, enum: [cwmp, usp] } }
+        - { name: version, in: query, schema: { type: string, enum: ["2.20", "2.21"] } }
+      responses:
+        "200":
+          description: Timestamped cached readings, raw values and unavailable markers
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/devices/{id}/telemetry-health:
+    get:
+      tags: [Diagnostics]
+      operationId: GetTelemetryHealth
+      summary: Read receiver expiry and missing-report alerts
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+      responses:
+        "200":
+          description: Reports become missing after three intervals plus sixty seconds
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/devices/{id}/bulk-data/receivers/{receiver_id}/renew:
+    post:
+      tags: [Diagnostics]
+      operationId: RenewBulkDataReceiver
+      summary: Extend receiver validity seven days and queue new device credentials atomically
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - { name: receiver_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202": { $ref: "#/components/responses/QueueResponse" }
+        "409": { description: Revoked receiver or missing writable capability evidence }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/devices/{id}/discovery-export:
+    get:
+      tags: [Diagnostics]
+      operationId: ExportDiscovery
+      summary: Export the last twenty completed discovery snapshots
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+      responses:
+        "200":
+          description: Export the last twenty completed discovery snapshots
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400":
+          description: Invalid input or report
+        "401":
+          description: Operator authentication required
+        "403":
+          description: Insufficient permission or invalid receiver credentials
+        "404":
+          description: Device, receiver or dictionary path not found
+        "409":
+          description: Required discovered capability unavailable
+        "500":
+          description: Persistence failed
+
+  /api/v1/devices/{id}/standards-assessment:
+    get:
+      tags: [Diagnostics]
+      operationId: StandardsAssessment
+      summary: Compare discovered paths against a selected pinned TR-181 dictionary
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - name: protocol
+          in: query
+          schema: { type: string, enum: [cwmp, usp], default: cwmp }
+        - name: version
+          in: query
+          schema: { type: string, enum: ["2.20", "2.21"], default: "2.21" }
+      responses:
+        "200":
+          description: Compare discovered paths against a selected pinned TR-181 dictionary
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400":
+          description: Invalid input or report
+        "401":
+          description: Operator authentication required
+        "403":
+          description: Insufficient permission or invalid receiver credentials
+        "404":
+          description: Device, receiver or dictionary path not found
+        "409":
+          description: Required discovered capability unavailable
+        "500":
+          description: Persistence failed
+
+  /api/v1/devices/{id}/connection-diagnostics:
+    get:
+      tags: [Diagnostics]
+      operationId: ConnectionDiagnostics
+      summary: Read observed authentication, transport and discovery evidence
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+      responses:
+        "200":
+          description: Read observed authentication, transport and discovery evidence
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400":
+          description: Invalid input or report
+        "401":
+          description: Operator authentication required
+        "403":
+          description: Insufficient permission or invalid receiver credentials
+        "404":
+          description: Device, receiver or dictionary path not found
+        "409":
+          description: Required discovered capability unavailable
+        "500":
+          description: Persistence failed
+
+  /api/v1/devices/{id}/wifi-topology:
+    get:
+      tags: [Diagnostics]
+      operationId: WiFiTopology
+      summary: Read timestamped cached TR-181 Wi-Fi DataElements topology
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+      responses:
+        "200":
+          description: Read timestamped cached TR-181 Wi-Fi DataElements topology
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400":
+          description: Invalid input or report
+        "401":
+          description: Operator authentication required
+        "403":
+          description: Insufficient permission or invalid receiver credentials
+        "404":
+          description: Device, receiver or dictionary path not found
+        "409":
+          description: Required discovered capability unavailable
+        "500":
+          description: Persistence failed
+
+  /api/v1/standards/dictionary:
+    get:
+      tags: [Diagnostics]
+      operationId: StandardDictionary
+      summary: Look up standard paths in a bundled CWMP or USP TR-181 dictionary
+      parameters:
+        - name: protocol
+          in: query
+          schema: { type: string, enum: [cwmp, usp], default: cwmp }
+        - name: version
+          in: query
+          schema: { type: string, enum: ["2.20", "2.21"], default: "2.21" }
+        - name: path
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Look up standard paths in a bundled CWMP or USP TR-181 dictionary
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400":
+          description: Invalid input or report
+        "401":
+          description: Operator authentication required
+        "403":
+          description: Insufficient permission or invalid receiver credentials
+        "404":
+          description: Device, receiver or dictionary path not found
+        "409":
+          description: Required discovered capability unavailable
+        "500":
+          description: Persistence failed
+
+  /api/v1/devices/{id}/bulk-data/reports:
+    get:
+      tags: [Diagnostics]
+      operationId: BulkDataReports
+      summary: Read the latest one hundred JSON bulk reports
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+      responses:
+        "200":
+          description: Read the latest one hundred JSON bulk reports
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400":
+          description: Invalid input or report
+        "401":
+          description: Operator authentication required
+        "403":
+          description: Insufficient permission or invalid receiver credentials
+        "404":
+          description: Device, receiver or dictionary path not found
+        "409":
+          description: Required discovered capability unavailable
+        "500":
+          description: Persistence failed
+
+  /api/v1/devices/{id}/bulk-data/receivers/{receiver_id}:
+    delete:
+      tags: [Diagnostics]
+      operationId: RevokeBulkData
+      summary: Revoke a device-bound bulk receiver
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - name: receiver_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Revoke a device-bound bulk receiver
+        "400":
+          description: Invalid input or report
+        "401":
+          description: Operator authentication required
+        "403":
+          description: Insufficient permission or invalid receiver credentials
+        "404":
+          description: Device, receiver or dictionary path not found
+        "409":
+          description: Required discovered capability unavailable
+        "500":
+          description: Persistence failed
+
+  /api/v1/devices/{id}/bulk-data/configure:
+    post:
+      tags: [Diagnostics]
+      operationId: ConfigureBulkData
+      summary: Queue a discovered HTTP JSON NameValuePair bulk profile with seven-day receiver credentials
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile_instance, reporting_interval, parameters]
+              properties:
+                profile_instance: { type: integer, minimum: 1 }
+                reporting_interval: { type: integer, minimum: 60, maximum: 86400 }
+                parameters:
+                  type: array
+                  minItems: 1
+                  maxItems: 128
+                  items:
+                    type: object
+                    required: [instance, path]
+                    properties:
+                      instance: { type: integer, minimum: 1 }
+                      path: { type: string }
+      responses:
+        "202":
+          description: Queue a discovered HTTP JSON NameValuePair bulk profile with seven-day receiver credentials
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "400":
+          description: Invalid input or report
+        "401":
+          description: Operator authentication required
+        "403":
+          description: Insufficient permission or invalid receiver credentials
+        "404":
+          description: Device, receiver or dictionary path not found
+        "409":
+          description: Required discovered capability unavailable
+        "500":
+          description: Persistence failed
+
+  /api/v1/bulk-data/{id}/receive:
+    post:
+      tags: [Diagnostics]
+      operationId: ReceiveBulkData
+      summary: Receive a bounded device-authenticated BBF bulk report
+      security:
+        - bulkReceiverAuth: []
+      description: Receiver username is its UUID; password is a signed expiring device-bound token. Gzip is supported. Reports are limited to 1 MiB and configured scalar metric paths.
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [Report]
+              properties:
+                Report:
+                  type: array
+                  minItems: 1
+                  maxItems: 32
+                  items: { type: object, additionalProperties: true }
+      responses:
+        "204":
+          description: Receive a bounded device-authenticated BBF bulk report
+        "400":
+          description: Invalid input or report
+        "401":
+          description: Operator authentication required
+        "403":
+          description: Insufficient permission or invalid receiver credentials
+        "404":
+          description: Device, receiver or dictionary path not found
+        "409":
+          description: Required discovered capability unavailable
+        "500":
+          description: Persistence failed
+
   # --- Auth ---
   /api/v1/auth/login:
     post:
@@ -1925,6 +2313,10 @@ paths:
 
 components:
   securitySchemes:
+    bulkReceiverAuth:
+      type: http
+      scheme: basic
+      description: Signed receiver-specific credential, expiring after seven days and revocable through the operator API.
     bearerAuth:
       type: http
       scheme: bearer
@@ -1951,6 +2343,8 @@ components:
       description: Capture session UUID
 
   responses:
+    NotFound:
+      description: Device or resource not found within the caller's scope
     QueueResponse:
       description: Job queued
       content:

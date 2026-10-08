@@ -1,0 +1,12 @@
+{
+  "name": "nokia-reported-firmware-read-only",
+  "identity_fields": ["Manufacturer", "ModelName", "ProductClass", "HardwareVersion", "SoftwareVersion"],
+  "expected_identity": {
+    "HardwareVersion": ["3TG02241AAAA"],
+    "SoftwareVersion": ["1.2501.00.0798", "5GGW2-OMNI-2_R250100BiwT0301E0798"]
+  },
+  "reads": [],
+  "read_discovered_5g": true,
+  "writes": [],
+  "reboot": false
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/bulkdata"
 	"database/sql"
 	"net/http"
 
@@ -14,6 +15,9 @@ import (
 // the real router against a test database (cmd/api/integration_test.go)
 // and so the OpenAPI drift test has one file to read.
 func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *http.ServeMux {
+	if h.bulkData == nil {
+		h.bulkData = bulkdata.NewRepository(db)
+	}
 	mux := http.NewServeMux()
 	// route(method, pattern, minRole, fn) wraps a handler with both HTTP
 	// metrics (build plan §4 Phase 7) and role enforcement, in one place
@@ -156,6 +160,21 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	routePerm("POST", "/api/v1/devices/{id}/connection-request", operators.PermConnectionReq, h.createConnectionRequest)
 	routePerm("POST", "/api/v1/devices/{id}/discover-parameters", operators.PermDiagnosticsRun, h.createParameterDiscovery)
 	route("GET", "/api/v1/devices/{id}/parameter-names", ro, h.getParameterNames)
+	route("GET", "/api/v1/devices/{id}/discovery-export", ro, h.exportDiscovery)
+	route("GET", "/api/v1/devices/{id}/standards-assessment", ro, h.getStandardsAssessment)
+	route("GET", "/api/v1/devices/{id}/connection-diagnostics", ro, h.getConnectionDiagnostics)
+	route("GET", "/api/v1/devices/{id}/wifi-topology", ro, h.getWiFiTopology)
+	route("GET", "/api/v1/standards/dictionary", ro, h.getStandardDictionary)
+	routePerm("POST", "/api/v1/devices/{id}/bulk-data/configure", operators.PermDevicesWrite, h.configureBulkData)
+	routePerm("POST", "/api/v1/devices/{id}/discover-instances", operators.PermDiagnosticsRun, h.discoverInstances)
+	route("GET", "/api/v1/devices/{id}/instances", ro, h.getInstances)
+	route("GET", "/api/v1/devices/{id}/compatibility", ro, h.getCompatibility)
+	route("GET", "/api/v1/devices/{id}/5g-telemetry", ro, h.getFiveG)
+	route("GET", "/api/v1/devices/{id}/telemetry-health", ro, h.getTelemetryHealth)
+	routePerm("POST", "/api/v1/devices/{id}/bulk-data/receivers/{receiver_id}/renew", operators.PermDevicesWrite, h.renewBulkData)
+	route("GET", "/api/v1/devices/{id}/bulk-data/reports", ro, h.getBulkDataReports)
+	routePerm("DELETE", "/api/v1/devices/{id}/bulk-data/receivers/{receiver_id}", operators.PermDevicesWrite, h.revokeBulkData)
+	mux.HandleFunc("POST /api/v1/bulk-data/{id}/receive", metrics.InstrumentHTTP("POST /api/v1/bulk-data/{id}/receive", h.receiveBulkData))
 	route("GET", "/api/v1/devices/{id}/cellular-capabilities", ro, h.getCellularCapabilities)
 	route("GET", "/api/v1/devices/{id}/diagnostics-capabilities", ro, h.getDiagnosticsCapabilities)
 	routePerm("POST", "/api/v1/devices/{id}/cli/credentials", operators.PermCLIAccess, h.createCLICredential)

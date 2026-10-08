@@ -32,6 +32,40 @@ func (h *handler) runOfflineIncidentLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			h.ingestOfflineDevices(ctx)
+			h.ingestBulkDataHealth(ctx)
+		}
+	}
+}
+
+func (h *handler) ingestBulkDataHealth(ctx context.Context) {
+	recovered, err := h.alertIncidents.RecoverBulkData(ctx)
+	if err != nil {
+		h.logger.Error("bulk data incident recovery failed", "err", err)
+		return
+	}
+	for i := range recovered {
+		h.notifyIncident(ctx, "ALERT_RECOVERED", &recovered[i])
+	}
+	targets, err := h.alertPolicies.MissingBulkData(ctx, webhookBatchSize)
+	if err != nil {
+		h.logger.Error("bulk data health evaluation failed", "err", err)
+		return
+	}
+	policies, err := h.alertPolicies.List(ctx)
+	if err != nil {
+		return
+	}
+	for _, target := range targets {
+		policy, ok := alerting.Resolve(policies, alerting.Target{TenantID: target.TenantID, DeviceID: target.DeviceID, CustomerTier: target.CustomerTier, GroupIDs: target.GroupIDs})
+		if !ok {
+			continue
+		}
+		next := time.Now().Add(firstEscalationDelay(policy))
+		incident, created, err := h.alertIncidents.OpenWithCreated(ctx, target.TenantID, target.DeviceID, "bulk-data:"+target.ReceiverID, alerting.Classify(policy, "bulk_data_missing", false), "Bulk telemetry reports missing or receiver expired", &next, map[string]any{"receiver_id": target.ReceiverID, "last_report_at": target.LastReportAt, "expires_at": target.ExpiresAt, "reporting_interval": target.Interval})
+		if err != nil {
+			h.logger.Error("bulk data incident creation failed", "err", err)
+		} else if created {
+			h.notifyIncident(ctx, "ALERT_OPENED", incident)
 		}
 	}
 }

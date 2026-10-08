@@ -6,6 +6,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -28,8 +29,26 @@ func (h *handler) createParameterDiscovery(w http.ResponseWriter, r *http.Reques
 		root, fallback = fallback, root
 	}
 
-	job, err := h.jobs.Create(r.Context(), id, jobs.TypeParameterDiscovery,
-		jobs.ParameterDiscoveryPayload{Root: root, FallbackRoot: fallback}, operatorFromRequest(r))
+	req := struct {
+		Incremental bool `json:"incremental"`
+	}{Incremental: true}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+	}
+	values, err := h.params.Get(r.Context(), id)
+	if err != nil {
+		http.Error(w, "failed to read firmware evidence", 500)
+		return
+	}
+	firmware := values["Device.DeviceInfo.SoftwareVersion"].Value
+	if firmware == "" {
+		firmware = values["InternetGatewayDevice.DeviceInfo.SoftwareVersion"].Value
+	}
+	job, err := h.jobs.CreateWithMaxAttempts(r.Context(), id, jobs.TypeParameterDiscovery,
+		jobs.ParameterDiscoveryPayload{Root: root, FallbackRoot: fallback, Incremental: req.Incremental, Firmware: firmware}, operatorFromRequest(r), jobs.DiscoveryMaxObjects)
 	if err != nil {
 		h.logger.Error("failed to queue parameter discovery", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -62,5 +81,6 @@ func (h *handler) getParameterNames(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"names": discovered.Names, "discovered_at": discovered.DiscoveredAt.Format(time.RFC3339),
+		"stale": discovered.Stale,
 	})
 }

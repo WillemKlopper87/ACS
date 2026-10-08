@@ -722,6 +722,14 @@ func (h *handler) resolveAndMarkReconciled(c mtp.Conn) {
 		return
 	}
 	h.markReconciled(c, agentRow.DeviceID)
+	if h.paramsRepo != nil && h.dispatcher != nil && h.dispatcher.jobsRepo != nil {
+		discovered, err := h.paramsRepo.GetNames(ctx, agentRow.DeviceID)
+		if err == nil && (discovered == nil || discovered.Stale) {
+			if err := h.dispatcher.jobsRepo.QueueDiscoveryIfNeeded(ctx, agentRow.DeviceID); err != nil {
+				h.log.Warn("queue USP onboarding discovery", "err", err)
+			}
+		}
+	}
 
 	// Resolve and record this device's natural key (oui_serial) once per
 	// reconciliation, not per-message (task-4 fix round 1): captureInbound
@@ -771,7 +779,13 @@ func (h *handler) assignDeviceProfile(ctx context.Context, device *devices.Devic
 	if h.profiles == nil || device == nil || h.devicesRepo == nil {
 		return
 	}
-	match := h.profiles.MatchProfile(device.Manufacturer, device.ProductClass)
+	firmware := ""
+	if h.paramsRepo != nil {
+		if values, err := h.paramsRepo.Get(ctx, device.ID); err == nil {
+			firmware = values["Device.DeviceInfo.SoftwareVersion"].Value
+		}
+	}
+	match := h.profiles.MatchFirmwareProfile(device.Manufacturer, device.ProductClass, firmware)
 	if match.MatchedBy == "" {
 		_ = h.devicesRepo.ClearProfileAssignment(ctx, device.ID)
 		return

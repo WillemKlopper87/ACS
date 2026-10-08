@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -81,6 +82,8 @@ var uspDispatchableTypes = []string{
 	jobs.TypeDiagnosticsTraceroute,
 	jobs.TypeParameterDiscovery,
 	jobs.TypeFirmwareDownload,
+	jobs.TypeDiagnosticsDownload,
+	jobs.TypeDiagnosticsUpload,
 }
 
 // dispatchSweepInterval sets how often periodicSweep re-checks every
@@ -219,6 +222,12 @@ func (d *dispatcher) tryDispatch(ctx context.Context, deviceID string) error {
 	}
 
 	msgID := usp.NewMsgID()
+	if d.paramsRepo != nil {
+		if err := d.jobsRepo.BindFirmware(ctx, job); err != nil {
+			d.resolveFailure(ctx, job, conn.Endpoint(), "FIRMWARE_CHANGED", err.Error())
+			return nil
+		}
+	}
 	msgBytes, err := buildUSPRequest(msgID, job)
 	if errors.Is(err, ErrUnsupportedOverUSP) {
 		// Defensive default, not a normal path: every type currently in
@@ -363,6 +372,7 @@ type responseOutcome struct {
 	// may write the parameter, false means it is known read-only.
 	discoveredNames        map[string]bool
 	discoveredCapabilities []parameters.SupportedCapability
+	instances              map[string][]string
 }
 
 // classifyResponse inspects msg.GetBody().GetResponse()'s actual
@@ -383,6 +393,34 @@ func classifyResponse(msg *uspproto.Msg) responseOutcome {
 	switch v := msg.GetBody().GetResponse().GetRespType().(type) {
 	case *uspproto.Response_GetResp:
 		return classifyGetResp(msgType, v.GetResp)
+	case *uspproto.Response_SetResp:
+		for _, result := range v.SetResp.GetUpdatedObjResults() {
+			status := result.GetOperStatus()
+			if failure := status.GetOperFailure(); failure != nil {
+				return responseOutcome{uspErr: &usp.USPError{Code: usp.ErrorCode(failure.GetErrCode()), Message: failure.GetErrMsg()}}
+			}
+			for _, instance := range status.GetOperSuccess().GetUpdatedInstResults() {
+				for _, failure := range instance.GetParamErrs() {
+					if failure.GetErrCode() != 0 {
+						return responseOutcome{uspErr: &usp.USPError{Code: usp.ErrorCode(failure.GetErrCode()), Message: failure.GetErrMsg()}}
+					}
+				}
+			}
+		}
+		return responseOutcome{detail: dispatchResultDetail{MsgType: msgType}}
+	case *uspproto.Response_GetInstancesResp:
+		out := responseOutcome{instances: map[string][]string{}, detail: dispatchResultDetail{MsgType: msgType}}
+		for _, result := range v.GetInstancesResp.GetReqPathResults() {
+			if result.GetErrCode() != 0 {
+				return responseOutcome{uspErr: &usp.USPError{Code: usp.ErrorCode(result.GetErrCode()), Message: result.GetErrMsg()}}
+			}
+			paths := []string{}
+			for _, instance := range result.GetCurrInsts() {
+				paths = append(paths, instance.GetInstantiatedObjPath())
+			}
+			out.instances[result.GetRequestedPath()] = paths
+		}
+		return out
 	case *uspproto.Response_AddResp:
 		return classifyAddResp(msgType, v.AddResp)
 	case *uspproto.Response_DeleteResp:
@@ -576,18 +614,37 @@ func classifyGetSupportedDMResp(msgType string, resp *uspproto.GetSupportedDMRes
 	var capabilities []parameters.SupportedCapability
 	for _, r := range resp.GetReqObjResults() {
 		if r.GetErrCode() != 0 {
-			params[r.GetReqObjPath()] = fmt.Sprintf("error %d: %s", r.GetErrCode(), r.GetErrMsg())
-			continue
+			return responseOutcome{uspErr: &usp.USPError{Code: usp.ErrorCode(r.GetErrCode()), Message: r.GetErrMsg()}}
 		}
 		params[r.GetReqObjPath()] = fmt.Sprintf("%d supported objects discovered", len(r.GetSupportedObjs()))
 		for _, obj := range r.GetSupportedObjs() {
+			objectPath := obj.GetSupportedObjPath()
+			if objectPath == "" {
+				continue
+			}
+			discoveredNames[objectPath] = false
+			objectCapability := parameters.SupportedCapability{Path: objectPath}
+			for _, command := range obj.GetSupportedCommands() {
+				path := resolvedParameterPath(objectPath, command.GetCommandName())
+				if path != "" {
+					discoveredNames[path] = false
+					objectCapability.Commands = append(objectCapability.Commands, path)
+				}
+			}
+			for _, event := range obj.GetSupportedEvents() {
+				path := resolvedParameterPath(objectPath, event.GetEventName())
+				if path != "" {
+					objectCapability.Events = append(objectCapability.Events, path)
+				}
+			}
+			capabilities = append(capabilities, objectCapability)
 			for _, parameter := range obj.GetSupportedParams() {
 				name := resolvedParameterPath(obj.GetSupportedObjPath(), parameter.GetParamName())
 				if name == "" {
 					continue
 				}
 				discoveredNames[name] = parameter.GetAccess() == uspproto.GetSupportedDMResp_PARAM_READ_WRITE || parameter.GetAccess() == uspproto.GetSupportedDMResp_PARAM_WRITE_ONLY
-				capabilities = append(capabilities, parameters.SupportedCapability{Path: name, Writable: discoveredNames[name], ValueType: parameter.GetValueType().String(), ValueChange: parameter.GetValueChange().String()})
+				capabilities = append(capabilities, parameters.SupportedCapability{Path: name, Writable: discoveredNames[name], ValueType: parameter.GetValueType().String(), ValueChange: parameter.GetValueChange().String(), Access: parameter.GetAccess().String()})
 			}
 		}
 	}
@@ -631,12 +688,19 @@ func (d *dispatcher) handleResponse(from usp.EndpointID, msg *uspproto.Msg) (mat
 	if !ok {
 		return false
 	}
+	if entry.conn != nil && entry.conn.Endpoint() != from {
+		return false
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
 	defer cancel()
 
 	if uspErr := usp.ErrorFromMsg(msg); uspErr != nil {
 		d.mu.Lock()
+		if _, exists := d.pending[msgID]; !exists {
+			d.mu.Unlock()
+			return true
+		}
 		delete(d.pending, msgID)
 		d.mu.Unlock()
 		d.classifyAndFail(ctx, entry.job, from, uspErr, "msg_id", msgID)
@@ -653,6 +717,10 @@ func (d *dispatcher) handleResponse(from usp.EndpointID, msg *uspproto.Msg) (mat
 	}
 
 	d.mu.Lock()
+	if _, exists := d.pending[msgID]; !exists {
+		d.mu.Unlock()
+		return true
+	}
 	delete(d.pending, msgID)
 	d.mu.Unlock()
 
@@ -660,17 +728,140 @@ func (d *dispatcher) handleResponse(from usp.EndpointID, msg *uspproto.Msg) (mat
 		d.classifyAndFail(ctx, entry.job, from, outcome.uspErr, "msg_id", msgID)
 		return true
 	}
-	if entry.job.Type == jobs.TypeParameterDiscovery && outcome.discoveredNames != nil && d.paramsRepo != nil {
-		if err := d.paramsRepo.SaveNames(ctx, entry.job.DeviceID, outcome.discoveredNames); err != nil {
-			// A failed capability-cache write must not turn a completed device
-			// RPC into a false failure. Operators still receive the discovery
-			// summary, while callers safely fall back to canonical mappings.
-			d.log.Warn("uspc: dispatcher: persist USP discovered parameter names", "job_id", entry.job.ID, "device_id", entry.job.DeviceID, "error", err)
+	if entry.job.Type == jobs.TypeSetParameter && d.paramsRepo != nil {
+		var payload jobs.SetParameterPayload
+		if err := json.Unmarshal(entry.job.Payload, &payload); err != nil {
+			d.resolveFailure(ctx, entry.job, from, "", "invalid write payload")
+			return true
 		}
-		if len(outcome.discoveredCapabilities) > 0 {
-			if err := d.paramsRepo.SaveCapabilities(ctx, entry.job.DeviceID, outcome.discoveredCapabilities); err != nil {
-				d.log.Warn("uspc: dispatcher: persist USP capability metadata", "job_id", entry.job.ID, "device_id", entry.job.DeviceID, "error", err)
+		if payload.Verify && !payload.VerificationPending && len(jobs.VerificationPaths(payload)) > 0 {
+			if err := d.jobsRepo.BeginReadback(ctx, entry.job, payload); err != nil {
+				d.resolveFailure(ctx, entry.job, from, "", "failed to queue readback")
+				return true
 			}
+			d.retryDispatch(entry.job.DeviceID, from)
+			return true
+		}
+		if payload.VerificationPending {
+			values := map[string]parameters.CachedValue{}
+			for path, value := range outcome.detail.Params {
+				values[path] = parameters.CachedValue{Value: value, Source: "USP_GET", UpdatedAt: time.Now()}
+			}
+			if err := d.paramsRepo.Upsert(ctx, entry.job.DeviceID, values); err != nil {
+				d.resolveFailure(ctx, entry.job, from, "", "failed to cache readback")
+				return true
+			}
+			check := jobs.CompareReadback(payload, outcome.detail.Params)
+			success := len(check.Mismatched) == 0 && len(check.Missing) == 0 && len(check.Matched) > 0
+			if err := d.paramsRepo.RecordOperation(ctx, entry.job.DeviceID, entry.job.CommandKey, "WRITE", success, jobs.VerificationPaths(payload), check, jobs.EvidenceFirmware(entry.job)); err != nil {
+				d.resolveFailure(ctx, entry.job, from, "", "failed to persist verification")
+				return true
+			}
+			if !success {
+				d.resolveFailure(ctx, entry.job, from, "READBACK_MISMATCH", "readback did not confirm every readable parameter")
+				return true
+			}
+		}
+	}
+	if entry.job.Type == jobs.TypeParameterDiscovery && d.paramsRepo != nil {
+		var payload jobs.ParameterDiscoveryPayload
+		if err := json.Unmarshal(entry.job.Payload, &payload); err != nil {
+			d.resolveFailure(ctx, entry.job, from, "", "invalid discovery payload")
+			return true
+		}
+		if len(outcome.discoveredNames) == 0 {
+			d.resolveFailure(ctx, entry.job, from, "", "agent returned no supported data model")
+			return true
+		}
+		if payload.Incremental {
+			if payload.Capabilities == nil {
+				payload.Capabilities = map[string]json.RawMessage{}
+			}
+			for _, capability := range outcome.discoveredCapabilities {
+				raw, err := json.Marshal(capability)
+				if err != nil {
+					d.resolveFailure(ctx, entry.job, from, "", "invalid capability metadata")
+					return true
+				}
+				payload.Capabilities[capability.Path] = raw
+			}
+			done, err := jobs.AdvanceDiscovery(&payload, outcome.discoveredNames)
+			if err != nil {
+				d.resolveFailure(ctx, entry.job, from, "", err.Error())
+				return true
+			}
+			if !done {
+				if err := d.jobsRepo.RequeueDiscovery(ctx, entry.job, payload); err != nil {
+					d.resolveFailure(ctx, entry.job, from, "", "failed to save discovery progress")
+					return true
+				}
+				d.retryDispatch(entry.job.DeviceID, from)
+				return true
+			}
+			outcome.discoveredNames = payload.Names
+			outcome.discoveredCapabilities = nil
+			for _, raw := range payload.Capabilities {
+				var capability parameters.SupportedCapability
+				if err := json.Unmarshal(raw, &capability); err != nil {
+					d.resolveFailure(ctx, entry.job, from, "", "invalid saved capability metadata")
+					return true
+				}
+				outcome.discoveredCapabilities = append(outcome.discoveredCapabilities, capability)
+			}
+		}
+		if err := d.paramsRepo.SaveDiscovery(ctx, entry.job.DeviceID, parameters.DiscoverySnapshot{CommandKey: entry.job.CommandKey, Protocol: "USP", Root: "Device.", Names: outcome.discoveredNames, Capabilities: outcome.discoveredCapabilities, ExpectedFirmware: payload.Firmware}); err != nil {
+			d.resolveFailure(ctx, entry.job, from, "", "failed to persist discovery snapshot")
+			if errors.Is(err, parameters.ErrFirmwareChanged) {
+				_ = d.jobsRepo.QueueDiscoveryIfNeeded(ctx, entry.job.DeviceID)
+			}
+			return true
+		}
+	}
+	if entry.job.Type == jobs.TypeGetParameter && d.paramsRepo != nil && len(outcome.detail.Params) > 0 {
+		var payload jobs.GetParameterPayload
+		if json.Unmarshal(entry.job.Payload, &payload) != nil || len(jobs.MissingReadPaths(payload.Paths, outcome.detail.Params)) > 0 {
+			d.resolveFailure(ctx, entry.job, from, "PARTIAL_READ", "agent omitted requested readable parameters")
+			return true
+		}
+		values := map[string]parameters.CachedValue{}
+		for path, value := range outcome.detail.Params {
+			values[path] = parameters.CachedValue{Value: value, Source: "USP_GET", UpdatedAt: time.Now()}
+		}
+		if err := d.paramsRepo.Upsert(ctx, entry.job.DeviceID, values); err != nil {
+			d.resolveFailure(ctx, entry.job, from, "", "failed to persist parameter values")
+			return true
+		}
+	}
+	if entry.job.Type == jobs.TypeGetParameter && d.paramsRepo != nil {
+		var payload jobs.GetParameterPayload
+		if err := json.Unmarshal(entry.job.Payload, &payload); err != nil {
+			d.resolveFailure(ctx, entry.job, from, "", "invalid read payload")
+			return true
+		}
+		if payload.Instances {
+			for _, path := range payload.Paths {
+				instances, ok := outcome.instances[path]
+				if !ok {
+					d.resolveFailure(ctx, entry.job, from, "", "missing instance discovery result")
+					return true
+				}
+				if err := d.paramsRepo.SaveInstances(ctx, entry.job.DeviceID, path, payload.Firmware, instances); err != nil {
+					d.resolveFailure(ctx, entry.job, from, "", "failed to persist instance evidence")
+					return true
+				}
+			}
+		} else if len(outcome.detail.Params) > 0 {
+			paths := []string{}
+			for path := range outcome.detail.Params {
+				paths = append(paths, path)
+			}
+			if err := d.paramsRepo.RecordOperation(ctx, entry.job.DeviceID, entry.job.CommandKey, "READ", true, paths, map[string]string{"protocol": "USP"}, jobs.EvidenceFirmware(entry.job)); err != nil {
+				d.resolveFailure(ctx, entry.job, from, "", "failed to persist read evidence")
+				return true
+			}
+		} else if len(jobs.MissingReadPaths(payload.Paths, outcome.detail.Params)) > 0 {
+			d.resolveFailure(ctx, entry.job, from, "PARTIAL_READ", "agent returned no requested parameter values")
+			return true
 		}
 	}
 	d.resolveSuccess(ctx, entry.job, from, outcome.detail)

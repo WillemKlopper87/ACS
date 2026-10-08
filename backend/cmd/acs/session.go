@@ -309,7 +309,6 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	h.assignDeviceProfile(ctx, device, inform.DeviceId)
 
 	h.captureInbound(ctx, naturalKey, remoteIP(r), device.ID, "Inform",
 		fmt.Sprintf("Inform (events: %v)", events), inform, r.Header.Get("Authorization"))
@@ -334,6 +333,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 		}
 	}
 
+	h.assignDeviceProfile(ctx, device, inform.DeviceId)
 	h.correlateValueChangeEvents(ctx, device, inform.Event, inform.ParameterList)
 	h.enforcePolicies(ctx, device, inform.ParameterList)
 
@@ -393,7 +393,16 @@ func (h *handler) assignDeviceProfile(ctx context.Context, device *devices.Devic
 	if h.profiles == nil || device == nil {
 		return
 	}
-	match := h.profiles.MatchProfile(id.Manufacturer, id.ProductClass)
+	firmware := ""
+	if h.params != nil {
+		if values, err := h.params.Get(ctx, device.ID); err == nil {
+			firmware = values["Device.DeviceInfo.SoftwareVersion"].Value
+			if firmware == "" {
+				firmware = values["InternetGatewayDevice.DeviceInfo.SoftwareVersion"].Value
+			}
+		}
+	}
+	match := h.profiles.MatchFirmwareProfile(id.Manufacturer, id.ProductClass, firmware)
 	if match.MatchedBy == "" {
 		if err := h.devices.ClearProfileAssignment(ctx, device.ID); err != nil {
 			h.logger.Warn("failed to clear stale device profile", "err", err, "device_id", device.ID)
@@ -533,6 +542,13 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 		return
 	}
 
+	if h.params != nil {
+		if err := h.jobs.BindFirmware(ctx, job); err != nil {
+			_ = h.jobs.MarkFailed(ctx, job.ID, "FIRMWARE_CHANGED", err.Error())
+			h.respondEmpty(w)
+			return
+		}
+	}
 	requestBody, ok := h.renderJobRequest(job)
 	if !ok {
 		h.logger.Error("job has unrenderable payload; failing it", "job_id", job.ID, "type", job.Type)

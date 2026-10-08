@@ -1,0 +1,50 @@
+# Device standards and discovery
+
+The ACS supports CWMP and USP discovery and keeps durable device capability evidence. Software support does not certify a device or its firmware.
+
+## Standards baseline
+
+Official, unmodified TR-181 Device:2 XML dictionaries for CWMP and USP revisions 2.20 and 2.21 are embedded in the backend. Their source URLs and SHA-256 hashes are recorded in `backend/internal/datamodel/models/manifest.json`. Select a revision using `GET /api/v1/standards/dictionary?protocol=usp&version=2.21`. Add `path=Device.Cellular.Interface.1.RSRP` to inspect a definition. Dictionary checks recognize instance templates, scalar syntax, inherited numeric ranges, enumerations and sizes. Cross-parameter relationships, profiles and full BBF conformance require additional validation. Select the device's supported revision when assessing paths.
+
+5G support uses verified TR-181 `Device.Cellular` and `Device.SessionManagement` definitions, with discovered optional capabilities. The exact identifier **BBF.0281 remains unverified**: an authoritative document is required before claiming support for that identifier. The current TR-181 3GPP NAS theory covers cellular and 5G FWA; it supersedes the older 5G WWC theory. Historical TR-157 performance definitions incorporated into TR-181 are included in the XML dictionaries; periodic statistics, BASAPM and LMAP are reported when discovered. There is no independent LMAP scheduler implementation in this change.
+
+TR-143 download/upload diagnostics use standard CWMP parameters or discovered USP Operate commands. Bulk collection is separate: TR-181 BulkData HTTP/JSON collection is implemented. Wi-Fi DataElements topology is projected from timestamped cached values; mesh steering is not implemented. TP-469 is the USP agent test plan, not a mesh dictionary or a certification of this ACS.
+
+Official references: https://device-data-model.broadband-forum.org/ , https://cwmp-data-models.broadband-forum.org/ , https://usp-data-models.broadband-forum.org/ , https://usp-test.broadband-forum.org/ .
+
+## Discovery and export
+
+`POST /api/v1/devices/{id}/discover-parameters` queues discovery through the existing ACS session. CWMP uses GetParameterNames; USP uses GetSupportedDM. The default incremental walk visits one level at a time, persists progress in the durable job and limits work to 512 objects, 50,000 names and depth 16. Limit or per-path failures preserve the last complete snapshot. CWMP can try the alternate Device/InternetGatewayDevice root once. Sending `{ "incremental": false }` requests the legacy full-tree operation.
+
+`GET /api/v1/devices/{id}/discovery-export` returns the latest 20 snapshots with names, writable flags, USP command/type metadata, protocol, identity, firmware and timestamps. Cached parameter values are excluded. `GET /api/v1/devices/{id}/standards-assessment` compares discovered paths with a selected dictionary. Supported-model templates do not prove that a concrete USP table instance exists.
+
+Run `python scripts/discover-devices.py --help` for the fleet export tool. Set `ACS_API_TOKEN`, provide `--base-url https://your-acs --device DEVICE_UUID --output DIRECTORY`, and repeat `--device` for additional devices. Devices must connect to the ACS before queued work can complete. The tool follows the recorded CWMP root fallback and exports the snapshot belonging to the completed job. Remote authentication requires HTTPS.
+
+The device compatibility panel provides discovery, refresh and export actions. Connection diagnostics are available at `GET /api/v1/devices/{id}/connection-diagnostics`; they report observed session/authentication evidence and recommendations, rather than claiming a successful external connectivity probe.
+
+## Firmware evidence and provisioning
+
+A reported SoftwareVersion change atomically marks discovery stale, clears profile qualification and queues rediscovery. Stale access evidence cannot authorize writes. A completed discovery is published only if its expected firmware still matches the cache. USP Get responses now update the parameter cache, including firmware evidence.
+
+Catalog profiles match manufacturer and model, but become qualified only with an exact firmware allow-list and nonempty qualification evidence. XML catalog attributes `firmwares="VERSION1,VERSION2"` and `qualificationEvidence="reference to device test evidence"` record this. Do not label a profile qualified without a physical-device test record. Standard paths take precedence; writes require discovered writable access, and unavailable capabilities remain unavailable. The MikroTik catalog is deliberately conservative and contains portable identity paths only.
+
+## Eight compatibility improvements
+
+1. **Repeatable lab evidence:** `scripts/qualify-device.py` runs discovery and explicit read, instance, write/readback and optional reboot scenarios through the ACS API. The default scenario is read-only. Writes and reboot require `--lab-actions`. A post-reboot read proves communication but does not independently witness a restart. Record physical reboot/reconnect and firmware-upgrade evidence separately; see `ci/compatibility/README.md`.
+2. **USP actual instances:** `POST /api/v1/devices/{id}/discover-instances` queues GetInstances for up to 32 concrete object paths. `GET /api/v1/devices/{id}/instances` returns firmware-bound evidence. Supported-model templates alone cannot authorize writes to unconfirmed rows; instance evidence expires after 24 hours. Discover nested tables after confirming their parent rows.
+3. **Connection diagnostics:** the diagnostics endpoint reports observed contact, staleness, transport state, and recorded connection-request DNS, TLS, authentication, TCP, timeout, policy and UDP outcomes with remediation. Unknown evidence remains unknown.
+4. **Firmware stages:** `GET /api/v1/devices/{id}/compatibility` separates contact, discovery, successful reads, verified writes and firmware qualification. It reports added, removed and changed access paths between snapshots. Successful read/write evidence is bound to the firmware observed at dispatch. Catalog qualification still requires an exact firmware and evidence reference.
+5. **Safer provisioning:** API and template writes request durable readback by default. A Set acknowledgement starts a persisted read phase; mismatches and missing values fail the job. Passwords and discovered write-only parameters are excluded and cannot establish verified-write evidence. Boolean readback accepts equivalent 0/1 representations. Standard syntax/range/enum/size checks apply before queueing.
+6. **5G telemetry:** `GET /api/v1/devices/{id}/5g-telemetry` projects discovered cellular, session, slice, QoS and WWC paths with raw values, dictionary units, source, timestamp and freshness. Unknown values and specified signal sentinels are unavailable. Large counters remain strings; vendor meanings and EN-DC state are not inferred.
+7. **Resilience:** duplicate and wrong-endpoint USP responses are rejected. Readback remains pending across worker restart; existing recovery protects destructive operations from blind replay. Database tests cover persisted readback and USP-only instance routing.
+8. **Telemetry lifecycle:** `GET /api/v1/devices/{id}/telemetry-health` reports receiving, awaiting-first-report, missing, expired and revoked receivers. Missing means no report after three configured intervals plus 60 seconds. `POST /api/v1/devices/{id}/bulk-data/receivers/{receiver}/renew` atomically renews credentials and queues the password update. Renewal provides a new grace period. Missing/expired latest receivers use existing account alert policies; fresh reports, revocation and replacement recover incidents. Renewal is operator-triggered, not automatic.
+
+## Bulk reports and OID fallback
+
+`POST /api/v1/devices/{id}/bulk-data/configure` configures an existing writable profile and parameter rows, a reporting interval and explicit metric references. HTTPS upload configuration and the transfer signing key must be configured. Receivers use signed Basic credentials, expire after seven days and can be revoked. The public receiver accepts bounded JSON NameValuePair reports, optionally gzip, and rejects unconfigured metrics. Reports are deduplicated and retained to a bounded history. Read reports with `GET /api/v1/devices/{id}/bulk-data/reports`. Configuration does not create missing table rows; USP supported-model discovery alone may be insufficient for concrete-instance evidence.
+
+`backend/cmd/oidprobe` provides a read-only SNMPv3 AuthPriv probe with bounded timeouts. The OID resolver prefers standard cached paths, then discovered vendor paths, then configured OIDs. Profiles must match vendor, model, firmware and actual sysObjectID and contain qualification evidence. Firmware supplied to the standalone probe is operator evidence, not automatically verified by SNMP. No Huawei, ZTE or MikroTik enterprise OIDs are guessed, and the probe is not wired into the server polling scheduler. Passwords are supplied through environment variables; see the command's help and source for the profile shape.
+
+## Deployment and validation
+
+Apply migrations 0074 through 0077 through the repository's normal migration process before using these features. Validation includes PostgreSQL 18 integration tests for sessions, discovery, firmware evidence, readback, tenant isolation, BulkData ingestion/renewal and missing-report incident recovery; frontend tests/build/lint; Python runner tests; OpenAPI checks; and Go vet. Physical CPE qualification remains pending until actual device sessions and firmware-specific lab evidence are available. On 8 October 2026, race-enabled checks passed for every backend package in Linux containers against disposable PostgreSQL 18, including a corrected fixture mount for the store suite. Preserve the bundled XML license notices when distributing binaries; see `docs/BBF-DICTIONARY-LICENSE.txt`. For Nokia preparation and a read-only deployment schema check, see `docs/NOKIA-ONBOARDING-HANDOFF.md`.

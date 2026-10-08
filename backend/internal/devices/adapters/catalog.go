@@ -28,18 +28,22 @@ type CatalogParameter struct {
 
 // Catalog is one vendor/model's known parameter tree.
 type Catalog struct {
-	Vendor      string
-	Model       string
-	SpecVersion string
-	Parameters  []CatalogParameter
+	Vendor                string
+	Model                 string
+	SpecVersion           string
+	Parameters            []CatalogParameter
+	Firmwares             []string
+	QualificationEvidence string
 }
 
 type xmlDataModel struct {
-	XMLName     xml.Name    `xml:"cwmpDataModel"`
-	Vendor      string      `xml:"vendor,attr"`
-	Model       string      `xml:"model,attr"`
-	SpecVersion string      `xml:"specVersion,attr"`
-	Objects     []xmlObject `xml:"object"`
+	XMLName               xml.Name    `xml:"cwmpDataModel"`
+	Vendor                string      `xml:"vendor,attr"`
+	Model                 string      `xml:"model,attr"`
+	SpecVersion           string      `xml:"specVersion,attr"`
+	Objects               []xmlObject `xml:"object"`
+	Firmwares             string      `xml:"firmwares,attr"`
+	QualificationEvidence string      `xml:"qualificationEvidence,attr"`
 }
 
 type xmlObject struct {
@@ -67,6 +71,10 @@ func parseCatalog(raw []byte) (Catalog, error) {
 	}
 
 	cat := Catalog{Vendor: dm.Vendor, Model: dm.Model, SpecVersion: dm.SpecVersion}
+	if dm.Firmwares != "" {
+		cat.Firmwares = strings.Split(dm.Firmwares, ",")
+	}
+	cat.QualificationEvidence = dm.QualificationEvidence
 	for _, obj := range dm.Objects {
 		flattenObject(obj, "", &cat.Parameters)
 	}

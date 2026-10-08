@@ -3,9 +3,11 @@
 package main
 
 import (
+	"acs/internal/datamodel"
 	"acs/internal/devices"
 	"acs/internal/jobs"
 	"acs/internal/operators"
+	"acs/internal/parameters"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -403,10 +405,25 @@ func buildSetParameterPayload(inputs []parameterInput) (jobs.SetParameterPayload
 	if len(inputs) == 0 {
 		return jobs.SetParameterPayload{}, errors.New("parameters must not be empty")
 	}
-	payload := jobs.SetParameterPayload{Parameters: make([]jobs.ParameterWrite, len(inputs))}
+	payload := jobs.SetParameterPayload{Parameters: make([]jobs.ParameterWrite, len(inputs)), Verify: true}
 	for i, p := range inputs {
 		if p.Name == "" {
 			return jobs.SetParameterPayload{}, errors.New("each parameter requires a name")
+		}
+		if strings.HasPrefix(p.Name, "Device.") {
+			dictionary, err := datamodel.Load("cwmp", "")
+			if err != nil {
+				return jobs.SetParameterPayload{}, err
+			}
+			if err := dictionary.ValidateValue(p.Name, p.Value); err != nil {
+				return jobs.SetParameterPayload{}, err
+			}
+			if definition, ok := dictionary.Lookup(p.Name); ok && p.Type == "" && definition.Type != "" {
+				p.Type = "xsd:" + definition.Type
+				if definition.Type == "base64" {
+					p.Type = "xsd:base64Binary"
+				}
+			}
 		}
 		payload.Parameters[i] = jobs.ParameterWrite{Name: p.Name, Value: p.Value, Type: p.Type}
 	}
@@ -429,12 +446,33 @@ func (h *handler) validateWritableParameters(ctx context.Context, deviceID strin
 	if discovered == nil {
 		return nil
 	}
-	return validateDiscoveredWritableParameters(discovered.Names, payload)
+	if err := validateDiscoveredWritableParameters(discovered.Names, payload); err != nil {
+		return err
+	}
+	cache, err := h.params.Get(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	instances, err := h.params.Instances(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	for _, p := range payload.Parameters {
+		if _, concrete := discovered.Names[p.Name]; !concrete {
+			if err := parameters.RequireInstances(p.Name, parameters.Firmware(cache), instances, time.Now()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func validateDiscoveredWritableParameters(names map[string]bool, payload jobs.SetParameterPayload) error {
 	for _, parameter := range payload.Parameters {
 		writable, exists := names[parameter.Name]
+		if !exists {
+			writable, exists = names[datamodel.NormalizePath(parameter.Name)]
+		}
 		if !exists {
 			return fmt.Errorf("parameter %q is not supported by the discovered device model", parameter.Name)
 		}

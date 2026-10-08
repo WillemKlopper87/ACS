@@ -28,3 +28,9 @@ frontend/playwright-report/
 
 # Managed worktrees are local development state and can be very large.
 .worktrees/
+
+# Python qualification/discovery runner caches
+__pycache__/
+
+# Local onboarding readiness and device qualification evidence
+.local/

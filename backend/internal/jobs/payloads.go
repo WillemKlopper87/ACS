@@ -1,11 +1,18 @@
 // Per-type job payload shapes (split out of job.go, audit P3.1).
 package jobs
 
+import "encoding/json"
+
 // SetParameterPayload is the payload shape for a SET_PARAMETER job,
 // mirroring the REST PUT /devices/{id}/parameters body (design doc v3
 // §8.3).
 type SetParameterPayload struct {
-	Parameters []ParameterWrite `json:"parameters"`
+	EvidenceFirmware    string           `json:"evidence_firmware,omitempty"`
+	EvidenceBound       bool             `json:"evidence_bound,omitempty"`
+	NonReadable         []string         `json:"non_readable,omitempty"`
+	Parameters          []ParameterWrite `json:"parameters"`
+	Verify              bool             `json:"verify,omitempty"`
+	VerificationPending bool             `json:"verification_pending,omitempty"`
 }
 
 type ParameterWrite struct {
@@ -16,7 +23,11 @@ type ParameterWrite struct {
 
 // GetParameterPayload is the payload shape for a GET_PARAMETER job.
 type GetParameterPayload struct {
-	Paths []string `json:"paths"`
+	EvidenceFirmware string   `json:"evidence_firmware,omitempty"`
+	EvidenceBound    bool     `json:"evidence_bound,omitempty"`
+	Paths            []string `json:"paths"`
+	Instances        bool     `json:"instances,omitempty"`
+	Firmware         string   `json:"firmware,omitempty"`
 }
 
 // ConnectionRequestPayload is the payload shape for a CONNECTION_REQUEST
@@ -88,13 +99,16 @@ type DiagnosticsTraceroutePayload struct {
 }
 
 type DiagnosticsDownloadPayload struct {
-	URL    string `json:"url"`
-	Prefix string `json:"prefix"`
+	URL        string `json:"url"`
+	Prefix     string `json:"prefix"`
+	USPCommand string `json:"usp_command,omitempty"`
 }
 
 type DiagnosticsUploadPayload struct {
-	URL    string `json:"url"`
-	Prefix string `json:"prefix"`
+	URL            string `json:"url"`
+	Prefix         string `json:"prefix"`
+	USPCommand     string `json:"usp_command,omitempty"`
+	TestFileLength uint64 `json:"test_file_length,omitempty"`
 }
 
 // AddObjectPayload is the payload shape for an ADD_OBJECT job.
@@ -181,7 +195,14 @@ type UploadPayload struct {
 // rather than guessing — IsFallback marks that second attempt so the chain
 // stops after one retry instead of looping.
 type ParameterDiscoveryPayload struct {
-	Root         string `json:"root"`
-	FallbackRoot string `json:"fallback_root,omitempty"`
-	IsFallback   bool   `json:"is_fallback,omitempty"`
+	Root         string                     `json:"root"`
+	FallbackRoot string                     `json:"fallback_root,omitempty"`
+	IsFallback   bool                       `json:"is_fallback,omitempty"`
+	Incremental  bool                       `json:"incremental,omitempty"`
+	Cursor       string                     `json:"cursor,omitempty"`
+	Pending      []string                   `json:"pending,omitempty"`
+	Visited      map[string]bool            `json:"visited,omitempty"`
+	Names        map[string]bool            `json:"names,omitempty"`
+	Firmware     string                     `json:"firmware,omitempty"`
+	Capabilities map[string]json.RawMessage `json:"capabilities,omitempty"`
 }

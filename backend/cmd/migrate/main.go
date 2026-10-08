@@ -8,6 +8,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"flag"
 	"log/slog"
 	"os"
 	"time"
@@ -16,6 +18,8 @@ import (
 )
 
 func main() {
+	check := flag.Bool("check", false, "read-only migration readiness check; never applies migrations")
+	flag.Parse()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	dsn := os.Getenv("ACS_POSTGRES_DSN")
 	if dsn == "" {
@@ -31,6 +35,26 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+	if *check {
+		checks, err := store.CheckMigrations(ctx, db)
+		if err != nil {
+			logger.Error("migration check failed")
+			os.Exit(1)
+		}
+		ready := true
+		for _, item := range checks {
+			if item.State != "applied" {
+				ready = false
+			}
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"ready": ready, "migrations": checks}); err != nil {
+			os.Exit(1)
+		}
+		if !ready {
+			os.Exit(1)
+		}
+		return
+	}
 
 	start := time.Now()
 	if err := store.Migrate(ctx, db); err != nil {

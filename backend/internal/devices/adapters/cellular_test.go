@@ -25,7 +25,7 @@ func TestCellularPathCandidatesUsePortableTR181Objects(t *testing.T) {
 	if got := CellularPathCandidates(devices.DataModelRootDevice2, CellularAccessPoint, "2"); len(got) != 1 || got[0] != "Device.Cellular.AccessPoint.2.APN" {
 		t.Fatalf("APN candidates = %v", got)
 	}
-	if got := CellularPathCandidates(devices.DataModelRootDevice2, CellularIMSI, "2"); len(got) != 1 || got[0] != "Device.Cellular.Interface.2.USIM.1.IMSI" {
+	if got := CellularPathCandidates(devices.DataModelRootDevice2, CellularIMSI, "2"); len(got) != 2 || got[0] != "Device.Cellular.Interface.2.USIM.IMSI" {
 		t.Fatalf("IMSI candidates = %v", got)
 	}
 	if got := CellularPathCandidates(devices.DataModelRootDevice2, CellularCellID, "2"); got != nil {

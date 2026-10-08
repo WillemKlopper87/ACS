@@ -283,8 +283,28 @@ export const api = {
   discoverParameters: (id: string) =>
     request<QueueResponse>(`/api/v1/devices/${id}/discover-parameters`, { method: "POST" }),
 
+  exportDiscovery: (id: string) => download(`/api/v1/devices/${id}/discovery-export`, `discovery-${id}.json`),
+
+  getStandardsAssessment: (id: string) =>
+    request<paths["/api/v1/devices/{id}/standards-assessment"]["get"]["responses"]["200"]["content"]["application/json"]>(`/api/v1/devices/${id}/standards-assessment`),
+
+  getConnectionDiagnostics: (id: string) =>
+      request<paths["/api/v1/devices/{id}/connection-diagnostics"]["get"]["responses"]["200"]["content"]["application/json"]>(`/api/v1/devices/${id}/connection-diagnostics`),
+
   getParameterNames: (id: string) =>
     request<{ names: Record<string, boolean>; discovered_at: string | null }>(`/api/v1/devices/${id}/parameter-names`),
+
+  getCompatibility: (id: string) =>
+    request<paths["/api/v1/devices/{id}/compatibility"]["get"]["responses"]["200"]["content"]["application/json"]>(`/api/v1/devices/${id}/compatibility`),
+
+  discoverInstances: (id: string, objectPaths: string[]) =>
+    request<QueueResponse>(`/api/v1/devices/${id}/discover-instances`, { method: "POST", body: JSON.stringify({ paths: objectPaths }) }),
+
+  getTelemetryHealth: (id: string) =>
+    request<paths["/api/v1/devices/{id}/telemetry-health"]["get"]["responses"]["200"]["content"]["application/json"]>(`/api/v1/devices/${id}/telemetry-health`),
+
+  renewBulkReceiver: (id: string, receiverId: string) =>
+    request<QueueResponse>(`/api/v1/devices/${id}/bulk-data/receivers/${receiverId}/renew`, { method: "POST" }),
 
   scheduleInform: (id: string, delaySeconds: number) =>
     request<QueueResponse>(`/api/v1/devices/${id}/schedule-inform`, {

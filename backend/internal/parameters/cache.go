@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"strings"
 	"time"
 
@@ -60,6 +61,9 @@ func (r *Repository) Upsert(ctx context.Context, deviceID string, values map[str
 		return fmt.Errorf("begin parameter cache upsert tx: %w", err)
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM devices WHERE id=$1 FOR UPDATE`, deviceID); err != nil {
+		return err
+	}
 
 	var raw []byte
 	err = tx.QueryRowContext(ctx, `SELECT parameters FROM device_parameter_cache WHERE device_id = $1 FOR UPDATE`, deviceID).Scan(&raw)
@@ -71,6 +75,30 @@ func (r *Repository) Upsert(ctx context.Context, deviceID string, values map[str
 		if err := json.Unmarshal(raw, &current); err != nil {
 			return fmt.Errorf("unmarshal current parameter cache: %w", err)
 		}
+	}
+	// Firmware changes invalidate access evidence even when paths look the
+	// same. Queue one fresh discovery atomically with the new firmware value.
+	for _, path := range []string{"Device.DeviceInfo.SoftwareVersion", "InternetGatewayDevice.DeviceInfo.SoftwareVersion"} {
+		old, existed := current[path]
+		updated, present := values[path]
+		if !present || !existed || old.Value == "" || old.Value == updated.Value {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE device_parameter_names SET evidence=evidence || '{"stale":true}'::jsonb WHERE device_id=$1`, deviceID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE devices SET profile_qualified=false WHERE id=$1`, deviceID); err != nil {
+			return err
+		}
+		root, fallback := "Device.", "InternetGatewayDevice."
+		if strings.HasPrefix(path, "InternetGatewayDevice.") {
+			root, fallback = fallback, root
+		}
+		payload, _ := json.Marshal(map[string]any{"root": root, "fallback_root": fallback, "incremental": true, "firmware": updated.Value})
+		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs(id,command_key,device_id,type,status,payload,created_by,max_attempts) SELECT $1,$2,$3,'PARAMETER_DISCOVERY','QUEUED',$4,'system:firmware-discovery',512 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE device_id=$3 AND type='PARAMETER_DISCOVERY' AND status IN('QUEUED','RPC_SENT'))`, uuid.NewString(), "discover-"+uuid.NewString(), deviceID, payload); err != nil {
+			return err
+		}
+		break
 	}
 
 	for name, v := range values {
@@ -323,6 +351,7 @@ func (r *Repository) SaveNames(ctx context.Context, deviceID string, writableByN
 		VALUES ($1, $2::jsonb, now())
 		ON CONFLICT (device_id) DO UPDATE SET
 			names = EXCLUDED.names,
+			capabilities = '[]'::jsonb, evidence = '{}'::jsonb,
 			discovered_at = now()
 	`, deviceID, patch)
 	if err != nil {
@@ -338,6 +367,7 @@ type SupportedCapability struct {
 	Path        string   `json:"path"`
 	Writable    bool     `json:"writable"`
 	ValueType   string   `json:"value_type,omitempty"`
+	Access      string   `json:"access,omitempty"`
 	ValueChange string   `json:"value_change,omitempty"`
 	Commands    []string `json:"commands,omitempty"`
 	Events      []string `json:"events,omitempty"`
@@ -397,6 +427,7 @@ func (r *Repository) GetCapabilities(ctx context.Context, deviceID string) ([]Su
 type DiscoveredNames struct {
 	Names        map[string]bool
 	DiscoveredAt time.Time
+	Stale        bool
 }
 
 // GetNames returns a device's discovered parameter-name tree (nil Names, no
@@ -404,9 +435,10 @@ type DiscoveredNames struct {
 func (r *Repository) GetNames(ctx context.Context, deviceID string) (*DiscoveredNames, error) {
 	var raw []byte
 	var discoveredAt time.Time
+	var stale bool
 	err := r.db.QueryRowContext(ctx,
-		`SELECT names, discovered_at FROM device_parameter_names WHERE device_id = $1`, deviceID,
-	).Scan(&raw, &discoveredAt)
+		`SELECT names, discovered_at, COALESCE((evidence->>'stale')::boolean,false) FROM device_parameter_names WHERE device_id = $1`, deviceID,
+	).Scan(&raw, &discoveredAt, &stale)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -420,5 +452,8 @@ func (r *Repository) GetNames(ctx context.Context, deviceID string) (*Discovered
 			return nil, fmt.Errorf("unmarshal discovered parameter names: %w", err)
 		}
 	}
-	return &DiscoveredNames{Names: names, DiscoveredAt: discoveredAt}, nil
+	if stale {
+		names = map[string]bool{}
+	} // prevent outdated write permissions from being reused
+	return &DiscoveredNames{Names: names, DiscoveredAt: discoveredAt, Stale: stale}, nil
 }

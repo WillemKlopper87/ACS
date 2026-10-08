@@ -4,6 +4,7 @@ import { api, ApiError } from "../api/client";
 import type { Credential, Device, FirmwareImage, Job, ParameterCache, ParameterHistoryEntry, UploadedFile } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { DeviceConsole } from "../components/DeviceConsole";
+import { DeviceCompatibility } from "../components/DeviceCompatibility";
 import { RemoteShell } from "../components/RemoteShell";
 import { DeviceWebGUI } from "../components/DeviceWebGUI";
 import { VPNTunnel } from "../components/VPNTunnel";
@@ -442,6 +443,8 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
             Factory reset
           </button>
         </div>
+
+        <DeviceCompatibility id={id} writable={writable} />
 
         <div className="form-row">
           <input aria-label="New WiFi SSID"

@@ -201,7 +201,7 @@ func (h *handler) applyTemplate(w http.ResponseWriter, r *http.Request) {
 	for i, p := range t.Parameters {
 		params[i] = jobs.ParameterWrite{Name: p.Name, Value: p.Value, Type: p.Type}
 	}
-	payload := jobs.SetParameterPayload{Parameters: params}
+	payload := jobs.SetParameterPayload{Parameters: params, Verify: true}
 
 	// audit H-3: applyTemplate used to queue SET_PARAMETER (including
 	// WiFi SSID/passphrase writes) against any device_ids/group members

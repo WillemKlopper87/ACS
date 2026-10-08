@@ -96,9 +96,7 @@ func NewRegistry() *Registry {
 	return &Registry{catalogs: LoadCatalogList()}
 }
 
-// ProfileMatch describes how a catalog was selected. Exact model matches are
-// qualification evidence; vendor matches are deliberately labelled fallback
-// so callers do not mistake a family baseline for a tested device pack.
+// ProfileMatch separates catalog selection from firmware qualification.
 type ProfileMatch struct {
 	Catalog   Catalog
 	MatchedBy string // "model", "vendor", or ""
@@ -130,7 +128,7 @@ func (r *Registry) MatchProfile(manufacturer, productClass string) ProfileMatch 
 			continue
 		}
 		if model != "" && model == vendorKey(cat.Model) {
-			return ProfileMatch{Catalog: cat, MatchedBy: "model", Qualified: true}
+			return ProfileMatch{Catalog: cat, MatchedBy: "model"}
 		}
 	}
 	for _, cat := range r.catalogs {
@@ -139,6 +137,27 @@ func (r *Registry) MatchProfile(manufacturer, productClass string) ProfileMatch 
 		}
 	}
 	return ProfileMatch{}
+}
+
+// MatchFirmwareProfile never treats a model-name match as hardware validation.
+// A qualification flag requires an exact firmware and recorded pack evidence.
+func (r *Registry) MatchFirmwareProfile(manufacturer, model, firmware string) ProfileMatch {
+	match := r.MatchProfile(manufacturer, model)
+	if match.MatchedBy != "model" || firmware == "" {
+		return match
+	}
+	for _, catalog := range r.catalogs {
+		key := vendorKey(catalog.Vendor)
+		if key == "" || !strings.Contains(vendorKey(manufacturer), key) || vendorKey(catalog.Model) != vendorKey(model) || catalog.QualificationEvidence == "" {
+			continue
+		}
+		for _, version := range catalog.Firmwares {
+			if strings.TrimSpace(version) == firmware {
+				return ProfileMatch{Catalog: catalog, MatchedBy: "model", Qualified: true}
+			}
+		}
+	}
+	return match
 }
 
 // MatchCellularDiagnostics returns the cellular/RF diagnostic parameter
