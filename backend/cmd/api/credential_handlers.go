@@ -106,7 +106,7 @@ func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	username, password, err := credentials.GenerateUsernamePassword()
+	username, password, err := credentials.GenerateUsernamePasswordForType(credType)
 	if err != nil {
 		h.logger.Error("failed to generate credential", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
