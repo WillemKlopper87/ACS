@@ -3335,6 +3335,13 @@ export interface paths {
                         "application/json": components["schemas"]["Credential"];
                     };
                 };
+                /** @description A CWMP_DIGEST rotation is already pending or the required credential path cannot be safely written */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         delete?: never;
