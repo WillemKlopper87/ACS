@@ -78,6 +78,17 @@ func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	if credType == credentials.TypeCWMPDigest {
+		if pending, err := h.credentials.PendingForDevice(r.Context(), id, credType); err == nil {
+			http.Error(w, "a CWMP_DIGEST credential is already PENDING for this device: "+pending.ID, http.StatusConflict)
+			return
+		} else if !errors.Is(err, credentials.ErrNotFound) {
+			h.logger.Error("failed to check pending CWMP Digest credential", "err", err, "device_id", id)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	userParam, passParam := adapters.ManagementServerConnectionRequestUser, adapters.ManagementServerConnectionRequestPass
 	if credType == credentials.TypeCWMPDigest {
 		userParam, passParam = adapters.ManagementServerUsername, adapters.ManagementServerPassword
