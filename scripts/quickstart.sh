@@ -7,8 +7,8 @@
 # The host deployment starts the complete control plane: CWMP/STUN,
 # operator API, BSS/TMF adapter, USP controller, frontend, PostgreSQL,
 # Prometheus, Alertmanager and Grafana. The quickstart publishes the
-# monitoring UIs directly by default; set ACS_MONITORING_PUBLIC=0 to keep
-# Grafana and Prometheus localhost-only.
+# monitoring UIs privately by default; set ACS_MONITORING_PUBLIC=1 only
+# for a source-restricted controlled lab.
 #
 # Usage (on a fresh instance, logged in as the `ubuntu` user):
 #   curl -fsSL https://raw.githubusercontent.com/WillemKlopper87/ACS/main/scripts/quickstart.sh | bash
@@ -158,7 +158,7 @@ echo ""
 echo "CWMP first-contact bootstrap:"
 echo "  ACS/CPE->server username: $ACS_CWMP_BOOTSTRAP_USERNAME"
 echo "  Connection Request/server->CPE username: $ACS_CONNECTION_REQUEST_USERNAME"
-echo "  Passwords are intentionally not printed by quickstart."
+echo "  Passwords are not printed by quickstart, gen-env, or start.sh."
 echo "  Run '$INSTALL_DIR/scripts/show-cpe-setup.sh --show-secrets' interactively while configuring the CPE."
 echo "  Qualification must prove credential installation and a matching bound reconnect before ACTIVE management."
 echo "  Legacy shared Digest remains lab-compatibility-only in ~/.acs-secrets.env."
