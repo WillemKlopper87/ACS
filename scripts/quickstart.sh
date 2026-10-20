@@ -25,8 +25,8 @@
 #   GO_VERSION   Go toolchain to install (default: matches backend/go.mod)
 #   ACS_PUBLIC_IP  passed through to scripts/start.sh — set this if the
 #                instance isn't on EC2 or IMDS is blocked
-#   ACS_MONITORING_PUBLIC  1 (default) publishes Grafana :3000 and
-#                Prometheus :9090; 0 keeps them localhost-only
+#   ACS_MONITORING_PUBLIC  0 (default) keeps Grafana/Prometheus localhost-only;
+#                set 1 only for a controlled lab and restrict both ports to the operator CIDR
 #
 # This is a LAB/FIELD profile. Run scripts/gen-production-env.sh with an
 # explicit protected bind address, CPE CIDRs and TLS files before production.
@@ -42,7 +42,7 @@ REPO_URL="${REPO_URL:-https://github.com/WillemKlopper87/ACS.git}"
 GIT_REF="${GIT_REF:-main}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/ACS}"
 GO_VERSION="${GO_VERSION:-1.26.6}"
-ACS_MONITORING_PUBLIC="${ACS_MONITORING_PUBLIC:-1}"
+ACS_MONITORING_PUBLIC="${ACS_MONITORING_PUBLIC:-0}"
 
 case "$(uname -m)" in
   x86_64) GO_ARCH=amd64 ;;
@@ -155,9 +155,11 @@ echo "  USP WebSocket: ws://<public-ip>:9877/usp"
 echo "  USP MQTT:      <public-ip>:1883"
 echo "  USP controller ID: $ACS_USP_CONTROLLER_ID"
 echo ""
-echo "CWMP credentials:"
-echo "  Username: $ACS_DIGEST_USERNAME"
-echo "  Password: $ACS_DIGEST_PASSWORD"
+echo "CWMP first-contact bootstrap credentials:"
+echo "  Username: $ACS_CWMP_BOOTSTRAP_USERNAME"
+echo "  Password: $ACS_CWMP_BOOTSTRAP_PASSWORD"
+echo "  ACS will graduate the device to a unique bound credential after onboarding."
+echo "  Legacy shared Digest remains lab-compatibility-only in ~/.acs-secrets.env."
 echo "  Connection-request username: $ACS_CONNECTION_REQUEST_USERNAME"
 echo "  Connection-request password: $ACS_CONNECTION_REQUEST_PASSWORD"
 echo "  Credentials/settings file: ~/.acs-secrets.env"
