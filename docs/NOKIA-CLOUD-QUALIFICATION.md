@@ -32,10 +32,13 @@ Recommended security-group policy for the first Nokia CWMP run:
 | Port | Direction | Source | Purpose |
 |---|---|---|---|
 | 22/tcp | inbound | operator/admin CIDR only | SSH administration |
-| 443/tcp | inbound | operator/admin CIDR or reviewed public ingress | HTTPS operator UI/API when configured |
+| 443/tcp | inbound | operator/admin CIDR or reviewed public ingress | HTTPS operator UI/API when production ingress is configured |
 | 7547/tcp | inbound | Nokia WAN/NAT source policy | CWMP CPE -> ACS |
 | 3478/udp | inbound | Nokia WAN/NAT source policy | optional STUN |
-| 5173/8080/8090/8092/3000/9090/5432 | inbound | **none** | host-local/control/DB services |
+| 5173/tcp | inbound | operator/admin CIDR only | lab operator console |
+| 8080/tcp | inbound | operator/admin CIDR only | lab REST API used by the console/qualification tooling |
+| 3000/9090 | inbound | **none by default** | Grafana/Prometheus stay loopback unless deliberately published for a restricted lab |
+| 8090/8092/5432 | inbound | **none** | BSS/USP health/Postgres remain host-local |
 
 Do not use the operator UI port as the CPE ACS URL. For example, `http://CURRENT_PUBLIC_IP:5173` is the browser UI; the default CWMP URL is `http://CURRENT_PUBLIC_IP:7547/cwmp` in a lab profile.
 
