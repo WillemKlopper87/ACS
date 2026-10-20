@@ -83,7 +83,6 @@ func TestDecryptWrongKeyFails(t *testing.T) {
 	}
 }
 
-
 func TestGenerateUsernamePasswordForTypeUsesDirectionPrefix(t *testing.T) {
 	tests := []struct {
 		name       string
