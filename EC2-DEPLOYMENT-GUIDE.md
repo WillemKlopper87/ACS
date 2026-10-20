@@ -21,9 +21,13 @@ conflicting Git update rather than discarding local changes. Every package
 step is idempotent, and it ends by calling `scripts/start.sh`, which always
 stops whatever was running first. See the comment block at the top of
 `scripts/quickstart.sh` for the environment variables that control it
-(`REPO_URL`, `GIT_REF`, `GO_VERSION`, `ACS_PUBLIC_IP`, etc.) — in
-particular, if the repo is private, set `REPO_URL` per §3 before running
-this.
+(`REPO_URL`, `GIT_REF`, `GO_VERSION`, `ACS_PUBLIC_IP`, etc.). On EC2,
+`start.sh` normally discovers the instance's **current** public IPv4 through
+IMDSv2; set `ACS_PUBLIC_IP` only when metadata is unavailable or you want a
+specific hostname/address in the printed URLs. Grafana and Prometheus are
+localhost-only by default; set `ACS_MONITORING_PUBLIC=1` only for a controlled
+lab and restrict those ports to your operator CIDR. If the repo is private,
+set `REPO_URL` per §3 before running this.
 
 If you'd rather run the steps yourself (or the one-liner above doesn't
 fit your setup), §2 and §3 below cover the same ground manually.
@@ -67,7 +71,7 @@ troubleshooting something the script doesn't cover.
   - `t3.medium` is sufficient for development and small test fleets
   - `t3.large` (2vCPU, 8GB) for real fleets or production evaluation
 - **Storage**: 20 GB root volume minimum, 50+ GB recommended if storing device logs/firmware
-- **Network**: Public IP (enable automatically) or Elastic IP for stability
+- **Network**: auto-assigned public IPv4 is sufficient for the first lab qualification; an Elastic IP/DNS name is recommended only for a persistent test fleet. A stop/start can change the auto-assigned address, so record the current IPv4 before each CPE session.
 
 ### 1.2 Security Group — Inbound Rules
 
@@ -497,7 +501,9 @@ curl http://localhost:5173 | head
 
 ### 7.2 Log into the console
 
-Open `http://<ec2-public-ip>:5173` in a browser.
+First record the instance's current public IPv4 from the EC2 console (or let `scripts/start.sh` print the IMDSv2-detected value). If the instance was stopped/started, do not reuse an old address.
+
+Open `http://<current-ec2-public-ip>:5173` in a browser for the lab profile, with port 5173 restricted to your operator CIDR.
 
 **Login**: admin / `<ACS_BOOTSTRAP_ADMIN_PASSWORD>`
 
@@ -509,22 +515,25 @@ On your CPE (e.g., ZTE ZOWEE 5G CPE Max 6), set:
 
 | TR-069 Parameter | Value |
 |---|---|
-| `ManagementServer.URL` | `http://<ec2-public-ip>:7547/cwmp` |
-| `ManagementServer.Username` | `acs-device` (from `ACS_DIGEST_USERNAME`) |
-| `ManagementServer.Password` | the value you stored from `ACS_DIGEST_PASSWORD` |
+| `ManagementServer.URL` | `http://<current-ec2-public-ip>:7547/cwmp` for the controlled lab, or the reviewed HTTPS CWMP URL for production-like testing |
+| `ManagementServer.Username` | value of `ACS_CWMP_BOOTSTRAP_USERNAME` |
+| `ManagementServer.Password` | value of `ACS_CWMP_BOOTSTRAP_PASSWORD` |
 | `ManagementServer.PeriodicInformEnable` | enabled |
-| `ManagementServer.PeriodicInformInterval` | 60 (seconds, for testing) |
-| `ManagementServer.ConnectionRequestUsername` | `acs-connreq` |
-| `ManagementServer.ConnectionRequestPassword` | the value you stored from `ACS_CONNECTION_REQUEST_PASSWORD` |
-| `ManagementServer.STUNEnable` | enabled (optional) |
-| `ManagementServer.STUNServerAddress` | `<ec2-public-ip>` |
-| `ManagementServer.STUNServerPort` | `3478` |
+| `ManagementServer.PeriodicInformInterval` | 60–300 seconds for qualification |
+| `ManagementServer.ConnectionRequestUsername` | leave unchanged until the device's actual Connection Request behavior is discovered, or use the device-specific value you deliberately configure |
+| `ManagementServer.ConnectionRequestPassword` | same rule as above |
+| `ManagementServer.STUNEnable` | leave disabled for first contact unless STUN/Annex-G testing is in scope |
+| `ManagementServer.STUNServerAddress` | current EC2 public/DNS address only when STUN is being qualified |
+| `ManagementServer.STUNServerPort` | `3478` when enabled |
 
 Save the settings. The CPE should send a **BOOTSTRAP** Inform within moments.
-The shared Digest credential is intentionally limited to onboarding a new
-identity. After enrollment, use the device's unique ACS credential or mTLS;
-the shared credential cannot claim an established device or continue its
-session traffic.
+The dedicated bootstrap identity is constrained to first contact. After a
+valid new-device Inform, ACS generates and installs a unique encrypted
+per-device `CWMP_DIGEST` credential. That credential remains `PENDING` until
+the CPE reconnects with it and reports the same bound identity, then becomes
+`ACTIVE`. Do not replace this flow with the legacy fleet-wide
+`ACS_DIGEST_USERNAME/PASSWORD` pair except during an explicitly controlled
+lab compatibility investigation.
 
 ### 7.3 Verify device appears in console
 
