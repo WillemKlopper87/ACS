@@ -261,6 +261,23 @@ func (r *Repository) ListByDevice(ctx context.Context, deviceID string) ([]Crede
 	return out, rows.Err()
 }
 
+// PendingForDevice returns the newest PENDING credential for one
+// device+type. CWMP bootstrap/rotation uses this to keep credential
+// installation single-flight; the database partial unique index remains the
+// race-proof invariant for concurrent callers.
+func (r *Repository) PendingForDevice(ctx context.Context, deviceID, credType string) (*Credential, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT `+credColumns+` FROM device_credentials
+		WHERE device_id = $1 AND credential_type = $2 AND status = $3
+		ORDER BY version DESC LIMIT 1`,
+		deviceID, credType, StatusPending)
+	cred, err := r.scanCredential(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return cred, err
+}
+
 // ActiveForDevice returns the current ACTIVE credential for a device,
 // or ErrNoActiveCredential if the device has never had one rotated in
 // (the common case — most devices still use the shared fallback
