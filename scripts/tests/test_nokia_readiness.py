@@ -18,19 +18,67 @@ class NokiaReadinessTests(unittest.TestCase):
         self.assertFalse(scenario["writes"])
         self.assertFalse(scenario["reboot"])
 
-    def test_export_does_not_include_secret_or_url_credentials(self):
+    def test_production_uses_constrained_bootstrap_without_exporting_secret(self):
         secret = "never-export-this-password"
-        env = {"ACS_DEPLOYMENT_PROFILE": "production", "ACS_POSTGRES_DSN": "postgres://user:" + secret + "@host/db",
-               "ACS_CREDENTIAL_ENCRYPTION_KEY": secret}
-        for name in ("NOKIA_ACS_USERNAME", "NOKIA_ACS_PASSWORD", "NOKIA_ACSCR_USERNAME", "NOKIA_ACSCR_PASSWORD"):
-            env[name] = secret
+        env = {
+            "ACS_DEPLOYMENT_PROFILE": "production",
+            "ACS_POSTGRES_DSN": "postgres://user:" + secret + "@host/db",
+            "ACS_CREDENTIAL_ENCRYPTION_KEY": secret,
+            "ACS_CWMP_BOOTSTRAP_USERNAME": "nokia-bootstrap",
+            "ACS_CWMP_BOOTSTRAP_PASSWORD": secret,
+        }
         report, _ = preparation.prepare("https://acs.example:7547/cwmp", env)
         self.assertTrue(report["prepared"])
+        self.assertEqual(report["credential_mode"], "production_bootstrap")
         self.assertEqual(report["network"]["cwmp_destination_port"], 7547)
         self.assertNotIn(secret, str(report))
+
         report, _ = preparation.prepare("https://user:" + secret + "@acs.example/cwmp", env)
         self.assertFalse(report["prepared"])
         self.assertNotIn(secret, str(report))
+
+    def test_production_rejects_legacy_nokia_credentials_as_first_contact(self):
+        secret = "never-export-this-password"
+        env = {
+            "ACS_DEPLOYMENT_PROFILE": "production",
+            "ACS_POSTGRES_DSN": "postgres://host/db",
+            "ACS_CREDENTIAL_ENCRYPTION_KEY": secret,
+            "NOKIA_ACS_USERNAME": "legacy-user",
+            "NOKIA_ACS_PASSWORD": secret,
+        }
+        report, _ = preparation.prepare("https://acs.example:7547/cwmp", env)
+        self.assertFalse(report["prepared"])
+        self.assertEqual(report["credential_mode"], "missing")
+        check = next(c for c in report["checks"] if c["check"] == "cwmp_first_contact_credentials")
+        self.assertEqual(check["state"], "pending")
+
+    def test_lab_legacy_credentials_are_explicitly_compatibility_only(self):
+        secret = "never-export-this-password"
+        env = {
+            "ACS_DEPLOYMENT_PROFILE": "lab",
+            "ACS_POSTGRES_DSN": "postgres://host/db",
+            "ACS_CREDENTIAL_ENCRYPTION_KEY": secret,
+            "NOKIA_ACS_USERNAME": "lab-user",
+            "NOKIA_ACS_PASSWORD": secret,
+        }
+        report, _ = preparation.prepare("http://acs.example:7547/cwmp", env)
+        self.assertTrue(report["prepared"])
+        self.assertEqual(report["credential_mode"], "lab_compatibility")
+
+    def test_connection_request_credentials_are_not_required_for_first_contact(self):
+        secret = "never-export-this-password"
+        env = {
+            "ACS_DEPLOYMENT_PROFILE": "lab",
+            "ACS_POSTGRES_DSN": "postgres://host/db",
+            "ACS_CREDENTIAL_ENCRYPTION_KEY": secret,
+            "ACS_CWMP_BOOTSTRAP_USERNAME": "bootstrap",
+            "ACS_CWMP_BOOTSTRAP_PASSWORD": secret,
+        }
+        report, _ = preparation.prepare("http://acs.example:7547/cwmp", env)
+        self.assertTrue(report["first_contact_prepared"])
+        check = next(c for c in report["checks"] if c["check"] == "connection_request_credentials")
+        self.assertEqual(check["state"], "pending")
+        self.assertFalse(check["blocking"])
 
     def test_production_plaintext_is_pending(self):
         report, _ = preparation.prepare("http://acs.example:7547", {"ACS_DEPLOYMENT_PROFILE": "production"})
