@@ -22,10 +22,10 @@ type credentialResponse struct {
 	CredentialType string  `json:"credential_type"`
 	Username       string  `json:"username"`
 	Status         string  `json:"status"`
-	CommandKey  string  `json:"command_key,omitempty"`
-	CreatedAt   string  `json:"created_at"`
-	ActivatedAt *string `json:"activated_at,omitempty"`
-	RevokedAt   *string `json:"revoked_at,omitempty"`
+	CommandKey     string  `json:"command_key,omitempty"`
+	CreatedAt      string  `json:"created_at"`
+	ActivatedAt    *string `json:"activated_at,omitempty"`
+	RevokedAt      *string `json:"revoked_at,omitempty"`
 }
 
 func toCredentialResponse(c *credentials.Credential) credentialResponse {
