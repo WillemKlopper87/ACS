@@ -73,11 +73,23 @@ type Credential struct {
 	RevokedAt      *time.Time
 }
 
-// GenerateUsernamePassword produces a fresh random credential pair — 8
-// random bytes hex-encoded for the username (readable, still unguessable)
-// and 24 random bytes for the password (192 bits, well past any
-// brute-force concern for a Digest-style credential).
+// GenerateUsernamePassword produces a fresh Connection Request credential
+// pair. Keep this historical helper for callers that do not select a
+// direction explicitly; new code should use GenerateUsernamePasswordForType.
 func GenerateUsernamePassword() (username, password string, err error) {
+	return GenerateUsernamePasswordForType(TypeConnectionRequest)
+}
+
+// GenerateUsernamePasswordForType produces a fresh random pair with a
+// direction-specific username prefix. The prefix is not an authorization
+// boundary — credential_type and device_id are — but it keeps operator/field
+// evidence unambiguous: "cwmp-" means CPE->ACS Digest, while "cr-" means
+// ACS->CPE Connection Request. The username carries 64 random bits and the
+// password 192 random bits.
+func GenerateUsernamePasswordForType(credentialType string) (username, password string, err error) {
+	if !ValidType(credentialType) {
+		return "", "", fmt.Errorf("unsupported credential type %q", credentialType)
+	}
 	u := make([]byte, 8)
 	if _, err := rand.Read(u); err != nil {
 		return "", "", fmt.Errorf("generate username: %w", err)
@@ -86,7 +98,11 @@ func GenerateUsernamePassword() (username, password string, err error) {
 	if _, err := rand.Read(p); err != nil {
 		return "", "", fmt.Errorf("generate password: %w", err)
 	}
-	return "cr-" + hex.EncodeToString(u), hex.EncodeToString(p), nil
+	prefix := "cr-"
+	if credentialType == TypeCWMPDigest {
+		prefix = "cwmp-"
+	}
+	return prefix + hex.EncodeToString(u), hex.EncodeToString(p), nil
 }
 
 type Repository struct {
