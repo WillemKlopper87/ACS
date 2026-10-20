@@ -63,20 +63,20 @@ echo "Periodic Inform enabled:  yes"
 echo "Periodic Inform interval: 60 seconds (qualification)"
 echo
 echo "ACS URL:                   $CWMP_SCHEME://$PUBLIC_IP:7547/cwmp"
-echo "ACS Username:              ${ACS_CWMP_BOOTSTRAP_USERNAME:-${ACS_DIGEST_USERNAME:-<unset>}}"
-printf 'ACS Password:              '
+echo "ACS Username (ACSUsername): ${ACS_CWMP_BOOTSTRAP_USERNAME:-${ACS_DIGEST_USERNAME:-<unset>}}"
+printf 'ACS Password (ACSPassword): '
 secret_value "${ACS_CWMP_BOOTSTRAP_PASSWORD:-${ACS_DIGEST_PASSWORD:-}}"
 echo
 echo
 echo "Connection Request URL:    leave device-generated / observed initially"
-echo "CR Username:               ${ACS_CONNECTION_REQUEST_USERNAME:-<unset>}"
-printf 'CR Password:               '
+echo "CR Username (ACSCRUsername): ${ACS_CONNECTION_REQUEST_USERNAME:-<unset>}"
+printf 'CR Password (ACSCRPassword): '
 secret_value "${ACS_CONNECTION_REQUEST_PASSWORD:-}"
 echo
 echo
 echo "Notes:"
-echo "  - The ACS username/password are for CPE -> ACS authentication."
-echo "  - The Connection Request username/password are for ACS -> CPE authentication."
+echo "  - ACSUsername/ACSPassword are for CPE -> ACS authentication."
+echo "  - ACSCRUsername/ACSCRPassword are for ACS -> CPE Connection Request authentication."
 echo "  - Do not replace the device's Connection Request URL with the ACS URL."
 echo "  - Verify credential installation, matching bound reconnect and ACTIVE state before normal management."
 echo "  - If this EC2 instance uses an auto-assigned public IP, rerun this helper after any stop/start."
