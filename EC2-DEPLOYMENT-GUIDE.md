@@ -42,7 +42,7 @@ cd ~/ACS
 This builds real binaries (not `go run`), backgrounds the CWMP gateway,
 operator API, BSS/TMF adapter, USP controller, and frontend with `nohup` +
 PID files, and prints the
-console URL and login credentials at the end. Safe to rerun any time —
+console URL and login username at the end (passwords are redacted). Safe to rerun any time —
 it stops whatever was running first. If you pull a fresh `git clone`,
 run `chmod +x scripts/*.sh` once (Windows git doesn't always preserve
 the executable bit across the repo).
@@ -56,7 +56,7 @@ Credentials are generated once and persisted to `~/.acs-secrets.env` —
 rerunning `start.sh` reuses them rather than regenerating (regenerating
 on every run would give `cmd/acs` and `cmd/api` different secrets if
 they're ever started from different shells, silently breaking auth).
-Delete that file and rerun `start.sh` if you want fresh credentials.
+**Do not delete the secrets file on an established installation**: rotating encryption, JWT and device authentication values without a controlled migration can strand enrolled CPEs or invalidate stored credentials. Back it up securely and use a deliberate rotation procedure.
 
 The rest of this guide explains what the script does and how to
 customize/harden it — read on if you want the manual steps or you're
@@ -265,7 +265,7 @@ Binaries land in `backend/bin/` — run them as `./bin/acs`, `./bin/api`, etc.
 
 Use `scripts/gen-env.sh` (in the repo root) rather than a hand-rolled
 heredoc — it generates every credential **once** and persists them to
-`~/.acs-secrets.env`, then prints them. This matters more than it looks:
+`~/.acs-secrets.env`, but does not print passwords by default. This matters more than it looks:
 `cmd/acs` and `cmd/api` are separate processes, and if each one sources
 a script that calls `openssl rand` fresh, they end up with *different*
 Digest passwords / JWT secrets the moment they're started from different
@@ -277,10 +277,7 @@ reusing on every subsequent source.
 source ~/ACS/scripts/gen-env.sh
 ```
 
-First run generates and prints credentials; every run after that loads
-the same ones from `~/.acs-secrets.env` and prints them again (handy —
-you don't have to write them down, just re-source this file whenever you
-need to see them).
+First run generates credentials, but normal startup does **not** print secret values. Use `scripts/show-cpe-setup.sh` for a redacted Nokia configuration view; use `scripts/show-cpe-setup.sh --show-secrets` deliberately in a private SSH session when entering the CPE credentials. Keep that output out of logs, screenshots and support tickets. For the operator login, read the existing `ACS_BOOTSTRAP_ADMIN_PASSWORD` securely from `~/.acs-secrets.env`; never paste it into issue comments.
 
 **IMPORTANT**: `~/.acs-secrets.env` is created with `chmod 600` (owner-only),
 but it's still plaintext on disk — treat it like any other credentials
@@ -402,7 +399,7 @@ The third argument is the API origin; it goes into the page's CSP
 built with (`start.sh` passes both from the same detected public IP).
 
 Then open `http://<ec2-public-ip>:5173` in your browser and log in with
-the admin username/password `scripts/gen-env.sh` printed.
+the existing admin username/password stored in `~/.acs-secrets.env`.
 
 ### 6.2 Alternative: Serve with Nginx (production)
 
