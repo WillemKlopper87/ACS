@@ -3302,7 +3302,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Generate + queue a new Connection Request credential, recorded PENDING (credential.manage permission) */
+        /** Generate + queue a new per-device credential, recorded PENDING (credential.manage permission) */
         post: {
             parameters: {
                 query?: never;
@@ -3393,7 +3393,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Activate a PENDING credential — switches the ACS's own Connection Request client, demotes the previous ACTIVE row to GRACE (credential.manage permission) */
+        /** Activate a PENDING Connection Request credential — CWMP_DIGEST activates only after a matching authenticated Inform (credential.manage permission) */
         post: {
             parameters: {
                 query?: never;
@@ -3415,6 +3415,13 @@ export interface paths {
                     content: {
                         "application/json": components["schemas"]["Credential"];
                     };
+                };
+                /** @description CWMP_DIGEST credentials cannot be manually activated */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
             };
         };
@@ -6249,14 +6256,16 @@ export interface components {
             terminal_count?: number;
         };
         Credential: {
-            id?: string;
-            version?: number;
-            username?: string;
+            id: string;
+            version: number;
+            /** @description Direction of authentication protected by this credential. */
+            credential_type: "CONNECTION_REQUEST" | "CWMP_DIGEST";
+            username: string;
             /** @enum {string} */
-            status?: "PENDING" | "ACTIVE" | "GRACE" | "REVOKED";
+            status: "PENDING" | "ACTIVE" | "GRACE" | "REVOKED";
             command_key?: string;
             /** Format: date-time */
-            created_at?: string;
+            created_at: string;
             /** Format: date-time */
             activated_at?: string | null;
             /** Format: date-time */
