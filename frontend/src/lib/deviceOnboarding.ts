@@ -1,7 +1,8 @@
-import type { Device, Job, ParameterCache } from "../api/types";
+import type { Credential, Device, Job, ParameterCache } from "../api/types";
 
 export type OnboardingCheckStatus = "pass" | "warn" | "fail" | "pending";
 export type TroubleshootingSeverity = "info" | "warning" | "critical";
+export type VendorFamily = "Huawei" | "Nokia" | "Other";
 
 export interface OnboardingCheck {
   id: string;
@@ -18,9 +19,10 @@ export interface TroubleshootingHint {
 }
 
 export interface DeviceOnboardingAssessment {
-  vendorFamily: "Huawei" | "Other";
+  vendorFamily: VendorFamily;
   isHuawei: boolean;
   isHuaweiN5368X: boolean;
+  isNokia: boolean;
   healthyChecks: number;
   totalChecks: number;
   checks: OnboardingCheck[];
@@ -37,6 +39,25 @@ function normalized(value?: string) {
 
 function isKnownRoot(root?: string) {
   return root === "Device." || root === "InternetGatewayDevice.";
+}
+
+function privateConnectionRequest(url?: string) {
+  if (!url) return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host === "localhost" || host === "::1" || host.startsWith("127.")) return true;
+    if (host.startsWith("10.") || host.startsWith("192.168.")) return true;
+    const match = host.match(/^172\.(\d+)\./);
+    return match ? Number(match[1]) >= 16 && Number(match[1]) <= 31 : false;
+  } catch {
+    return false;
+  }
+}
+
+function newestCredential(credentials: Credential[], type: Credential["credential_type"], status?: Credential["status"]) {
+  return credentials.find((credential) =>
+    credential.credential_type === type && (!status || credential.status === status),
+  );
 }
 
 function faultHint(job: Job): TroubleshootingHint | null {
@@ -100,14 +121,25 @@ function faultHint(job: Job): TroubleshootingHint | null {
   }
 }
 
-export function assessDeviceOnboarding(device: Device, params: ParameterCache, jobs: Job[]): DeviceOnboardingAssessment {
+export function assessDeviceOnboarding(
+  device: Device,
+  params: ParameterCache,
+  jobs: Job[],
+  credentials: Credential[] = [],
+): DeviceOnboardingAssessment {
   const manufacturer = normalized(device.manufacturer);
   const model = normalized(device.product_class);
   const isHuawei = manufacturer.includes("huawei") || model.includes("huawei");
   const isHuaweiN5368X = isHuawei && /n5368x?|5g\s*cpe\s*pro/.test(model);
+  const isNokia = manufacturer.includes("nokia") || model.includes("nokia") || model.includes("fastmile");
+  const vendorFamily: VendorFamily = isHuawei ? "Huawei" : isNokia ? "Nokia" : "Other";
   const recentFailures = jobs.filter((job) => FAILURE_STATUSES.has(job.status)).slice(0, 5);
   const lastCR = (device.last_connection_request_status ?? "").trim().toUpperCase();
   const parameterCount = Object.keys(params).length;
+
+  const activeDigest = newestCredential(credentials, "CWMP_DIGEST", "ACTIVE");
+  const pendingDigest = newestCredential(credentials, "CWMP_DIGEST", "PENDING");
+  const graceDigest = newestCredential(credentials, "CWMP_DIGEST", "GRACE");
 
   const checks: OnboardingCheck[] = [
     {
@@ -133,6 +165,18 @@ export function assessDeviceOnboarding(device: Device, params: ParameterCache, j
       detail: device.cwmp_auth_mode
         ? `Observed mode: ${device.cwmp_auth_mode}`
         : "Authentication mode has not been learned yet.",
+    },
+    {
+      id: "bound-credential",
+      label: "Per-device CWMP credential",
+      status: activeDigest ? "pass" : pendingDigest ? "pending" : graceDigest ? "warn" : "warn",
+      detail: activeDigest
+        ? `CWMP_DIGEST v${activeDigest.version} ACTIVE — CPE→ACS identity is device-bound.`
+        : pendingDigest
+          ? `CWMP_DIGEST v${pendingDigest.version} PENDING — waiting for a reconnect authenticated with the generated credential and matching device identity.`
+          : graceDigest
+            ? `CWMP_DIGEST v${graceDigest.version} is in GRACE; confirm the intended ACTIVE credential before further provisioning.`
+            : "No per-device CWMP_DIGEST credential is visible yet. In the secure bootstrap flow normal management waits for credential graduation.",
     },
     {
       id: "model",
@@ -189,6 +233,15 @@ export function assessDeviceOnboarding(device: Device, params: ParameterCache, j
     });
   }
 
+  if (pendingDigest) {
+    hints.push({
+      id: "digest-pending",
+      severity: "warning",
+      title: "Credential graduation is waiting for a bound reconnect",
+      detail: "Do not manually activate this CWMP_DIGEST credential. The CPE must reconnect using it and report the same OUI/ProductClass/Serial identity; only that authenticated Inform may promote it to ACTIVE.",
+    });
+  }
+
   if (isHuaweiN5368X) {
     hints.push({
       id: "huawei-n5368x-digest",
@@ -214,6 +267,23 @@ export function assessDeviceOnboarding(device: Device, params: ParameterCache, j
     });
   }
 
+  if (isNokia) {
+    hints.push({
+      id: "nokia-read-only-first",
+      severity: "info",
+      title: "Nokia: keep the first qualification read-only",
+      detail: "Use parameter discovery and the Device Compatibility evidence before any vendor-specific write. Read only paths that this exact firmware exposes; do not promote guessed Nokia 5G paths from another model or build.",
+    });
+    if (privateConnectionRequest(device.connection_request_url)) {
+      hints.push({
+        id: "nokia-private-cr",
+        severity: "warning",
+        title: "Nokia Connection Request URL is private",
+        detail: `${device.connection_request_url} is not directly reachable from a public cloud ACS. Prove normal periodic Inform first, then qualify NAT/STUN/Annex-G or another reachable Connection Request path instead of rewriting the URL blindly.`,
+      });
+    }
+  }
+
   if (!device.connection_request_url) {
     hints.push({
       id: "no-cr-url",
@@ -226,7 +296,7 @@ export function assessDeviceOnboarding(device: Device, params: ParameterCache, j
       id: "cr-failed",
       severity: "warning",
       title: "Connection Request has not succeeded",
-      detail: "Start a CWMP capture, retry Connection Request, and verify that Event 6 CONNECTION REQUEST Inform follows. For Huawei, compare the CPE's advertised Digest algorithm with the challenge before changing credentials or NAT settings.",
+      detail: "Start a CWMP capture, retry Connection Request, and verify that Event 6 CONNECTION REQUEST Inform follows. Compare the CPE's advertised authentication/NAT behavior with the observed request before changing credentials.",
     });
   }
 
@@ -235,17 +305,16 @@ export function assessDeviceOnboarding(device: Device, params: ParameterCache, j
     if (hint) hints.push(hint);
   }
 
-  // De-duplicate repeated firmware/path faults so the operator gets one
-  // actionable diagnosis instead of five copies of the same 9005.
   const dedupedHints = hints.filter((hint, index, all) => {
     const key = hint.title.replace(/\s*\([^)]*\)$/, "");
     return all.findIndex((candidate) => candidate.title.replace(/\s*\([^)]*\)$/, "") === key) === index;
   });
 
   return {
-    vendorFamily: isHuawei ? "Huawei" : "Other",
+    vendorFamily,
     isHuawei,
     isHuaweiN5368X,
+    isNokia,
     healthyChecks: checks.filter((check) => check.status === "pass").length,
     totalChecks: checks.length,
     checks,
