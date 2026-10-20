@@ -459,7 +459,11 @@ export const api = {
 
   // --- device credentials (build plan §4 Phase 6 / design doc v3 §11.6) ---
   listDeviceCredentials: (deviceId: string) => request<{ items: Credential[] }>(`/api/v1/devices/${deviceId}/credentials`),
-  rotateDeviceCredential: (deviceId: string) => request<Credential>(`/api/v1/devices/${deviceId}/credentials/rotate`, { method: "POST" }),
+  rotateDeviceCredential: (deviceId: string, credentialType: "CONNECTION_REQUEST" | "CWMP_DIGEST" = "CONNECTION_REQUEST") =>
+    request<Credential>(`/api/v1/devices/${deviceId}/credentials/rotate`, {
+      method: "POST",
+      body: JSON.stringify({ credential_type: credentialType }),
+    }),
   activateDeviceCredential: (deviceId: string, credentialId: string) =>
     request<Credential>(`/api/v1/devices/${deviceId}/credentials/${credentialId}/activate`, { method: "POST" }),
   revokeDeviceCredential: (deviceId: string, credentialId: string) =>
