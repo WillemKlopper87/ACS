@@ -82,3 +82,33 @@ func TestDecryptWrongKeyFails(t *testing.T) {
 		t.Fatal("decrypt with the wrong key succeeded — GCM should reject a tampered/mismatched key")
 	}
 }
+
+
+func TestGenerateUsernamePasswordForTypeUsesDirectionPrefix(t *testing.T) {
+	tests := []struct {
+		name       string
+		credType   string
+		wantPrefix string
+	}{
+		{name: "connection request", credType: TypeConnectionRequest, wantPrefix: "cr-"},
+		{name: "cwmp digest", credType: TypeCWMPDigest, wantPrefix: "cwmp-"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			username, password, err := GenerateUsernamePasswordForType(tt.credType)
+			if err != nil {
+				t.Fatalf("GenerateUsernamePasswordForType: %v", err)
+			}
+			if len(username) <= len(tt.wantPrefix) || username[:len(tt.wantPrefix)] != tt.wantPrefix {
+				t.Fatalf("username = %q, want prefix %q", username, tt.wantPrefix)
+			}
+			if len(password) != 48 {
+				t.Fatalf("password length = %d, want 48 hex chars", len(password))
+			}
+		})
+	}
+
+	if _, _, err := GenerateUsernamePasswordForType("UNKNOWN"); err == nil {
+		t.Fatal("unsupported credential type unexpectedly succeeded")
+	}
+}
