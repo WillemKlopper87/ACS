@@ -199,6 +199,16 @@ go build -o bin/acs ./cmd/acs
 go build -o bin/api ./cmd/api
 go build -o bin/bssadapter ./cmd/bssadapter
 go build -o bin/uspc ./cmd/uspc
+go build -o bin/migrate ./cmd/migrate
+
+# A fresh EC2 Postgres volume has no ACS schema. Apply and verify all
+# embedded migrations before any service accepts CPE traffic. Running this
+# again is idempotent, and any migration/checksum mismatch fails the launch
+# rather than leaving a partially initialized control plane.
+echo "=== Applying and checking ACS database migrations ==="
+./bin/migrate
+./bin/migrate -check > "$LOG_DIR/migration-check.json"
+echo "ACS database schema verified (evidence: $LOG_DIR/migration-check.json)."
 
 start_process() {
   local name="$1"
@@ -284,10 +294,11 @@ else
 fi
 
 echo ""
-echo "Login: $ACS_BOOTSTRAP_ADMIN_USERNAME / $ACS_BOOTSTRAP_ADMIN_PASSWORD"
-echo "Grafana login: admin / $GRAFANA_ADMIN_PASSWORD"
+echo "Console login username: $ACS_BOOTSTRAP_ADMIN_USERNAME"
+echo "Grafana login username: admin"
+echo "Passwords are redacted. Retrieve them from ~/.acs-secrets.env using a private shell."
 echo "USP controller ID: $ACS_USP_CONTROLLER_ID"
-echo "(credentials/settings are also saved in ~/.acs-secrets.env)"
+echo "(credentials/settings are saved in ~/.acs-secrets.env; keep file permissions at 600)"
 if [ "${ACS_PROMETHEUS_PUBLIC:-}" = "1" ]; then
   echo ""
 echo "WARNING: Prometheus has no login in this dev mode. Restrict 9090/tcp"
