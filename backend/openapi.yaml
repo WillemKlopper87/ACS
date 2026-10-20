@@ -1549,7 +1549,7 @@ paths:
   /api/v1/devices/{id}/credentials/rotate:
     post:
       tags: [Credentials]
-      summary: Generate + queue a new Connection Request credential, recorded PENDING (credential.manage permission)
+      summary: Generate + queue a new per-device credential, recorded PENDING (credential.manage permission)
       requestBody:
         required: false
         content:
@@ -1569,6 +1569,7 @@ paths:
       parameters: [{ $ref: "#/components/parameters/DeviceId" }]
       responses:
         "202": { description: Queued, content: { application/json: { schema: { $ref: "#/components/schemas/Credential" } } } }
+        "409": { description: A CWMP_DIGEST rotation is already pending or the required credential path cannot be safely written }
 
   /api/v1/devices/{id}/credentials:
     get:
@@ -1581,12 +1582,13 @@ paths:
   /api/v1/devices/{id}/credentials/{credential_id}/activate:
     post:
       tags: [Credentials]
-      summary: Activate a PENDING credential — switches the ACS's own Connection Request client, demotes the previous ACTIVE row to GRACE (credential.manage permission)
+      summary: Activate a PENDING Connection Request credential — CWMP_DIGEST activates only after a matching authenticated Inform (credential.manage permission)
       parameters:
         - { $ref: "#/components/parameters/DeviceId" }
         - { name: credential_id, in: path, required: true, schema: { type: string } }
       responses:
         "200": { description: Activated, content: { application/json: { schema: { $ref: "#/components/schemas/Credential" } } } }
+        "409": { description: CWMP_DIGEST credentials cannot be manually activated }
 
   /api/v1/devices/{id}/credentials/{credential_id}/revoke:
     post:
@@ -2689,9 +2691,14 @@ components:
 
     Credential:
       type: object
+      required: [id, version, credential_type, username, status, created_at]
       properties:
         id: { type: string }
         version: { type: integer }
+        credential_type:
+          type: string
+          enum: [CONNECTION_REQUEST, CWMP_DIGEST]
+          description: Direction of authentication protected by this credential.
         username: { type: string }
         status: { type: string, enum: [PENDING, ACTIVE, GRACE, REVOKED] }
         command_key: { type: string }

@@ -17,19 +17,20 @@ import (
 )
 
 type credentialResponse struct {
-	ID          string  `json:"id"`
-	Version     int     `json:"version"`
-	Username    string  `json:"username"`
-	Status      string  `json:"status"`
-	CommandKey  string  `json:"command_key,omitempty"`
-	CreatedAt   string  `json:"created_at"`
-	ActivatedAt *string `json:"activated_at,omitempty"`
-	RevokedAt   *string `json:"revoked_at,omitempty"`
+	ID             string  `json:"id"`
+	Version        int     `json:"version"`
+	CredentialType string  `json:"credential_type"`
+	Username       string  `json:"username"`
+	Status         string  `json:"status"`
+	CommandKey     string  `json:"command_key,omitempty"`
+	CreatedAt      string  `json:"created_at"`
+	ActivatedAt    *string `json:"activated_at,omitempty"`
+	RevokedAt      *string `json:"revoked_at,omitempty"`
 }
 
 func toCredentialResponse(c *credentials.Credential) credentialResponse {
 	resp := credentialResponse{
-		ID: c.ID, Version: c.Version, Username: c.Username, Status: c.Status,
+		ID: c.ID, Version: c.Version, CredentialType: c.CredentialType, Username: c.Username, Status: c.Status,
 		CommandKey: c.CommandKey, CreatedAt: c.CreatedAt.Format(time.RFC3339),
 	}
 	if c.ActivatedAt != nil {
@@ -77,6 +78,17 @@ func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	if credType == credentials.TypeCWMPDigest {
+		if pending, err := h.credentials.PendingForDevice(r.Context(), id, credType); err == nil {
+			http.Error(w, "a CWMP_DIGEST credential is already PENDING for this device: "+pending.ID, http.StatusConflict)
+			return
+		} else if !errors.Is(err, credentials.ErrNotFound) {
+			h.logger.Error("failed to check pending CWMP Digest credential", "err", err, "device_id", id)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	userParam, passParam := adapters.ManagementServerConnectionRequestUser, adapters.ManagementServerConnectionRequestPass
 	if credType == credentials.TypeCWMPDigest {
 		userParam, passParam = adapters.ManagementServerUsername, adapters.ManagementServerPassword
@@ -105,7 +117,7 @@ func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	username, password, err := credentials.GenerateUsernamePassword()
+	username, password, err := credentials.GenerateUsernamePasswordForType(credType)
 	if err != nil {
 		h.logger.Error("failed to generate credential", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -160,12 +172,18 @@ func (h *handler) listDeviceCredentials(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-// activateDeviceCredential implements v3 §11.6 steps 4-5: the operator
-// (having checked GET /jobs/{command_key} shows the rotation's
-// SetParameterValues job SUCCESS) switches the ACS's Connection Request
-// client to the new credential. Whatever was ACTIVE before moves to
-// GRACE, not straight to REVOKED — v3 is explicit that a rollback path
-// should exist, not an instant cutover.
+// credentialMayBeManuallyActivated deliberately excludes CWMP_DIGEST.
+// CPE->ACS Digest credentials prove installation by reconnecting with the
+// new secret and presenting the same natural device identity; allowing an
+// operator to click "activate" would bypass that identity proof.
+func credentialMayBeManuallyActivated(c *credentials.Credential) bool {
+	return c != nil && c.CredentialType == credentials.TypeConnectionRequest
+}
+
+// activateDeviceCredential implements v3 §11.6 steps 4-5 for the
+// ACS->CPE Connection Request direction only: after its SetParameterValues
+// job succeeds, the operator switches the ACS client to the new credential.
+// CWMP_DIGEST activation is automatic on a matching authenticated Inform.
 func (h *handler) activateDeviceCredential(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 	if _, ok := h.getScopedDevice(w, r, deviceID); !ok {
@@ -186,6 +204,9 @@ func (h *handler) activateDeviceCredential(w http.ResponseWriter, r *http.Reques
 		return
 	} else if existing.DeviceID != deviceID {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	} else if !credentialMayBeManuallyActivated(existing) {
+		http.Error(w, "CWMP_DIGEST credentials activate only after a matching authenticated Inform", http.StatusConflict)
 		return
 	}
 

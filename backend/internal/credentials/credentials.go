@@ -1,16 +1,16 @@
-// Package credentials owns versioned per-device credentials for the one
-// rotation flow design doc v3 §11.6 actually specifies as buildable:
-// ACS-to-CPE Connection Request. (v3 §11.5 explicitly warns the *other*
-// direction — CPE-to-ACS Digest — often can't be rotated remotely at all,
-// vendor-dependent; this package doesn't attempt that one.)
+// Package credentials owns versioned per-device credentials for both TR-069
+// authentication directions:
 //
-// The full v3 flow: generate a new credential, queue a SetParameterValues
-// pushing it to the CPE, confirm, switch the ACS's own Connection Request
-// client to it, keep the old one valid for a grace period, audit the
-// revocation. This package models the state machine
-// (PENDING -> ACTIVE -> GRACE -> REVOKED); cmd/api's REST handlers drive
-// the transitions and cmd/api's connreq_worker reads ActiveForDevice
-// instead of a single shared credential when one exists.
+//   - CONNECTION_REQUEST: ACS -> CPE. A successful SetParameterValues installs
+//     the username/password, then an operator may activate it and keep the old
+//     credential in GRACE for rollback.
+//   - CWMP_DIGEST: CPE -> ACS. The credential is installed in
+//     ManagementServer.Username/Password but may become ACTIVE only after a
+//     later Digest-authenticated Inform resolves to the same bound device.
+//
+// Both directions use the shared PENDING -> ACTIVE -> GRACE -> REVOKED state
+// vocabulary, but their activation proofs deliberately differ. Passwords stay
+// encrypted at rest when ACS_CREDENTIAL_ENCRYPTION_KEY is configured.
 package credentials
 
 import (
@@ -73,11 +73,23 @@ type Credential struct {
 	RevokedAt      *time.Time
 }
 
-// GenerateUsernamePassword produces a fresh random credential pair — 8
-// random bytes hex-encoded for the username (readable, still unguessable)
-// and 24 random bytes for the password (192 bits, well past any
-// brute-force concern for a Digest-style credential).
+// GenerateUsernamePassword produces a fresh Connection Request credential
+// pair. Keep this historical helper for callers that do not select a
+// direction explicitly; new code should use GenerateUsernamePasswordForType.
 func GenerateUsernamePassword() (username, password string, err error) {
+	return GenerateUsernamePasswordForType(TypeConnectionRequest)
+}
+
+// GenerateUsernamePasswordForType produces a fresh random pair with a
+// direction-specific username prefix. The prefix is not an authorization
+// boundary — credential_type and device_id are — but it keeps operator/field
+// evidence unambiguous: "cwmp-" means CPE->ACS Digest, while "cr-" means
+// ACS->CPE Connection Request. The username carries 64 random bits and the
+// password 192 random bits.
+func GenerateUsernamePasswordForType(credentialType string) (username, password string, err error) {
+	if !ValidType(credentialType) {
+		return "", "", fmt.Errorf("unsupported credential type %q", credentialType)
+	}
 	u := make([]byte, 8)
 	if _, err := rand.Read(u); err != nil {
 		return "", "", fmt.Errorf("generate username: %w", err)
@@ -86,7 +98,11 @@ func GenerateUsernamePassword() (username, password string, err error) {
 	if _, err := rand.Read(p); err != nil {
 		return "", "", fmt.Errorf("generate password: %w", err)
 	}
-	return "cr-" + hex.EncodeToString(u), hex.EncodeToString(p), nil
+	prefix := "cr-"
+	if credentialType == TypeCWMPDigest {
+		prefix = "cwmp-"
+	}
+	return prefix + hex.EncodeToString(u), hex.EncodeToString(p), nil
 }
 
 type Repository struct {
@@ -243,6 +259,23 @@ func (r *Repository) ListByDevice(ctx context.Context, deviceID string) ([]Crede
 		out = append(out, *c)
 	}
 	return out, rows.Err()
+}
+
+// PendingForDevice returns the newest PENDING credential for one
+// device+type. CWMP bootstrap/rotation uses this to keep credential
+// installation single-flight; the database partial unique index remains the
+// race-proof invariant for concurrent callers.
+func (r *Repository) PendingForDevice(ctx context.Context, deviceID, credType string) (*Credential, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT `+credColumns+` FROM device_credentials
+		WHERE device_id = $1 AND credential_type = $2 AND status = $3
+		ORDER BY version DESC LIMIT 1`,
+		deviceID, credType, StatusPending)
+	cred, err := r.scanCredential(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return cred, err
 }
 
 // ActiveForDevice returns the current ACTIVE credential for a device,

@@ -1,4 +1,4 @@
-import type { Device, Job, ParameterCache } from "../api/types";
+import type { Credential, Device, Job, ParameterCache } from "../api/types";
 import { assessDeviceOnboarding, type OnboardingCheckStatus, type TroubleshootingSeverity } from "../lib/deviceOnboarding";
 import { StatusBadge } from "./StatusBadge";
 
@@ -10,7 +10,7 @@ const CHECK_LABEL: Record<OnboardingCheckStatus, string> = {
 };
 
 const HINT_LABEL: Record<TroubleshootingSeverity, string> = {
-  info: "Huawei note",
+  info: "Vendor note",
   warning: "Investigate",
   critical: "Start here",
 };
@@ -19,6 +19,7 @@ export function DeviceOnboardingPanel({
   device,
   params,
   jobs,
+  credentials,
   writable,
   busy,
   onStartCWMPTrace,
@@ -30,6 +31,7 @@ export function DeviceOnboardingPanel({
   device: Device;
   params: ParameterCache;
   jobs: Job[];
+  credentials: Credential[];
   writable: boolean;
   busy: boolean;
   onStartCWMPTrace: () => void;
@@ -38,7 +40,7 @@ export function DeviceOnboardingPanel({
   onRefreshCellular: () => void;
   onOpenCaptures: () => void;
 }) {
-  const assessment = assessDeviceOnboarding(device, params, jobs);
+  const assessment = assessDeviceOnboarding(device, params, jobs, credentials);
   const ready = assessment.healthyChecks === assessment.totalChecks;
 
   return (
@@ -46,9 +48,10 @@ export function DeviceOnboardingPanel({
       <h3 style={{ alignItems: "flex-start" }}>
         <span>
           Onboarding &amp; troubleshooting
-          {assessment.isHuawei && (
+          {assessment.vendorFamily !== "Other" && (
             <span className="chip" style={{ marginLeft: "0.55rem", verticalAlign: "middle" }}>
-              Huawei{assessment.isHuaweiN5368X ? " · N5368X family" : ""}
+              {assessment.vendorFamily}
+              {assessment.isHuaweiN5368X ? " · N5368X family" : ""}
             </span>
           )}
         </span>
@@ -61,8 +64,8 @@ export function DeviceOnboardingPanel({
       </h3>
 
       <p className="dim" style={{ marginTop: 0, marginBottom: "0.85rem", fontSize: "0.82rem" }}>
-        Use this sequence before changing credentials or vendor compatibility settings. It separates transport/authentication,
-        CWMP model discovery, reachability and device-operation faults so a Huawei firmware quirk does not become a fleet-wide workaround.
+        Follow the evidence in order: reachability/authentication, device-bound identity, model discovery, then Connection Request and operations.
+        Vendor guidance is scoped to the detected device so one firmware quirk does not become a fleet-wide workaround.
       </p>
 
       <div
@@ -88,7 +91,7 @@ export function DeviceOnboardingPanel({
 
       {assessment.hints.length > 0 && (
         <div style={{ display: "grid", gap: "0.5rem", marginBottom: "0.85rem" }}>
-          {assessment.hints.slice(0, 5).map((hint) => (
+          {assessment.hints.slice(0, 6).map((hint) => (
             <div
               key={hint.id}
               className={hint.severity === "critical" ? "banner error" : "banner"}
@@ -116,9 +119,9 @@ export function DeviceOnboardingPanel({
         <button className="btn" onClick={onTestConnectionRequest} disabled={busy || !writable || !device.connection_request_url} title={device.connection_request_url ? "Test CPE reachability and watch for Event 6 Inform" : "Unavailable until the CPE supplies a Connection Request URL"}>
           3. Test Connection Request
         </button>
-        {assessment.isHuawei && (
-          <button className="btn" onClick={onRefreshCellular} disabled={busy || !writable} title="Read the vendor-aware cellular diagnostic candidate paths">
-            Huawei cellular read
+        {(assessment.isHuawei || assessment.isNokia) && (
+          <button className="btn" onClick={onRefreshCellular} disabled={busy || !writable} title="Read vendor-aware cellular diagnostic candidate paths after discovery">
+            {assessment.vendorFamily} cellular read
           </button>
         )}
         <button className="btn ghost" onClick={onOpenCaptures}>

@@ -5,6 +5,7 @@ import type { Credential, Device, FirmwareImage, Job, ParameterCache, ParameterH
 import { StatusBadge } from "../components/StatusBadge";
 import { DeviceConsole } from "../components/DeviceConsole";
 import { DeviceCompatibility } from "../components/DeviceCompatibility";
+import { DeviceOnboardingPanel } from "../components/DeviceOnboardingPanel";
 import { RemoteShell } from "../components/RemoteShell";
 import { DeviceWebGUI } from "../components/DeviceWebGUI";
 import { VPNTunnel } from "../components/VPNTunnel";
@@ -231,6 +232,19 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       return `Capture started: ${session.id}`;
     });
 
+  const handleStartCWMPTrace = () =>
+    withBusy(async () => {
+      const session = await api.startDeviceCapture(id, "CWMP");
+      navigate(`/captures?open=${session.id}`);
+      return `CWMP capture started: ${session.id}`;
+    });
+
+  const handleDiscoverParameters = () =>
+    withBusy(async () => {
+      const res = await api.discoverParameters(id);
+      return `Parameter discovery queued: ${res.command_key}`;
+    });
+
   const handleRefreshWifiClients = () =>
     withBusy(async () => {
       const res = await api.refreshWifiClients(id);
@@ -351,8 +365,14 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
 
   const handleRotateCredential = () =>
     withBusy(async () => {
-      const cred = await api.rotateDeviceCredential(id);
-      return `Rotation queued: v${cred.version} (${cred.command_key}) — activate once the job shows SUCCESS`;
+      const cred = await api.rotateDeviceCredential(id, "CONNECTION_REQUEST");
+      return `Connection Request rotation queued: v${cred.version} (${cred.command_key}) — activate once the job shows SUCCESS`;
+    });
+
+  const handleRotateCWMPDigestCredential = () =>
+    withBusy(async () => {
+      const cred = await api.rotateDeviceCredential(id, "CWMP_DIGEST");
+      return `CWMP Digest rotation queued: v${cred.version} (${cred.command_key}) — it becomes ACTIVE only after the device reconnects with the new credential and matching identity`;
     });
 
   const handleActivateCredential = (credentialId: string) =>
@@ -386,6 +406,8 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   }
 
   const paramEntries = Object.entries(params);
+  const cwmpDigestCredentials = credentials.filter((credential) => credential.credential_type === "CWMP_DIGEST");
+  const connectionRequestCredentials = credentials.filter((credential) => credential.credential_type === "CONNECTION_REQUEST");
 
   return (
     <div className="split two-col">
@@ -610,32 +632,81 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
         )}
       </div>
 
+      <DeviceOnboardingPanel
+        device={device}
+        params={params}
+        jobs={jobs}
+        credentials={credentials}
+        writable={writable}
+        busy={busy}
+        onStartCWMPTrace={handleStartCWMPTrace}
+        onDiscoverParameters={handleDiscoverParameters}
+        onTestConnectionRequest={handleConnectionRequest}
+        onRefreshCellular={handleRefreshCellular}
+        onOpenCaptures={() => navigate("/captures")}
+      />
+
       <div className="panel">
-        <h3>
-          Connection Request credentials
-          <button className="btn" onClick={handleRotateCredential} disabled={busy || !writable}>
-            Rotate
+        <h3>Device authentication credentials</h3>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", marginBottom: "0.45rem" }}>
+          <strong style={{ fontSize: "0.82rem" }}>CPE → ACS Digest</strong>
+          <button className="btn sm" onClick={handleRotateCWMPDigestCredential} disabled={busy || !writable}>
+            Rotate CPE Digest
           </button>
-        </h3>
-        {credentials.length === 0 ? (
-          <p style={{ color: "var(--ink-faint)", fontSize: "0.84rem", margin: 0 }}>
-            No rotated credentials — this device still uses the shared ACS_CONNECTION_REQUEST_USERNAME/PASSWORD fallback.
+        </div>
+        {cwmpDigestCredentials.length === 0 ? (
+          <p className="dim" style={{ fontSize: "0.78rem", marginTop: 0 }}>
+            No per-device CWMP_DIGEST credential is recorded yet. Secure bootstrap should create one and keep it PENDING until this CPE reconnects with the generated credential and matching identity.
           </p>
         ) : (
-          credentials.map((c) => (
-            <div className="param-row" key={c.id}>
+          cwmpDigestCredentials.map((credential) => (
+            <div className="param-row" key={credential.id}>
               <span className="path">
-                v{c.version} <span style={{ color: "var(--ink-faint)" }}>· {c.username}</span>
+                v{credential.version} <span style={{ color: "var(--ink-faint)" }}>· {credential.username}</span>
               </span>
               <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                <StatusBadge value={c.status} />
-                {c.status === "PENDING" && (
-                  <button className="btn" onClick={() => handleActivateCredential(c.id)} disabled={busy || !writable}>
+                <StatusBadge value={credential.status} />
+                {(credential.status === "GRACE" || credential.status === "PENDING") && (
+                  <button className="btn" onClick={() => handleRevokeCredential(credential.id)} disabled={busy || !writable}>
+                    Revoke
+                  </button>
+                )}
+              </span>
+              {credential.status === "PENDING" && (
+                <span className="src">Waiting for a matching authenticated Inform — manual activation is intentionally disabled.</span>
+              )}
+            </div>
+          ))
+        )}
+
+        <div style={{ borderTop: "1px solid var(--border)", margin: "0.9rem 0 0.75rem" }} />
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", marginBottom: "0.45rem" }}>
+          <strong style={{ fontSize: "0.82rem" }}>ACS → CPE Connection Request</strong>
+          <button className="btn sm" onClick={handleRotateCredential} disabled={busy || !writable}>
+            Rotate CR credential
+          </button>
+        </div>
+        {connectionRequestCredentials.length === 0 ? (
+          <p className="dim" style={{ fontSize: "0.78rem", margin: 0 }}>
+            No per-device Connection Request credential — the worker will use the configured shared ACS_CONNECTION_REQUEST_USERNAME/PASSWORD fallback until you rotate one.
+          </p>
+        ) : (
+          connectionRequestCredentials.map((credential) => (
+            <div className="param-row" key={credential.id}>
+              <span className="path">
+                v{credential.version} <span style={{ color: "var(--ink-faint)" }}>· {credential.username}</span>
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                <StatusBadge value={credential.status} />
+                {credential.status === "PENDING" && (
+                  <button className="btn" onClick={() => handleActivateCredential(credential.id)} disabled={busy || !writable}>
                     Activate
                   </button>
                 )}
-                {(c.status === "GRACE" || c.status === "PENDING") && (
-                  <button className="btn" onClick={() => handleRevokeCredential(c.id)} disabled={busy || !writable}>
+                {(credential.status === "GRACE" || credential.status === "PENDING") && (
+                  <button className="btn" onClick={() => handleRevokeCredential(credential.id)} disabled={busy || !writable}>
                     Revoke
                   </button>
                 )}

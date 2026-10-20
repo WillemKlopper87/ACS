@@ -29,6 +29,25 @@ class FakeACS:
 
 
 class CompatibilityTests(unittest.TestCase):
+    def test_failed_read_prevents_reboot(self):
+        acs = FakeACS([{'command_key': 'discovery'}, {'status': 'SUCCESS'},
+                       {'snapshots': [{'command_key': 'discovery', 'names': {}}]},
+                       {'command_key': 'read'}, {'status': 'FAILED'},
+                       {'command_key': 'reboot'}, {'status': 'SUCCESS'},
+                       {'command_key': 'post'}, {'status': 'SUCCESS'}, {}])
+        report = qualification.qualify(acs, DEVICE, {'reads': ['Device.DeviceInfo.SoftwareVersion'], 'reboot': True}, 10, True)
+        self.assertFalse(report['passed'])
+        self.assertFalse(any(path.endswith('/reboot') for path, _, _ in acs.calls))
+
+    def test_post_reboot_read_uses_discovered_legacy_root(self):
+        acs = FakeACS([{'command_key': 'discovery'}, {'status': 'SUCCESS'},
+                       {'snapshots': [{'command_key': 'discovery', 'root': 'InternetGatewayDevice.', 'names': {}}]},
+                       {'command_key': 'reboot'}, {'status': 'SUCCESS'},
+                       {'command_key': 'post'}, {'status': 'SUCCESS'}, {}])
+        qualification.qualify(acs, DEVICE, {'reboot': True}, 10, True)
+        reads = [body['paths'] for path, body, _ in acs.calls if path.endswith('/parameters/get')]
+        self.assertEqual(reads, [['InternetGatewayDevice.DeviceInfo.SoftwareVersion']])
+
     def test_remote_credentials_require_https(self):
         with self.assertRaises(ValueError):
             discovery.ACS("http://acs.example", "secret")

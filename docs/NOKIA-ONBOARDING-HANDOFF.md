@@ -1,6 +1,17 @@
 # Nokia onboarding handoff
 
-The reported identifiers are hardware `3TG02241AAAA`, software version `1.2501.00.0798`, software build `5GGW2-OMNI-2_R250100BiwT0301E0798`, country `eu`, and local management address `192.168.1.1`. The build string is not a confirmed model. Model, serial and OUI are pending device evidence. SSH is optional for investigation and is not required for CWMP.
+The reported identifiers are hardware `3TG02241AAAA`, software version `1.2501.00.0798`, software build `5GGW2-OMNI-2_R250100BiwT0301E0798`, country `eu`, and local management address `192.168.1.1`. The build string is not a confirmed model. Model, serial, OUI, exact ProductClass and vendor paths remain pending device evidence. SSH is optional for investigation and is not required for CWMP.
+
+Tracking goal: #75.
+
+## Recommended sequence
+
+Use two passes:
+
+1. **Controlled cloud lab first contact** — capture-first, read-only, no guessed Nokia writes.
+2. **Production-like secure management** — TLS, constrained bootstrap, automatic unique device-bound Digest graduation, Connection Request and reversible operations.
+
+Do not mark the device qualified from emulator/mock evidence.
 
 ## Prepare before connecting the device
 
@@ -10,36 +21,120 @@ Run from the repository root:
 python scripts/prepare-nokia-onboarding.py --output .local/nokia-onboarding
 ```
 
-The tool is offline. It reports pending settings with exit code 1 and produces `readiness.json` and a read-only `scenario.json`. It never contacts the CPE, changes a server or exports passwords. Set `NOKIA_ACS_URL` to the actual CPE management URL; specify the deployment profile and supply `NOKIA_ACS_USERNAME`, `NOKIA_ACS_PASSWORD`, `NOKIA_ACSCR_USERNAME`, `NOKIA_ACSCR_PASSWORD`, `ACS_POSTGRES_DSN`, and `ACS_CREDENTIAL_ENCRYPTION_KEY` securely in the invoking process. These are preparation inputs, not automatic credential installation. The Nokia password meanings and usernames must be confirmed when configuring the device. API and CWMP services must share the credential encryption key.
+The tool is offline. It never contacts the CPE or ACS, changes a server, or exports passwords. It writes a redacted `readiness.json` and read-only `scenario.json`.
 
-Use the existing production launcher and `scripts/security-preflight.sh` for the full production security check. The offline checklist does not replace it or prove reachability. Apply standard TLS, source CIDR and device authentication configuration documented in `docs/security/device-authentication-and-deployment-profiles.md`. Keep the API/console private behind the configured authenticated HTTPS ingress.
-
-## Check deployment schema
-
-On the intended server, export `ACS_POSTGRES_DSN` securely. From `backend`, run:
+Set:
 
 ```
-go run ./cmd/migrate -check
+NOKIA_ACS_URL=<exact URL to configure on the CPE>
+ACS_DEPLOYMENT_PROFILE=lab|production
+ACS_POSTGRES_DSN=<target database DSN>
+ACS_CREDENTIAL_ENCRYPTION_KEY=<same key used by API and CWMP services>
 ```
 
-This opens a read-only database snapshot. Exit 0 means every migration embedded in that binary has a matching applied checksum. Pending, unverified, modified or unknown migrations return exit 1; an absent tracking table remains absent. Do not run migration integration tests on this server because their harness recreates the public schema.
+### Production first contact
 
-After reviewing pending changes and taking the normal database backup, apply migrations through the regular deployment procedure (`go run ./cmd/migrate`, which writes to the database). Migrations 0074–0077 support discovery evidence, BulkData, instance/operation evidence and telemetry health. Start the new services and verify their readiness endpoints. A schema check does not prove service health or network readiness.
+Production must use the constrained bootstrap path:
+
+```
+ACS_CWMP_BOOTSTRAP_USERNAME=<bootstrap username>
+ACS_CWMP_BOOTSTRAP_PASSWORD=<strong bootstrap password>
+```
+
+The bootstrap identity is not a normal fleet credential. It cannot manage an already-established device or consume that device's queued work. After a valid first-contact Inform, ACS installs a generated per-device `CWMP_DIGEST` credential through standard ManagementServer paths selected from the root inferred from Inform, before discovery confirms writable access. That credential stays `PENDING` until the Nokia reconnects with it and reports the same natural identity, then becomes `ACTIVE`.
+
+### Lab first contact
+
+For a controlled compatibility lab, the same constrained bootstrap pair is preferred. The legacy preparation variables:
+
+```
+NOKIA_ACS_USERNAME
+NOKIA_ACS_PASSWORD
+```
+
+remain accepted by the preparation script only as a **lab compatibility input**. They are not a production steady-state identity.
+
+Connection Request credentials are deliberately not required for first contact. When the Nokia advertises its ConnectionRequestURL/authentication behavior, configure device-specific values and record them securely:
+
+```
+NOKIA_ACSCR_USERNAME
+NOKIA_ACSCR_PASSWORD
+```
+
+## Cloud deployment
+
+For the first cloud run, use the current `main` release candidate and the supported deployment scripts. See `docs/NOKIA-CLOUD-QUALIFICATION.md` for the concrete cloud sequence.
+
+Before changing the CPE:
+
+1. apply migrations;
+2. run `go run ./cmd/migrate -check`;
+3. run `scripts/security-preflight.sh` for production or `scripts/field-preflight.sh` for a controlled field/lab run;
+4. verify the ACS/API/BSS/USP readiness endpoints;
+5. start a bounded remote-IP CWMP capture for the Nokia source address when practical.
+
+Keep API/console/BSS/USP health/Grafana/Prometheus off the public management plane except through the documented protected ingress.
 
 ## Network handoff
 
-The default CWMP listener is TCP 7547; a TLS ingress can expose a different external destination port. The preparation report derives the firewall destination port from the supplied ACS URL. Permit CPE-initiated sessions from approved CPE source/NAT ranges to that destination with stateful return traffic. Optional STUN uses UDP 3478. ACS-to-CPE connection requests use the CPE-advertised port and need a separate rule when enabled. Verify trusted TLS, DNS resolution, the final ingress port and time synchronization. The private local address `192.168.1.1` is not a cloud-reachable management address by itself.
+The default CWMP listener is TCP 7547; a TLS ingress can expose a different external destination port. Permit CPE-initiated sessions from the approved Nokia WAN/NAT source policy with stateful return traffic.
 
-## Once the device is available
+Optional STUN uses UDP 3478. Do not expose it until STUN/Annex-G qualification is actually needed.
 
-Install CPE and ACS credentials using the existing secure workflows, verify authenticated Inform, and obtain its ACS device UUID. Set `ACS_API_TOKEN` securely and run:
+ACS-to-CPE Connection Request uses the CPE-advertised URL/port and must be qualified separately. The Nokia's private local address `192.168.1.1` is not directly cloud-routable and should never be assumed to be its Connection Request path.
+
+## First-contact evidence
+
+On the first authenticated Inform, record:
+
+- Manufacturer;
+- OUI;
+- ProductClass;
+- SerialNumber;
+- HardwareVersion;
+- SoftwareVersion/build;
+- CWMP namespace;
+- Device/TR-181 vs InternetGatewayDevice/TR-098 root;
+- ConnectionRequestURL if present;
+- NAT/STUN state if present.
+
+Do not create vendor-specific parameter mappings from the reported build string alone.
+
+## Read-only qualification
+
+After the device exists in ACS and you have its device UUID, set `ACS_API_TOKEN` securely and run:
 
 ```
-python scripts/qualify-device.py --base-url https://YOUR-API-ORIGIN --device DEVICE_UUID --scenario ci/compatibility/nokia-read-only.json --output .local/nokia-onboarding/qualification.json
+python scripts/qualify-device.py \
+  --base-url https://YOUR-API-ORIGIN \
+  --device DEVICE_UUID \
+  --scenario ci/compatibility/nokia-read-only.json \
+  --output .local/nokia-onboarding/qualification.json
 ```
 
-The runner discovers the root, reads portable identity and rejects hardware/firmware mismatches before writes or reboot. It then reads up to 128 discovered concrete cellular/5G candidates, excluding sensitive and known write-only parameters. It never guesses Nokia vendor paths. The report records identity, path inventory and job outcomes, without operational values. Unsupported required identity fields fail the scenario rather than weakening its checks. If the actual device reports a different firmware identifier, reconcile it with the captured evidence and review the scenario explicitly.
+The runner:
 
-Review `5g-telemetry`, connection diagnostics, discovery export and compatibility in the API/console. Do not set firmware qualification from a read-only report. Safe writes/readback, diagnostics, real reconnect, restart recovery, BulkData and upgrades still require supervised lab acceptance on the exact hardware and firmware. The existing Nokia catalog is a candidate mapping source; its guessed vendor paths are not asserted to exist on this device.
+- discovers the actual root and parameter tree first;
+- reads portable DeviceInfo identity;
+- rejects a hardware/firmware mismatch before writes or reboot;
+- reads only discovered concrete 5G/cellular candidates;
+- excludes sensitive/write-only candidates;
+- never guesses Nokia vendor paths;
+- records path/job evidence without exporting operational values or secrets.
 
-Renewal remains operator-triggered. Mesh steering, server-scheduled SNMP fallback and independent LMAP scheduling remain broader feature work; none is needed to receive the first Nokia CWMP session.
+Review the Device Compatibility panel, discovery export, connection diagnostics, 5G telemetry and captured CWMP session together.
+
+## After read-only PASS
+
+Only after read-only qualification succeeds:
+
+1. prove the unique bound Digest reconnect / credential activation;
+2. verify post-graduation bootstrap rejection;
+3. test Connection Request and require Event 6 CONNECTION REQUEST;
+4. identify one harmless writable parameter from discovery;
+5. perform read -> SPV -> read-back -> restore;
+6. run IPPing/TraceRoute if supported;
+7. test reboot/reconnect with independent observation;
+8. test firmware Download/TransferComplete only with an approved image for the exact device/firmware.
+
+Any Nokia-specific SOAP, authentication, data-model or fault behavior must be captured, sanitized and converted into firmware-scoped fixtures/tests before being promoted into a reusable compatibility profile.

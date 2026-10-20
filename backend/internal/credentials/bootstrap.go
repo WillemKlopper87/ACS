@@ -51,7 +51,7 @@ func (r *Repository) EnsurePendingCWMPDigest(ctx context.Context, deviceID strin
 		return nil, err
 	}
 
-	username, password, err := GenerateUsernamePassword()
+	username, password, err := GenerateUsernamePasswordForType(TypeCWMPDigest)
 	if err != nil {
 		return nil, err
 	}

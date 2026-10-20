@@ -21,6 +21,13 @@ export ACS_POSTGRES_DSN="postgres://acs:$GENERATED_POSTGRES_PASSWORD@localhost:5
 export ACS_DEPLOYMENT_PROFILE="lab"
 export ACS_CWMP_ALLOW_PLAINTEXT="true"
 
+# Constrained first-contact identity. New CPEs should use this pair so ACS
+# can graduate them to a unique device-bound CWMP_DIGEST credential.
+export ACS_CWMP_BOOTSTRAP_USERNAME="acs-bootstrap"
+export ACS_CWMP_BOOTSTRAP_PASSWORD="$(openssl rand -base64 24)"
+
+# Legacy/shared Digest identity retained for controlled lab compatibility only.
+# It is not the production onboarding or steady-state device identity.
 export ACS_DIGEST_USERNAME="acs-device"
 export ACS_DIGEST_PASSWORD="$(openssl rand -base64 16)"
 export ACS_CWMP_ALLOW_SHARED_ESTABLISHED="false"
@@ -104,6 +111,15 @@ else
     sed -i 's/^export ACS_CONNECTION_REQUEST_USERNAME=""$/export ACS_CONNECTION_REQUEST_USERNAME="acs-connreq"/' "$SECRETS_FILE"
   elif ! grep -q '^export ACS_CONNECTION_REQUEST_USERNAME=' "$SECRETS_FILE"; then
     echo 'export ACS_CONNECTION_REQUEST_USERNAME="acs-connreq"' >> "$SECRETS_FILE"
+  fi
+  # Backfill the constrained bootstrap identity added after the original
+  # quickstart. Generate it once and preserve it across restarts so a CPE
+  # midway through bootstrap/graduation is not stranded.
+  if ! grep -q '^export ACS_CWMP_BOOTSTRAP_USERNAME=' "$SECRETS_FILE"; then
+    echo 'export ACS_CWMP_BOOTSTRAP_USERNAME="acs-bootstrap"' >> "$SECRETS_FILE"
+  fi
+  if ! grep -q '^export ACS_CWMP_BOOTSTRAP_PASSWORD=' "$SECRETS_FILE"; then
+    echo "export ACS_CWMP_BOOTSTRAP_PASSWORD=\"$(openssl rand -base64 24)\"" >> "$SECRETS_FILE"
   fi
   if ! grep -q '^export ACS_CWMP_ALLOW_SHARED_ESTABLISHED=' "$SECRETS_FILE"; then
     echo 'export ACS_CWMP_ALLOW_SHARED_ESTABLISHED="false"' >> "$SECRETS_FILE"
@@ -203,6 +219,8 @@ chmod 600 "$COMPOSE_ENV"
 {
   echo "ACS_POSTGRES_DSN=$ACS_POSTGRES_DSN"
   echo "ACS_DEPLOYMENT_PROFILE=${ACS_DEPLOYMENT_PROFILE:-lab}"
+  echo "ACS_CWMP_BOOTSTRAP_USERNAME=$ACS_CWMP_BOOTSTRAP_USERNAME"
+  echo "ACS_CWMP_BOOTSTRAP_PASSWORD=$ACS_CWMP_BOOTSTRAP_PASSWORD"
   echo "ACS_DIGEST_USERNAME=$ACS_DIGEST_USERNAME"
   echo "ACS_DIGEST_PASSWORD=$ACS_DIGEST_PASSWORD"
   echo "ACS_CWMP_ALLOW_SHARED_ESTABLISHED=${ACS_CWMP_ALLOW_SHARED_ESTABLISHED:-false}"
@@ -238,23 +256,16 @@ chmod 600 "$COMPOSE_ENV"
 } > "$SYSTEMD_FILE"
 chmod 600 "$SYSTEMD_FILE"
 
+# This script is sourced by quickstart/startup and CI. Do not emit credentials
+# into terminal history, EC2 serial logs, session recordings, or support logs.
+# Use scripts/show-cpe-setup.sh --show-secrets only for a deliberate,
+# interactive CPE configuration session.
 echo ""
-echo "=== ACS credentials (also saved in $SECRETS_FILE) ==="
-echo "Console / API login:"
-echo "  Username: $ACS_BOOTSTRAP_ADMIN_USERNAME"
-echo "  Password: $ACS_BOOTSTRAP_ADMIN_PASSWORD"
-echo ""
-echo "CWMP Digest (device ManagementServer.Username / .Password):"
-echo "  Username: $ACS_DIGEST_USERNAME"
-echo "  Password: $ACS_DIGEST_PASSWORD"
-echo ""
-echo "Connection Request (device .ConnectionRequestUsername / .Password):"
-echo "  Username: $ACS_CONNECTION_REQUEST_USERNAME"
-echo "  Password: $ACS_CONNECTION_REQUEST_PASSWORD"
-echo ""
-echo "USP controller ID: $ACS_USP_CONTROLLER_ID"
-echo "Grafana (dashboards, :3000):"
-echo "  Username: admin"
-echo "  Password: $GRAFANA_ADMIN_PASSWORD"
-echo "======================================================="
+echo "ACS credentials loaded from $SECRETS_FILE (file mode 600)."
+echo "CWMP first-contact username: $ACS_CWMP_BOOTSTRAP_USERNAME"
+echo "Legacy fleet Digest credential: lab compatibility only."
+echo "Connection Request username: $ACS_CONNECTION_REQUEST_USERNAME"
+echo "Passwords and API/admin secrets are redacted."
+echo "For CPE setup, run: $REPO_ROOT/scripts/show-cpe-setup.sh"
+echo "To inspect CPE secrets interactively: $REPO_ROOT/scripts/show-cpe-setup.sh --show-secrets"
 echo ""
