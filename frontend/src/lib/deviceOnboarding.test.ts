@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Device, Job, ParameterCache } from "../api/types";
+import type { Credential, Device, Job, ParameterCache } from "../api/types";
 import { assessDeviceOnboarding } from "./deviceOnboarding";
 
 function device(overrides: Partial<Device> = {}): Device {
@@ -64,5 +64,74 @@ describe("assessDeviceOnboarding", () => {
 
     expect(result.hints.some((hint) => hint.id === "huawei-tr098-wifi")).toBe(true);
     expect(result.hints.find((hint) => hint.id === "huawei-tr098-wifi")?.detail).toContain("PreSharedKey.1.KeyPassphrase");
+  });
+});
+
+
+function credential(overrides: Partial<Credential> = {}): Credential {
+  return {
+    id: "cred-1",
+    version: 1,
+    credential_type: "CWMP_DIGEST",
+    username: "cr-test",
+    status: "PENDING",
+    created_at: "2026-10-20T10:00:00Z",
+    ...overrides,
+  };
+}
+
+describe("Nokia onboarding assessment", () => {
+  it("recognizes Nokia and warns when its Connection Request URL is private", () => {
+    const result = assessDeviceOnboarding(
+      device({
+        manufacturer: "Nokia",
+        product_class: "FastMile 5G Gateway",
+        connection_request_url: "http://10.10.178.31:7547/",
+        last_inform_at: "2026-10-20T10:00:00Z",
+        cwmp_auth_mode: "DIGEST",
+      }),
+      {},
+      [],
+      [],
+    );
+
+    expect(result.vendorFamily).toBe("Nokia");
+    expect(result.isNokia).toBe(true);
+    expect(result.hints.some((hint) => hint.id === "nokia-read-only-first")).toBe(true);
+    expect(result.hints.find((hint) => hint.id === "nokia-private-cr")?.detail).toContain("10.10.178.31");
+  });
+
+  it("shows a pending CWMP Digest credential as waiting for bound reconnect", () => {
+    const result = assessDeviceOnboarding(
+      device({
+        manufacturer: "Nokia",
+        product_class: "FastMile",
+        last_inform_at: "2026-10-20T10:00:00Z",
+        cwmp_auth_mode: "DIGEST",
+      }),
+      {},
+      [],
+      [credential()],
+    );
+
+    expect(result.checks.find((check) => check.id === "bound-credential")?.status).toBe("pending");
+    expect(result.hints.some((hint) => hint.id === "digest-pending")).toBe(true);
+    expect(result.hints.find((hint) => hint.id === "digest-pending")?.detail).toContain("Do not manually activate");
+  });
+
+  it("marks an active device-bound CWMP Digest identity healthy", () => {
+    const result = assessDeviceOnboarding(
+      device({
+        manufacturer: "Nokia",
+        product_class: "FastMile",
+        last_inform_at: "2026-10-20T10:00:00Z",
+        cwmp_auth_mode: "DIGEST",
+      }),
+      {},
+      [],
+      [credential({ status: "ACTIVE", activated_at: "2026-10-20T10:01:00Z" })],
+    );
+
+    expect(result.checks.find((check) => check.id === "bound-credential")?.status).toBe("pass");
   });
 });
