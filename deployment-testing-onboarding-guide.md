@@ -1,5 +1,7 @@
 # Deployment, testing & device onboarding guide
 
+> **Current security note (2026-10):** this guide predates the constrained production CWMP bootstrap/graduation flow and still contains legacy shared-Digest examples in later sections. For new physical-device work, use `docs/NOKIA-CLOUD-QUALIFICATION.md` for Nokia, `docs/HUAWEI-N5368X-SECURE-QUALIFICATION.md` for Huawei, and `docs/security/device-authentication-and-deployment-profiles.md` for the authoritative lab/production security model. In production, do not use the fleet-wide `ACS_DIGEST_USERNAME/PASSWORD` as the device onboarding identity; use `ACS_CWMP_BOOTSTRAP_USERNAME/PASSWORD` and allow ACS to graduate the device to a unique bound `CWMP_DIGEST` credential.
+
 Written for the first real-device test: a ZTE-family "ZOWEE 5G CPE Max 6"
 (model H362-383), reachable only outbound (CGNAT), with developer/engineer
 access to its TR-069 client settings. Everything here is grounded in what's
