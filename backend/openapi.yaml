@@ -1569,6 +1569,7 @@ paths:
       parameters: [{ $ref: "#/components/parameters/DeviceId" }]
       responses:
         "202": { description: Queued, content: { application/json: { schema: { $ref: "#/components/schemas/Credential" } } } }
+        "409": { description: A CWMP_DIGEST rotation is already pending or the required credential path cannot be safely written }
 
   /api/v1/devices/{id}/credentials:
     get:
