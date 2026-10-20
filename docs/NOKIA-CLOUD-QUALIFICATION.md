@@ -25,7 +25,7 @@ Provider-neutral requirements:
 
 ### AWS EC2 example
 
-A practical test host is Ubuntu 24.04 LTS on EC2 in `af-south-1` with an Elastic IP.
+A practical test host is Ubuntu 24.04 LTS on EC2 in `af-south-1`. An Elastic IP is **not required** for the first controlled Nokia lab. The instance's current auto-assigned public IPv4 is acceptable as long as it is recorded at the start of the test and the operator understands that stopping/starting the instance can change it. Keep the instance running during an active qualification session, or update the Nokia ACS URL if the public IPv4 changes. For a persistent test fleet or production-like qualification, prefer DNS backed by a stable address.
 
 Recommended security-group policy for the first Nokia CWMP run:
 
@@ -37,7 +37,9 @@ Recommended security-group policy for the first Nokia CWMP run:
 | 3478/udp | inbound | Nokia WAN/NAT source policy | optional STUN |
 | 5173/8080/8090/8092/3000/9090/5432 | inbound | **none** | host-local/control/DB services |
 
-Do not use the operator UI port as the CPE ACS URL. For example, `http://PUBLIC_IP:5173` is the browser UI; the default CWMP URL is `http://PUBLIC_IP:7547/cwmp` in a lab profile.
+Do not use the operator UI port as the CPE ACS URL. For example, `http://CURRENT_PUBLIC_IP:5173` is the browser UI; the default CWMP URL is `http://CURRENT_PUBLIC_IP:7547/cwmp` in a lab profile.
+
+At the beginning of every lab session, obtain and record the instance's **current** public IPv4 from the cloud console (or equivalent instance metadata) and use that value consistently in the CPE configuration and qualification evidence. Never assume the previous session's address is still valid.
 
 If the Nokia source address is unknown/dynamic behind a mobile carrier or CGNAT, prefer a short controlled observation window with the constrained bootstrap identity and rate limits rather than leaving 7547 globally exposed. Tighten the source policy as soon as the real egress range is known.
 
@@ -54,10 +56,10 @@ export ACS_CWMP_BOOTSTRAP_PASSWORD="<strong-random-secret>"
 export ACS_CREDENTIAL_ENCRYPTION_KEY="<strong-stable-secret>"
 ```
 
-For a lab host with public IP `PUBLIC_IP`:
+For a lab host using its current auto-assigned public IP `CURRENT_PUBLIC_IP`:
 
 ```
-export NOKIA_ACS_URL="http://PUBLIC_IP:7547/cwmp"
+export NOKIA_ACS_URL="http://CURRENT_PUBLIC_IP:7547/cwmp"
 ```
 
 This is for capture-first compatibility qualification only. Keep the firewall restricted and do not call this the production security path.
@@ -127,7 +129,7 @@ Record the exact commit and preflight output in the qualification evidence.
 Before touching the CPE:
 
 ```
-export NOKIA_ACS_URL="http://PUBLIC_IP:7547/cwmp"   # lab example
+export NOKIA_ACS_URL="http://CURRENT_PUBLIC_IP:7547/cwmp"   # lab example
 export ACS_DEPLOYMENT_PROFILE=lab
 export ACS_CWMP_BOOTSTRAP_USERNAME="nokia-bootstrap"
 export ACS_CWMP_BOOTSTRAP_PASSWORD="<secret>"
