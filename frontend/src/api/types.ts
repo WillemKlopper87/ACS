@@ -214,9 +214,12 @@ export interface FirmwareImage {
   created_at: string;
 }
 
+export type CredentialType = "CONNECTION_REQUEST" | "CWMP_DIGEST";
+
 export interface Credential {
   id: string;
   version: number;
+  credential_type: CredentialType;
   username: string;
   status: "PENDING" | "ACTIVE" | "GRACE" | "REVOKED";
   command_key?: string;
