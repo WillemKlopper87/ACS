@@ -27,7 +27,6 @@ func TestCredentialMayBeManuallyActivated(t *testing.T) {
 	}
 }
 
-
 func TestCredentialResponsePreservesDirection(t *testing.T) {
 	created := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
 	for _, credentialType := range []string{credentials.TypeConnectionRequest, credentials.TypeCWMPDigest} {
