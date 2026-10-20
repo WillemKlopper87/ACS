@@ -77,7 +77,11 @@ echo
 echo "Notes:"
 echo "  - ACSUsername/ACSPassword are for CPE -> ACS authentication."
 echo "  - ACSCRUsername/ACSCRPassword are for ACS -> CPE Connection Request authentication."
+echo "  - If you replace the Nokia's existing 'hgw' ACS user, enter the bootstrap pair above in both places."
+echo "  - The Nokia's existing 'itms' CR user only works if the ACS has the matching CR password."
+echo "  - When enabling CR, set the Nokia's CR user/password to the pair above; no first-contact CR is required."
 echo "  - Do not replace the device's Connection Request URL with the ACS URL."
+echo "  - A private Nokia CR URL (e.g. 10.x.x.x) will not be reachable directly from cloud ACS over the internet."
 echo "  - Verify credential installation, matching bound reconnect and ACTIVE state before normal management."
 echo "  - If this EC2 instance uses an auto-assigned public IP, rerun this helper after any stop/start."
 if [ "$SHOW_SECRETS" = "1" ]; then
