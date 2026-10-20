@@ -1,16 +1,16 @@
-// Package credentials owns versioned per-device credentials for the one
-// rotation flow design doc v3 §11.6 actually specifies as buildable:
-// ACS-to-CPE Connection Request. (v3 §11.5 explicitly warns the *other*
-// direction — CPE-to-ACS Digest — often can't be rotated remotely at all,
-// vendor-dependent; this package doesn't attempt that one.)
+// Package credentials owns versioned per-device credentials for both TR-069
+// authentication directions:
 //
-// The full v3 flow: generate a new credential, queue a SetParameterValues
-// pushing it to the CPE, confirm, switch the ACS's own Connection Request
-// client to it, keep the old one valid for a grace period, audit the
-// revocation. This package models the state machine
-// (PENDING -> ACTIVE -> GRACE -> REVOKED); cmd/api's REST handlers drive
-// the transitions and cmd/api's connreq_worker reads ActiveForDevice
-// instead of a single shared credential when one exists.
+//   - CONNECTION_REQUEST: ACS -> CPE. A successful SetParameterValues installs
+//     the username/password, then an operator may activate it and keep the old
+//     credential in GRACE for rollback.
+//   - CWMP_DIGEST: CPE -> ACS. The credential is installed in
+//     ManagementServer.Username/Password but may become ACTIVE only after a
+//     later Digest-authenticated Inform resolves to the same bound device.
+//
+// Both directions use the shared PENDING -> ACTIVE -> GRACE -> REVOKED state
+// vocabulary, but their activation proofs deliberately differ. Passwords stay
+// encrypted at rest when ACS_CREDENTIAL_ENCRYPTION_KEY is configured.
 package credentials
 
 import (
