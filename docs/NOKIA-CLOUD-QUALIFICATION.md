@@ -199,11 +199,11 @@ Record:
 - PeriodicInform values;
 - STUN/NAT parameters if present.
 
-The ACS should then queue discovery. Do not add Nokia vendor mappings until discovery has proved the paths exist on this exact firmware.
+With constrained bootstrap, credential installation and a matching unique-credential reconnect must complete before normal discovery/jobs can run. The bootstrap Inform is not a normal management session. Do not add Nokia vendor mappings until subsequent discovery has proved the paths exist on this exact firmware.
 
 ## 8. Run the read-only Nokia scenario
 
-Once the Nokia has an ACS device UUID:
+Once the Nokia has an ACS device UUID and has completed the bound-credential reconnect in section 9:
 
 ```
 export ACS_API_TOKEN="<operator token>"
@@ -230,7 +230,7 @@ A PASS means the read-only compatibility stage passed. It does not make the firm
 
 ## 9. Credential graduation
 
-When the secure bootstrap path is used, ACS creates a unique per-device `CWMP_DIGEST` credential and installs it through the discovered ManagementServer username/password path.
+When the constrained bootstrap pair is configured, both lab and production use the bootstrap graduation handler. ACS creates a unique per-device `CWMP_DIGEST` credential and attempts installation through the standard ManagementServer username/password paths for the root inferred from Inform. This happens before parameter discovery; it does not establish that those paths are writable on this Nokia firmware. An unknown root blocks installation.
 
 Expected lifecycle:
 
@@ -238,8 +238,8 @@ Expected lifecycle:
 bootstrap Inform
   -> exact identity validated
   -> generated credential stored encrypted
-  -> credential installation SPV
   -> credential state PENDING
+  -> credential installation SPV
   -> Nokia reconnects using unique credential
   -> Inform identity matches bound ACS device
   -> credential becomes ACTIVE
@@ -247,6 +247,8 @@ bootstrap Inform
 ```
 
 If the Nokia firmware refuses remote ManagementServer credential rewrite, record the exact fault and mark automatic graduation BLOCKED for that firmware. Do not fall back to a permanent shared fleet credential.
+
+An SPV acknowledgement alone does not activate the credential. If installation faults or reconnect fails, retain the capture/credential ID, keep normal management blocked, and investigate the CPE configuration and root/path evidence. Use the reviewed operator credential workflow to recover the matching pending identity; do not repeatedly rotate credentials or delete device registration to bypass the check.
 
 ## 10. Connection Request qualification
 

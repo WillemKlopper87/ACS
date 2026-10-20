@@ -78,7 +78,7 @@ echo "Notes:"
 echo "  - The ACS username/password are for CPE -> ACS authentication."
 echo "  - The Connection Request username/password are for ACS -> CPE authentication."
 echo "  - Do not replace the device's Connection Request URL with the ACS URL."
-echo "  - After secure enrollment, ACS should graduate the CPE to a unique device-bound CWMP credential."
+echo "  - Verify credential installation, matching bound reconnect and ACTIVE state before normal management."
 echo "  - If this EC2 instance uses an auto-assigned public IP, rerun this helper after any stop/start."
 if [ "$SHOW_SECRETS" = "1" ]; then
   echo

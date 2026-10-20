@@ -96,10 +96,13 @@ def qualify(acs, device, scenario, timeout, lab_actions=False):
         queued = acs.request(prefix + "/parameters", {"parameters": scenario["writes"]}, method="PUT")
         report["tests"].append({"operation": "write_readback", "paths": [p["name"] for p in scenario["writes"]], **wait_job(acs, queued["command_key"], timeout)})
     if scenario.get("reboot"):
+        if any(t["status"] != "SUCCESS" for t in report["tests"]):
+            report.update(passed=False, reboot_skipped="Required scenario operations failed")
+            return report
         queued = acs.request(prefix + "/reboot", {})
         report["tests"].append({"operation": "reboot", **wait_job(acs, queued["command_key"], timeout)})
         # A read proves continued communication, but cannot witness the reboot itself.
-        queued = acs.request(prefix + "/parameters/get", {"paths": ["Device.DeviceInfo.SoftwareVersion"]})
+        queued = acs.request(prefix + "/parameters/get", {"paths": [root + "DeviceInfo.SoftwareVersion"]})
         report["tests"].append({"operation": "post_reboot_read", **wait_job(acs, queued["command_key"], timeout)})
         report["reboot_witness"] = "Physical restart and transport reconnection require independent observation."
     report["compatibility"] = acs.request(prefix + "/compatibility")

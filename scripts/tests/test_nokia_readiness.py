@@ -10,6 +10,40 @@ spec.loader.exec_module(preparation)
 
 
 class NokiaReadinessTests(unittest.TestCase):
+    def test_invalid_configured_bootstrap_cannot_fall_back_to_legacy(self):
+        env = {'ACS_DEPLOYMENT_PROFILE': 'lab', 'ACS_POSTGRES_DSN': 'postgres://host/db',
+               'ACS_CREDENTIAL_ENCRYPTION_KEY': 'stable-key-material-for-testing',
+               'ACS_CWMP_BOOTSTRAP_USERNAME': 'bootstrap', 'ACS_CWMP_BOOTSTRAP_PASSWORD': 'short',
+               'NOKIA_ACS_USERNAME': 'legacy', 'NOKIA_ACS_PASSWORD': 'strong-password-material'}
+        report, _ = preparation.prepare('http://acs.example:7547/cwmp', env)
+        self.assertFalse(report['first_contact_prepared'])
+
+    def test_runtime_invalid_bootstrap_secrets_remain_pending(self):
+        for password in ('short', 'x' * 32, 'change_me       ', 'password', 'CHANGE ME'):
+            with self.subTest(password=password):
+                env = {'ACS_DEPLOYMENT_PROFILE': 'lab', 'ACS_POSTGRES_DSN': 'postgres://host/db',
+                       'ACS_CREDENTIAL_ENCRYPTION_KEY': 'stable-key-material-for-testing',
+                       'ACS_CWMP_BOOTSTRAP_USERNAME': 'bootstrap',
+                       'ACS_CWMP_BOOTSTRAP_PASSWORD': password}
+                report, _ = preparation.prepare('http://acs.example:7547/cwmp', env)
+                self.assertFalse(report['first_contact_prepared'])
+
+    def test_bootstrap_username_must_differ_from_shared_identity(self):
+        env = {'ACS_DEPLOYMENT_PROFILE': 'lab', 'ACS_POSTGRES_DSN': 'postgres://host/db',
+               'ACS_CREDENTIAL_ENCRYPTION_KEY': 'stable-key-material-for-testing',
+               'ACS_CWMP_BOOTSTRAP_USERNAME': 'same-user', 'ACS_DIGEST_USERNAME': 'same-user',
+               'ACS_CWMP_BOOTSTRAP_PASSWORD': 'strong-password-material'}
+        report, _ = preparation.prepare('http://acs.example:7547/cwmp', env)
+        self.assertFalse(report['first_contact_prepared'])
+
+    def test_placeholder_encryption_key_remains_pending(self):
+        env = {'ACS_DEPLOYMENT_PROFILE': 'lab', 'ACS_POSTGRES_DSN': 'postgres://host/db',
+               'ACS_CREDENTIAL_ENCRYPTION_KEY': 'x' * 32,
+               'ACS_CWMP_BOOTSTRAP_USERNAME': 'bootstrap',
+               'ACS_CWMP_BOOTSTRAP_PASSWORD': 'strong-password-material'}
+        report, _ = preparation.prepare('http://acs.example:7547/cwmp', env)
+        self.assertFalse(report['first_contact_prepared'])
+
     def test_missing_settings_remain_pending(self):
         report, scenario = preparation.prepare("", {})
         self.assertFalse(report["prepared"])

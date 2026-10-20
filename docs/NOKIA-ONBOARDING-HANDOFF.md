@@ -41,7 +41,7 @@ ACS_CWMP_BOOTSTRAP_USERNAME=<bootstrap username>
 ACS_CWMP_BOOTSTRAP_PASSWORD=<strong bootstrap password>
 ```
 
-The bootstrap identity is not a normal fleet credential. It cannot manage an already-established device or consume that device's queued work. After a valid first-contact Inform, ACS installs a generated per-device `CWMP_DIGEST` credential through the device's discovered TR-181/TR-098 ManagementServer path. That credential stays `PENDING` until the Nokia reconnects with it and reports the same natural identity, then becomes `ACTIVE`.
+The bootstrap identity is not a normal fleet credential. It cannot manage an already-established device or consume that device's queued work. After a valid first-contact Inform, ACS installs a generated per-device `CWMP_DIGEST` credential through standard ManagementServer paths selected from the root inferred from Inform, before discovery confirms writable access. That credential stays `PENDING` until the Nokia reconnects with it and reports the same natural identity, then becomes `ACTIVE`.
 
 ### Lab first contact
 

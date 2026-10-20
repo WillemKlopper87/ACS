@@ -91,7 +91,7 @@ A per-device `CWMP_DIGEST` credential is cryptographically bound by the ACS cred
 
 The shared fleet credential is retained only for controlled lab compatibility. Production rejects the shared username before the CWMP session handler, so a leaked fleet secret cannot be used there to claim another tenant's established device.
 
-Production first contact uses the separate constrained `ACS_CWMP_BOOTSTRAP_USERNAME/PASSWORD` identity when bootstrap is enabled. That identity may create only a new natural device identity; it cannot authenticate as an already-established device or consume normal queued work. After a valid bootstrap Inform, ACS creates a unique encrypted per-device `CWMP_DIGEST` credential, installs it through the discovered TR-181/TR-098 ManagementServer username/password path, keeps it `PENDING`, and promotes it to `ACTIVE` only after a later Digest-authenticated Inform matches the credential-bound ACS DeviceID. Unsupported credential rewrite is fail-closed and must be recorded as a firmware qualification limitation rather than bypassed with a permanent shared identity.
+Production first contact uses the separate constrained `ACS_CWMP_BOOTSTRAP_USERNAME/PASSWORD` identity when bootstrap is enabled. That identity may create only a new natural device identity; it cannot authenticate as an already-established device or consume normal queued work. After a valid bootstrap Inform, ACS creates a unique encrypted per-device `CWMP_DIGEST` credential, installs it through standard ManagementServer username/password paths selected from the root inferred from Inform, before discovery confirms writable access, keeps it `PENDING`, and promotes it to `ACTIVE` only after a later Digest-authenticated Inform matches the credential-bound ACS DeviceID. Unsupported credential rewrite is fail-closed and must be recorded as a firmware qualification limitation rather than bypassed with a permanent shared identity.
 
 ### Huawei N5368X field sequence
 
@@ -107,7 +107,7 @@ For Huawei N5368X qualification (#54):
 8. Prove the device can use the production transport floor (TLS 1.2+) before treating direct production CWMP as supported. If it cannot, that limitation is field evidence to resolve rather than a reason to weaken the production profile silently.
 9. Only after bound reconnect and transport validation should normal provisioning, diagnostics, firmware or commercial fulfilment be treated as production-authorized.
 
-Automatic bootstrap-to-bound-credential graduation is implemented on the supported production path. Physical qualification must still prove the exact firmware accepts the credential-installation write, reconnects with the generated credential, activates only after identity match, and rejects the bootstrap identity for subsequent normal management.
+Automatic bootstrap-to-bound-credential graduation is wired into both lab and production when the dedicated bootstrap pair and credential encryption key are configured. Physical qualification must still prove the exact firmware accepts the credential-installation write, reconnects with the generated credential, activates only after identity match, and rejects the bootstrap identity for subsequent normal management.
 
 ### Nokia 5G field sequence
 

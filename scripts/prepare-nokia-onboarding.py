@@ -21,6 +21,19 @@ def _present(environment, name):
     return bool(value) and not value.lower().startswith(("change-me", "placeholder"))
 
 
+def _valid_secret(environment, name):
+    # Match backend/internal/config's normal startup checks, without the
+    # insecure-development bypass: readiness should never recommend weak keys.
+    value = environment.get(name, "")
+    normalized = value.lower().translate(str.maketrans('', '', '-_ '))
+    placeholders = {'changeme', 'changethis', 'changeit', 'secret', 'mysecret', 'supersecret',
+                    'password', 'passw0rd', 'letmein', 'test', 'testing', 'dev', 'development',
+                    'default', 'example', 'sample', 'placeholder', 'admin', 'root', 'todo',
+                    'fixme', '123456', '12345678', 'abc123', 'qwerty', 'xxx', 'xxxxxxxx'}
+    return (len(value.encode()) >= 16 and normalized not in placeholders
+            and bool(normalized) and len(set(normalized)) > 1)
+
+
 def prepare(acs_url, environment, management_ip="192.168.1.1"):
     ipaddress.ip_address(management_ip)
     checks = []
@@ -46,7 +59,14 @@ def prepare(acs_url, environment, management_ip="192.168.1.1"):
     record("acs_url", valid and (not production or url.scheme == "https"),
            "Provide the exact CPE ACS URL. Production requires HTTPS with a certificate the Nokia trusts.")
 
-    bootstrap_ready = _present(environment, "ACS_CWMP_BOOTSTRAP_USERNAME") and _present(environment, "ACS_CWMP_BOOTSTRAP_PASSWORD")
+    bootstrap_ready = (_present(environment, "ACS_CWMP_BOOTSTRAP_USERNAME")
+                       and _valid_secret(environment, "ACS_CWMP_BOOTSTRAP_PASSWORD")
+                       and environment.get("ACS_CWMP_BOOTSTRAP_USERNAME", "").strip()
+                       != environment.get("ACS_DIGEST_USERNAME", "").strip())
+    bootstrap_configured = any(environment.get(name, '').strip() for name in
+                               ('ACS_CWMP_BOOTSTRAP_USERNAME', 'ACS_CWMP_BOOTSTRAP_PASSWORD'))
+    record('bootstrap_configuration', not bootstrap_configured or bootstrap_ready,
+           'If configured, supply both bootstrap fields, a non-placeholder password of at least 16 UTF-8 bytes, and a username distinct from ACS_DIGEST_USERNAME. Invalid bootstrap configuration blocks server startup even in lab mode.')
     lab_legacy_ready = _present(environment, "NOKIA_ACS_USERNAME") and _present(environment, "NOKIA_ACS_PASSWORD")
     if production:
         credential_mode = "production_bootstrap" if bootstrap_ready else "missing"
@@ -75,7 +95,7 @@ def prepare(acs_url, environment, management_ip="192.168.1.1"):
     record("database_configured", bool(environment.get("ACS_POSTGRES_DSN")),
            "Run the read-only migration check on the target database; apply pending migrations separately.")
 
-    encryption_ready = len(environment.get("ACS_CREDENTIAL_ENCRYPTION_KEY", "").encode()) >= 16
+    encryption_ready = _valid_secret(environment, "ACS_CREDENTIAL_ENCRYPTION_KEY")
     record("credential_encryption_configured", encryption_ready,
            "Use the same credential encryption key on the API and CWMP services. It is required for secure per-device credential graduation.")
 
