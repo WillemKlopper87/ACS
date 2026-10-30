@@ -23,6 +23,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -352,6 +353,11 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 		if url := extractConnectionRequestURL(inform.ParameterList); url != "" {
 			if err := h.devices.UpdateConnectionRequestURL(ctx, device.ID, url); err != nil {
 				h.logger.Error("failed to update connection request url", "err", err, "device_id", device.ID)
+			}
+			if behind, known := connectionRequestBehindNAT(url, remoteIP(r)); known {
+				if err := h.devices.ClassifyConnectionRequestNAT(ctx, device.ID, behind); err != nil {
+					h.logger.Error("failed to classify connection request reachability", "err", err, "device_id", device.ID)
+				}
 			}
 		}
 
@@ -851,6 +857,23 @@ func (h *handler) publishCellularStateChanges(ctx context.Context, deviceID stri
 	if err := telemetry.PublishCellularStateChanged(ctx, h.tmfEvents, account, deviceID, "CWMP", changes, at); err != nil {
 		h.logger.Warn("failed to publish cellular state event", "error", err, "device_id", deviceID)
 	}
+}
+
+// connectionRequestBehindNAT compares the host of a CPE's advertised
+// ConnectionRequestURL with the source address of its Inform. known is
+// false when the URL host is a name rather than an IP literal (no safe
+// comparison) or either address is unparsable.
+func connectionRequestBehindNAT(rawURL, informSource string) (behind, known bool) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.Hostname() == "" {
+		return false, false
+	}
+	advertised := net.ParseIP(u.Hostname())
+	source := net.ParseIP(informSource)
+	if advertised == nil || source == nil {
+		return false, false
+	}
+	return !advertised.Equal(source), true
 }
 
 func extractConnectionRequestURL(list []cwmp.ParameterValueStruct) string {

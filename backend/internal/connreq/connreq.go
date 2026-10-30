@@ -48,6 +48,13 @@ const (
 	// see Attempt's doc comment for why the policy check lives there.
 	OutcomeBlockedByPolicy = "BLOCKED_BY_POLICY"
 
+	// OutcomeBehindNAT means the device was classified as behind NAT on
+	// Inform (its ConnectionRequestURL host differs from the Inform source
+	// address) and has no STUN/Annex G address, so a direct Connection
+	// Request cannot reach it; queued work runs at its next periodic Inform.
+	// Set by the caller without dialling (cmd/api/connreq_worker.go).
+	OutcomeBehindNAT = "BEHIND_NAT"
+
 	// Annex G UDP outcomes (annexg.go).
 	OutcomeUDPSendFailed     = "UDP_SEND_FAILED"
 	OutcomeUDPInformReceived = "UDP_SENT_INFORM_RECEIVED"

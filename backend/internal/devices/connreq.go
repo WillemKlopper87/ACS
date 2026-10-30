@@ -27,6 +27,33 @@ func (r *Repository) UpdateConnectionRequestURL(ctx context.Context, deviceID, u
 	return nil
 }
 
+// ClassifyConnectionRequestNAT records whether a device's advertised
+// ConnectionRequestURL is reachable directly, judged on Inform by comparing
+// the URL host with the address the Inform arrived from (a mismatch means
+// NAT/CGNAT, e.g. Nokia FastMile on a carrier network advertising
+// 10.10.178.14 while informing from a public address). Behind NAT the mode
+// becomes PERIODIC_FALLBACK_ONLY unless STUN/Annex G already works; a device
+// that is no longer behind NAT is reset from PERIODIC_FALLBACK_ONLY to
+// UNKNOWN so Connection Request is tried again.
+func (r *Repository) ClassifyConnectionRequestNAT(ctx context.Context, deviceID string, behindNAT bool) error {
+	var err error
+	if behindNAT {
+		_, err = r.db.ExecContext(ctx, `
+			UPDATE devices SET connection_request_mode = $2, last_updated_at = now()
+			WHERE id = $1 AND connection_request_mode NOT IN ($2, $3)
+		`, deviceID, ModePeriodicFallback, ModeSTUNAnnexG)
+	} else {
+		_, err = r.db.ExecContext(ctx, `
+			UPDATE devices SET connection_request_mode = $2, last_updated_at = now()
+			WHERE id = $1 AND connection_request_mode = $3
+		`, deviceID, ModeUnknown, ModePeriodicFallback)
+	}
+	if err != nil {
+		return fmt.Errorf("classify connection request nat: %w", err)
+	}
+	return nil
+}
+
 // UpdateDataModelRoot records the data model root confirmed by a successful
 // parameter discovery run (build plan nice-to-have backlog) — the first
 // time this column moves off UNKNOWN in production, since UpsertFromInform

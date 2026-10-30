@@ -311,12 +311,16 @@ func (r *Repository) ByCommandKey(ctx context.Context, commandKey string) (*Job,
 // the operator's tenancy scope (audit P0.2) — pass scoped=false for the
 // unrestricted fleet-wide view.
 func (r *Repository) StatusCountsSince(ctx context.Context, since time.Time, customerIDs []string, scoped bool) (map[string]int, error) {
-	query := `SELECT status, COUNT(*) FROM jobs WHERE created_at >= $1 GROUP BY status`
+	// Connection Request jobs are wake-up attempts, not CPE RPCs: behind
+	// CGNAT they cannot succeed by design, so counting them made every NAT'd
+	// fleet look unhealthy. They are reported separately via
+	// devices.connection_request_mode / last_connection_request_status.
+	query := `SELECT status, COUNT(*) FROM jobs WHERE created_at >= $1 AND type <> 'CONNECTION_REQUEST' GROUP BY status`
 	args := []any{since}
 	if scoped {
 		query = `SELECT j.status, COUNT(*) FROM jobs j
 			JOIN devices d ON d.id = j.device_id
-			WHERE j.created_at >= $1 AND d.customer_id::text = ANY($2)
+			WHERE j.created_at >= $1 AND j.type <> 'CONNECTION_REQUEST' AND d.customer_id::text = ANY($2)
 			GROUP BY j.status`
 		args = append(args, store.StringArray(customerIDs))
 	}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"acs/internal/connreq"
@@ -16,6 +17,7 @@ import (
 	"acs/internal/jobs"
 	"acs/internal/netguard"
 	"acs/internal/observability"
+	"acs/internal/parameters"
 )
 
 const (
@@ -57,6 +59,9 @@ type connectionRequestWorker struct {
 	// point (audit H-2/P1.2) — same policy the web-GUI proxy and CLI
 	// bridge already enforce.
 	netPolicy netguard.Policy
+	// params (optional) supplies the cached PeriodicInformInterval so the
+	// CGNAT fallback never loosens an already short interval.
+	params *parameters.Repository
 }
 
 // attemptGET checks the target against the device-network policy (audit
@@ -165,6 +170,17 @@ func (w *connectionRequestWorker) process(ctx context.Context, job *jobs.Job) {
 		_ = w.jobs.MarkFailed(ctx, job.ID, "", connreq.OutcomeUnavailable)
 		_ = w.devices.RecordConnectionRequestAttempt(ctx, device.ID, connreq.OutcomeUnavailable, "")
 		w.audit(ctx, device.ID, job, connreq.OutcomeUnavailable)
+		return
+	}
+
+	if device.ConnectionRequestMode == devices.ModePeriodicFallback && udpAddr == "" {
+		// Classified behind NAT on Inform with no STUN address: a direct
+		// GET to the advertised (private/CGNAT) URL cannot arrive. Do not
+		// spend the dial timeout; queued work runs at the next Inform.
+		_ = w.devices.RecordConnectionRequestAttempt(ctx, device.ID, connreq.OutcomeBehindNAT, "")
+		_ = w.jobs.MarkFailed(ctx, job.ID, connreq.OutcomeBehindNAT,
+			"device is behind NAT and has no STUN/Annex G address; queued work runs at its next periodic Inform")
+		w.audit(ctx, device.ID, job, connreq.OutcomeBehindNAT)
 		return
 	}
 
@@ -278,6 +294,15 @@ func (w *connectionRequestWorker) tightenPeriodicInform(ctx context.Context, dev
 	path := "Device.ManagementServer.PeriodicInformInterval"
 	if device.DataModelRoot == devices.DataModelRootIGD1 {
 		path = "InternetGatewayDevice.ManagementServer.PeriodicInformInterval"
+	}
+	// Only ever tighten: a device already informing at or below the target
+	// (the Nokia FastMile was at 60 s) must not be loosened to 300 s.
+	if w.params != nil {
+		if cached, err := w.params.Get(ctx, device.ID); err == nil {
+			if current, err := strconv.Atoi(strings.TrimSpace(cached[path].Value)); err == nil && current > 0 && current <= cgnatPeriodicInformTarget {
+				return
+			}
+		}
 	}
 	payload := jobs.SetParameterPayload{Parameters: []jobs.ParameterWrite{
 		{Name: path, Value: strconv.Itoa(cgnatPeriodicInformTarget), Type: "xsd:unsignedInt"},

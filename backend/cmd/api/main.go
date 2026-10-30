@@ -306,6 +306,7 @@ func main() {
 		username:    connReqUsername,
 		password:    connReqPassword,
 		netPolicy:   netPolicy,
+		params:      h.params,
 	}
 	go worker.Run(ctx)
 
