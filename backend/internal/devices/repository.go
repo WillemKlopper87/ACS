@@ -30,7 +30,8 @@ const deviceColumns = `id, oui_serial, manufacturer, oui, product_class, serial_
 	udp_connection_request_address, nat_detected, customer_id, location,
 	latitude, longitude, label, profile_id, profile_matched_by, profile_qualified,
 	profile_evidence, profile_assigned_at, reenroll_until,
-	reboot_requested_at, last_reboot_duration_seconds`
+	reboot_requested_at, last_reboot_duration_seconds,
+	gateway_oui_serial, gateway_device_id`
 
 // AssignProfile persists deterministic profile-match provenance. It does not
 // authorize parameter writes or replace per-operation capability checks.
@@ -384,6 +385,7 @@ func scanDevice(s scanner) (*Device, error) {
 	var reenrollUntil sql.NullTime
 	var rebootRequestedAt sql.NullTime
 	var lastRebootDuration sql.NullInt64
+	var gatewayOUISerial, gatewayDeviceID sql.NullString
 
 	if err := s.Scan(&d.ID, &d.OUISerial, &d.Manufacturer, &d.OUI, &d.ProductClass, &d.SerialNumber,
 		&d.DataModelRoot, &d.OnlineStatus, &lastInformAt, &eventCodes,
@@ -393,7 +395,8 @@ func scanDevice(s scanner) (*Device, error) {
 		&udpConnectionRequestAddress, &natDetected, &customerID, &location,
 		&latitude, &longitude, &label, &profileID, &profileMatchedBy, &d.ProfileQualified,
 		&profileEvidence, &profileAssignedAt, &reenrollUntil,
-		&rebootRequestedAt, &lastRebootDuration); err != nil {
+		&rebootRequestedAt, &lastRebootDuration,
+		&gatewayOUISerial, &gatewayDeviceID); err != nil {
 		return nil, fmt.Errorf("scan device: %w", err)
 	}
 	if customerID.Valid {
@@ -429,6 +432,12 @@ func scanDevice(s scanner) (*Device, error) {
 	if lastRebootDuration.Valid {
 		v := int(lastRebootDuration.Int64)
 		d.LastRebootDurationSeconds = &v
+	}
+	if gatewayOUISerial.Valid {
+		d.GatewayOUISerial = &gatewayOUISerial.String
+	}
+	if gatewayDeviceID.Valid {
+		d.GatewayDeviceID = &gatewayDeviceID.String
 	}
 	if latitude.Valid {
 		d.Latitude = &latitude.Float64

@@ -201,6 +201,9 @@ func (h *handler) finishParameterDiscovery(ctx context.Context, deviceID string,
 				h.logger.Error("failed to queue Wi-Fi state read", "err", err, "device_id", deviceID)
 			}
 		}
+		// A mesh satellite names its gateway via TR-111 GatewayInfo; read
+		// it so the satellite is linked to that gateway (see mesh.go).
+		h.queueGatewayInfoRead(ctx, deviceID, writableByName)
 	}
 }
 
