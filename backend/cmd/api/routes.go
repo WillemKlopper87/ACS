@@ -71,6 +71,22 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	routePerm("PUT", "/api/v1/devices/{id}/projects", operators.PermTenancyManage, h.setDeviceProjects)
 	route("GET", "/api/v1/devices/{id}/projects", ro, h.getDeviceProjects)
 	routePerm("POST", "/api/v1/devices/import", operators.PermTenancyManage, h.importDevices)
+
+	// Onboarding: sale -> site, plan and tenant -> IN_SERVICE, driven by
+	// cmd/acs on each Inform. Changing it is tenancy.manage, like assigning
+	// a device's customer above.
+	route("GET", "/api/v1/sites", ro, h.listSites)
+	routePerm("POST", "/api/v1/sites", operators.PermTenancyManage, h.createSite)
+	route("GET", "/api/v1/sites/{id}", ro, h.getSite)
+	route("GET", "/api/v1/service-plans", ro, h.listServicePlans)
+	routePerm("POST", "/api/v1/service-plans", operators.PermTenancyManage, h.createServicePlan)
+	route("GET", "/api/v1/service-plans/{id}", ro, h.getServicePlan)
+	route("GET", "/api/v1/onboardings", ro, h.listOnboardings)
+	routePerm("POST", "/api/v1/onboardings", operators.PermTenancyManage, h.createOnboarding)
+	route("GET", "/api/v1/onboardings/unclaimed", ro, h.listUnclaimedDevices)
+	route("GET", "/api/v1/onboardings/{id}", ro, h.getOnboarding)
+	routePerm("POST", "/api/v1/onboardings/{id}/cancel", operators.PermTenancyManage, h.onboardingAction("cancel"))
+	routePerm("POST", "/api/v1/onboardings/{id}/retry", operators.PermTenancyManage, h.onboardingAction("retry"))
 	route("GET", "/api/v1/devices", ro, h.listDevices)
 	route("GET", "/api/v1/devices/summary", ro, h.listDevicesSummary)
 	route("GET", "/api/v1/devices/ids", ro, h.listMatchingDeviceIDs)

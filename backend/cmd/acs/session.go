@@ -380,6 +380,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	h.assignDeviceProfile(ctx, device, inform.DeviceId)
 	h.correlateValueChangeEvents(ctx, device, inform.Event, inform.ParameterList)
 	h.enforcePolicies(ctx, device, inform.ParameterList)
+	h.reconcileOnboarding(ctx, device, true)
 
 	if inform.HasEventCode("0") {
 		h.applyAutoProvisioningTemplates(ctx, device)
@@ -577,6 +578,9 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 	}
 
 	job, err := h.jobs.Lease(ctx, session.DeviceID)
+	if err == nil && job == nil && h.reconcileOnboardingAtSessionEnd(ctx, session.DeviceID) {
+		job, err = h.jobs.Lease(ctx, session.DeviceID)
+	}
 	if err != nil {
 		h.logger.Error("failed to lease next job", "err", err, "device_id", session.DeviceID)
 		http.Error(w, "internal error", http.StatusInternalServerError)

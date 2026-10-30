@@ -39,6 +39,7 @@ import (
 	"acs/internal/netguard"
 	"acs/internal/objstore"
 	"acs/internal/observability"
+	"acs/internal/onboarding"
 	"acs/internal/operators"
 	"acs/internal/parameters"
 	"acs/internal/policy"
@@ -265,6 +266,7 @@ func main() {
 		}, logger),
 		frontendBaseURL: envOr("ACS_FRONTEND_BASE_URL", "http://localhost:5173"),
 		tenancy:         tenancy.NewRepository(db),
+		onboarding:      onboarding.NewRepository(db),
 		dashboards:      dashboard.NewRepository(db),
 
 		bssMappings:     bss.NewRepository(db),
@@ -487,6 +489,7 @@ type handler struct {
 	mailer          *mailer.Mailer
 	frontendBaseURL string
 	tenancy         *tenancy.Repository
+	onboarding      *onboarding.Repository
 	dashboards      *dashboard.Repository
 
 	bssMappings     *bss.Repository

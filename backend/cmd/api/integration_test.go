@@ -31,6 +31,7 @@ import (
 	"acs/internal/jobs"
 	"acs/internal/mailer"
 	"acs/internal/observability"
+	"acs/internal/onboarding"
 	"acs/internal/operators"
 	"acs/internal/parameters"
 	"acs/internal/policy"
@@ -128,6 +129,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		mailer:           mailer.New(mailer.Config{}, logger),
 		frontendBaseURL:  "http://console.test",
 		tenancy:          tenancy.NewRepository(db),
+		onboarding:       onboarding.NewRepository(db),
 		dashboards:       dashboard.NewRepository(db),
 		bssMappings:      bss.NewRepository(db),
 		bssWebhooks:      bss.NewWebhookRepository(db),
