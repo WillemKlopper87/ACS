@@ -220,6 +220,13 @@ button, input, select { font-family: inherit; font-size: inherit; color: inherit
 .nav-group-label:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .nav-caret { font-size: 0.6rem; color: var(--ink-faint); }
 .sidebar-nav button:hover { color: var(--ink); background: var(--surface-2); }
+/* External links (Grafana) look like the nav buttons around them. */
+.sidebar-nav a.nav-external {
+  display: flex; align-items: center; gap: 0.35rem; border-left: 3px solid transparent;
+  color: var(--ink-dim); padding: 0.55rem 1.1rem 0.55rem 1rem; font-size: 0.84rem; text-decoration: none;
+}
+.sidebar-nav a.nav-external:hover { color: var(--ink); background: var(--surface-2); }
+.sidebar-nav a.nav-external:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .sidebar-nav button.active { color: var(--ink); background: var(--surface-2); border-left-color: var(--accent); font-weight: 600; }
 .sidebar-footer {
   flex: none;

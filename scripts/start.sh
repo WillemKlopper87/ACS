@@ -131,11 +131,17 @@ set_compose_env() {
 
 if [ "${ACS_GRAFANA_PUBLIC:-}" = "1" ]; then
   GRAFANA_BIND="0.0.0.0"
-  set_compose_env GRAFANA_ROOT_URL "http://$PUBLIC_IP:3000"
+  GRAFANA_URL="http://$PUBLIC_IP:3000"
 else
   GRAFANA_BIND="127.0.0.1"
-  set_compose_env GRAFANA_ROOT_URL "http://localhost:3000"
+  GRAFANA_URL="http://localhost:3000"
 fi
+# ACS_GRAFANA_URL: Grafana's address behind your own TLS proxy, e.g.
+# https://grafana.example.net. It becomes Grafana's root URL and the
+# console's "Grafana" link (which otherwise opens the public port, or
+# localhost:3000 through an SSH tunnel).
+GRAFANA_URL="${ACS_GRAFANA_URL:-$GRAFANA_URL}"
+set_compose_env GRAFANA_ROOT_URL "$GRAFANA_URL"
 set_compose_env GRAFANA_BIND "$GRAFANA_BIND"
 
 if [ "${ACS_PROMETHEUS_PUBLIC:-}" = "1" ]; then
@@ -273,6 +279,7 @@ wait_url "cmd/uspc" "${ACS_HEALTH_USPC_URL:-http://127.0.0.1:8092/readyz}" "$LOG
 echo "=== Building frontend ==="
 cd "$ROOT/frontend"
 echo "VITE_API_BASE_URL=$API_PUBLIC_URL" > .env.local
+echo "VITE_GRAFANA_URL=$GRAFANA_URL" >> .env.local
 npm install --silent
 npm run build
 
@@ -320,7 +327,9 @@ echo "USP MQTT:    $PUBLIC_IP:1883"
 echo "BSS adapter: http://127.0.0.1:8090 (host-local; use TLS reverse proxy for northbound access)"
 echo "USP health:  http://127.0.0.1:8092/readyz"
 
-if [ "${ACS_GRAFANA_PUBLIC:-}" = "1" ]; then
+if [ -n "${ACS_GRAFANA_URL:-}" ]; then
+  echo "Grafana:     $ACS_GRAFANA_URL"
+elif [ "${ACS_GRAFANA_PUBLIC:-}" = "1" ]; then
   echo "Grafana:     http://$PUBLIC_IP:3000"
 else
   echo "Grafana:     http://127.0.0.1:3000 on the instance (SSH tunnel required)"
