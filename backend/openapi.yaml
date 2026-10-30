@@ -953,6 +953,28 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
         "404": { description: Not found }
 
+  /api/v1/devices/{id}/satellites:
+    get:
+      tags: [Devices]
+      summary: List the mesh satellites linked to this gateway (tenancy-scoped)
+      description: >-
+        Devices whose gateway_device_id is this device, i.e. mesh satellites
+        (e.g. Nokia WiFi Beacon 3.1) that reported this gateway's identity
+        via TR-111 Device.GatewayInfo.
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Device" } }
+                  total: { type: integer }
+        "404": { description: Not found }
+
   /api/v1/devices/{id}/tags:
     put:
       tags: [Devices]
@@ -2518,6 +2540,8 @@ components:
         reenroll_until: { type: string, format: date-time, description: Open operator re-enrolment window (bootstrap allowed until this time) }
         reboot_requested_at: { type: string, format: date-time, description: Set while an ACS-requested reboot/reset is in progress (online_status REBOOTING) }
         last_reboot_duration_seconds: { type: integer, description: Seconds from the last acknowledged reboot/reset until the device informed again }
+        gateway_device_id: { type: string, description: "Mesh satellites only: the gateway device this unit sits behind, resolved from TR-111 Device.GatewayInfo (unset when unknown or the gateway is not registered)" }
+        gateway_oui_serial: { type: string, description: "Mesh satellites only: the gateway identity (OUI+ProductClass+SerialNumber natural key) reported in Device.GatewayInfo" }
 
     WiFiNetwork:
       type: object
