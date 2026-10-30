@@ -28,7 +28,9 @@ This plan is for a fresh Claude Code session picking up this work. Work on branc
 
 ### Verification so far
 - Local: backend `go vet` and `go test ./...` pass; frontend `tsc -b`, `vitest` (19 files, 95 tests) and lint pass.
-- **No Postgres was available locally.** The DB-backed tests (all new SQL: insights, mesh link, bulk SET_WIFI, report identity, diagnostics lifecycle, XMPP worker) have only run in CI, if at all. **First task: check PR #79's CI and fix any failure in the DB-backed step.**
+- **No Postgres was available locally, and GitHub Actions does not run.** Every CI job is refused for billing ("recent account payments have failed or your spending limit needs to be increased"; code review D1). So the DB-backed tests for all the new SQL have **never run**: insights, mesh link, bulk SET_WIFI, report identity, diagnostics lifecycle, XMPP worker and the 0081–0085 migrations.
+- **First task:** run them against a throwaway Postgres (commands in `docs/SESSION-SUMMARY-2026-10-30.md` §5), fix any failures, and only then deploy. **Never** point `ACS_TEST_POSTGRES_DSN` at the EC2 database: the tests drop the schema.
+- Fixing GitHub billing (or self-hosting a runner) would bring CI back.
 
 ## 2. Deploy and field-test the merged work (EC2)
 

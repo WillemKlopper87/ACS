@@ -28,7 +28,7 @@ This summary is for another Claude agent working on this repository. It records 
   - `docs/COMPATIBILITY.md`
 - **State at pause:**
   - Local backend and frontend checks pass.
-  - **DB-backed tests have not been run locally (no Postgres)**; only CI runs them. Check PR #79's CI first.
+  - **GitHub Actions CI does not run at all.** Every job is refused with *"recent account payments have failed or your spending limit needs to be increased"* (code review finding D1, since about 2026-09-23). So **the DB-backed tests for the new SQL have never run anywhere.** Run them against a throwaway Postgres (see §5) before merging or deploying.
   - Nothing after commit `ac658eb` is deployed to the EC2 lab.
 
 ## 1. What the user asked for (in order) and the outcome
@@ -216,11 +216,46 @@ Identity: OUI A4FC77, ProductClass 3TG02241, firmware 1.2501.00.0798, TR-181 2.1
 - `ci/compatibility/*.json` scenarios and `ci/compatibility/discoveries/`.
 - `docs/COMPATIBILITY.md`, `docs/WIFI-MANAGEMENT-SPEC.md`, `docs/NOKIA-FIELD-GAP-REPORT-2026-10-30.md`, `docs/XMPP-CONNECTION-REQUEST.md`.
 
-## 5. Open items
+## 5. EC2 lab: operational lessons from today
+
+- **Run `start.sh` as `ubuntu`, never with `sudo`.** `sudo` created `/root/.acs-secrets.env` and overwrote `infra/.env`, and Postgres auth then failed. The working command:
+  ```bash
+  sg docker -c "PATH=\$PATH:/usr/local/go/bin ./scripts/start.sh"
+  ```
+  The explicit `PATH` avoids "go: command not found".
+- **The repo is private.** The `curl raw.githubusercontent.com … | bash` quickstart returns 404. Clone with a PAT or deploy key, then run `./scripts/quickstart.sh`.
+- **`git pull` on EC2 conflicted earlier** on a file-mode change and on locally exported discoveries. Fixed with `git config core.fileMode false` and `git checkout -- scripts/grafana-db-role.sh`. The EC2 discovery exports were moved to `~/discoveries-ec2-backup-20261030`.
+- **Long-running jobs on EC2:**
+  - Don't background a whole `&&` chain: it stopped on a TTY read. Background only the long process, and check for stopped jobs with `jobs`.
+  - **Run one qualification or write test at a time.** Duplicate concurrent runs happened and interfere with each other.
+- **Logs:** `~/acs-logs/` holds `acs.log`, `api.log` and `write-test.log`. In log lines the device id comes *after* the message, so grep for the id, not a prefix.
+- **SSH key:** `ACS_Key.ppk` is in PuTTY format, so use `pscp`/`plink`, not `scp`. The file was readable by another local group; tighten it with `icacls` and keep it outside shared folders.
+- **Device behaviour seen on EC2:**
+  - The FastMile's discovery takes many sessions because of mid-burst drops. That is expected; discovery resumes.
+  - A Beacon reboot through the ACS took 8–11 minutes, during which its LED was red and it showed "Backhaul Disconnected". That is normal recovery, not a bug.
+- **Never** point `ACS_TEST_POSTGRES_DSN` at the EC2 database: the DB-backed tests run `DROP SCHEMA public CASCADE`. Use a throwaway container, for example:
+  ```bash
+  docker run -d --name acs-testdb -e POSTGRES_USER=acs -e POSTGRES_PASSWORD=acs -e POSTGRES_DB=acs -p 55432:5432 postgres:18-alpine
+  ```
+  Then, from `backend/`:
+  ```bash
+  ACS_TEST_POSTGRES_DSN='postgres://acs:acs@localhost:55432/acs?sslmode=disable' go test -p 1 -count=1 ./...
+  ```
+
+## 6. Where to find more
+
+- `docs/HANDOFF-PLAN-2026-10-30.md`: the next steps, in order.
+- `docs/field-notes/2026-10-30/`:
+  - `CODE_REVIEW.md`: the morning review of `main`, with an end-of-day status note.
+  - `NOKIA-FASTMILE-EC2-RUNBOOK.md`: EC2 setup and the CPE TR-069 settings used.
+  - `NOKIA-FASTMILE-FIELD-RESULT.md`: qualification evidence.
+- The full conversation transcript was exported for the user to share. It is not in the repo, because it contains raw logs and device data. Search it for detail this summary leaves out.
+
+## 7. Open items
 
 These are listed with order and detail in `docs/HANDOFF-PLAN-2026-10-30.md`:
 
-1. CI for PR #79, especially the DB-backed step.
+1. Run the DB-backed tests locally (CI cannot run; see §0 and §5) and fix any failures.
 2. Deploy to EC2 and run the field checks: secrets, SIM, insights, mesh, diagnostics, bulk Wi-Fi, XMPP, the write-test restore.
 3. **Hardening:**
    - security group and CIDR allowlist;
