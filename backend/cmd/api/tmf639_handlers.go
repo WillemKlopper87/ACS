@@ -49,7 +49,7 @@ func (h *handler) listTMF639Resources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	enrichment, err := h.tmf639Enrichment(r.Context(), result.Items)
+	enrichment, err := h.tmf639Enrichment(r.Context(), result.Items, customerIDs, scoped)
 	if err != nil {
 		h.logger.Error("failed to enrich TMF639 resources", "err", err)
 		writeTMFInternalError(w)
@@ -106,7 +106,7 @@ func (h *handler) getTMF639Resource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	enrichment, err := h.tmf639Enrichment(r.Context(), []devices.Device{*device})
+	enrichment, err := h.tmf639Enrichment(r.Context(), []devices.Device{*device}, customerIDs, scoped)
 	if err != nil {
 		h.logger.Error("failed to enrich TMF639 resource", "err", err, "device_id", device.ID)
 		writeTMFInternalError(w)
@@ -121,7 +121,7 @@ func (h *handler) getTMF639Resource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resourceinventory.ProjectFields(resource, fields))
 }
 
-func (h *handler) tmf639Enrichment(ctx context.Context, page []devices.Device) (map[string]resourceinventory.Enrichment, error) {
+func (h *handler) tmf639Enrichment(ctx context.Context, page []devices.Device, customerIDs []string, scoped bool) (map[string]resourceinventory.Enrichment, error) {
 	out := make(map[string]resourceinventory.Enrichment, len(page))
 	if len(page) == 0 {
 		return out, nil
@@ -143,6 +143,10 @@ func (h *handler) tmf639Enrichment(ctx context.Context, page []devices.Device) (
 	if err != nil {
 		return nil, err
 	}
+	mesh, err := h.devices.MeshRelationsFor(ctx, ids, customerIDs, scoped)
+	if err != nil {
+		return nil, err
+	}
 	for _, id := range ids {
 		facts := versions[id]
 		out[id] = resourceinventory.Enrichment{
@@ -150,6 +154,8 @@ func (h *handler) tmf639Enrichment(ctx context.Context, page []devices.Device) (
 			AssignmentRoles:     roles[id],
 			SoftwareVersion:     facts.SoftwareVersion,
 			HardwareVersion:     facts.HardwareVersion,
+			GatewayID:           mesh.Gateway[id],
+			SatelliteIDs:        mesh.Satellites[id],
 		}
 	}
 	return out, nil

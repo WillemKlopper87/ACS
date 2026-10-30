@@ -59,4 +59,12 @@ func TestDeviceSatellitesEndpoint(t *testing.T) {
 		t.Errorf("satellite device missing gateway_device_id: %s", r.body)
 	}
 
+	tmf := e.call("alice", http.MethodGet, "/tmf-api/resourceInventoryManagement/v5/resource/"+gatewayID, nil)
+	if tmf.code != http.StatusOK || !strings.Contains(tmf.body, "hasMeshSatellite") || !strings.Contains(tmf.body, satA) || strings.Contains(tmf.body, satB) {
+		t.Errorf("TMF639 gateway relationships should name in-scope %s only: %d %s", satA, tmf.code, tmf.body)
+	}
+	tmf = e.call("alice", http.MethodGet, "/tmf-api/resourceInventoryManagement/v5/resource/"+satA, nil)
+	if !strings.Contains(tmf.body, "isMeshSatelliteOf") || !strings.Contains(tmf.body, gatewayID) {
+		t.Errorf("TMF639 satellite missing gateway relationship: %s", tmf.body)
+	}
 }

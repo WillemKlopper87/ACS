@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"acs/internal/devices"
+	"acs/internal/tmf/common"
 )
 
 func TestProjectDeviceResource(t *testing.T) {
@@ -148,4 +149,58 @@ func TestProjectRejectsInvalidBaseURL(t *testing.T) {
 	if err == nil {
 		t.Fatal("Project() error = nil, want invalid base URL error")
 	}
+}
+
+func TestProjectMeshRelationships(t *testing.T) {
+	updated := time.Unix(0, 0).UTC()
+	projector := NewProjector("https://acs.example.net")
+
+	satellite, err := projector.ProjectWithEnrichment(devices.Device{ID: "beacon", LastUpdatedAt: updated}, Enrichment{GatewayID: "fastmile"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(satellite.ResourceRelationship) != 1 {
+		t.Fatalf("satellite relationships = %+v, want one", satellite.ResourceRelationship)
+	}
+	rel := satellite.ResourceRelationship[0]
+	if rel.RelationshipType != RelationshipMeshSatelliteOf || rel.Type != "ResourceRelationship" ||
+		rel.Resource.ID != "fastmile" || rel.Resource.ReferredType != "PhysicalResource" || rel.Resource.Type != "ResourceRef" ||
+		rel.Resource.Href != "https://acs.example.net/tmf-api/resourceInventoryManagement/v5/resource/fastmile" {
+		t.Fatalf("satellite relationship = %+v", rel)
+	}
+
+	gateway, err := projector.ProjectWithEnrichment(devices.Device{ID: "fastmile", LastUpdatedAt: updated},
+		Enrichment{SatelliteIDs: []string{"beacon-b", "beacon-a", "beacon-b", "", "fastmile"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range gateway.ResourceRelationship {
+		if r.RelationshipType != RelationshipHasMeshSatellite {
+			t.Fatalf("gateway relationship type = %q", r.RelationshipType)
+		}
+		got = append(got, r.Resource.ID)
+	}
+	if strings.Join(got, ",") != "beacon-a,beacon-b" {
+		t.Fatalf("gateway satellites = %v, want sorted, deduplicated, no self/blank", got)
+	}
+
+	body, _ := json.Marshal(ProjectFields(gateway, mustFields(t, "resourceRelationship")))
+	if !strings.Contains(string(body), `"resourceRelationship"`) || !strings.Contains(string(body), `"relationshipType":"hasMeshSatellite"`) {
+		t.Fatalf("fields=resourceRelationship projection = %s", body)
+	}
+
+	standalone, _ := projector.Project(devices.Device{ID: "solo", LastUpdatedAt: updated})
+	if encoded, _ := json.Marshal(standalone); strings.Contains(string(encoded), "resourceRelationship") {
+		t.Fatalf("unlinked device should omit resourceRelationship: %s", encoded)
+	}
+}
+
+func mustFields(t *testing.T, raw string) common.Fields {
+	t.Helper()
+	fields, err := common.ParseFields(raw, AllowedFields...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fields
 }
