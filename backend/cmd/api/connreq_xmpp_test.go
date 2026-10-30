@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,7 +11,9 @@ import (
 	"acs/internal/connreq"
 	"acs/internal/devices"
 	"acs/internal/jobs"
+	"acs/internal/operators"
 	"acs/internal/parameters"
+	"acs/internal/tenancy"
 	"acs/internal/xmpp"
 )
 
@@ -188,5 +191,29 @@ func assertXMPPAudit(t *testing.T, e *testEnv, deviceID, outcome string) {
 	_ = json.Unmarshal(detail, &d)
 	if d["outcome"] != outcome || d["fallback"] != true {
 		t.Fatalf("audit detail = %v, want outcome %s with fallback", d, outcome)
+	}
+}
+
+// TestXMPPEndpointsWhenUnconfigured: with ACS_XMPP_* unset the read
+// endpoint reports it and provisioning is refused cleanly (503), scoped
+// and permission-gated like the other credential actions.
+func TestXMPPEndpointsWhenUnconfigured(t *testing.T) {
+	e := newTestEnv(t)
+	cust := e.customer("Customer X")
+	dev := e.device("X001", &cust)
+	other := e.customer("Customer Y")
+	foreign := e.device("Y001", &other)
+	e.operator("xena", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: cust})
+	e.grant(operators.RoleManager, operators.PermCredentialManage)
+
+	r := e.call("xena", "GET", "/api/v1/devices/"+dev+"/xmpp", nil)
+	if r.code != 200 || !strings.Contains(r.body, `"configured":false`) || !strings.Contains(r.body, `"provisioning":null`) {
+		t.Fatalf("GET xmpp = %d %s", r.code, r.body)
+	}
+	if r := e.call("xena", "POST", "/api/v1/devices/"+dev+"/xmpp/provision", map[string]any{}); r.code != 503 {
+		t.Fatalf("provision without XMPP = %d %s, want 503", r.code, r.body)
+	}
+	if r := e.call("xena", "POST", "/api/v1/devices/"+foreign+"/xmpp/provision", map[string]any{}); r.code != 404 {
+		t.Fatalf("provision on a foreign device = %d, want 404", r.code)
 	}
 }
