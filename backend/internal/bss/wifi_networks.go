@@ -10,14 +10,16 @@ import (
 // WiFiNetworkTarget is the subset of the ACS's resolved Wi-Fi network
 // (GET /api/v1/devices/{id}/wifi/networks) the BSS adapter writes to.
 type WiFiNetworkTarget struct {
-	Instance           int    `json:"instance"`
-	Band               string `json:"band"`
-	NamePath           string `json:"name_path"`
-	EnablePath         string `json:"enable_path"`
-	PassphrasePath     string `json:"passphrase_path"`
-	NameWritable       bool   `json:"name_writable"`
-	EnableWritable     bool   `json:"enable_writable"`
-	PassphraseWritable bool   `json:"passphrase_writable"`
+	Instance int `json:"instance"`
+	// Name is the cached SSID value; nil when it has not been read yet.
+	Name               *string `json:"name"`
+	Band               string  `json:"band"`
+	NamePath           string  `json:"name_path"`
+	EnablePath         string  `json:"enable_path"`
+	PassphrasePath     string  `json:"passphrase_path"`
+	NameWritable       bool    `json:"name_writable"`
+	EnableWritable     bool    `json:"enable_writable"`
+	PassphraseWritable bool    `json:"passphrase_writable"`
 }
 
 // WiFiNetworksView is the ACS's resolved Wi-Fi view for one device.
@@ -104,4 +106,38 @@ func TranslateModifyWifiNetworks(params map[string]string, view *WiFiNetworksVie
 		return nil, fmt.Errorf("%w: MODIFY_WIFI requires at least one of wifi_ssid, wifi_password, wifi_enabled", ErrInvalidParameters)
 	}
 	return out, nil
+}
+
+// PrimarySSIDNames returns the distinct cached names of the view's primary
+// networks in instance order — normally one name shared by every band
+// (FastMile: SENT-5G on SSID.1 and SSID.5). When no name can be reported,
+// it returns nil and a reason: the view is unsupported (e.g. a mesh
+// satellite whose Wi-Fi is run by its gateway), its roles are not read
+// yet, or no primary network exists.
+func PrimarySSIDNames(view *WiFiNetworksView) ([]string, string) {
+	switch {
+	case view == nil || !view.Supported:
+		reason := "managed by gateway: the device reports no Wi-Fi networks of its own"
+		if view != nil && view.Reason != "" {
+			reason = view.Reason
+		}
+		return nil, reason
+	case !view.Complete:
+		return nil, "unknown: the device's Wi-Fi roles are not read yet; retry after its next check-in"
+	case len(view.Primary) == 0:
+		return nil, "no primary (enabled, non-guest) Wi-Fi network"
+	}
+	var names []string
+	seen := map[string]bool{}
+	for _, n := range view.Primary {
+		if n.Name == nil || seen[*n.Name] {
+			continue
+		}
+		seen[*n.Name] = true
+		names = append(names, *n.Name)
+	}
+	if len(names) == 0 {
+		return nil, "unknown: the primary SSID names are not read yet"
+	}
+	return names, ""
 }

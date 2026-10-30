@@ -66,6 +66,12 @@ func seedTMF640Device(t *testing.T, ctx context.Context, db *sql.DB, accountID, 
 func tmf640ACSHandler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && contains(r.URL.Path, "/wifi/networks"):
+			// The resolved view, not SSID.1: TMF640 reports the primary name.
+			json.NewEncoder(w).Encode(map[string]any{
+				"supported": true, "complete": true,
+				"primary": []map[string]any{{"instance": 1, "name": "MyNetwork"}, {"instance": 5, "name": "MyNetwork"}},
+			})
 		case r.Method == http.MethodGet && r.URL.Path != "" && !contains(r.URL.Path, "parameters"):
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]string{"id": "dev-1", "data_model_root": "DEVICE2"})
