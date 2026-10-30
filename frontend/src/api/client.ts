@@ -64,6 +64,8 @@ import type { paths } from "./generated";
 // legacy to be migrated over time.
 type LoginResponse =
   paths["/api/v1/auth/login"]["post"]["responses"]["200"]["content"]["application/json"];
+type DeviceSatellitesResponse =
+  paths["/api/v1/devices/{id}/satellites"]["get"]["responses"]["200"]["content"]["application/json"];
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -198,6 +200,13 @@ export const api = {
     }),
 
   getDevice: (id: string) => request<Device>(`/api/v1/devices/${id}`),
+
+  /** Mesh satellites linked to this gateway (via their TR-111 GatewayInfo). */
+  listDeviceSatellites: (id: string) =>
+    request<DeviceSatellitesResponse>(`/api/v1/devices/${id}/satellites`).then((r) => ({
+      items: r.items as Device[],
+      total: r.total,
+    })),
 
   startDeviceCapture: (deviceId: string, protocol: CaptureProtocol) =>
     request<CaptureSession>(`/api/v1/devices/${deviceId}/captures`, {

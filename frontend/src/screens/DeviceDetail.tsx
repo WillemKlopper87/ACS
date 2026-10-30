@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { Credential, Device, FirmwareImage, Job, ParameterCache, ParameterHistoryEntry, UploadedFile } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
@@ -17,6 +17,9 @@ import { useLive } from "../lib/useLive";
 import { ParameterBrowser } from "../components/ParameterBrowser";
 import { useEscape } from "../lib/hotkeys";
 import { toast } from "../lib/toast";
+import { MeshTopology } from "../components/MeshTopology";
+import { useMeshTopology } from "../lib/useMeshTopology";
+import { deviceLink, gatewayName, isMeshSatellite, satelliteReachabilityNote, satelliteRebootWarning } from "../lib/mesh";
 
 export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const navigate = useNavigate();
@@ -143,6 +146,9 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
 
   const [live, setLive] = useLive(() => load(true), 5000);
   useEscape(onClose, true);
+  const mesh = useMeshTopology(device);
+  const satellite = isMeshSatellite(device);
+  const meshGatewayName = device ? gatewayName(mesh.gateway, device) : "";
 
   async function withBusy(fn: () => Promise<string>) {
     setBusy(true);
@@ -375,14 +381,19 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
     }
   }
 
-  const handleReboot = () =>
-    withBusy(async () => {
+  const handleReboot = () => {
+    // A mesh satellite comes back only once its backhaul rejoins (8–11 min
+    // for a Beacon 3.1 in the field test, once needing manual recovery).
+    if (satellite && !window.confirm(`Reboot ${device?.label || device?.oui_serial}?\n\n${satelliteRebootWarning(meshGatewayName)}`)) return;
+    return withBusy(async () => {
       const res = await api.rebootDevice(id);
       return `Reboot queued: ${res.command_key} — watch for a fresh Inform once it comes back up`;
     });
+  };
 
   const handleFactoryReset = () => {
-    if (!window.confirm(`Factory reset ${device?.oui_serial}? This wipes the device back to defaults and cannot be undone.`)) return;
+    const meshWarning = satellite ? `\n\n${satelliteRebootWarning(meshGatewayName)} A reset satellite may also need re-pairing with the gateway.` : "";
+    if (!window.confirm(`Factory reset ${device?.oui_serial}? This wipes the device back to defaults and cannot be undone.${meshWarning}`)) return;
     withBusy(async () => {
       const res = await api.factoryResetDevice(id);
       return `Factory reset queued: ${res.command_key}`;
@@ -484,13 +495,23 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
           <button className="btn" onClick={handleRefreshCellular} disabled={busy || !writable}>
             Refresh cellular diagnostics
           </button>
-          <button className="btn" onClick={handleReboot} disabled={busy || !writable} title="Queues Reboot — the device drops and reconnects">
+          <button
+            className="btn"
+            onClick={handleReboot}
+            disabled={busy || !writable}
+            title={satellite ? "Queues Reboot — a mesh satellite returns only after its backhaul rejoins (8–11 min in testing)" : "Queues Reboot — the device drops and reconnects"}
+          >
             Reboot
           </button>
           <button className="btn danger" onClick={handleFactoryReset} disabled={busy || !writable} title="Queues FactoryReset — wipes the device back to defaults">
             Factory reset
           </button>
         </div>
+        {satellite && (
+          <p className="dim" role="note" style={{ fontSize: "0.76rem", margin: "0.5rem 0 0" }}>
+            {satelliteReachabilityNote(device, meshGatewayName)}
+          </p>
+        )}
 
         <DeviceCompatibility id={id} writable={writable} />
 
@@ -593,6 +614,8 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
           </button>
         </div>
       </div>
+
+      <MeshTopology device={device} mesh={mesh} />
 
       <div className="panel">
         <h3>Parameter cache{paramEntries.length === 0 ? " — empty" : ""}</h3>
@@ -762,9 +785,23 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
           </button>
         </div>
         <div className="form-row">
-          <button className="btn" onClick={handleRefreshWifiClients} disabled={busy || !writable} style={{ width: "100%", justifyContent: "center" }}>
-            Refresh WiFi clients
-          </button>
+          {satellite ? (
+            // A satellite has no Device.WiFi tree of its own: its clients are
+            // reported by the gateway's EasyMesh controller.
+            mesh.gateway ? (
+              <Link className="btn" to={deviceLink(mesh.gateway.id)} style={{ width: "100%", justifyContent: "center" }}>
+                Refresh WiFi clients on {meshGatewayName}
+              </Link>
+            ) : (
+              <span className="dim" style={{ fontSize: "0.78rem" }}>
+                WiFi clients of this mesh are reported by its gateway ({meshGatewayName}), not by the satellite.
+              </span>
+            )
+          ) : (
+            <button className="btn" onClick={handleRefreshWifiClients} disabled={busy || !writable} style={{ width: "100%", justifyContent: "center" }}>
+              Refresh WiFi clients
+            </button>
+          )}
         </div>
         <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
           Ping/Traceroute poll to completion — watch Recent jobs for the outcome; results land in the parameter cache above under Device.IP.Diagnostics.*.
@@ -858,7 +895,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       <DeviceTenancy deviceId={id} customerId={device.customer_id} writable={writable} />
       <DeviceConsole id={id} writable={writable} />
       <RemoteShell id={id} writable={writable} />
-      <DeviceWebGUI id={id} writable={writable} />
+      <DeviceWebGUI id={id} writable={writable} unreachableNote={satellite ? satelliteReachabilityNote(device, meshGatewayName) : undefined} />
       <VPNTunnel id={id} writable={writable} />
 
       <div className="panel">
