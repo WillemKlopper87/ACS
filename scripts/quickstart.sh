@@ -41,7 +41,7 @@ fi
 REPO_URL="${REPO_URL:-https://github.com/WillemKlopper87/ACS.git}"
 GIT_REF="${GIT_REF:-main}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/ACS}"
-GO_VERSION="${GO_VERSION:-1.26.6}"
+GO_VERSION="${GO_VERSION:-1.26.10}"
 ACS_MONITORING_PUBLIC="${ACS_MONITORING_PUBLIC:-0}"
 
 case "$(uname -m)" in

@@ -124,7 +124,7 @@ sudo apt-get install -y \
   lsb-release
 
 # Install the Go version currently pinned by scripts/quickstart.sh/backend/go.mod
-curl -fsSL https://go.dev/dl/go1.26.6.linux-amd64.tar.gz -o /tmp/go.tar.gz
+curl -fsSL https://go.dev/dl/go1.26.10.linux-amd64.tar.gz -o /tmp/go.tar.gz
 sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf /tmp/go.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
