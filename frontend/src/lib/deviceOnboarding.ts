@@ -37,8 +37,22 @@ function normalized(value?: string) {
   return (value ?? "").trim().toLowerCase();
 }
 
+// The API reports devices.data_model_root as its stored enum ("DEVICE2",
+// "IGD1", "UNKNOWN"); the dotted path forms are accepted too. Comparing only
+// against "Device."/"InternetGatewayDevice." marked every device's root as
+// unknown in the onboarding panel.
+function rootModel(root?: string): "TR-181" | "TR-098" | undefined {
+  if (root === "DEVICE2" || root === "Device.") return "TR-181";
+  if (root === "IGD1" || root === "InternetGatewayDevice.") return "TR-098";
+  return undefined;
+}
+
 function isKnownRoot(root?: string) {
-  return root === "Device." || root === "InternetGatewayDevice.";
+  return rootModel(root) !== undefined;
+}
+
+function rootLabel(root?: string) {
+  return rootModel(root) === "TR-181" ? "Device. (TR-181)" : "InternetGatewayDevice. (TR-098)";
 }
 
 function privateConnectionRequest(url?: string) {
@@ -183,7 +197,7 @@ export function assessDeviceOnboarding(
       label: "Data model root",
       status: isKnownRoot(device.data_model_root) ? "pass" : "warn",
       detail: isKnownRoot(device.data_model_root)
-        ? device.data_model_root
+        ? rootLabel(device.data_model_root)
         : "Root is unknown/non-standard. Discover the parameter model before any write.",
     },
     {
@@ -258,7 +272,7 @@ export function assessDeviceOnboarding(
     });
   }
 
-  if (isHuawei && device.data_model_root === "InternetGatewayDevice.") {
+  if (isHuawei && rootModel(device.data_model_root) === "TR-098") {
     hints.push({
       id: "huawei-tr098-wifi",
       severity: "warning",

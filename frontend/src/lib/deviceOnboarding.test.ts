@@ -10,7 +10,7 @@ function device(overrides: Partial<Device> = {}): Device {
     oui: "A1B2C3",
     product_class: "N5368X",
     serial_number: "SERIAL1",
-    data_model_root: "Device.",
+    data_model_root: "DEVICE2",
     online_status: "ONLINE",
     connection_request_mode: "DIRECT",
     ...overrides,
@@ -57,7 +57,7 @@ describe("assessDeviceOnboarding", () => {
 
   it("warns about Huawei TR-098 passphrase writability", () => {
     const result = assessDeviceOnboarding(
-      device({ product_class: "HG8145V5", data_model_root: "InternetGatewayDevice." }),
+      device({ product_class: "HG8145V5", data_model_root: "IGD1" }),
       {},
       [],
     );
@@ -133,5 +133,15 @@ describe("Nokia onboarding assessment", () => {
     );
 
     expect(result.checks.find((check) => check.id === "bound-credential")?.status).toBe("pass");
+  });
+});
+
+describe("data model root check", () => {
+  it("passes for the API's DEVICE2/IGD1 enum values and fails for UNKNOWN", () => {
+    const check = (root: string) =>
+      assessDeviceOnboarding(device({ data_model_root: root }), {}, []).checks.find((c) => c.id === "model");
+    expect(check("DEVICE2")).toMatchObject({ status: "pass", detail: "Device. (TR-181)" });
+    expect(check("IGD1")).toMatchObject({ status: "pass", detail: "InternetGatewayDevice. (TR-098)" });
+    expect(check("UNKNOWN")?.status).toBe("warn");
   });
 });
