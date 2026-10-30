@@ -117,6 +117,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	routePerm("POST", "/api/v1/device-groups/{id}/members", operators.PermGroupManage, h.addDeviceGroupMembers)
 	routePerm("DELETE", "/api/v1/device-groups/{id}/members/{device_id}", operators.PermGroupManage, h.removeDeviceGroupMember)
 	routePerm("POST", "/api/v1/devices/{id}/credentials/rotate", operators.PermCredentialManage, h.rotateDeviceCredential)
+	routePerm("POST", "/api/v1/devices/{id}/re-enroll", operators.PermCredentialManage, h.openReenrollment)
 	route("GET", "/api/v1/devices/{id}/credentials", ro, h.listDeviceCredentials)
 	routePerm("POST", "/api/v1/devices/{id}/credentials/{credential_id}/activate", operators.PermCredentialManage, h.activateDeviceCredential)
 	routePerm("POST", "/api/v1/devices/{id}/credentials/{credential_id}/revoke", operators.PermCredentialManage, h.revokeDeviceCredential)

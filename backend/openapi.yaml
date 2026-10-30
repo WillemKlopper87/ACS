@@ -1571,6 +1571,37 @@ paths:
         "202": { description: Queued, content: { application/json: { schema: { $ref: "#/components/schemas/Credential" } } } }
         "409": { description: A CWMP_DIGEST rotation is already pending or the required credential path cannot be safely written }
 
+  /api/v1/devices/{id}/re-enroll:
+    post:
+      tags: [Credentials]
+      summary: Open a time-limited window in which this already-graduated device may use the bootstrap identity again (credential.manage permission)
+      description: >
+        For a CPE that was factory-reset and lost its device-bound CWMP Digest credential: it returns with the
+        constrained bootstrap identity, which is otherwise refused for established devices. During the window the
+        device graduates to a new unique credential as on first contact; activation closes the window. The previous
+        credential stays valid until the new one activates. Audited as DeviceReenrollmentOpened.
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                minutes: { type: integer, minimum: 1, maximum: 1440, default: 60 }
+                reason: { type: string, description: Free text recorded in the audit log }
+      responses:
+        "200":
+          description: Window opened
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device_id: { type: string }
+                  reenroll_until: { type: string, format: date-time }
+        "400": { description: minutes out of range or invalid body }
+
   /api/v1/devices/{id}/credentials:
     get:
       tags: [Credentials]
@@ -2457,6 +2488,7 @@ components:
         location: { type: string }
         latitude: { type: number, format: double, nullable: true }
         longitude: { type: number, format: double, nullable: true }
+        reenroll_until: { type: string, format: date-time, description: Open operator re-enrolment window (bootstrap allowed until this time) }
 
     DeviceGroupCount:
       type: object

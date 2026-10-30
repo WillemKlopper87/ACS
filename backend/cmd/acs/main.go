@@ -146,6 +146,9 @@ func main() {
 				return
 			}
 			logger.Info("per-device CWMP Digest credential activated on first use", "device_id", cred.DeviceID, "version", cred.Version)
+			if err := devices.NewRepository(db).CloseReenrollment(ctx, cred.DeviceID); err != nil {
+				logger.Error("failed to close re-enrolment window", "err", err, "device_id", cred.DeviceID)
+			}
 			_ = observability.NewAuditor(db).Record(ctx, "system", cred.DeviceID, "CredentialRotation", map[string]any{
 				"credential_id": cred.ID, "version": cred.Version, "type": credentials.TypeCWMPDigest, "phase": "activated-on-first-use",
 			})

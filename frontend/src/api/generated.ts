@@ -3350,6 +3350,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/re-enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open a time-limited window in which this already-graduated device may use the bootstrap identity again (credential.manage permission)
+         * @description For a CPE that was factory-reset and lost its device-bound CWMP Digest credential: it returns with the constrained bootstrap identity, which is otherwise refused for established devices. During the window the device graduates to a new unique credential as on first contact; activation closes the window. The previous credential stays valid until the new one activates. Audited as DeviceReenrollmentOpened.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @default 60 */
+                        minutes?: number;
+                        /** @description Free text recorded in the audit log */
+                        reason?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Window opened */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            device_id?: string;
+                            /** Format: date-time */
+                            reenroll_until?: string;
+                        };
+                    };
+                };
+                /** @description minutes out of range or invalid body */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/credentials": {
         parameters: {
             query?: never;
@@ -6025,6 +6087,11 @@ export interface components {
             latitude?: number | null;
             /** Format: double */
             longitude?: number | null;
+            /**
+             * Format: date-time
+             * @description Open operator re-enrolment window (bootstrap allowed until this time)
+             */
+            reenroll_until?: string;
         };
         DeviceGroupCount: {
             Manufacturer?: string;
@@ -6265,7 +6332,10 @@ export interface components {
         Credential: {
             id: string;
             version: number;
-            /** @description Direction of authentication protected by this credential. */
+            /**
+             * @description Direction of authentication protected by this credential.
+             * @enum {string}
+             */
             credential_type: "CONNECTION_REQUEST" | "CWMP_DIGEST";
             username: string;
             /** @enum {string} */

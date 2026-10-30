@@ -54,6 +54,24 @@ func (r *Repository) ClassifyConnectionRequestNAT(ctx context.Context, deviceID 
 	return nil
 }
 
+// OpenReenrollment lets a device that already graduated use the bootstrap
+// identity once more until the given time (operator action, e.g. after a
+// factory reset wiped its device-bound credential).
+func (r *Repository) OpenReenrollment(ctx context.Context, deviceID string, until time.Time) error {
+	if _, err := r.db.ExecContext(ctx, `UPDATE devices SET reenroll_until = $2, last_updated_at = now() WHERE id = $1`, deviceID, until); err != nil {
+		return fmt.Errorf("open re-enrolment: %w", err)
+	}
+	return nil
+}
+
+// CloseReenrollment ends a re-enrolment window (graduation completed).
+func (r *Repository) CloseReenrollment(ctx context.Context, deviceID string) error {
+	if _, err := r.db.ExecContext(ctx, `UPDATE devices SET reenroll_until = NULL, last_updated_at = now() WHERE id = $1 AND reenroll_until IS NOT NULL`, deviceID); err != nil {
+		return fmt.Errorf("close re-enrolment: %w", err)
+	}
+	return nil
+}
+
 // UpdateDataModelRoot records the data model root confirmed by a successful
 // parameter discovery run (build plan nice-to-have backlog) — the first
 // time this column moves off UNKNOWN in production, since UpsertFromInform

@@ -29,7 +29,7 @@ const deviceColumns = `id, oui_serial, manufacturer, oui, product_class, serial_
 	first_seen_at, last_updated_at, tags, cwmp_auth_mode, data_model_root_confirmed_at,
 	udp_connection_request_address, nat_detected, customer_id, location,
 	latitude, longitude, label, profile_id, profile_matched_by, profile_qualified,
-	profile_evidence, profile_assigned_at`
+	profile_evidence, profile_assigned_at, reenroll_until`
 
 // AssignProfile persists deterministic profile-match provenance. It does not
 // authorize parameter writes or replace per-operation capability checks.
@@ -376,6 +376,7 @@ func scanDevice(s scanner) (*Device, error) {
 	var profileID, profileMatchedBy sql.NullString
 	var profileEvidence []byte
 	var profileAssignedAt sql.NullTime
+	var reenrollUntil sql.NullTime
 
 	if err := s.Scan(&d.ID, &d.OUISerial, &d.Manufacturer, &d.OUI, &d.ProductClass, &d.SerialNumber,
 		&d.DataModelRoot, &d.OnlineStatus, &lastInformAt, &eventCodes,
@@ -384,7 +385,7 @@ func scanDevice(s scanner) (*Device, error) {
 		&d.FirstSeenAt, &d.LastUpdatedAt, &tags, &d.CWMPAuthMode, &dataModelRootConfirmedAt,
 		&udpConnectionRequestAddress, &natDetected, &customerID, &location,
 		&latitude, &longitude, &label, &profileID, &profileMatchedBy, &d.ProfileQualified,
-		&profileEvidence, &profileAssignedAt); err != nil {
+		&profileEvidence, &profileAssignedAt, &reenrollUntil); err != nil {
 		return nil, fmt.Errorf("scan device: %w", err)
 	}
 	if customerID.Valid {
@@ -408,6 +409,10 @@ func scanDevice(s scanner) (*Device, error) {
 	if profileAssignedAt.Valid {
 		t := profileAssignedAt.Time
 		d.ProfileAssignedAt = &t
+	}
+	if reenrollUntil.Valid {
+		t := reenrollUntil.Time
+		d.ReenrollUntil = &t
 	}
 	if latitude.Valid {
 		d.Latitude = &latitude.Float64

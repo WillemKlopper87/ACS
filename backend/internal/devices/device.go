@@ -44,6 +44,14 @@ type Device struct {
 	ProfileQualified  bool
 	ProfileEvidence   json.RawMessage
 	ProfileAssignedAt *time.Time
+	// ReenrollUntil is an operator-opened window in which this device may
+	// use the bootstrap identity again (e.g. after a factory reset).
+	ReenrollUntil *time.Time
+}
+
+// ReenrollmentOpen reports whether an operator re-enrolment window is open.
+func (d *Device) ReenrollmentOpen(now time.Time) bool {
+	return d != nil && d.ReenrollUntil != nil && now.Before(*d.ReenrollUntil)
 }
 
 // Data model root values (design doc v3 §7.1's data_model_root check
