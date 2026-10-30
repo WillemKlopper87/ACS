@@ -1182,6 +1182,27 @@ paths:
                   names: { type: object, additionalProperties: { type: boolean } }
                   discovered_at: { type: string, format: date-time, nullable: true }
 
+  /api/v1/devices/{id}/wifi/insights:
+    get:
+      tags: [Devices]
+      summary: Controller-style Wi-Fi overview (bandwidth, client counts, top SSIDs/clients, new/returning clients, vendors, inferred OS)
+      description: >
+        Built from samples cmd/acs takes on periodic Informs (ACS_WIFI_INSIGHTS_INTERVAL, default 5m).
+        Rates are differences between consecutive cumulative counters; counter resets are dropped.
+        There is no backfill: the CPE keeps no history.
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - name: window
+          in: query
+          schema: { type: string, enum: ["2h", "1d", "1w", "1m"], default: "2h" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WiFiInsights" }
+        "400": { description: Unknown window }
+        "404": { description: Device not found or outside the caller's scope }
   /api/v1/devices/{id}/sim:
     get:
       tags: [Diagnostics]
@@ -2448,6 +2469,100 @@ components:
           schema: { $ref: "#/components/schemas/QueueResponse" }
 
   schemas:
+    WiFiInsights:
+      type: object
+      required: [device_id, window, since, bucket_seconds, total_bytes_down, total_bytes_up, bandwidth, client_counts, top_ssids, top_clients, client_stats, vendors, os_inferred, clients]
+      properties:
+        device_id: { type: string }
+        window: { type: string }
+        since: { type: string, format: date-time }
+        bucket_seconds: { type: integer }
+        last_sample_at: { type: string, format: date-time, nullable: true }
+        total_bytes_down: { type: integer, format: int64 }
+        total_bytes_up: { type: integer, format: int64 }
+        bandwidth:
+          type: array
+          items:
+            type: object
+            required: [at, bytes_down, bytes_up, bps_down, bps_up]
+            properties:
+              at: { type: string, format: date-time }
+              bytes_down: { type: integer, format: int64 }
+              bytes_up: { type: integer, format: int64 }
+              bps_down: { type: number }
+              bps_up: { type: number }
+        client_counts:
+          type: array
+          items:
+            type: object
+            required: [at, wireless, wired, guest]
+            properties:
+              at: { type: string, format: date-time }
+              wireless: { type: integer }
+              wired: { type: integer }
+              guest: { type: integer }
+        top_ssids:
+          type: array
+          items:
+            type: object
+            required: [instance, name, role, bytes_down, bytes_up]
+            properties:
+              instance: { type: integer }
+              name: { type: string }
+              role: { type: string }
+              bytes_down: { type: integer, format: int64 }
+              bytes_up: { type: integer, format: int64 }
+        top_clients:
+          type: array
+          items:
+            type: object
+            required: [mac, hostname, vendor, bytes_down, bytes_up]
+            properties:
+              mac: { type: string }
+              hostname: { type: string }
+              vendor: { type: string }
+              bytes_down: { type: integer, format: int64 }
+              bytes_up: { type: integer, format: int64 }
+        client_stats:
+          type: object
+          required: [new, returning, private_mac, average_session_seconds]
+          properties:
+            new: { type: integer }
+            returning: { type: integer }
+            private_mac: { type: integer, description: "Clients with a randomised (locally administered) MAC; their vendor cannot be resolved" }
+            average_session_seconds: { type: integer, format: int64 }
+        vendors: { type: array, items: { $ref: "#/components/schemas/WiFiInsightsShare" } }
+        os_inferred: { type: array, items: { $ref: "#/components/schemas/WiFiInsightsShare" }, description: "Guessed from DHCP hostnames; no DHCP fingerprint is available over CWMP" }
+        clients:
+          type: array
+          items:
+            type: object
+            required: [mac, hostname, ip_address, ssid_name, band, wireless, guest, private_mac, vendor, os_inferred, signal_dbm, first_seen_at, last_seen_at, connected, sessions, connected_seconds]
+            properties:
+              mac: { type: string }
+              hostname: { type: string }
+              ip_address: { type: string }
+              ssid_instance: { type: integer }
+              ssid_name: { type: string }
+              band: { type: string }
+              mesh_node: { type: integer, description: "EasyMesh DataElements Network.Device instance (e.g. 2 = a Beacon satellite)" }
+              wireless: { type: boolean }
+              guest: { type: boolean }
+              private_mac: { type: boolean }
+              vendor: { type: string }
+              os_inferred: { type: string }
+              signal_dbm: { type: integer, nullable: true }
+              first_seen_at: { type: string, format: date-time }
+              last_seen_at: { type: string, format: date-time }
+              connected: { type: boolean }
+              sessions: { type: integer }
+              connected_seconds: { type: integer, format: int64 }
+    WiFiInsightsShare:
+      type: object
+      required: [name, count]
+      properties:
+        name: { type: string }
+        count: { type: integer }
     SIMField:
       type: object
       required: [kind, path, value, masked, updated_at, source]

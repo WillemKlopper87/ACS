@@ -38,6 +38,7 @@ import (
 	"acs/internal/stun"
 	"acs/internal/templates"
 	"acs/internal/tmf/telemetry"
+	"acs/internal/wifiinsights"
 )
 
 // maxBodyBytes guards against the "oversized XML" chaos scenario (design
@@ -224,6 +225,11 @@ func main() {
 		ipLimiter:          ratelimit.New(ipRate, ipBurst, rateLimitIdleTTL),
 		deviceLimiter:      ratelimit.New(deviceRate, deviceBurst, rateLimitIdleTTL),
 		onboardingListener: newOnboardingListener(envOr("ACS_ONBOARDING_LISTENER", "off"), logger),
+		// Wi-Fi insights sampling cadence; 0 disables it.
+		wifiInsights: &wifiInsightsSampler{
+			repo:     wifiinsights.NewRepository(db, wifiinsights.DefaultOUIRegistry()),
+			interval: envOrDuration("ACS_WIFI_INSIGHTS_INTERVAL", 5*time.Minute),
+		},
 	}
 	h.sharedCredentialBootstrapOnly = sharedCredentialBootstrapOnly
 	logger.Info("rate limits configured", "ip_per_second", ipRate, "ip_burst", ipBurst,
@@ -404,6 +410,23 @@ func envOrInt(key string, fallback int) int {
 	return v
 }
 
+// envOrDuration parses a Go duration ("5m"); "0" disables the feature it
+// configures.
+func envOrDuration(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	if raw == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		return fallback
+	}
+	return d
+}
+
 func levelFromEnv() slog.Level {
 	if os.Getenv("ACS_DEBUG") != "" {
 		return slog.LevelDebug
@@ -431,6 +454,7 @@ type handler struct {
 	ipLimiter          *ratelimit.Limiter
 	deviceLimiter      *ratelimit.Limiter
 	onboardingListener *onboardingListener
+	wifiInsights       *wifiInsightsSampler
 
 	// sharedCredentialBootstrapOnly prevents the legacy fleet credential
 	// from authenticating an identity that already exists or continuing a

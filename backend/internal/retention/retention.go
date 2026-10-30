@@ -29,6 +29,7 @@ type Policy struct {
 	StaleUploadSlotsDays  int
 	ResetTokensDays       int
 	CaptureSessionsDays   int
+	WiFiInsightsDays      int
 }
 
 // DefaultPolicy is deliberately conservative: long enough that an
@@ -44,6 +45,7 @@ var DefaultPolicy = Policy{
 	StaleUploadSlotsDays:  7,
 	ResetTokensDays:       1,
 	CaptureSessionsDays:   1,
+	WiFiInsightsDays:      30,
 }
 
 func envDays(key string, fallback int) int {
@@ -67,6 +69,7 @@ func PolicyFromEnv() Policy {
 		StaleUploadSlotsDays:  envDays("ACS_RETENTION_STALE_UPLOAD_SLOTS_DAYS", d.StaleUploadSlotsDays),
 		ResetTokensDays:       envDays("ACS_RETENTION_RESET_TOKENS_DAYS", d.ResetTokensDays),
 		CaptureSessionsDays:   envDays("ACS_RETENTION_CAPTURE_SESSIONS_DAYS", d.CaptureSessionsDays),
+		WiFiInsightsDays:      envDays("ACS_RETENTION_WIFI_INSIGHTS_DAYS", d.WiFiInsightsDays),
 	}
 }
 
@@ -102,6 +105,12 @@ var rules = []rule{
 		"(used_at IS NOT NULL OR expires_at < now()) AND expires_at < $1", "token"},
 	{"capture_sessions", func(p Policy) int { return p.CaptureSessionsDays },
 		"(status <> 'ACTIVE' AND COALESCE(stopped_at, expires_at) < $1) OR (status = 'ACTIVE' AND expires_at < $1)", "id"},
+	// Wi-Fi insights samples (SSID/client sample rows cascade) and clients
+	// not seen within the window; client MACs/hostnames are personal data.
+	{"wifi_samples", func(p Policy) int { return p.WiFiInsightsDays },
+		"sampled_at < $1", "id"},
+	{"wifi_clients", func(p Policy) int { return p.WiFiInsightsDays },
+		"last_seen_at < $1", "id"},
 }
 
 // Result is per-table rows deleted in one Run.

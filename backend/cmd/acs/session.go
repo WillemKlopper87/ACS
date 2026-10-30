@@ -419,6 +419,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	h.onboardingListener.onboarded(device.ID, r.RemoteAddr)
 	h.recoverAbandonedDiscovery(ctx, device.ID)
 	h.recoverDroppedSessionJobs(ctx, device.ID, inform.Event)
+	h.maybeQueueWiFiInsights(ctx, device.ID)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "acs_session",

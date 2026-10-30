@@ -51,6 +51,7 @@ import (
 	"acs/internal/transfer"
 	"acs/internal/uploads"
 	"acs/internal/vpn"
+	"acs/internal/wifiinsights"
 )
 
 func main() {
@@ -229,6 +230,7 @@ func main() {
 		devices:             devices.NewRepository(db),
 		jobs:                jobs.NewRepository(db),
 		params:              parameters.NewRepository(db),
+		wifiInsights:        wifiinsights.NewRepository(db, nil),
 		vendors:             adapters.NewRegistry(),
 		auditor:             observability.NewAuditor(db),
 		firmware:            firmware.NewRepository(db),
@@ -402,8 +404,10 @@ type handler struct {
 	devices  *devices.Repository
 	jobs     *jobs.Repository
 	params   *parameters.Repository
-	vendors  *adapters.Registry
-	auditor  *observability.Auditor
+	// wifiInsights serves the controller-style Wi-Fi overview (sampled by cmd/acs).
+	wifiInsights *wifiinsights.Repository
+	vendors      *adapters.Registry
+	auditor      *observability.Auditor
 
 	firmware     *firmware.Repository
 	firmwareFS   firmware.Storage

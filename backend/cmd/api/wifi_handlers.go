@@ -2,9 +2,11 @@ package main
 
 import (
 	"net/http"
+	"time"
 
 	"acs/internal/devices"
 	"acs/internal/devices/adapters"
+	"acs/internal/wifiinsights"
 )
 
 // getWiFiNetworks resolves the device's TR-181 Wi-Fi networks (SSID +
@@ -46,4 +48,32 @@ func (h *handler) getWiFiNetworks(w http.ResponseWriter, r *http.Request) {
 		"refresh_paths": view.RefreshPaths,
 		"read_paths":    adapters.WiFiNetworkReadPaths(discovered.Names),
 	})
+}
+
+// getWiFiInsights serves the controller-style overview (bandwidth, client
+// counts, top SSIDs/clients, new/returning clients, vendors, inferred OS)
+// for ?window=2h|1d|1w|1m (default 2h). Data exists only from when cmd/acs
+// started sampling the device (ACS_WIFI_INSIGHTS_INTERVAL); there is no
+// backfill because the CPE keeps no history.
+func (h *handler) getWiFiInsights(w http.ResponseWriter, r *http.Request) {
+	device, ok := h.getScopedDevice(w, r, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	name := r.URL.Query().Get("window")
+	if name == "" {
+		name = "2h"
+	}
+	window, ok := wifiinsights.Windows[name]
+	if !ok {
+		http.Error(w, "window must be one of 2h, 1d, 1w, 1m", http.StatusBadRequest)
+		return
+	}
+	overview, err := h.wifiInsights.Overview(r.Context(), device.ID, window, time.Now().UTC())
+	if err != nil {
+		h.logger.Error("failed to build Wi-Fi insights", "err", err, "device_id", device.ID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, overview)
 }

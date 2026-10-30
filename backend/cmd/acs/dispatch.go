@@ -9,6 +9,7 @@ import (
 	"acs/internal/jobs"
 	"acs/internal/parameters"
 	"acs/internal/tmf/telemetry"
+	"acs/internal/wifiinsights"
 	"context"
 	"encoding/json"
 	"strconv"
@@ -362,6 +363,10 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 			return
 		}
 		h.markJobSuccess(ctx, deviceID, job)
+		if job.CreatedBy == wifiinsights.CreatedBy {
+			h.recordWiFiInsights(ctx, deviceID, body.GetParameterValuesResponse.ParameterList)
+			return
+		}
 		h.cacheParameterValues(ctx, deviceID, body.GetParameterValuesResponse.ParameterList, parameters.SourceGetValues)
 		paths := []string{}
 		for _, v := range body.GetParameterValuesResponse.ParameterList {

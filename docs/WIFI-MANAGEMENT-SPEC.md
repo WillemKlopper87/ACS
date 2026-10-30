@@ -98,6 +98,27 @@ The CPE reports state and cumulative counters only while a CWMP session is open,
 
 Client MACs and hostnames are personal data, so neither table is granted to `grafana_ro`.
 
+**Implemented (backend, 2026-10-30).**
+
+- Package `internal/wifiinsights`, migration `0084_wifi_insights.sql`.
+- Endpoint: `GET /api/v1/devices/{id}/wifi/insights?window=2h|1d|1w|1m`.
+- `cmd/acs` queues the sampling read (`created_by = system:wifi-insights`) on a check-in when the last sample is older than the interval. It skips the device when a sampling read is already pending or a discovery walk is running. The response is stored as a sample and is not written to the parameter cache.
+- The FastMile omits most `*NumberOfEntries` counters, so read paths are keyed off the discovered table objects. On the field tree that comes to 8 `AssociatedDevice.` + 12 `STA.` + `Hosts.Host.` + 16 SSID counters + 12 BSS SSID names.
+
+Configuration:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ACS_WIFI_INSIGHTS_INTERVAL` | `5m` | Sampling cadence; `0` turns sampling off |
+| `ACS_OUI_CSV` | unset | Path to the IEEE `oui.csv`. Without it, vendors show only as Private or unknown. |
+| `ACS_RETENTION_WIFI_INSIGHTS_DAYS` | `30` | How long samples and clients are kept |
+
+Still open:
+
+- Console page.
+- Fleet-wide (multi-CPE) top devices.
+- Measuring the FastMile session-drop rate with sampling switched on.
+
 ### 3.4 Radios
 
 | Field | Path | FastMile |
