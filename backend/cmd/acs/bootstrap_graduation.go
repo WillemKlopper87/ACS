@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -40,6 +41,14 @@ type bootstrapGraduationDeps struct {
 	ensurePending  bootstrapEnsurePendingCredential
 	credentialByID bootstrapCredentialByID
 	deviceByID     bootstrapDeviceByID
+	logger         *slog.Logger
+}
+
+func (d bootstrapGraduationDeps) log() *slog.Logger {
+	if d.logger != nil {
+		return d.logger
+	}
+	return slog.Default()
 }
 
 // bootstrapCWMPGraduationGuard owns the production bootstrap->unique-credential
@@ -107,6 +116,9 @@ func bootstrapCWMPGraduationGuardWithDeps(next http.HandlerFunc, deps bootstrapG
 
 		ok, stale, _ := deps.bootstrapAuth.Verify(r)
 		if !ok {
+			// The normal handler logs its own auth failures; without this line a
+			// wrong bootstrap password is invisible in acs.log.
+			deps.log().Warn("bootstrap credential authentication failed", "stale", stale, "remote", r.RemoteAddr)
 			_, _ = io.Copy(io.Discard, r.Body)
 			if stale {
 				deps.bootstrapAuth.ChallengeStale(w)
@@ -173,6 +185,9 @@ func bootstrapCWMPGraduationGuardWithDeps(next http.HandlerFunc, deps bootstrapG
 			// A vendor that cannot rewrite ManagementServer credentials remains
 			// safely PENDING for explicit operator/manual recovery. Never fall
 			// back to shared normal-management credentials.
+			deps.log().Warn("bootstrap credential install faulted; device stays PENDING",
+				"device_id", device.ID, "oui_serial", device.OUISerial,
+				"fault_code", env.Body.Fault.CWMPCode(), "fault", env.Body.Fault.CWMPMessage(), "remote", r.RemoteAddr)
 			clearBootstrapCredentialCookie(w, r)
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -259,7 +274,7 @@ func handleBootstrapCredentialInstall(w http.ResponseWriter, r *http.Request, cr
 	rpc := cwmp.RenderSetParameterValues(cwmp.NewID(), []cwmp.ParameterValueStruct{
 		{Name: usernamePath, Value: cred.Username},
 		{Name: passwordPath, Value: cred.Password},
-	}, cred.CommandKey)
+	}, cwmp.ClampParameterKey(cred.CommandKey))
 	rpc = cwmp.RewriteCWMPNamespace(rpc, ns)
 	w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
 	w.WriteHeader(http.StatusOK)

@@ -59,6 +59,9 @@ const (
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: levelFromEnv()}))
+	// Handlers built without an injected logger (the bootstrap graduation
+	// guard) fall back to slog.Default; keep them on the same output/format.
+	slog.SetDefault(logger)
 	devicePlane, err := loadDevicePlaneConfig(os.Getenv)
 	if err != nil {
 		logger.Error("refusing to start", "err", err)

@@ -295,3 +295,30 @@ func TestBootstrapGraduationAnswersCPEInitiatedGetRPCMethodsBeforeInstall(t *tes
 		t.Fatalf("empty POST after GetRPCMethods status=%d body=%q, want credential install", recorder.Code, recorder.Body.String())
 	}
 }
+
+// A PENDING credential created before the ParameterKey limit was enforced
+// still carries a 51-character "cwmp-bootstrap-<uuid>" key; the install SPV
+// must clamp it to TR-069's string(32) or Nokia CPEs fault 9003.
+func TestBootstrapGraduationClampsLegacyParameterKey(t *testing.T) {
+	deps, cred, _ := bootstrapGraduationTestDeps(t, devices.DataModelRootDevice2)
+	cred.CommandKey = "cwmp-bootstrap-0d6f0a52-8a51-4c0b-9b8e-6f3a2f1c9e77"
+	guard := bootstrapCWMPGraduationGuardWithDeps(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("normal handler entered during bootstrap graduation")
+	}, deps)
+	cookie := runBootstrapGraduationInform(t, guard, "Device")
+
+	req := authenticatedBootstrapRequest(t, deps.bootstrapAuth, "")
+	req.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+	guard(recorder, req)
+	body := recorder.Body.String()
+	start := strings.Index(body, "<ParameterKey>")
+	end := strings.Index(body, "</ParameterKey>")
+	if start < 0 || end < start {
+		t.Fatalf("credential install has no ParameterKey: %s", body)
+	}
+	key := body[start+len("<ParameterKey>") : end]
+	if len(key) > cwmp.MaxParameterKeyLength || !strings.HasPrefix(cred.CommandKey, key) {
+		t.Fatalf("ParameterKey = %q (%d chars), want the stored key clamped to %d", key, len(key), cwmp.MaxParameterKeyLength)
+	}
+}

@@ -111,6 +111,21 @@ type SetParameterValuesResponse struct {
 // resulting "4 VALUE CHANGE" event, letting a later phase correlate that
 // event to the job that caused it — Phase 2 sets it (to the job's
 // CommandKey) but does not yet consume it on the Inform side.
+// MaxParameterKeyLength is TR-069's string(32) limit on the ParameterKey
+// argument of SetParameterValues/AddObject/DeleteObject.
+const MaxParameterKeyLength = 32
+
+// ClampParameterKey trims a key to MaxParameterKeyLength. Keys are ASCII
+// (generated hex/identifier strings), so byte truncation is safe. It exists
+// for keys persisted before the 32-character limit was enforced, e.g. legacy
+// "cwmp-bootstrap-<uuid>" credential keys still held by PENDING rows.
+func ClampParameterKey(key string) string {
+	if len(key) > MaxParameterKeyLength {
+		return key[:MaxParameterKeyLength]
+	}
+	return key
+}
+
 func RenderSetParameterValues(id string, params []ParameterValueStruct, parameterKey string) []byte {
 	var sb strings.Builder
 	sb.WriteString(`<cwmp:SetParameterValues><ParameterList soap-enc:arrayType="cwmp:ParameterValueStruct[`)
