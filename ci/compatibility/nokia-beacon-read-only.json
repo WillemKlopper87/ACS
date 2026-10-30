@@ -1,7 +1,20 @@
 {
   "name": "nokia-beacon31-read-only",
-  "identity_fields": ["Manufacturer", "ModelName", "ProductClass", "HardwareVersion", "SoftwareVersion"],
-  "expected_identity": {},
+  "identity_fields": [
+    "Manufacturer",
+    "ModelName",
+    "ProductClass",
+    "HardwareVersion",
+    "SoftwareVersion"
+  ],
+  "expected_identity": {
+    "HardwareVersion": [
+      "3TN00512BABA"
+    ],
+    "SoftwareVersion": [
+      "3TN00626IJLJ03"
+    ]
+  },
   "reads": [
     "Device.DeviceInfo.ModelNumber",
     "Device.DeviceInfo.UpTime",
