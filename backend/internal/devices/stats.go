@@ -4,8 +4,10 @@
 package devices
 
 import (
+	"acs/internal/parameters"
 	"acs/internal/store"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -232,7 +234,10 @@ func (r *Repository) InformRecencyBuckets(ctx context.Context, customerIDs []str
 // device status/identity plus the small set of cached parameters the
 // user's report spec named (firmware version, current SSID, MAC).
 // SoftwareVersion/SSID/MAC are "" when the CPE has never reported them,
-// not fabricated.
+// not fabricated. ReportRows leaves SSID and MACAddress empty: the caller
+// derives them from IdentityNames/IdentityValues with
+// adapters.ReportSSID / adapters.DeviceMACAddress (that package imports
+// this one, so it cannot be called from here).
 type ReportRow struct {
 	SerialNumber    string
 	Label           string
@@ -245,6 +250,37 @@ type ReportRow struct {
 	SoftwareVersion string
 	SSID            string
 	MACAddress      string
+
+	DataModelRoot string
+	// IdentityNames / IdentityValues are the discovered names (empty when
+	// never discovered or stale) and cached values matching
+	// ReportIdentityPatterns — the Wi-Fi resolver's inputs and the MAC
+	// candidates, never a credential.
+	IdentityNames  map[string]bool
+	IdentityValues map[string]parameters.CachedValue
+}
+
+// ReportIdentityPatterns (SQL LIKE) select what adapters.ReportSSID and
+// adapters.DeviceMACAddress read, from both the discovered names and the
+// cache, so the export does not load every device's whole tree. Names and
+// values use the same list: a name without its value marks the Wi-Fi view
+// incomplete. No pattern matches a passphrase/key/password leaf. ("_" is
+// a LIKE wildcard here; the adapters' regexes do the exact match.)
+var ReportIdentityPatterns = []string{
+	"Device.WiFi.SSID.%.SSID",
+	"Device.WiFi.SSID.%.Enable",
+	"Device.WiFi.SSID.%.LowerLayers",
+	"Device.WiFi.SSID.%.X_%IsGuestSSID",
+	"Device.WiFi.AccessPoint.%.SSIDReference",
+	"Device.WiFi.AccessPoint.%.SSIDAdvertisementEnabled",
+	"Device.WiFi.AccessPoint.%.Security.ModeEnabled",
+	"Device.WiFi.Radio.%.OperatingFrequencyBand",
+	"Device.WiFi.X_%.SSIDReference",
+	"Device.Ethernet.Interface.%.MACAddress",
+	"Device.Ethernet.Link.%.MACAddress",
+	"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
+	"InternetGatewayDevice.LANDevice.%.LANEthernetInterfaceConfig.%.MACAddress",
+	"InternetGatewayDevice.WANDevice.%.WANConnectionDevice.%.WAN%Connection.%.MACAddress",
 }
 
 // ReportRows backs the Excel export. customerIDs/scoped is the calling
@@ -271,16 +307,20 @@ func (r *Repository) ReportRows(ctx context.Context, customerIDs []string, scope
 		conditions = append(conditions, "EXISTS (SELECT 1 FROM device_projects dp WHERE dp.device_id = d.id AND dp.project_id = "+arg(*filterProjectID)+")")
 	}
 
+	patterns := arg(store.StringArray(ReportIdentityPatterns)) + "::text[]"
 	query := `
 		SELECT d.serial_number, COALESCE(d.label, ''), d.manufacturer, d.product_class, d.online_status,
 			COALESCE(d.location, ''), COALESCE(c.name, ''), COALESCE(reg.name, ''),
 			COALESCE(p.parameters->'Device.DeviceInfo.SoftwareVersion'->>'value', ''),
-			COALESCE(p.parameters->'Device.WiFi.SSID.1.SSID'->>'value', ''),
-			COALESCE((SELECT kv.value->>'value' FROM jsonb_each(p.parameters) kv WHERE kv.key ILIKE '%MACAddress%' LIMIT 1), '')
+			d.data_model_root,
+			CASE WHEN COALESCE((n.evidence->>'stale')::boolean, false) THEN '{}'::jsonb ELSE
+				COALESCE((SELECT jsonb_object_agg(kv.key, kv.value) FROM jsonb_each(n.names) kv WHERE kv.key LIKE ANY(` + patterns + `)), '{}'::jsonb) END,
+			COALESCE((SELECT jsonb_object_agg(kv.key, kv.value) FROM jsonb_each(p.parameters) kv WHERE kv.key LIKE ANY(` + patterns + `)), '{}'::jsonb)
 		FROM devices d
 		LEFT JOIN customers c ON c.id = d.customer_id
 		LEFT JOIN regions reg ON reg.id = c.region_id
 		LEFT JOIN device_parameter_cache p ON p.device_id = d.id
+		LEFT JOIN device_parameter_names n ON n.device_id = d.id
 	`
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
@@ -296,9 +336,16 @@ func (r *Repository) ReportRows(ctx context.Context, customerIDs []string, scope
 	var out []ReportRow
 	for rows.Next() {
 		var row ReportRow
+		var namesJSON, valuesJSON []byte
 		if err := rows.Scan(&row.SerialNumber, &row.Label, &row.Manufacturer, &row.ProductClass, &row.OnlineStatus,
-			&row.Location, &row.CustomerName, &row.RegionName, &row.SoftwareVersion, &row.SSID, &row.MACAddress); err != nil {
+			&row.Location, &row.CustomerName, &row.RegionName, &row.SoftwareVersion, &row.DataModelRoot, &namesJSON, &valuesJSON); err != nil {
 			return nil, fmt.Errorf("scan report row: %w", err)
+		}
+		if err := json.Unmarshal(namesJSON, &row.IdentityNames); err != nil {
+			return nil, fmt.Errorf("decode report row names: %w", err)
+		}
+		if err := json.Unmarshal(valuesJSON, &row.IdentityValues); err != nil {
+			return nil, fmt.Errorf("decode report row values: %w", err)
 		}
 		out = append(out, row)
 	}
