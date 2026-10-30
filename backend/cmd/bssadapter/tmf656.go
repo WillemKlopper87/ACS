@@ -138,7 +138,7 @@ func (h *handler) listTMF656Problems(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "ErrInvalidRequest", "accountId is required for scoped clients")
 		return
 	}
-	if accountID != "" && !tmfAccountAllowed(w, claims, accountID) {
+	if accountID != "" && !h.accountAllowed(w, r, claims, accountID) {
 		return
 	}
 	problems, err := h.mappings.ListServiceProblems(r.Context(), accountID, strings.TrimSpace(r.URL.Query().Get("status")), 500)

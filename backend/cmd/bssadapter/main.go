@@ -158,20 +158,21 @@ func main() {
 	}
 
 	h := &handler{
-		logger:             logger,
-		mappings:           bss.NewRepository(db),
-		onboarding:         onboarding.NewRepository(db),
-		acs:                bss.NewACSClient(acsBaseURL, 10*time.Second, internalServiceToken),
-		auditor:            observability.NewAuditor(db),
-		token:              token,
-		oauthClients:       bss.NewOAuthRepository(db),
-		oauthSigningSecret: oauthSigningSecret,
-		metrics:            metrics,
-		walledGarden:       walledGarden,
-		webhooks:           bss.NewWebhookRepository(db),
-		alertPolicies:      alerting.NewRepository(db),
-		alertIncidents:     alerting.NewIncidentRepository(db),
-		netPolicy:          webhookNetPolicy,
+		logger:               logger,
+		mappings:             bss.NewRepository(db),
+		onboarding:           onboarding.NewRepository(db),
+		acs:                  bss.NewACSClient(acsBaseURL, 10*time.Second, internalServiceToken),
+		auditor:              observability.NewAuditor(db),
+		token:                token,
+		oauthClients:         bss.NewOAuthRepository(db),
+		oauthSigningSecret:   oauthSigningSecret,
+		requireCustomerBound: os.Getenv("ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS") == "true",
+		metrics:              metrics,
+		walledGarden:         walledGarden,
+		webhooks:             bss.NewWebhookRepository(db),
+		alertPolicies:        alerting.NewRepository(db),
+		alertIncidents:       alerting.NewIncidentRepository(db),
+		netPolicy:            webhookNetPolicy,
 	}
 
 	mux := http.NewServeMux()
@@ -419,6 +420,10 @@ func withMaxBody(next http.Handler) http.Handler {
 type handler struct {
 	logger   *slog.Logger
 	mappings *bss.Repository
+	// requireCustomerBound accepts only OAuth clients bound to a customer
+	// (ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS): no shared token, no global
+	// client, no unauthenticated lab mode.
+	requireCustomerBound bool
 	// onboarding records pre-provisioned sales; nil keeps an unknown
 	// device an error, as before.
 	onboarding         *onboarding.Repository
@@ -511,6 +516,7 @@ type createMappingRequest struct {
 	// answer 202 instead of 404 (preprovision.go). Opt-in, so integrations
 	// that rely on the 404 keep it.
 	PreProvision bool         `json:"pre_provision"`
+	CustomerID   string       `json:"customer_id"`
 	ICCID        string       `json:"iccid"`
 	IMSI         string       `json:"imsi"`
 	Place        *tmf641Place `json:"place"`
@@ -577,7 +583,7 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 
 	mapping, err := h.mappings.AssignDevice(r.Context(), req.AccountID, req.OUISerial, roleOrDefault(req.Role), req.ServicePlan)
 	if errors.Is(err, bss.ErrDeviceNotFound) && req.PreProvision {
-		o, ppErr := h.preProvision(r.Context(), preProvisionRequest{AccountID: req.AccountID, OUISerial: req.OUISerial, Role: req.Role,
+		o, ppErr := h.preProvision(r.Context(), preProvisionRequest{CustomerID: req.CustomerID, AccountID: req.AccountID, OUISerial: req.OUISerial, Role: req.Role,
 			ServicePlan: req.ServicePlan, ICCID: req.ICCID, IMSI: req.IMSI, Place: req.Place})
 		switch {
 		case ppErr == nil:

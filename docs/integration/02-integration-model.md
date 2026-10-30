@@ -166,6 +166,44 @@ back. It does not interpret it or change device behaviour based on it.
 - **Log hygiene:** `wifi_password` appears in request bodies you send.
   Redact it in your own logs.
 
+### 8.1 Customer-bound clients (one ISP, one customer)
+
+An OAuth client can be **bound to one ACS customer** (an ISP). This is the
+recommended model for an ISP or NaaS platform, and the only one accepted
+when the ACS runs with `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true`.
+
+- **Accounts belong to customers.** The first *write* a bound client makes
+  for a new `account_id` (a mapping, an order, a TMF641 order, a webhook)
+  claims that account for its customer. From then on only that customer's
+  clients can read or change it. Every other client gets **404**, never
+  403, so account ids are no existence oracle across ISPs. A read of an
+  account nobody owns yet is also 404.
+- **Account ids stay globally unique.** Mint them so they cannot collide
+  across ISPs, for example `<tenant prefix>.<uuid>`. Ownership, not
+  per-customer uniqueness, is what keeps one ISP out of the accounts of
+  another.
+- **Devices follow the account.** Mapping a device with no customer to a
+  bound account gives the device that customer. A device of another
+  customer is not found (404 `ErrDeviceNotMapped`). The device only
+  changes customer when the mapping is actually written.
+- **Pre-provisioned sales** (`pre_provision`, TMF641 `add` for an unseen
+  CPE) belong to the account's customer. Plan codes resolve only to that
+  customer's plans or shared ones. An explicit `customer_id` (mapping) or
+  `customerId` (TMF641 order) must be the account's customer, else the
+  request is refused (409 on mappings, a FAILED item on TMF641).
+- **Accounts from before binding.** An account that already has mappings,
+  orders, service orders or webhooks from a global client cannot be
+  claimed by a bound client; it stays 404 until an operator assigns it
+  (`PUT /api/v1/bss/accounts/{account_id}/customer`, superadmin). Only an
+  operator can move an account between customers.
+- **Asserting your binding.** The token response carries `customer_id`,
+  and the JWT carries it as `cust`. A client cannot be both bound and
+  fleet-wide; `account_ids` on a bound client narrows it further.
+- **Fleet-wide operations** (a webhook with no `account_id`, TMF lists
+  without `accountId`) need a global client, which
+  `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true` disables together with the
+  shared `ACS_BSS_API_TOKEN` and the unauthenticated lab mode.
+
 ## 9. Known limits to design around
 
 - **One action per order.** `MODIFY_WIFI` only, today. An order carries one

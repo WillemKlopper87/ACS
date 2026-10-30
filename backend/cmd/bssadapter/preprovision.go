@@ -31,6 +31,8 @@ type tmf641Place struct {
 }
 
 type preProvisionRequest struct {
+	// CustomerID, when the caller names one, must be the account owner's.
+	CustomerID  string
 	AccountID   string
 	ExternalRef string // the TMF641 externalId, when an order asked
 	OUISerial   string
@@ -44,6 +46,10 @@ type preProvisionRequest struct {
 // errPreProvisionUnavailable: the adapter runs without onboarding (tests
 // and older deployments), so an unknown device fails as it always did.
 var errPreProvisionUnavailable = errors.New("pre-provisioning is not available")
+
+// errPreProvisionCustomer: the caller named a customer that does not own
+// the account (for a legacy unowned account, any customer).
+var errPreProvisionCustomer = errors.New("customer_id does not match the account's customer")
 
 // onboardingRole maps the BSS role vocabulary onto the onboarding's; the
 // BSS role itself is kept for the account mapping.
@@ -80,12 +86,26 @@ func (h *handler) preProvision(ctx context.Context, req preProvisionRequest) (*o
 		return nil, err
 	}
 
-	// The BSS account is not an ACS customer; the plan is what ties a sale
-	// to one. An unknown plan code is kept on the mapping but configures
-	// nothing.
+	// An account owned by a customer (a customer-bound client claimed it)
+	// sells for that customer, and only its own or shared plans apply. A
+	// legacy account with no owner falls back to the plan code: the shared
+	// plan with that code, else the one customer plan that has it. An
+	// unknown plan code is kept on the mapping but configures nothing.
+	owner, err := h.mappings.AccountOwner(ctx, req.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	if req.CustomerID != "" && req.CustomerID != owner {
+		return nil, errPreProvisionCustomer
+	}
 	var plan *onboarding.ServicePlan
 	if code := strings.TrimSpace(req.ServicePlan); code != "" {
-		p, err := h.onboarding.PlanByCode(ctx, code)
+		var p *onboarding.ServicePlan
+		if owner != "" {
+			p, err = h.onboarding.PlanForCustomer(ctx, code, owner)
+		} else {
+			p, err = h.onboarding.PlanByCode(ctx, code)
+		}
 		switch {
 		case err == nil:
 			plan = p
@@ -97,6 +117,9 @@ func (h *handler) preProvision(ctx context.Context, req preProvisionRequest) (*o
 	var customerID, planID *string
 	if plan != nil {
 		customerID, planID = plan.CustomerID, &plan.ID
+	}
+	if owner != "" {
+		customerID = &owner
 	}
 
 	// A device with this serial in another customer's inventory is never

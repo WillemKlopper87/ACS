@@ -19,6 +19,9 @@ type tokenResponse struct {
 	TokenType   string `json:"token_type"`
 	ExpiresIn   int    `json:"expires_in"`
 	Scope       string `json:"scope,omitempty"`
+	// CustomerID is the ACS customer the token is bound to, so a caller can
+	// assert it does not hold a global token.
+	CustomerID string `json:"customer_id,omitempty"`
 }
 
 // issueOAuthToken implements the client_credentials grant. The stored
@@ -70,6 +73,9 @@ func (h *handler) issueOAuthToken(w http.ResponseWriter, r *http.Request) {
 		Subject: "bss-client:" + clientID, Role: bssClientRole, IssuedAt: now, ExpiresAt: now.Add(oauthTokenTTL),
 		Scopes: scopes, AccountIDs: append([]string(nil), client.AccountIDs...), GlobalAccess: client.GlobalAccess,
 	}
+	if client.CustomerID != nil {
+		claims.CustomerID = *client.CustomerID
+	}
 	token, err := auth.SignJWT(h.oauthSigningSecret, claims)
 	if err != nil {
 		h.logger.Error("failed to sign oauth token", "err", err, "client_id", clientID)
@@ -79,5 +85,5 @@ func (h *handler) issueOAuthToken(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("oauth token issued", "client_id", clientID, "scopes", scopes, "global_access", client.GlobalAccess)
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(tokenResponse{AccessToken: token, TokenType: "Bearer", ExpiresIn: int(oauthTokenTTL.Seconds()), Scope: strings.Join(scopes, " ")})
+	_ = json.NewEncoder(w).Encode(tokenResponse{AccessToken: token, TokenType: "Bearer", ExpiresIn: int(oauthTokenTTL.Seconds()), Scope: strings.Join(scopes, " "), CustomerID: claims.CustomerID})
 }

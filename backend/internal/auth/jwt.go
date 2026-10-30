@@ -43,6 +43,9 @@ type Claims struct {
 	Scopes       []string
 	AccountIDs   []string
 	GlobalAccess bool
+	// CustomerID binds a machine token to one ACS customer (an ISP): it may
+	// act only on BSS accounts that customer owns.
+	CustomerID string
 }
 
 // AudienceBrowserTicket marks a ticket minted by POST /auth/ticket.
@@ -58,6 +61,7 @@ type jwtPayload struct {
 	Scopes       []string `json:"scp,omitempty"`
 	AccountIDs   []string `json:"accounts,omitempty"`
 	GlobalAccess bool     `json:"global,omitempty"`
+	CustomerID   string   `json:"cust,omitempty"`
 }
 
 const jwtHeader = `{"alg":"HS256","typ":"JWT"}`
@@ -80,6 +84,7 @@ func SignJWT(secret []byte, claims Claims) (string, error) {
 		Scopes:       claims.Scopes,
 		AccountIDs:   claims.AccountIDs,
 		GlobalAccess: claims.GlobalAccess,
+		CustomerID:   claims.CustomerID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal claims: %w", err)
@@ -121,6 +126,7 @@ func VerifyJWT(secret []byte, token string) (*Claims, error) {
 		Scopes:       p.Scopes,
 		AccountIDs:   p.AccountIDs,
 		GlobalAccess: p.GlobalAccess,
+		CustomerID:   p.CustomerID,
 	}
 	if time.Now().After(claims.ExpiresAt) {
 		return nil, ErrInvalidToken

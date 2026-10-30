@@ -118,6 +118,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("GET", "/api/v1/bss/oauth-clients", admin, h.listBSSOAuthClients)
 	route("POST", "/api/v1/bss/oauth-clients", admin, h.createBSSOAuthClient)
 	route("DELETE", "/api/v1/bss/oauth-clients/{id}", admin, h.revokeBSSOAuthClient)
+	route("PUT", "/api/v1/bss/accounts/{account_id}/customer", admin, h.setBSSAccountCustomer)
 	route("GET", "/api/v1/bss/webhooks", admin, h.listBSSWebhooks)
 	route("POST", "/api/v1/bss/webhooks", admin, h.createBSSWebhook)
 	route("DELETE", "/api/v1/bss/webhooks/{id}", admin, h.deleteBSSWebhook)

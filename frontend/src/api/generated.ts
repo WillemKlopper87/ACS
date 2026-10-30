@@ -5858,10 +5858,12 @@ export interface paths {
                         /** @description Accounts this client may access. Required for a non-empty scope list unless global_access is true; mutually exclusive with global_access. */
                         account_ids?: string[];
                         /**
-                         * @description Deliberate fleet-wide TMF access. Mutually exclusive with account_ids.
+                         * @description Deliberate fleet-wide TMF access. Mutually exclusive with account_ids and customer_id.
                          * @default false
                          */
                         global_access?: boolean;
+                        /** @description Bind the client to one ACS customer (an ISP). It acts only on BSS accounts that customer owns and claims a new account on its first write; account_ids may narrow it further. Required for every client when cmd/bssadapter runs with ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true. */
+                        customer_id?: string | null;
                     };
                 };
             };
@@ -5884,6 +5886,55 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bss/accounts/{account_id}/customer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Assign a BSS account to an ACS customer (superadmin) — for accounts used before customer binding, which a bound client may not claim, or to move an account */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    account_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        customer_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Assigned */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing or unknown customer_id */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7735,6 +7786,8 @@ export interface components {
             scopes: ("tmf:read" | "tmf:write" | "tmf:execute" | "tmf:acknowledge")[];
             account_ids: string[];
             global_access: boolean;
+            /** @description The ACS customer the client is bound to; null for a global or account-listed client */
+            customer_id?: string | null;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */

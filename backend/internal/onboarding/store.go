@@ -188,6 +188,14 @@ func (r *Repository) PlanByCode(ctx context.Context, code string) (*ServicePlan,
 	}
 }
 
+// PlanForCustomer finds a plan by code for one customer: its own plan with
+// that code, else the shared one. Another customer's plan is never found.
+func (r *Repository) PlanForCustomer(ctx context.Context, code, customerID string) (*ServicePlan, error) {
+	return scanPlan(r.db.QueryRowContext(ctx, `SELECT `+planColumns+` FROM service_plans
+		WHERE code = $1 AND (customer_id IS NULL OR customer_id = $2::uuid)
+		ORDER BY customer_id NULLS LAST LIMIT 1`, strings.TrimSpace(code), customerID))
+}
+
 // SiteByRef finds a customer's site by its BSS premise reference.
 func (r *Repository) SiteByRef(ctx context.Context, customerID *string, ref string) (*Site, error) {
 	return scanSite(r.db.QueryRowContext(ctx, `SELECT `+siteColumns+` FROM sites

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { BSSAdapterCallResult, BSSHealth, BSSMapping, BSSOAuthClient, BSSStats, BSSWebhookSubscription } from "../api/types";
 import { toast } from "../lib/toast";
+import { customerName, useCustomers } from "../lib/useCustomers";
 
 // BSS integration admin panel (admin-platform backlog): a superadmin view
 // onto the BSS-facing adapter (internal/bss, cmd/bssadapter — see
@@ -86,6 +87,10 @@ export function BSSIntegration() {
   const [oauthScopes, setOauthScopes] = useState<string[]>(["tmf:read"]);
   const [oauthAccountIds, setOauthAccountIds] = useState("");
   const [oauthGlobalAccess, setOauthGlobalAccess] = useState(false);
+  // An ISP integration is bound to its ACS customer: it acts only on that
+  // customer's BSS accounts (migration 0089).
+  const [oauthCustomerId, setOauthCustomerId] = useState("");
+  const customers = useCustomers();
   const [newClientSecret, setNewClientSecret] = useState<{ clientId: string; secret: string } | null>(null);
 
   // --- health ---
@@ -121,8 +126,8 @@ export function BSSIntegration() {
     const accountIds = oauthGlobalAccess
       ? []
       : oauthAccountIds.split(",").map((value) => value.trim()).filter(Boolean);
-    if (oauthScopes.length > 0 && !oauthGlobalAccess && accountIds.length === 0) {
-      toast("Grant at least one account ID or deliberately enable fleet-wide access", "error");
+    if (oauthScopes.length > 0 && !oauthGlobalAccess && !oauthCustomerId && accountIds.length === 0) {
+      toast("Bind the client to a customer, grant account IDs, or deliberately enable fleet-wide access", "error");
       return;
     }
     try {
@@ -131,8 +136,10 @@ export function BSSIntegration() {
         scopes: oauthScopes,
         account_ids: accountIds,
         global_access: oauthGlobalAccess,
+        customer_id: oauthGlobalAccess ? null : oauthCustomerId || null,
       });
       setOauthClientName("");
+      setOauthCustomerId("");
       setOauthScopes(["tmf:read"]);
       setOauthAccountIds("");
       setOauthGlobalAccess(false);
@@ -341,6 +348,19 @@ export function BSSIntegration() {
             <form onSubmit={createOAuthClient} style={{ marginTop: "0.75rem" }}>
               <div className="form-row" style={{ flexWrap: "wrap" }}>
                 <input aria-label="Integration name, e.g. Salesforce Comm Cloud" placeholder="Integration name, e.g. Salesforce Comm Cloud" value={oauthClientName} onChange={(e) => setOauthClientName(e.target.value)} required />
+                <select
+                  aria-label="Customer (ISP) the client is bound to"
+                  value={oauthCustomerId}
+                  onChange={(e) => setOauthCustomerId(e.target.value)}
+                  disabled={oauthGlobalAccess}
+                >
+                  <option value="">Not bound to a customer</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      Bound to {c.name}
+                    </option>
+                  ))}
+                </select>
                 <input
                   aria-label="Authorized account IDs"
                   placeholder="account IDs, comma-separated"
@@ -354,7 +374,10 @@ export function BSSIntegration() {
                     checked={oauthGlobalAccess}
                     onChange={(e) => {
                       setOauthGlobalAccess(e.target.checked);
-                      if (e.target.checked) setOauthAccountIds("");
+                      if (e.target.checked) {
+                        setOauthAccountIds("");
+                        setOauthCustomerId("");
+                      }
                     }}
                   />
                   Fleet-wide access
@@ -407,7 +430,13 @@ export function BSSIntegration() {
                     )}
                     <span className="src mono">{c.client_id}</span>
                     <span className="src">
-                      {c.scopes.length > 0 ? c.scopes.join(", ") : "no TMF scopes"} · {c.global_access ? "fleet-wide" : c.account_ids.length > 0 ? c.account_ids.join(", ") : "no accounts"}
+                      {c.scopes.length > 0 ? c.scopes.join(", ") : "no TMF scopes"} · {c.global_access
+                        ? "fleet-wide"
+                        : c.customer_id
+                          ? `customer ${customerName(customers, c.customer_id)}${c.account_ids.length > 0 ? ` (${c.account_ids.join(", ")})` : ""}`
+                          : c.account_ids.length > 0
+                            ? c.account_ids.join(", ")
+                            : "no accounts"}
                     </span>
                   </div>
                 ))}

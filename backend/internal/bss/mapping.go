@@ -214,12 +214,22 @@ func (r *Repository) AssignDeviceStatus(ctx context.Context, accountID, ouiSeria
 	if !ValidRole(role) {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidRole, role)
 	}
-	deviceID, err := resolveDeviceID(ctx, r.db, ouiSerial)
+	// One transaction: a device only joins the account's customer when the
+	// mapping that needs it is written.
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin assignment: %w", err)
+	}
+	defer tx.Rollback()
+	deviceID, err := deviceForAccount(ctx, tx, ouiSerial, accountID)
 	if err != nil {
 		return nil, err
 	}
-	if err := insertAssignment(ctx, r.db, uuid.New().String(), accountID, deviceID, ouiSerial, role, nullIfEmpty(servicePlan), status); err != nil {
+	if err := insertAssignment(ctx, tx, uuid.New().String(), accountID, deviceID, ouiSerial, role, nullIfEmpty(servicePlan), status); err != nil {
 		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit assignment: %w", err)
 	}
 	return r.getByAccountDevice(ctx, accountID, deviceID)
 }
@@ -283,7 +293,7 @@ func (r *Repository) SwapDevice(ctx context.Context, accountID, role, newOUISeri
 		return nil, fmt.Errorf("release old assignment: %w", err)
 	}
 
-	newDeviceID, err := resolveDeviceID(ctx, tx, newOUISerial)
+	newDeviceID, err := deviceForAccount(ctx, tx, newOUISerial, accountID)
 	if err != nil {
 		return nil, err // deferred Rollback restores the old assignment
 	}

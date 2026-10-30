@@ -26,8 +26,10 @@ type tmf641ItemRequest struct {
 	Place *tmf641Place `json:"place"`
 }
 type tmf641OrderRequest struct {
-	ExternalID string              `json:"externalId"`
-	AccountID  string              `json:"accountId"`
+	ExternalID string `json:"externalId"`
+	AccountID  string `json:"accountId"`
+	// CustomerID, when given, must be the account owner's (pre-provisioning).
+	CustomerID string              `json:"customerId"`
 	OrderItem  []tmf641ItemRequest `json:"orderItem"`
 }
 type tmf641CancelRequest struct {
@@ -211,7 +213,7 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 }
 
 func tmf641PreProvision(req tmf641OrderRequest, item tmf641ItemRequest) preProvisionRequest {
-	return preProvisionRequest{AccountID: req.AccountID, ExternalRef: req.ExternalID, OUISerial: item.OUISerial, Role: item.Role,
+	return preProvisionRequest{CustomerID: req.CustomerID, AccountID: req.AccountID, ExternalRef: req.ExternalID, OUISerial: item.OUISerial, Role: item.Role,
 		ServicePlan: item.ServicePlan, ICCID: item.ICCID, IMSI: item.IMSI, Place: item.Place}
 }
 

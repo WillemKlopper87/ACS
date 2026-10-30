@@ -2335,10 +2335,32 @@ paths:
                 global_access:
                   type: boolean
                   default: false
-                  description: "Deliberate fleet-wide TMF access. Mutually exclusive with account_ids."
+                  description: "Deliberate fleet-wide TMF access. Mutually exclusive with account_ids and customer_id."
+                customer_id:
+                  type: string
+                  nullable: true
+                  description: "Bind the client to one ACS customer (an ISP). It acts only on BSS accounts that customer owns and claims a new account on its first write; account_ids may narrow it further. Required for every client when cmd/bssadapter runs with ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true."
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/BSSOAuthClientCreateResult" } } } }
         "400": { description: Invalid OAuth authorization policy }
+
+  /api/v1/bss/accounts/{account_id}/customer:
+    put:
+      tags: [BSS Admin]
+      summary: Assign a BSS account to an ACS customer (superadmin) — for accounts used before customer binding, which a bound client may not claim, or to move an account
+      parameters: [{ name: account_id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [customer_id]
+              properties:
+                customer_id: { type: string }
+      responses:
+        "204": { description: Assigned }
+        "400": { description: Missing or unknown customer_id }
 
   /api/v1/bss/oauth-clients/{id}:
     delete:
@@ -3509,6 +3531,7 @@ components:
             enum: [tmf:read, tmf:write, tmf:execute, tmf:acknowledge]
         account_ids: { type: array, items: { type: string } }
         global_access: { type: boolean }
+        customer_id: { type: string, nullable: true, description: "The ACS customer the client is bound to; null for a global or account-listed client" }
         created_at: { type: string, format: date-time }
         revoked_at: { type: string, format: date-time, nullable: true }
 

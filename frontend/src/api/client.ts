@@ -687,7 +687,7 @@ export const api = {
       body: JSON.stringify({ account_id: accountId, oui_serial: ouiSerial, service_plan: servicePlan }),
     }),
   listBSSOAuthClients: () => request<{ items: BSSOAuthClient[] }>("/api/v1/bss/oauth-clients"),
-  createBSSOAuthClient: (input: { name: string; scopes: string[]; account_ids: string[]; global_access: boolean }) =>
+  createBSSOAuthClient: (input: { name: string; scopes: string[]; account_ids: string[]; global_access: boolean; customer_id?: string | null }) =>
     request<BSSOAuthClientCreateResult>("/api/v1/bss/oauth-clients", { method: "POST", body: JSON.stringify(input) }),
   revokeBSSOAuthClient: (id: string) => request<void>(`/api/v1/bss/oauth-clients/${id}`, { method: "DELETE" }),
   listBSSWebhooks: () => request<{ items: BSSWebhookSubscription[] }>("/api/v1/bss/webhooks"),
