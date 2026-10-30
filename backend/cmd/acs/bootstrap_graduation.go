@@ -130,6 +130,9 @@ func bootstrapCWMPGraduationGuardWithDeps(next http.HandlerFunc, deps bootstrapG
 			}
 			return
 		}
+		if deps.metrics != nil {
+			deps.metrics.CWMPAuthTotal.WithLabelValues("bootstrap_ok").Inc()
+		}
 
 		raw, err := readCWMPBody(w, r)
 		if err != nil {
