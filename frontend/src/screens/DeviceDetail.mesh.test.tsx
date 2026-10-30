@@ -78,6 +78,8 @@ describe("DeviceDetail for a mesh satellite", () => {
     expect(screen.getAllByText(/192\.168\.1\.48/).length).toBeGreaterThan(0);
     await waitFor(() => expect(screen.getByText("Refresh WiFi clients on Lab FastMile")).toBeTruthy());
     expect(screen.queryByText("Refresh WiFi clients")).toBeNull();
+    expect(screen.queryByText("Set SSID")).toBeNull();
+    expect(screen.getByText(/Wi-Fi name and password for this mesh are set on its gateway/)).toBeTruthy();
 
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     fireEvent.click(screen.getByText("Reboot"));
@@ -102,5 +104,6 @@ describe("DeviceDetail for a mesh satellite", () => {
     await waitFor(() => expect(rebootDevice).toHaveBeenCalledWith("gw-1"));
     expect(confirm).not.toHaveBeenCalled();
     expect(screen.getByText("Refresh WiFi clients")).toBeTruthy();
+    expect(screen.getByText("Set SSID")).toBeTruthy();
   });
 });

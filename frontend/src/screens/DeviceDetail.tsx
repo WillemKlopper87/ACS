@@ -515,17 +515,23 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
 
         <DeviceCompatibility id={id} writable={writable} />
 
-        <div className="form-row">
-          <input aria-label="New WiFi SSID"
-            placeholder="New WiFi SSID…"
-            value={ssidInput}
-            onChange={(e) => setSsidInput(e.target.value)}
-            disabled={busy || !writable}
-          />
-          <button className="btn" onClick={handleSetSsid} disabled={busy || !writable || !ssidInput.trim()}>
-            Set SSID
-          </button>
-        </div>
+        {satellite ? (
+          // No Device.WiFi tree over CWMP on a satellite: the mesh SSIDs are
+          // set on the gateway and propagated by EasyMesh.
+          <p className="muted">Wi-Fi name and password for this mesh are set on its gateway ({meshGatewayName}).</p>
+        ) : (
+          <div className="form-row">
+            <input aria-label="New WiFi SSID"
+              placeholder="New WiFi SSID…"
+              value={ssidInput}
+              onChange={(e) => setSsidInput(e.target.value)}
+              disabled={busy || !writable}
+            />
+            <button className="btn" onClick={handleSetSsid} disabled={busy || !writable || !ssidInput.trim()}>
+              Set SSID
+            </button>
+          </div>
+        )}
 
         <div className="form-row">
           <input

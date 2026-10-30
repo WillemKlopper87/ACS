@@ -290,12 +290,14 @@ export function assessDeviceOnboarding(
       title: "Nokia: keep the first qualification read-only",
       detail: "Use parameter discovery and the Device Compatibility evidence before any vendor-specific write. Read only paths that this exact firmware exposes; do not promote guessed Nokia 5G paths from another model or build.",
     });
-    if (privateConnectionRequest(device.connection_request_url)) {
+    // A mesh satellite's URL is on its gateway's LAN by design; the mesh
+    // panel explains that instead (field test 2026-10-30, Beacon 3.1).
+    if (privateConnectionRequest(device.connection_request_url) && !(device.gateway_device_id || device.gateway_oui_serial)) {
       hints.push({
         id: "nokia-private-cr",
         severity: "warning",
         title: "Nokia Connection Request URL is private",
-        detail: `${device.connection_request_url} is not directly reachable from a public cloud ACS. Prove normal periodic Inform first, then qualify NAT/STUN/Annex-G or another reachable Connection Request path instead of rewriting the URL blindly.`,
+        detail: `${device.connection_request_url} is not directly reachable from a public cloud ACS (carrier CGNAT). FastMile 1.2501.00.0798 has no STUN/Annex G; it supports XMPP Connection Request (Annex K), so use that or rely on the periodic Inform instead of rewriting the URL.`,
       });
     }
   }
