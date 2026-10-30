@@ -48,6 +48,11 @@ type deviceResponse struct {
 	ReenrollUntil               *string  `json:"reenroll_until,omitempty"`
 	RebootRequestedAt           *string  `json:"reboot_requested_at,omitempty"`
 	LastRebootDurationSeconds   *int     `json:"last_reboot_duration_seconds,omitempty"`
+	// GatewayDeviceID is set on a mesh satellite linked (via TR-111
+	// GatewayInfo) to its gateway; GatewayOUISerial is the gateway
+	// identity it reported, kept even when that gateway is not registered.
+	GatewayDeviceID  *string `json:"gateway_device_id,omitempty"`
+	GatewayOUISerial *string `json:"gateway_oui_serial,omitempty"`
 }
 
 func toResponse(d devices.Device) deviceResponse {
@@ -73,6 +78,8 @@ func toResponse(d devices.Device) deviceResponse {
 		Location:                    d.Location,
 		Latitude:                    d.Latitude,
 		Longitude:                   d.Longitude,
+		GatewayDeviceID:             d.GatewayDeviceID,
+		GatewayOUISerial:            d.GatewayOUISerial,
 	}
 	if d.RebootRequestedAt != nil {
 		v := d.RebootRequestedAt.UTC().Format(time.RFC3339)
@@ -310,6 +317,32 @@ func (h *handler) getDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toResponse(*d))
+}
+
+// listDeviceSatellites returns the mesh satellites linked to a gateway
+// (devices whose gateway_device_id is this device), filtered to the
+// caller's tenancy scope like every other device read.
+func (h *handler) listDeviceSatellites(w http.ResponseWriter, r *http.Request) {
+	d, ok := h.getScopedDevice(w, r, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	satellites, err := h.devices.ListSatellites(r.Context(), d.ID, customerIDs, scoped)
+	if err != nil {
+		h.logger.Error("failed to list mesh satellites", "err", err, "device_id", d.ID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	items := make([]deviceResponse, 0, len(satellites))
+	for _, s := range satellites {
+		items = append(items, toResponse(s))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items)})
 }
 
 func deviceInScope(deviceCustomerID *string, accessibleCustomerIDs []string) bool {

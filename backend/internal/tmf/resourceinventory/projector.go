@@ -2,6 +2,7 @@ package resourceinventory
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +19,11 @@ type Enrichment struct {
 	AssignmentRoles     []string
 	SoftwareVersion     string
 	HardwareVersion     string
+	// GatewayID is the mesh gateway this device is a satellite of, and
+	// SatelliteIDs the satellites linked to it (devices.gateway_device_id).
+	// The caller only passes counterparts visible in the requester's scope.
+	GatewayID    string
+	SatelliteIDs []string
 }
 
 // Projector converts the existing ACS device inventory into the canonical
@@ -99,7 +105,43 @@ func (p *Projector) ProjectWithEnrichment(d devices.Device, enrichment Enrichmen
 	if strings.EqualFold(strings.TrimSpace(d.OnlineStatus), "ONLINE") {
 		resource.AvailabilityStatus = "online"
 	}
+	relationships, err := p.meshRelationships(d.ID, enrichment)
+	if err != nil {
+		return Resource{}, err
+	}
+	resource.ResourceRelationship = relationships
 	return resource, nil
+}
+
+func (p *Projector) meshRelationships(selfID string, enrichment Enrichment) ([]ResourceRelationship, error) {
+	var out []ResourceRelationship
+	add := func(relationshipType, id string) error {
+		id = strings.TrimSpace(id)
+		if id == "" || id == selfID {
+			return nil
+		}
+		href, err := common.BuildHref(p.baseURL, CollectionPath, id)
+		if err != nil {
+			return fmt.Errorf("build TMF639 relationship href: %w", err)
+		}
+		out = append(out, ResourceRelationship{
+			RelationshipType: relationshipType,
+			Resource:         ResourceRef{ID: id, Href: href, ReferredType: "PhysicalResource", Type: "ResourceRef"},
+			Type:             "ResourceRelationship",
+		})
+		return nil
+	}
+	if err := add(RelationshipMeshSatelliteOf, enrichment.GatewayID); err != nil {
+		return nil, err
+	}
+	satellites := normalizedStrings(enrichment.SatelliteIDs)
+	sort.Strings(satellites)
+	for _, id := range satellites {
+		if err := add(RelationshipHasMeshSatellite, id); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 func stringCharacteristic(name, value string) Characteristic {

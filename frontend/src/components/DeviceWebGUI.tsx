@@ -10,7 +10,7 @@ import { api, ApiError } from "../api/client";
 import type { WebGUIConfig } from "../api/types";
 import { toast } from "../lib/toast";
 
-export function DeviceWebGUI({ id, writable }: { id: string; writable: boolean }) {
+export function DeviceWebGUI({ id, writable, unreachableNote }: { id: string; writable: boolean; unreachableNote?: string }) {
   const [config, setConfig] = useState<WebGUIConfig | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ base_url: "", username: "", password: "" });
@@ -88,6 +88,12 @@ export function DeviceWebGUI({ id, writable }: { id: string; writable: boolean }
           {showForm ? "Cancel" : configured ? "Edit" : "Configure"}
         </button>
       </h3>
+
+      {unreachableNote && (
+        <p className="dim" role="note" style={{ fontSize: "0.78rem", marginTop: 0 }}>
+          {unreachableNote}
+        </p>
+      )}
 
       {showForm && (
         <div className="form-row" style={{ marginTop: 0, flexWrap: "wrap" }}>

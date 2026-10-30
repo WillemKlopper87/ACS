@@ -52,6 +52,11 @@ type Device struct {
 	// long the last one took until the device informed again.
 	RebootRequestedAt         *time.Time
 	LastRebootDurationSeconds *int
+	// GatewayOUISerial is the upstream gateway identity a mesh satellite
+	// last reported via TR-111 Device.GatewayInfo (natural-key form);
+	// GatewayDeviceID is the registered device it resolved to, if any.
+	GatewayOUISerial *string
+	GatewayDeviceID  *string
 }
 
 // ReenrollmentOpen reports whether an operator re-enrolment window is open.

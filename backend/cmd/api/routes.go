@@ -80,6 +80,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("PUT", "/api/v1/dashboard/layout", ro, h.setDashboardLayout)
 	routePerm("POST", "/api/v1/devices/bulk-actions", operators.PermBulkActions, h.bulkAction)
 	route("GET", "/api/v1/devices/{id}", ro, h.getDevice)
+	route("GET", "/api/v1/devices/{id}/satellites", ro, h.listDeviceSatellites)
 	// TMF639 Resource Inventory projects the tenant-scoped device inventory.
 	route("GET", "/tmf-api/resourceInventoryManagement/v5/resource", ro, h.listTMF639Resources)
 	route("GET", "/tmf-api/resourceInventoryManagement/v5/resource/{id}", ro, h.getTMF639Resource)

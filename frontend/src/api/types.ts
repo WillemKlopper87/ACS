@@ -28,6 +28,13 @@ export interface Device {
   /** Optional survey fix, set together. Drives the Tenancy & Site Locator map. */
   latitude?: number | null;
   longitude?: number | null;
+  /** Set while an ACS-requested reboot/reset is in progress (online_status REBOOTING). */
+  reboot_requested_at?: string;
+  last_reboot_duration_seconds?: number;
+  /** Mesh satellites: the gateway this unit sits behind (TR-111 Device.GatewayInfo). */
+  gateway_device_id?: string;
+  /** Mesh satellites: the gateway identity reported, even when that gateway is not registered. */
+  gateway_oui_serial?: string;
 }
 
 export type CaptureMatchType = "device" | "identity" | "remote_ip";

@@ -4,6 +4,7 @@ import { api, ApiError } from "../api/client";
 import type { DashboardAlarm, DashboardData, DashboardWidget } from "../api/types";
 import { timeAgo } from "../lib/format";
 import { toast } from "../lib/toast";
+import { groupCountsByVendor } from "../lib/vendorFamily";
 
 // Customizable fleet dashboard (admin-platform backlog). Charts follow the
 // dataviz skill's method: form picked by the data's job (grouped counts →
@@ -17,7 +18,7 @@ import { toast } from "../lib/toast";
 // --pending) rather than inventing a second one — no categorical palette
 // was needed anywhere here, so the validator doesn't apply.
 
-const GROUP_BY_LABEL: Record<string, string> = { customer: "Customer", region: "Region", project: "Project", manufacturer: "Manufacturer" };
+const GROUP_BY_LABEL: Record<string, string> = { customer: "Customer", region: "Region", project: "Project", manufacturer: "Vendor" };
 const STATUS_TONE: Record<string, string> = {
   ONLINE: "var(--ok)", OFFLINE: "var(--danger)", UNKNOWN: "var(--ink-faint)",
   DIRECT_IPV4: "var(--ok)", DIRECT_IPV6: "var(--ok)", STUN_ANNEX_G: "var(--warn)",
@@ -272,7 +273,8 @@ export function Dashboard() {
                     ))}
                   </select>
                 </h3>
-                <RankedBarChart data={data.group_by[groupDim]} />
+                {/* Vendor families: "ALCL" (Nokia Beacon) counts under Nokia. */}
+                <RankedBarChart data={groupDim === "manufacturer" ? groupCountsByVendor(data.group_by.manufacturer) : data.group_by[groupDim]} />
               </div>
             )}
 

@@ -384,6 +384,9 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	if inform.HasEventCode("0") {
 		h.applyAutoProvisioningTemplates(ctx, device)
 		h.autoDiscoverParameters(ctx, device)
+		h.adoptMeshSatellites(ctx, device)
+	} else if informHasEvent(inform, "1 BOOT") {
+		h.refreshGatewayInfoOnBoot(ctx, device.ID)
 	}
 
 	if inform.HasEventCode("6") {
@@ -802,6 +805,9 @@ func (h *handler) cacheParameterValues(ctx context.Context, deviceID string, lis
 		return
 	}
 	h.publishCellularStateChanges(ctx, deviceID, changes, now)
+	if hasGatewayInfo(list) {
+		h.refreshGatewayLink(ctx, deviceID)
+	}
 }
 
 // detectCellularStateChanges compares reported cellular state paths against

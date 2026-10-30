@@ -45,6 +45,9 @@ func ProjectFields(resource Resource, fields common.Fields) map[string]any {
 	if fields.Includes("resourceCharacteristic") && len(resource.ResourceCharacteristic) > 0 {
 		out["resourceCharacteristic"] = resource.ResourceCharacteristic
 	}
+	if fields.Includes("resourceRelationship") && len(resource.ResourceRelationship) > 0 {
+		out["resourceRelationship"] = resource.ResourceRelationship
+	}
 	if fields.Includes("@baseType") && resource.BaseType != "" {
 		out["@baseType"] = resource.BaseType
 	}
