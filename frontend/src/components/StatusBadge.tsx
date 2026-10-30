@@ -15,6 +15,8 @@ const TONE_BY_VALUE: Record<string, string> = {
   TIMEOUT: "danger",
   OFFLINE: "danger",
   UNREACHABLE: "danger",
+  // ACS-requested reboot/reset in progress: expected-down, not an outage.
+  REBOOTING: "pending",
   PERIODIC_FALLBACK_ONLY: "warn",
   // A non-repeatable job whose lease expired and which was deliberately
   // NOT retried (internal/jobs/lease.go). It means the work did not run

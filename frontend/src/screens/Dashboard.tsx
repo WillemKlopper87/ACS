@@ -21,7 +21,7 @@ const GROUP_BY_LABEL: Record<string, string> = { customer: "Customer", region: "
 const STATUS_TONE: Record<string, string> = {
   ONLINE: "var(--ok)", OFFLINE: "var(--danger)", UNKNOWN: "var(--ink-faint)",
   DIRECT_IPV4: "var(--ok)", DIRECT_IPV6: "var(--ok)", STUN_ANNEX_G: "var(--warn)",
-  PERIODIC_FALLBACK_ONLY: "var(--warn)", UNREACHABLE: "var(--danger)",
+  PERIODIC_FALLBACK_ONLY: "var(--warn)", UNREACHABLE: "var(--danger)", REBOOTING: "var(--warn)",
 };
 
 // RankedBarChart: horizontal bars, sorted descending, one sequential hue.

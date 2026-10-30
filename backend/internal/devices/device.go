@@ -47,6 +47,11 @@ type Device struct {
 	// ReenrollUntil is an operator-opened window in which this device may
 	// use the bootstrap identity again (e.g. after a factory reset).
 	ReenrollUntil *time.Time
+	// RebootRequestedAt is set while an ACS-requested reboot/reset is in
+	// progress (online_status REBOOTING); LastRebootDurationSeconds is how
+	// long the last one took until the device informed again.
+	RebootRequestedAt         *time.Time
+	LastRebootDurationSeconds *int
 }
 
 // ReenrollmentOpen reports whether an operator re-enrolment window is open.

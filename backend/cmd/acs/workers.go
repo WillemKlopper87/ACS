@@ -27,7 +27,7 @@ func pollDevicesOnlineGauge(ctx context.Context, repo *devices.Repository, metri
 		if err != nil {
 			logger.Error("failed to refresh devices-online gauge", "err", err)
 		} else {
-			for _, status := range []string{"ONLINE", "OFFLINE", "UNREACHABLE"} {
+			for _, status := range []string{"ONLINE", "OFFLINE", "UNREACHABLE", "REBOOTING"} {
 				metrics.DevicesOnline.WithLabelValues(status).Set(float64(counts[status]))
 			}
 		}

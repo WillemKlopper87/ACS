@@ -21,6 +21,7 @@ const STATUS_TONE: Record<string, string> = {
   DIRECT_IPV6: "ok",
   PERIODIC_FALLBACK_ONLY: "warn",
   UNREACHABLE: "danger",
+  REBOOTING: "pending",
   SUCCESS: "ok",
   FAILED: "danger",
   TIMEOUT: "danger",

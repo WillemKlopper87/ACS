@@ -72,6 +72,20 @@ func (r *Repository) CloseReenrollment(ctx context.Context, deviceID string) err
 	return nil
 }
 
+// RebootGrace is how long a device stays REBOOTING after an ACS-requested
+// reboot/reset before normal OFFLINE/UNREACHABLE liveness applies again. A
+// Nokia Beacon 3.1 needed 10.5 minutes to rejoin its mesh after a reboot.
+const RebootGrace = 30 * time.Minute
+
+// MarkRebooting records that the device acknowledged an ACS-requested
+// Reboot/FactoryReset: it is expected to go silent until it informs again.
+func (r *Repository) MarkRebooting(ctx context.Context, deviceID string) error {
+	if _, err := r.db.ExecContext(ctx, `UPDATE devices SET online_status = 'REBOOTING', reboot_requested_at = now(), last_updated_at = now() WHERE id = $1`, deviceID); err != nil {
+		return fmt.Errorf("mark rebooting: %w", err)
+	}
+	return nil
+}
+
 // UpdateDataModelRoot records the data model root confirmed by a successful
 // parameter discovery run (build plan nice-to-have backlog) — the first
 // time this column moves off UNKNOWN in production, since UpsertFromInform

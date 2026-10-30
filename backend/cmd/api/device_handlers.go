@@ -46,6 +46,8 @@ type deviceResponse struct {
 	Latitude                    *float64 `json:"latitude,omitempty"`
 	Longitude                   *float64 `json:"longitude,omitempty"`
 	ReenrollUntil               *string  `json:"reenroll_until,omitempty"`
+	RebootRequestedAt           *string  `json:"reboot_requested_at,omitempty"`
+	LastRebootDurationSeconds   *int     `json:"last_reboot_duration_seconds,omitempty"`
 }
 
 func toResponse(d devices.Device) deviceResponse {
@@ -72,6 +74,11 @@ func toResponse(d devices.Device) deviceResponse {
 		Latitude:                    d.Latitude,
 		Longitude:                   d.Longitude,
 	}
+	if d.RebootRequestedAt != nil {
+		v := d.RebootRequestedAt.UTC().Format(time.RFC3339)
+		resp.RebootRequestedAt = &v
+	}
+	resp.LastRebootDurationSeconds = d.LastRebootDurationSeconds
 	if d.ReenrollUntil != nil {
 		v := d.ReenrollUntil.UTC().Format(time.RFC3339)
 		resp.ReenrollUntil = &v

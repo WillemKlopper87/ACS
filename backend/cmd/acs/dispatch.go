@@ -609,6 +609,13 @@ func (h *handler) markJobSuccess(ctx context.Context, deviceID string, job *jobs
 		h.logger.Error("failed to write audit record", "err", err)
 	}
 	h.logger.Info("job succeeded", "job_id", job.ID, "command_key", job.CommandKey, "type", job.Type, "device_id", deviceID)
+	if job.Type == jobs.TypeReboot || job.Type == jobs.TypeFactoryReset {
+		// The CPE acknowledged the reboot/reset: it is expected to go silent
+		// until it informs again, which is not an outage.
+		if err := h.devices.MarkRebooting(ctx, deviceID); err != nil {
+			h.logger.Error("failed to mark device rebooting", "err", err, "device_id", deviceID)
+		}
+	}
 }
 
 func (h *handler) markUnexpectedResponse(ctx context.Context, deviceID string, job *jobs.Job) {

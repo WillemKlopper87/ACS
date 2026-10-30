@@ -6092,6 +6092,13 @@ export interface components {
              * @description Open operator re-enrolment window (bootstrap allowed until this time)
              */
             reenroll_until?: string;
+            /**
+             * Format: date-time
+             * @description Set while an ACS-requested reboot/reset is in progress (online_status REBOOTING)
+             */
+            reboot_requested_at?: string;
+            /** @description Seconds from the last acknowledged reboot/reset until the device informed again */
+            last_reboot_duration_seconds?: number;
         };
         DeviceGroupCount: {
             Manufacturer?: string;
