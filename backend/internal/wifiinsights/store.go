@@ -57,6 +57,16 @@ func (r *Repository) Record(ctx context.Context, deviceID string, at time.Time, 
 	if err != nil {
 		return fmt.Errorf("insert wifi sample: %w", err)
 	}
+	// Mesh nodes are never clients: drop what was stored for them before
+	// they were recognised (field data 2026-10-30: the Beacon topped the
+	// FastMile's client list), so every window stops listing them.
+	if len(snap.MeshMACs) > 0 {
+		for _, table := range []string{"wifi_client_samples", "wifi_clients"} {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE device_id = $1 AND mac = ANY($2)`, deviceID, snap.MeshMACs); err != nil {
+				return fmt.Errorf("drop mesh node rows from %s: %w", table, err)
+			}
+		}
+	}
 	for _, s := range snap.SSIDs {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO wifi_ssid_samples (sample_id, device_id, sampled_at, ssid_instance, ssid_name, role, bytes_down, bytes_up)

@@ -30,6 +30,11 @@ var (
 	staRE       = regexp.MustCompile(`^Device\.WiFi\.DataElements\.Network\.Device\.(\d+)\.Radio\.(\d+)\.BSS\.(\d+)\.STA\.(\d+)\.([A-Za-z0-9_-]+)$`)
 	staObj      = regexp.MustCompile(`^(Device\.WiFi\.DataElements\.Network\.Device\.\d+\.Radio\.\d+\.BSS\.\d+\.)STA\.$`)
 	bssSSIDRE   = regexp.MustCompile(`^(Device\.WiFi\.DataElements\.Network\.Device\.\d+\.Radio\.\d+\.BSS\.\d+\.)SSID$`)
+	// A mesh node's 1905 AL MAC and the MAC its backhaul link uses: field
+	// data 2026-10-30 showed the Beacon in the FastMile's STA and Hosts
+	// tables as if it were a client.
+	meshNodeMACRE = regexp.MustCompile(`^Device\.WiFi\.DataElements\.Network\.Device\.\d+\.(ID|MultiAPDevice\.Backhaul\.MACAddress)$`)
+	ethLinkMACRE  = regexp.MustCompile(`^Device\.Ethernet\.Link\.\d+\.MACAddress$`)
 )
 
 // ReadPaths lists what one sample reads, keyed off table objects in the
@@ -44,7 +49,7 @@ func ReadPaths(names map[string]bool) []string {
 	set := map[string]bool{}
 	for path := range names {
 		switch {
-		case ssidStatsRE.MatchString(path), bssSSIDRE.MatchString(path):
+		case ssidStatsRE.MatchString(path), bssSSIDRE.MatchString(path), meshNodeMACRE.MatchString(path):
 			set[path] = true
 		case apAssocObj.MatchString(path), staObj.MatchString(path), path == "Device.Hosts.Host.":
 			set[path] = true
@@ -91,6 +96,48 @@ type Client struct {
 type Snapshot struct {
 	SSIDs   []SSIDCounter
 	Clients []Client
+	// MeshMACs are MACs of mesh nodes (EasyMesh agents, linked satellites)
+	// seen in this sample. They are never clients; Record also drops any
+	// client rows stored for them before this was recognised.
+	MeshMACs []string
+}
+
+// ExcludeMACs removes clients with any of these MACs and records them as
+// mesh nodes (e.g. a linked satellite's own interface MACs).
+func (s *Snapshot) ExcludeMACs(macs []string) {
+	drop := map[string]bool{}
+	for _, m := range s.MeshMACs {
+		drop[m] = true
+	}
+	for _, raw := range macs {
+		if m := NormalizeMAC(raw); m != "" && !drop[m] {
+			drop[m] = true
+			s.MeshMACs = append(s.MeshMACs, m)
+		}
+	}
+	kept := s.Clients[:0]
+	for _, c := range s.Clients {
+		if !drop[c.MAC] {
+			kept = append(kept, c)
+		}
+	}
+	s.Clients = kept
+}
+
+// SatelliteMACs returns a mesh satellite's own interface MACs from its
+// parameter cache (Device.Ethernet.Link.{i}.MACAddress), which its gateway
+// may list in Hosts under a MAC its EasyMesh table does not carry.
+func SatelliteMACs(cache map[string]parameters.CachedValue) []string {
+	var out []string
+	for path, v := range cache {
+		if ethLinkMACRE.MatchString(path) {
+			if m := NormalizeMAC(v.Value); m != "" {
+				out = append(out, m)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Counts returns wireless, wired and guest client totals.
@@ -130,6 +177,7 @@ func Parse(values map[string]string, names map[string]bool, cache map[string]par
 		}
 	}
 
+	var meshMACs []string
 	counters := map[int]*SSIDCounter{}
 	assoc := map[[2]int]map[string]string{}
 	hosts := map[int]map[string]string{}
@@ -175,6 +223,8 @@ func Parse(values map[string]string, names map[string]bool, cache map[string]par
 			stas[key][m[5]] = value
 		} else if m := bssSSIDRE.FindStringSubmatch(name); m != nil {
 			bssSSID[m[1]] = value
+		} else if meshNodeMACRE.MatchString(name) {
+			meshMACs = append(meshMACs, value)
 		}
 	}
 
@@ -296,6 +346,7 @@ func Parse(values map[string]string, names map[string]bool, cache map[string]par
 		snap.Clients = append(snap.Clients, *c)
 	}
 	sort.Slice(snap.Clients, func(i, j int) bool { return snap.Clients[i].MAC < snap.Clients[j].MAC })
+	snap.ExcludeMACs(meshMACs)
 	return snap
 }
 

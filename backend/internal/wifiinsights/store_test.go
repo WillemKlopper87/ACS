@@ -123,3 +123,46 @@ func TestRecordAndOverview(t *testing.T) {
 		}
 	}
 }
+
+// TestRecordDropsMeshNodeHistory: a Beacon recorded as a client before
+// mesh nodes were recognised must disappear from the client list and the
+// top clients once a sample names it as a mesh node, in every window.
+func TestRecordDropsMeshNodeHistory(t *testing.T) {
+	ctx, r, deviceID := newInsightsTestRepo(t)
+	t0 := time.Now().UTC().Add(-20 * time.Minute).Truncate(time.Second)
+	phone, beacon := "32:a9:5c:44:3e:9a", "d6:51:5f:5e:7c:dd"
+
+	for i, down := range []int64{1000, 5_000_000} {
+		snap := Snapshot{Clients: []Client{
+			{MAC: phone, Wireless: true, BytesDown: i64(100 * int64(i+1)), BytesUp: i64(10)},
+			{MAC: beacon, Hostname: "Nokia WiFi Beacon 3.1", Wireless: true, BytesDown: i64(down), BytesUp: i64(10)},
+		}}
+		if err := r.Record(ctx, deviceID, t0.Add(time.Duration(i)*5*time.Minute), snap, 15*time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ov, err := r.Overview(ctx, deviceID, Windows["1d"], time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ov.Clients) != 2 {
+		t.Fatalf("setup: clients = %+v", ov.Clients)
+	}
+
+	next := Snapshot{Clients: []Client{{MAC: phone, Wireless: true, BytesDown: i64(300), BytesUp: i64(10)}}, MeshMACs: []string{beacon}}
+	if err := r.Record(ctx, deviceID, t0.Add(10*time.Minute), next, 15*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	ov, err = r.Overview(ctx, deviceID, Windows["1d"], time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ov.Clients) != 1 || ov.Clients[0].MAC != phone {
+		t.Fatalf("clients after mesh recognition = %+v", ov.Clients)
+	}
+	for _, c := range ov.TopClients {
+		if c.MAC == beacon {
+			t.Fatalf("beacon still in top clients: %+v", ov.TopClients)
+		}
+	}
+}

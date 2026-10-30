@@ -76,10 +76,21 @@ func (h *handler) recordWiFiInsights(ctx context.Context, deviceID string, list 
 		return
 	}
 	snap := wifiinsights.Parse(values, names, cache)
+	// A linked mesh satellite is not a client even under a MAC the gateway's
+	// EasyMesh table does not carry (field data: the Beacon in Hosts).
+	satellites, err := h.devices.ListSatellites(ctx, deviceID, nil, false)
+	if err != nil {
+		h.logger.Warn("failed to list mesh satellites for Wi-Fi insights", "err", err, "device_id", deviceID)
+	}
+	for _, sat := range satellites {
+		if satCache, err := h.params.Get(ctx, sat.ID); err == nil {
+			snap.ExcludeMACs(wifiinsights.SatelliteMACs(satCache))
+		}
+	}
 	if err := h.wifiInsights.repo.Record(ctx, deviceID, time.Now().UTC().Truncate(time.Second), snap, wifiinsights.DefaultSessionGap); err != nil {
 		h.logger.Error("failed to record Wi-Fi insights sample", "err", err, "device_id", deviceID)
 		return
 	}
 	wireless, wired, _ := snap.Counts()
-	h.logger.Info("Wi-Fi insights sample recorded", "device_id", deviceID, "ssids", len(snap.SSIDs), "wireless_clients", wireless, "wired_clients", wired)
+	h.logger.Info("Wi-Fi insights sample recorded", "device_id", deviceID, "ssids", len(snap.SSIDs), "wireless_clients", wireless, "wired_clients", wired, "mesh_nodes_excluded", len(snap.MeshMACs))
 }

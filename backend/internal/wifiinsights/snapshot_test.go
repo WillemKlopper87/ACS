@@ -52,6 +52,9 @@ func TestReadPathsOnFastMileTree(t *testing.T) {
 		"Device.WiFi.SSID.5.Stats.BytesReceived",
 		"Device.WiFi.DataElements.Network.Device.2.Radio.2.BSS.1.STA.", // Beacon satellite clients
 		"Device.WiFi.DataElements.Network.Device.1.Radio.1.BSS.1.SSID",
+		// Mesh node identities, so the Beacon is not counted as a client.
+		"Device.WiFi.DataElements.Network.Device.2.ID",
+		"Device.WiFi.DataElements.Network.Device.2.MultiAPDevice.Backhaul.MACAddress",
 	} {
 		if !has[want] {
 			t.Errorf("missing %s", want)
@@ -209,4 +212,71 @@ func mustTime(s string) time.Time {
 		panic(err)
 	}
 	return t
+}
+
+// TestParseExcludesMeshNodes: field data 2026-10-30. The Beacon showed up
+// as two "clients" of the FastMile: its backhaul STA on the hidden backhaul
+// BSS (hostname "Nokia WiFi Beacon 3.1") and a Hosts entry for its own MAC.
+// EasyMesh Network.Device.{n}.ID and MultiAPDevice.Backhaul.MACAddress
+// name both, so neither may count as a client.
+func TestParseExcludesMeshNodes(t *testing.T) {
+	sta := "Device.WiFi.DataElements.Network.Device.1.Radio.2.BSS.1.STA."
+	values := map[string]string{
+		"Device.WiFi.DataElements.Network.Device.1.ID":                                "a4:fc:77:00:00:01",
+		"Device.WiFi.DataElements.Network.Device.2.ID":                                "BC:51:5F:5E:7C:D3",
+		"Device.WiFi.DataElements.Network.Device.2.MultiAPDevice.Backhaul.MACAddress": "D6-51-5F-5E-7C-DD",
+		sta + "1.MACAddress":                "d6:51:5f:5e:7c:dd",
+		sta + "1.Hostname":                  "Nokia WiFi Beacon 3.1",
+		sta + "1.BytesSent":                 "4000000",
+		sta + "2.MACAddress":                "32:a9:5c:44:3e:9a",
+		sta + "2.Hostname":                  "HUAWEI_P40_Pro",
+		"Device.Hosts.Host.1.PhysAddress":   "bc:51:5f:5e:7c:d3",
+		"Device.Hosts.Host.1.Active":        "1",
+		"Device.Hosts.Host.1.InterfaceType": "802.11",
+		"Device.Hosts.Host.2.PhysAddress":   "32:a9:5c:44:3e:9a",
+		"Device.Hosts.Host.2.Active":        "1",
+	}
+	snap := Parse(values, nil, nil)
+	if len(snap.Clients) != 1 || snap.Clients[0].MAC != "32:a9:5c:44:3e:9a" {
+		t.Fatalf("clients = %+v, want only the phone", snap.Clients)
+	}
+	if w, _, _ := snap.Counts(); w != 1 {
+		t.Errorf("wireless count = %d, want 1", w)
+	}
+	want := map[string]bool{"a4:fc:77:00:00:01": true, "bc:51:5f:5e:7c:d3": true, "d6:51:5f:5e:7c:dd": true}
+	if len(snap.MeshMACs) != len(want) {
+		t.Fatalf("MeshMACs = %v, want %v", snap.MeshMACs, want)
+	}
+	for _, m := range snap.MeshMACs {
+		if !want[m] {
+			t.Errorf("unexpected mesh MAC %s", m)
+		}
+	}
+}
+
+// TestExcludeMACsAndSatelliteMACs: a linked satellite's own interface
+// MACs (from its parameter cache) are excluded too, for a mesh node the
+// gateway lists under a MAC its EasyMesh table does not carry.
+func TestExcludeMACsAndSatelliteMACs(t *testing.T) {
+	beaconCache := map[string]parameters.CachedValue{
+		"Device.Ethernet.Link.1.MACAddress": cv("BC:51:5F:5E:7C:D0"),
+		"Device.Ethernet.Link.2.MACAddress": cv(""),
+		"Device.DeviceInfo.SerialNumber":    cv("ALCLB499A341"),
+	}
+	macs := SatelliteMACs(beaconCache)
+	if len(macs) != 1 || macs[0] != "bc:51:5f:5e:7c:d0" {
+		t.Fatalf("SatelliteMACs = %v", macs)
+	}
+	snap := Snapshot{Clients: []Client{{MAC: "bc:51:5f:5e:7c:d0", Wireless: false}, {MAC: "32:a9:5c:44:3e:9a", Wireless: true}}}
+	snap.ExcludeMACs(macs)
+	if len(snap.Clients) != 1 || snap.Clients[0].MAC != "32:a9:5c:44:3e:9a" {
+		t.Fatalf("clients after exclude = %+v", snap.Clients)
+	}
+	if len(snap.MeshMACs) != 1 || snap.MeshMACs[0] != "bc:51:5f:5e:7c:d0" {
+		t.Errorf("MeshMACs = %v", snap.MeshMACs)
+	}
+	snap.ExcludeMACs(macs) // idempotent
+	if len(snap.MeshMACs) != 1 {
+		t.Errorf("MeshMACs duplicated: %v", snap.MeshMACs)
+	}
 }
