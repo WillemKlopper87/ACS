@@ -133,6 +133,10 @@ export interface BulkActionResult {
   device_id: string;
   command_key?: string;
   error?: string;
+  /** SET_WIFI: the networks written, e.g. "SSID 1 (2.4GHz) + SSID 5 (5GHz)". */
+  detail?: string;
+  /** SET_WIFI: Wi-Fi roles were not cached yet, so this read was queued instead (error is set). */
+  refresh_command_key?: string;
 }
 
 export interface BulkActionResponse {

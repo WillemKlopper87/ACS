@@ -11,6 +11,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"acs/internal/devices"
+	"acs/internal/devices/adapters"
+
 	"github.com/xuri/excelize/v2"
 )
 
@@ -153,6 +156,7 @@ func (h *handler) exportDevicesExcel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	resolveReportIdentity(rows)
 
 	f := excelize.NewFile()
 	defer f.Close()
@@ -192,5 +196,17 @@ func (h *handler) exportDevicesExcel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	if err := f.Write(w); err != nil {
 		h.logger.Error("failed to write xlsx response", "err", err)
+	}
+}
+
+// resolveReportIdentity fills each row's SSID (the primary Wi-Fi network
+// name(s), not Device.WiFi.SSID.1) and MAC (the device's own Ethernet MAC,
+// not the first cached *MACAddress key, which can be a BSSID or a Wi-Fi
+// client) from the identity subset ReportRows loaded.
+func resolveReportIdentity(rows []devices.ReportRow) {
+	for i := range rows {
+		row := &rows[i]
+		row.SSID = adapters.ReportSSID(row.DataModelRoot, row.IdentityNames, row.IdentityValues)
+		row.MACAddress = adapters.DeviceMACAddress(row.DataModelRoot, row.IdentityNames, row.IdentityValues)
 	}
 }

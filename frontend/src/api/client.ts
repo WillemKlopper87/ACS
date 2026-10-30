@@ -186,8 +186,16 @@ export const api = {
 
   bulkAction: (
     deviceIds: string[],
-    action: "SET_PARAMETER" | "CONNECTION_REQUEST" | "REFRESH_CELLULAR",
-    opts?: { parameters?: { name: string; value: string; type?: string }[]; timeoutSeconds?: number },
+    action: "SET_PARAMETER" | "SET_WIFI" | "CONNECTION_REQUEST" | "REFRESH_CELLULAR",
+    opts?: {
+      parameters?: { name: string; value: string; type?: string }[];
+      timeoutSeconds?: number;
+      // SET_WIFI: applied server-side to every primary Wi-Fi network each
+      // device resolves (never a fixed Device.WiFi.SSID.1).
+      wifiSsid?: string;
+      wifiPassword?: string;
+      wifiEnabled?: boolean;
+    },
   ) =>
     request<BulkActionResponse>("/api/v1/devices/bulk-actions", {
       method: "POST",
@@ -196,6 +204,9 @@ export const api = {
         action,
         parameters: opts?.parameters,
         timeout_seconds: opts?.timeoutSeconds,
+        wifi_ssid: opts?.wifiSsid || undefined,
+        wifi_password: opts?.wifiPassword || undefined,
+        wifi_enabled: opts?.wifiEnabled,
       }),
     }),
 
