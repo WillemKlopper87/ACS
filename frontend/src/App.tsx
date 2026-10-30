@@ -15,7 +15,7 @@ import { useTheme, type Theme } from "./theme/useTheme";
 // is worse than no badge at all. Set VITE_ENV_LABEL at build time.
 const ENV_LABEL = import.meta.env.VITE_ENV_LABEL as string | undefined;
 
-type Screen = "dashboard" | "fleet" | "control" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help" | "alerting";
+type Screen = "dashboard" | "fleet" | "devices" | "control" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help" | "alerting";
 
 const THEME_LABEL: Record<Theme, string> = { dark: "Dark", light: "Light", unfold: "Unfold", fluent: "Fluent 2" };
 
@@ -34,8 +34,8 @@ const NAV: { id: Screen; label: string; adminOnly?: boolean; group: string }[] =
   { group: "Monitor", id: "jobs", label: "Jobs" },
   { group: "Monitor", id: "alerting", label: "Alerting" },
 
-  { group: "Devices", id: "fleet", label: "Device Fleet" },
-  { group: "Devices", id: "control", label: "Fleet Control" },
+  { group: "Devices", id: "fleet", label: "Inventory" },
+  { group: "Devices", id: "control", label: "Bulk actions" },
   { group: "Devices", id: "groups", label: "Groups" },
 
   { group: "Provisioning", id: "templates", label: "Templates" },
@@ -43,12 +43,16 @@ const NAV: { id: Screen; label: string; adminOnly?: boolean; group: string }[] =
   { group: "Provisioning", id: "schedules", label: "Scheduled Jobs" },
   { group: "Provisioning", id: "rollouts", label: "Rollouts" },
 
+  // NOC and tier-2 tools (docs/CONSOLE-UX-PROPOSAL-2026-10-30.md §3); the
+  // per-device diagnostics live in each device's Diagnostics sub-page.
+  { group: "Troubleshooting", id: "captures", label: "Session captures" },
+
+  { group: "Integrations", id: "bss", label: "BSS / NaaS", adminOnly: true },
+
   { group: "Administration", id: "operators", label: "Operators", adminOnly: true },
   { group: "Administration", id: "tenancy", label: "Tenancy", adminOnly: true },
-  { group: "Administration", id: "bss", label: "BSS Integration", adminOnly: true },
 
   { group: "Records", id: "audit", label: "Audit Log" },
-  { group: "Records", id: "captures", label: "Captures" },
   { group: "Records", id: "reports", label: "Reports" },
   { group: "Records", id: "help", label: "Help" },
 ];
@@ -104,6 +108,7 @@ function onChunkLoadError(err: unknown): never {
 const SCREEN_COMPONENT: Record<Screen, ComponentType> = {
   dashboard: screen(() => import("./screens/Dashboard"), "Dashboard"),
   fleet: screen(() => import("./screens/DeviceFleet"), "DeviceFleet"),
+  devices: screen(() => import("./screens/DeviceWorkspace"), "DeviceWorkspace"),
   control: screen(() => import("./screens/FleetControl"), "FleetControl"),
   health: screen(() => import("./screens/FleetHealthScreen"), "FleetHealthScreen"),
   jobs: screen(() => import("./screens/Jobs"), "Jobs"),
@@ -130,6 +135,8 @@ function AppShell() {
   const { pathname } = useLocation();
   const fromPath = pathname.split("/")[1] as Screen;
   const screen: Screen = SCREEN_COMPONENT[fromPath] ? fromPath : "fleet";
+  // A device workspace belongs under Inventory in the sidebar.
+  const navScreen: Screen = screen === "devices" ? "fleet" : screen;
   const setScreen = (s: Screen) => navigate("/" + s);
 
   // Which nav sections are collapsed. Persisted per browser so an operator
@@ -182,7 +189,7 @@ function AppShell() {
             // The group holding the current screen is always shown, even if
             // it was collapsed earlier — collapsing a section should never
             // hide where you actually are.
-            const holdsActive = items.some((item) => item.id === screen);
+            const holdsActive = items.some((item) => item.id === navScreen);
             const open = holdsActive || !collapsed.includes(group);
             return (
               <div key={group} className="nav-group">
@@ -200,8 +207,8 @@ function AppShell() {
                   {items.map((item) => (
                     <button
                       key={item.id}
-                      className={screen === item.id ? "active" : ""}
-                      aria-current={screen === item.id ? "page" : undefined}
+                      className={navScreen === item.id ? "active" : ""}
+                      aria-current={navScreen === item.id ? "page" : undefined}
                       onClick={() => setScreen(item.id)}
                     >
                       {item.label}
@@ -247,7 +254,7 @@ function AppShell() {
               with nothing naming them but the sidebar's highlighted row,
               which is gone the moment the sidebar collapses on a narrow
               viewport. */}
-          <h1 className="page-title">{NAV.find((item) => item.id === screen)?.label}</h1>
+          <h1 className="page-title">{screen === "devices" ? "Device" : NAV.find((item) => item.id === screen)?.label}</h1>
           <ErrorBoundary key={screen}>
             <Suspense fallback={<p className="dim">Loading…</p>}>
               <ActiveScreen />

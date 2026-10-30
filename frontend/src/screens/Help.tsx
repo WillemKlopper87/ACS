@@ -59,8 +59,9 @@ const SECTIONS: Section[] = [
         <p className="help-note">
           The sidebar is grouped by intent: <strong>Monitor</strong> to see what the fleet is doing,
           <strong> Devices</strong> to act on specific hardware, <strong>Provisioning</strong> to
-          change how devices get configured, <strong>Administration</strong> to run the platform,
-          and <strong>Records</strong> for history and exports.
+          change how devices get configured, <strong>Troubleshooting</strong> for session captures,
+          <strong> Integrations</strong> for the BSS/NaaS link, <strong>Administration</strong> to run the
+          platform, and <strong>Records</strong> for history and exports.
         </p>
       </>
     ),
@@ -179,7 +180,7 @@ const SECTIONS: Section[] = [
           ]}
         />
         <p>
-          Then check <strong>Devices → Device Fleet</strong>. The device should appear with a recent
+          Then check <strong>Devices → Inventory</strong>. The device should appear with a recent
           Last Inform. If nothing arrives, work through{" "}
           <a href="#device-not-appearing">A device is not appearing</a>.
         </p>
@@ -279,16 +280,25 @@ const SECTIONS: Section[] = [
     body: (
       <>
         <p>
-          Click any row in <strong>Device Fleet</strong> to open its detail panel. The link is
-          shareable — the selected device is kept in the URL.
+          Click any row in <strong>Devices → Inventory</strong> to open that device's workspace. Each
+          section has its own address (<code>/devices/&lt;id&gt;/wifi</code> and so on), so links can be
+          shared and the back button works. The header always shows the device's state and the common
+          actions: Connection Request, Reboot and Factory reset (destructive and unrecoverable from here; be sure).
+        </p>
+        <p>
+          Sections appear according to what the device's discovered data model supports, so a router
+          without a cellular modem has no Cellular page.
         </p>
         <ul className="help-list">
-          <li><strong>Parameters</strong> — the cached data model, with change history. "Live read" queues a fresh read from the device.</li>
-          <li><strong>Discovery</strong> — asks the CPE what parameters it supports. Runs automatically on first BOOTSTRAP.</li>
-          <li><strong>Diagnostics</strong> — ping and traceroute run <em>on the device</em>, which is how you prove a subscriber's line rather than your own.</li>
-          <li><strong>Reboot / Factory reset</strong> — factory reset is destructive and unrecoverable from here. Be sure.</li>
-          <li><strong>Console / Web GUI / VPN</strong> — SSH or Telnet through the browser, a reverse proxy to the device's own web interface, and WireGuard enrolment.</li>
-          <li><strong>Location</strong> — a free-text site label plus optional latitude/longitude. The coordinates are what place the device on the Grafana site map, so fill them in during installation.</li>
+          <li><strong>Overview</strong>: identity, mesh links and the most recent jobs.</li>
+          <li><strong>Wi-Fi</strong>: rename the primary networks, refresh clients, and the Wi-Fi insights charts.</li>
+          <li><strong>Cellular &amp; SIM</strong>: masked SIM identifiers, and cell and signal values.</li>
+          <li><strong>Connectivity</strong>: how the ACS reaches the device: Connection Request, XMPP, credentials, VPN.</li>
+          <li><strong>Diagnostics</strong>: onboarding checks, and ping and traceroute run <em>on the device</em>, which is how you prove a subscriber's line rather than your own. Session captures start here too.</li>
+          <li><strong>Firmware &amp; files</strong>: push one image to this device; request config backups and logs.</li>
+          <li><strong>Ownership</strong>: name, tags, tenant and location. The coordinates are what place the device on the Grafana site map, so fill them in during installation.</li>
+          <li><strong>Parameters</strong> (advanced): the cached data model with change history, discovery, object management and parameter attributes.</li>
+          <li><strong>Remote access</strong> (advanced): the device console, SSH or Telnet through the browser, and a reverse proxy to the device's own web interface.</li>
         </ul>
         <p className="help-note">
           SSH host keys are pinned on first connect. If a device's key legitimately changes (after a
@@ -333,13 +343,13 @@ const SECTIONS: Section[] = [
   {
     id: "fleet-control",
     group: "Devices",
-    title: "Fleet Control and bulk actions",
+    title: "Bulk actions",
     audience: "everyone",
     keywords: "fleet control bulk action mass set parameter connection request select all matching",
     body: (
       <>
         <p>
-          <strong>Fleet Control</strong> is for doing one thing to many devices. Filter the fleet,
+          <strong>Devices → Bulk actions</strong> is for doing one thing to many devices. Filter the fleet,
           then either tick rows or use "select all N matching" — which acts on every device matching
           the filter, including ones not on the current page.
         </p>

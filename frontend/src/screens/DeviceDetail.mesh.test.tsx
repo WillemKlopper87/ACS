@@ -69,17 +69,15 @@ afterEach(() => {
 
 describe("DeviceDetail for a mesh satellite", () => {
   it("names the gateway, warns before reboot and redirects Wi-Fi client refresh", async () => {
-    render(
+    const overview = render(
       <MemoryRouter>
-        <DeviceDetail id="sat-1" onClose={() => {}} />
+        <DeviceDetail id="sat-1" section="overview" onClose={() => {}} />
       </MemoryRouter>,
     );
     await waitFor(() => expect(screen.getByText(/Mesh satellite of/)).toBeTruthy());
     expect(screen.getAllByText(/192\.168\.1\.48/).length).toBeGreaterThan(0);
-    await waitFor(() => expect(screen.getByText("Refresh WiFi clients on Lab FastMile")).toBeTruthy());
-    expect(screen.queryByText("Refresh WiFi clients")).toBeNull();
-    expect(screen.queryByText("Set SSID")).toBeNull();
-    expect(screen.getByText(/Wi-Fi name and password for this mesh are set on its gateway/)).toBeTruthy();
+    // The reboot warning names the gateway once its lookup has returned.
+    await waitFor(() => expect(screen.getAllByRole("link", { name: "Lab FastMile" }).length).toBeGreaterThan(0));
 
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     fireEvent.click(screen.getByText("Reboot"));
@@ -90,20 +88,38 @@ describe("DeviceDetail for a mesh satellite", () => {
     confirm.mockReturnValue(true);
     fireEvent.click(screen.getByText("Reboot"));
     await waitFor(() => expect(rebootDevice).toHaveBeenCalledWith("sat-1"));
+    overview.unmount();
+
+    render(
+      <MemoryRouter>
+        <DeviceDetail id="sat-1" section="wifi" onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText("Refresh WiFi clients on Lab FastMile")).toBeTruthy());
+    expect(screen.queryByText("Refresh WiFi clients")).toBeNull();
+    expect(screen.queryByText("Set SSID")).toBeNull();
+    expect(screen.getByText(/Wi-Fi name and password for this mesh are set on its gateway/)).toBeTruthy();
   });
 
   it("reboots a standalone gateway without the mesh warning", async () => {
-    render(
+    const overview = render(
       <MemoryRouter>
-        <DeviceDetail id="gw-1" onClose={() => {}} />
+        <DeviceDetail id="gw-1" section="overview" onClose={() => {}} />
       </MemoryRouter>,
     );
-    await waitFor(() => expect(screen.getByText(/Device detail — Lab FastMile/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Lab FastMile" })).toBeTruthy());
     const confirm = vi.spyOn(window, "confirm");
     fireEvent.click(screen.getByText("Reboot"));
     await waitFor(() => expect(rebootDevice).toHaveBeenCalledWith("gw-1"));
     expect(confirm).not.toHaveBeenCalled();
-    expect(screen.getByText("Refresh WiFi clients")).toBeTruthy();
+    overview.unmount();
+
+    render(
+      <MemoryRouter>
+        <DeviceDetail id="gw-1" section="wifi" onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText("Refresh WiFi clients")).toBeTruthy());
     expect(screen.getByText("Set SSID")).toBeTruthy();
   });
 });

@@ -70,6 +70,18 @@ What this changes:
 - **Deep links:** BSS tickets, alerts and audit entries can link straight to `/devices/<id>/wifi` or `/devices/<id>/diagnostics`.
 - **The fleet list stays a list:** clicking a row opens the workspace. An optional slim preview (status, ownership, last Inform) on hover or selection keeps quick scanning possible.
 
+**Vendor-neutral by design** (user, 2026-10-30): Nokia is the first vendor because it was the first to connect and be discovered, but other CPEs with similar or different capabilities will follow. Which sub-pages a device shows therefore comes from its discovered data model, not its vendor:
+- Wi-Fi appears for `Device.WiFi.` (or TR-098 `WLANConfiguration`), and for mesh satellites, whose Wi-Fi page points to the gateway.
+- Cellular & SIM appears for `Device.Cellular.`.
+- A device that has not been discovered yet is offered every sub-page, plus a prompt to run discovery.
+
+**Status: Phase 1 part 1 built** on branch `feat/console-device-workspace`:
+- the `/devices/<id>/<section>` workspace and its sub-pages as listed above, with old `/fleet?device=` links redirecting;
+- a reusable `SubNav` component;
+- the regrouped sidebar (Inventory, Bulk actions, Troubleshooting → Session captures, Integrations → BSS / NaaS).
+
+Still open in Phase 1: tabs for Operators, Tenancy, Firmware and Alerting; the merged Overview dashboard; and the Troubleshooting items beyond captures.
+
 ## 3. Proposal B: navigation with clear areas and sub-items
 
 The main changes are a new **Troubleshooting** area and an **Onboarding** item under Devices.

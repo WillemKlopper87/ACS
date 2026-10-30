@@ -16,7 +16,6 @@ import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { useLive } from "../lib/useLive";
 import { ParameterBrowser } from "../components/ParameterBrowser";
-import { useEscape } from "../lib/hotkeys";
 import { toast } from "../lib/toast";
 import { MeshTopology } from "../components/MeshTopology";
 import { SimPanel } from "../components/SimPanel";
@@ -25,8 +24,30 @@ import { XmppPanel } from "../components/XmppPanel";
 import { useMeshTopology } from "../lib/useMeshTopology";
 import { deviceLink, gatewayName, isMeshSatellite, satelliteReachabilityNote, satelliteRebootWarning } from "../lib/mesh";
 import { skippedNote, unsupportedReason } from "../lib/diagnostics";
+import { SubNav } from "../components/SubNav";
+import { deviceCapabilities, devicePath, visibleSections, type DeviceSectionId } from "../lib/deviceSections";
 
-export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void }) {
+// What each sub-page reads on open and on every poll, so a page loads only
+// what it shows (the single-page layout fired ~23 calls on open, close to
+// the API's burst limit of 30).
+const SECTION_DATA: Record<DeviceSectionId, { params?: true; jobs?: true; credentials?: true; uploads?: true }> = {
+  overview: { jobs: true },
+  wifi: {},
+  cellular: { params: true },
+  connectivity: { credentials: true },
+  diagnostics: { params: true, jobs: true, credentials: true },
+  firmware: { uploads: true },
+  parameters: { params: true, jobs: true },
+  ownership: {},
+  remote: {},
+};
+
+/**
+ * The device workspace (docs/CONSOLE-UX-PROPOSAL-2026-10-30.md §2): a
+ * header with identity, state and the common actions, sub-navigation, and
+ * the tools of one sub-page.
+ */
+export function DeviceDetail({ id, section, onClose }: { id: string; section: DeviceSectionId; onClose: () => void }) {
   const navigate = useNavigate();
   const { role } = useAuth();
   const writable = canWrite(role);
@@ -88,18 +109,19 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       if (background && busyRef.current) return;
       if (!background) setError(null);
       try {
+        const needs = SECTION_DATA[section];
         const [d, p, j, c, u] = await Promise.all([
           api.getDevice(id),
-          api.getDeviceParameters(id),
-          api.listDeviceJobs(id),
-          api.listDeviceCredentials(id),
-          api.listDeviceUploads(id),
+          needs.params ? api.getDeviceParameters(id) : null,
+          needs.jobs ? api.listDeviceJobs(id) : null,
+          needs.credentials ? api.listDeviceCredentials(id) : null,
+          needs.uploads ? api.listDeviceUploads(id) : null,
         ]);
         setDevice(d);
-        setParams(p.parameters);
-        setJobs(j.items);
-        setCredentials(c.items);
-        setUploads(u.items);
+        if (p) setParams(p.parameters);
+        if (j) setJobs(j.items);
+        if (c) setCredentials(c.items);
+        if (u) setUploads(u.items);
         if (!tagsDirtyRef.current) setTagsInput((d.tags ?? []).join(", "));
         if (!labelDirtyRef.current) setLabelInput(d.label ?? "");
         if (!locationDirtyRef.current) {
@@ -112,13 +134,13 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
         if (!background) setError(e instanceof ApiError ? `${e.status}: ${e.message}` : "Failed to load device detail");
       }
     },
-    [id],
+    [id, section],
   );
 
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, section]);
 
   // Discovery evidence changes only when discovery reruns; fetch it once per
   // device rather than on every 5-second poll.
@@ -128,20 +150,24 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       (r) => setParamNames(r.names && Object.keys(r.names).length > 0 ? r.names : null),
       () => setParamNames(null),
     );
-    setDiagCaps(null);
-    api.getDiagnosticsCapabilities(id).then(setDiagCaps, () => setDiagCaps(null));
   }, [id]);
+  useEffect(() => {
+    setDiagCaps(null);
+    if (section !== "diagnostics") return;
+    api.getDiagnosticsCapabilities(id).then(setDiagCaps, () => setDiagCaps(null));
+  }, [id, section]);
   const pingUnsupported = unsupportedReason(diagCaps?.ping);
   const tracerouteUnsupported = unsupportedReason(diagCaps?.traceroute);
 
   // The image catalogue is small and slow-changing, so it's fetched once
   // per panel rather than on every poll like the device state above.
   useEffect(() => {
+    if (section !== "firmware") return;
     api.listFirmwareImages().then(
       (r) => setFirmwareImages(r.items),
       () => {}, // the push control just stays empty if this fails
     );
-  }, []);
+  }, [section]);
 
   // Preselect the image built for this exact vendor/model so the common
   // case is one click, without hiding the others — pushing a different
@@ -157,7 +183,6 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   }, [device, firmwareImages, firmwareImageId]);
 
   const [live, setLive] = useLive(() => load(true), 5000);
-  useEscape(onClose, true);
   const mesh = useMeshTopology(device);
   const satellite = isMeshSatellite(device);
   const meshGatewayName = device ? gatewayName(mesh.gateway, device) : "";
@@ -441,8 +466,8 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       <div className="split">
         <div className="panel">
           <h3>
-            Device detail
-            <button className="close-detail" onClick={onClose} title="Close">✕</button>
+            Device
+            <button className="close-detail" onClick={onClose} title="Back to all devices" aria-label="Back to all devices">✕</button>
           </h3>
           <div className="banner error">{error}</div>
         </div>
@@ -451,225 +476,24 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   }
 
   if (!device) {
-    return <div className="loading">Loading device detail…</div>;
+    return <div className="loading">Loading device…</div>;
   }
 
   const paramEntries = Object.entries(params);
+  const cellularParams = Object.fromEntries(paramEntries.filter(([path]) => path.startsWith("Device.Cellular.")));
   const cwmpDigestCredentials = credentials.filter((credential) => credential.credential_type === "CWMP_DIGEST");
   const connectionRequestCredentials = credentials.filter((credential) => credential.credential_type === "CONNECTION_REQUEST");
+  const caps = deviceCapabilities(paramNames, satellite);
+  const navItems = visibleSections(caps).map((s) => ({
+    id: s.id,
+    label: s.label,
+    to: devicePath(id, s.id),
+    group: s.advanced ? "Advanced" : undefined,
+  }));
 
-  return (
-    <div className="split two-col">
-      <div className="panel">
-        <h3>
-          Device detail — {device.label || device.oui_serial}
-          <span style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-            <button
-              className={`btn live-toggle ${live ? "on" : ""}`}
-              onClick={() => setLive((l) => !l)}
-              style={{ padding: "0.2em 0.5em", fontSize: "0.72rem" }}
-              title={live ? "Auto-refreshing every 5s — click to pause" : "Auto-refresh paused — click to resume"}
-            >
-              <span className="live-dot" /> {live ? "Live" : "Paused"}
-            </button>
-            <button className="close-detail" onClick={onClose} title="Close (Esc)">✕</button>
-          </span>
-        </h3>
-        <dl className="kv">
-          <dt>Identity (oui_serial)</dt>
-          <dd className="mono">{device.oui_serial}</dd>
-          <dt>Manufacturer / Model</dt>
-          <dd style={{ fontFamily: "var(--font-ui)" }}>
-            {device.manufacturer} {device.product_class}
-          </dd>
-          <dt>Serial number</dt>
-          <dd>{device.serial_number}</dd>
-          <dt>Online status</dt>
-          <dd><StatusBadge value={device.online_status} /></dd>
-          <dt>Data model root</dt>
-          <dd>{device.data_model_root}</dd>
-          <dt>Connection Request URL</dt>
-          <dd>{device.connection_request_url ?? "unknown — awaiting an Inform with this parameter"}</dd>
-          <dt>Reachability mode</dt>
-          <dd><StatusBadge value={device.connection_request_mode} /></dd>
-          <dt>Last connection request</dt>
-          <dd>
-            {device.last_connection_request_status
-              ? `${device.last_connection_request_status} · ${timeAgo(device.last_connection_request_at)}`
-              : "never attempted"}
-          </dd>
-        </dl>
-
-        <div style={{ marginTop: "1rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-          <button className="btn primary" onClick={handleConnectionRequest} disabled={busy || !writable}>
-            Queue Connection Request
-          </button>
-          <button className="btn" onClick={handleRefreshCellular} disabled={busy || !writable}>
-            Refresh cellular diagnostics
-          </button>
-          <button
-            className="btn"
-            onClick={handleReboot}
-            disabled={busy || !writable}
-            title={satellite ? "Queues Reboot — a mesh satellite returns only after its backhaul rejoins (8–11 min in testing)" : "Queues Reboot — the device drops and reconnects"}
-          >
-            Reboot
-          </button>
-          <button className="btn danger" onClick={handleFactoryReset} disabled={busy || !writable} title="Queues FactoryReset — wipes the device back to defaults">
-            Factory reset
-          </button>
-        </div>
-        {satellite && (
-          <p className="dim" role="note" style={{ fontSize: "0.76rem", margin: "0.5rem 0 0" }}>
-            {satelliteReachabilityNote(device, meshGatewayName)}
-          </p>
-        )}
-
-        <DeviceCompatibility id={id} writable={writable} />
-
-        {satellite ? (
-          // No Device.WiFi tree over CWMP on a satellite: the mesh SSIDs are
-          // set on the gateway and propagated by EasyMesh.
-          <p className="muted">Wi-Fi name and password for this mesh are set on its gateway ({meshGatewayName}).</p>
-        ) : (
-          <div className="form-row">
-            <input aria-label="New WiFi SSID"
-              placeholder="New WiFi SSID…"
-              value={ssidInput}
-              onChange={(e) => setSsidInput(e.target.value)}
-              disabled={busy || !writable}
-            />
-            <button className="btn" onClick={handleSetSsid} disabled={busy || !writable || !ssidInput.trim()}>
-              Set SSID
-            </button>
-          </div>
-        )}
-
-        <div className="form-row">
-          <input
-            type="number"
-            aria-label="Schedule inform delay (seconds)"
-            min={60}
-            value={scheduleDelay}
-            onChange={(e) => setScheduleDelay(Number(e.target.value))}
-            disabled={busy || !writable}
-            style={{ maxWidth: "8rem" }}
-          />
-          <button
-            className="btn"
-            onClick={handleScheduleInform}
-            disabled={busy || !writable || scheduleDelay < 1}
-            title="Tells the device to Inform again after this many seconds, independent of its periodic interval"
-          >
-            Schedule Inform
-          </button>
-        </div>
-
-        <div className="form-row">
-          <input aria-label="Device name (shown instead of the identifier everywhere in the console)"
-            placeholder="Name this device — e.g. Mrs Dlamini, 14 Oak Ave"
-            value={labelInput}
-            onChange={(e) => {
-              setLabelInput(e.target.value);
-              setLabelDirty(true);
-            }}
-            disabled={busy || !writable}
-          />
-          <button className="btn" onClick={handleSaveLabel} disabled={busy || !writable}>
-            Save name
-          </button>
-        </div>
-
-        <div className="form-row">
-          <input aria-label="Tags (comma-separated)"
-            placeholder="Tags (comma-separated)"
-            value={tagsInput}
-            onChange={(e) => {
-              setTagsInput(e.target.value);
-              setTagsDirty(true);
-            }}
-            disabled={busy || !writable}
-          />
-          <button className="btn" onClick={handleSaveTags} disabled={busy || !writable}>
-            Save tags
-          </button>
-        </div>
-
-        <div className="form-row">
-          <input aria-label="Location (e.g. Rack 4, POP-West)"
-            placeholder="Location (e.g. Rack 4, POP-West)"
-            value={locationInput}
-            onChange={(e) => {
-              setLocationInput(e.target.value);
-              setLocationDirty(true);
-            }}
-            disabled={busy || !writable}
-          />
-          <input aria-label="Latitude (optional, for the site map)"
-            placeholder="Latitude"
-            inputMode="decimal"
-            style={{ maxWidth: "9rem" }}
-            value={latInput}
-            onChange={(e) => {
-              setLatInput(e.target.value);
-              setLocationDirty(true);
-            }}
-            disabled={busy || !writable}
-          />
-          <input aria-label="Longitude (optional, for the site map)"
-            placeholder="Longitude"
-            inputMode="decimal"
-            style={{ maxWidth: "9rem" }}
-            value={lonInput}
-            onChange={(e) => {
-              setLonInput(e.target.value);
-              setLocationDirty(true);
-            }}
-            disabled={busy || !writable}
-          />
-          <button className="btn" onClick={handleSaveLocation} disabled={busy || !writable}>
-            Save location
-          </button>
-        </div>
-      </div>
-
-      <MeshTopology device={device} mesh={mesh} />
-      <SimPanel deviceId={id} role={role} writable={writable} />
-      <XmppPanel deviceId={id} writable={writable} />
-      <WiFiInsights deviceId={id} satelliteOf={satellite ? meshGatewayName : undefined} />
-
-      <div className="panel">
-        <h3>Parameter cache{paramEntries.length === 0 ? " — empty" : ""}</h3>
-        {paramEntries.length === 0 ? (
-          <p style={{ color: "var(--ink-faint)", fontSize: "0.84rem", margin: 0 }}>
-            No parameters read from this device yet — the cache populates from Inform and GET_PARAMETER jobs.
-          </p>
-        ) : (
-          <ParameterBrowser
-            params={params}
-            writable={paramNames}
-            selectedPath={historyPath}
-            onSelect={toggleHistory}
-            renderDetail={() => (
-              <div style={{ padding: "0.4rem 0 0.6rem 0.75rem", borderBottom: "1px solid var(--border)" }}>
-                {historyLoading ? (
-                  <span className="dim" style={{ fontSize: "0.76rem" }}>Loading history…</span>
-                ) : historyEntries.length === 0 ? (
-                  <span className="dim" style={{ fontSize: "0.76rem" }}>No recorded changes yet — history only records when a value actually changes.</span>
-                ) : (
-                  historyEntries.map((entry, i) => (
-                    <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.76rem", fontFamily: "var(--font-mono)", padding: "0.15rem 0" }}>
-                      <span>{entry.value}</span>
-                      <span className="dim">{entry.source} · {timeAgo(entry.recorded_at)}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          />
-        )}
-
-        <h3 style={{ marginTop: "1.4rem" }}>Recent jobs</h3>
+  const recentJobs = (
+    <div className="panel">
+      <h3>Recent jobs</h3>
         {jobs.length === 0 ? (
           <p style={{ color: "var(--ink-faint)", fontSize: "0.84rem", margin: 0 }}>No jobs queued for this device yet.</p>
         ) : (
@@ -695,314 +519,626 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
             </div>
           ))
         )}
-      </div>
+    </div>
+  );
 
-      <DeviceOnboardingPanel
-        device={device}
-        params={params}
-        jobs={jobs}
-        credentials={credentials}
-        writable={writable}
-        busy={busy}
-        onStartCWMPTrace={handleStartCWMPTrace}
-        onDiscoverParameters={handleDiscoverParameters}
-        onTestConnectionRequest={handleConnectionRequest}
-        onRefreshCellular={handleRefreshCellular}
-        onOpenCaptures={() => navigate("/captures")}
-      />
-
-      <div className="panel">
-        <h3>Device authentication credentials</h3>
-
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", marginBottom: "0.45rem" }}>
-          <strong style={{ fontSize: "0.82rem" }}>CPE → ACS Digest</strong>
-          <button className="btn sm" onClick={handleRotateCWMPDigestCredential} disabled={busy || !writable}>
-            Rotate CPE Digest
-          </button>
-        </div>
-        {cwmpDigestCredentials.length === 0 ? (
-          <p className="dim" style={{ fontSize: "0.78rem", marginTop: 0 }}>
-            No per-device CWMP_DIGEST credential is recorded yet. Secure bootstrap should create one and keep it PENDING until this CPE reconnects with the generated credential and matching identity.
-          </p>
-        ) : (
-          cwmpDigestCredentials.map((credential) => (
-            <div className="param-row" key={credential.id}>
-              <span className="path">
-                v{credential.version} <span style={{ color: "var(--ink-faint)" }}>· {credential.username}</span>
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                <StatusBadge value={credential.status} />
-                {(credential.status === "GRACE" || credential.status === "PENDING") && (
-                  <button className="btn" onClick={() => handleRevokeCredential(credential.id)} disabled={busy || !writable}>
-                    Revoke
-                  </button>
-                )}
-              </span>
-              {credential.status === "PENDING" && (
-                <span className="src">Waiting for a matching authenticated Inform — manual activation is intentionally disabled.</span>
-              )}
-            </div>
-          ))
-        )}
-
-        <div style={{ borderTop: "1px solid var(--border)", margin: "0.9rem 0 0.75rem" }} />
-
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", marginBottom: "0.45rem" }}>
-          <strong style={{ fontSize: "0.82rem" }}>ACS → CPE Connection Request</strong>
-          <button className="btn sm" onClick={handleRotateCredential} disabled={busy || !writable}>
-            Rotate CR credential
-          </button>
-        </div>
-        {connectionRequestCredentials.length === 0 ? (
-          <p className="dim" style={{ fontSize: "0.78rem", margin: 0 }}>
-            No per-device Connection Request credential — the worker will use the configured shared ACS_CONNECTION_REQUEST_USERNAME/PASSWORD fallback until you rotate one.
-          </p>
-        ) : (
-          connectionRequestCredentials.map((credential) => (
-            <div className="param-row" key={credential.id}>
-              <span className="path">
-                v{credential.version} <span style={{ color: "var(--ink-faint)" }}>· {credential.username}</span>
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                <StatusBadge value={credential.status} />
-                {credential.status === "PENDING" && (
-                  <button className="btn" onClick={() => handleActivateCredential(credential.id)} disabled={busy || !writable}>
-                    Activate
-                  </button>
-                )}
-                {(credential.status === "GRACE" || credential.status === "PENDING") && (
-                  <button className="btn" onClick={() => handleRevokeCredential(credential.id)} disabled={busy || !writable}>
-                    Revoke
-                  </button>
-                )}
-              </span>
-            </div>
-          ))
-        )}
-      </div>
-
-      <div className="panel">
-        <h3>Diagnostics</h3>
-        <div className="form-row" style={{ marginTop: 0 }}>
-          <input aria-label="Ping host (e.g. 8.8.8.8)"
-            placeholder="Ping host (e.g. 8.8.8.8)"
-            value={pingHost}
-            onChange={(e) => setPingHost(e.target.value)}
-            disabled={busy || !writable || pingUnsupported !== null}
-          />
-          <button className="btn" onClick={handlePing} disabled={busy || !writable || !pingHost.trim() || pingUnsupported !== null}
-            title={pingUnsupported ?? undefined}>
-            Ping
-          </button>
-        </div>
-        {pingUnsupported && <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", margin: "0.3rem 0 0" }}>Ping unavailable: {pingUnsupported}</p>}
-        <div className="form-row">
-          <input aria-label="Traceroute host"
-            placeholder="Traceroute host"
-            value={tracerouteHost}
-            onChange={(e) => setTracerouteHost(e.target.value)}
-            disabled={busy || !writable || tracerouteUnsupported !== null}
-          />
-          <button className="btn" onClick={handleTraceroute} disabled={busy || !writable || !tracerouteHost.trim() || tracerouteUnsupported !== null}
-            title={tracerouteUnsupported ?? undefined}>
-            Traceroute
-          </button>
-        </div>
-        {tracerouteUnsupported && <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", margin: "0.3rem 0 0" }}>Traceroute unavailable: {tracerouteUnsupported}</p>}
-        <div className="form-row">
-          {satellite ? (
-            // A satellite has no Device.WiFi tree of its own: its clients are
-            // reported by the gateway's EasyMesh controller.
-            mesh.gateway ? (
-              <Link className="btn" to={deviceLink(mesh.gateway.id)} style={{ width: "100%", justifyContent: "center" }}>
-                Refresh WiFi clients on {meshGatewayName}
-              </Link>
-            ) : (
-              <span className="dim" style={{ fontSize: "0.78rem" }}>
-                WiFi clients of this mesh are reported by its gateway ({meshGatewayName}), not by the satellite.
-              </span>
-            )
-          ) : (
-            <button className="btn" onClick={handleRefreshWifiClients} disabled={busy || !writable} style={{ width: "100%", justifyContent: "center" }}>
-              Refresh WiFi clients
-            </button>
-          )}
-        </div>
-        <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
-          The device runs Ping/Traceroute after the current session and reports back on its next Inform (8 DIAGNOSTICS COMPLETE) — watch Recent jobs for the outcome; results land in the parameter cache above under Device.IP.Diagnostics.*.
-        </p>
-      </div>
-
-      <div className="panel">
-        <h3>Session capture</h3>
-        <div className="form-row" style={{ marginTop: 0 }}>
-          <label className="field">
-            <span>Protocol</span>
-            <select
-              value={captureProtocol}
-              onChange={(event) => setCaptureProtocol(event.target.value as "CWMP" | "USP")}
-              disabled={busy || !writable}
-            >
-              <option value="CWMP">CWMP</option>
-              <option value="USP">USP</option>
-            </select>
-          </label>
-          <button className="btn primary capture-start" onClick={handleStartCapture} disabled={busy || !writable}>
-            Start capture
-          </button>
-        </div>
-        <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
-          Records this device's real session traffic for troubleshooting — redacted, capped at 30 minutes, and viewable from Captures.
-        </p>
-      </div>
-
-      <div className="panel">
-        <h3>Object management</h3>
-        <div className="form-row" style={{ marginTop: 0 }}>
-          <input aria-label="Object path, e.g. Device.WiFi.SSID"
-            placeholder="Object path, e.g. Device.WiFi.SSID."
-            value={objectPath}
-            onChange={(e) => setObjectPath(e.target.value)}
-            disabled={busy || !writable}
-          />
-          <button className="btn" onClick={handleAddObject} disabled={busy || !writable || !objectPath.trim()}>
-            Add
-          </button>
-          <button className="btn danger" onClick={handleDeleteObject} disabled={busy || !writable || !objectPath.trim()}>
-            Delete
-          </button>
-        </div>
-        <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
-          Add creates a new instance under a parent path (e.g. <code>Device.WiFi.SSID.</code>) — the CPE assigns the instance number, shown once the job succeeds. Delete removes one specific instance (e.g. <code>Device.WiFi.SSID.3.</code>). Both must end in "."
-        </p>
-      </div>
-
-      <div className="panel">
-        <h3>Parameter attributes</h3>
-        <div className="form-row" style={{ marginTop: 0 }}>
-          <input aria-label="Parameter path to set, e.g. Device.DeviceInfo.SoftwareVersion"
-            placeholder="Parameter path to set, e.g. Device.DeviceInfo.SoftwareVersion"
-            value={attrSetPath}
-            onChange={(e) => setAttrSetPath(e.target.value)}
-            disabled={busy || !writable}
-          />
-          <select
-            aria-label="Notification level"
-            value={attrNotification}
-            onChange={(e) => setAttrNotification(Number(e.target.value))}
-            disabled={busy || !writable}
-            style={{ maxWidth: "9rem" }}
-          >
-            <option value={0}>0 — off</option>
-            <option value={1}>1 — passive</option>
-            <option value={2}>2 — active</option>
-          </select>
-          <button className="btn" onClick={handleSetParameterAttribute} disabled={busy || !writable || !attrSetPath.trim()}>
-            Set
-          </button>
-        </div>
-        <div className="form-row">
-          <input aria-label="Paths to read, comma-separated"
-            placeholder="Paths to read, comma-separated"
-            value={attrGetPaths}
-            onChange={(e) => setAttrGetPaths(e.target.value)}
-            disabled={busy || !writable}
-          />
-          <button className="btn" onClick={handleGetParameterAttributes} disabled={busy || !writable || !attrGetPaths.trim()}>
-            Get
-          </button>
-        </div>
-        <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
-          Configures whether the CPE actively Informs on a parameter's change (2), passively reports it on the next Inform anyway (1), or neither (0) — rather than the ACS having to poll for it. Get reads the current notification level back; the result appears inline in Recent jobs once the job succeeds.
-        </p>
-      </div>
-
-      <DeviceTenancy deviceId={id} customerId={device.customer_id} writable={writable} />
-      <DeviceConsole id={id} writable={writable} />
-      <RemoteShell id={id} writable={writable} />
-      <DeviceWebGUI id={id} writable={writable} unreachableNote={satellite ? satelliteReachabilityNote(device, meshGatewayName) : undefined} />
-      <VPNTunnel id={id} writable={writable} />
-
-      <div className="panel">
-        <h3>Push firmware</h3>
-        <p className="dim" style={{ marginTop: 0, fontSize: "0.8rem" }}>
-          Sends one image to this device alone. For a fleet, use a canary rollout on the Rollouts screen instead — this
-          is for single-device work: an RMA replacement, or reproducing a report on a known build.
-        </p>
-        {firmwareImages.length === 0 ? (
-          <p className="dim" style={{ fontSize: "0.8rem", margin: 0 }}>
-            No firmware images uploaded yet — add one on the Rollouts screen.
-          </p>
-        ) : (
-          <div className="form-row" style={{ marginTop: 0 }}>
-            <select
-              className="chip"
-              aria-label="Firmware image"
-              value={firmwareImageId}
-              onChange={(e) => setFirmwareImageId(e.target.value)}
-              disabled={busy || !writable}
-              style={{ flex: 1 }}
-            >
-              {firmwareImages.map((img) => (
-                <option key={img.id} value={img.id}>
-                  {img.vendor} {img.model} v{img.version} ({img.channel})
-                </option>
-              ))}
-            </select>
+  return (
+    <div className="device-workspace">
+      <header className="panel device-head">
+        <div className="device-head-top">
+          <div>
+            <h2 className="device-title">{device.label || device.oui_serial}</h2>
+            <p className="device-sub">
+              {device.manufacturer} {device.product_class} · <span className="mono">{device.serial_number}</span>
+              {device.last_inform_at && <> · last inform {timeAgo(device.last_inform_at)}</>}
+            </p>
+          </div>
+          <div className="device-head-actions">
             <button
-              className="btn danger"
-              onClick={handleFirmwarePush}
-              disabled={busy || !writable || !firmwareImageId}
-              title="Queues FIRMWARE_DOWNLOAD — the device applies it and reboots"
+              className={`btn live-toggle ${live ? "on" : ""}`}
+              onClick={() => setLive((l) => !l)}
+              title={live ? "Auto-refreshing every 5s — click to pause" : "Auto-refresh paused — click to resume"}
             >
-              Push to this device
+              <span className="live-dot" /> {live ? "Live" : "Paused"}
+            </button>
+            <button className="btn primary" onClick={handleConnectionRequest} disabled={busy || !writable}>
+              Connection Request
+            </button>
+            <button
+              className="btn"
+              onClick={handleReboot}
+              disabled={busy || !writable}
+              title={satellite ? "Queues Reboot — a mesh satellite returns only after its backhaul rejoins (8–11 min in testing)" : "Queues Reboot — the device drops and reconnects"}
+            >
+              Reboot
+            </button>
+            <button className="btn danger" onClick={handleFactoryReset} disabled={busy || !writable} title="Queues FactoryReset — wipes the device back to defaults">
+              Factory reset
+            </button>
+            <button className="close-detail" onClick={onClose} title="Back to all devices" aria-label="Back to all devices">
+              ✕
             </button>
           </div>
-        )}
-      </div>
-
-      <div className="panel">
-        <h3>Upload from device</h3>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-          <button className="btn" onClick={() => handleRequestUpload("1 Vendor Configuration File")} disabled={busy || !writable}>
-            Request config backup
-          </button>
-          <button className="btn" onClick={() => handleRequestUpload("2 Vendor Log File")} disabled={busy || !writable}>
-            Request log file
-          </button>
         </div>
-        <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: uploads.length ? "0.6rem" : 0 }}>
-          The CPE pushes the file back independently of this session, so a request stays PENDING until it arrives — this
-          list refreshes with the rest of the panel.
-        </p>
+        <div className="device-head-badges">
+          <StatusBadge value={device.online_status} />
+          <StatusBadge value={device.connection_request_mode} />
+          {satellite ? (
+            <span className="dim">
+              Satellite of {mesh.gateway ? <Link to={deviceLink(mesh.gateway.id)}>{meshGatewayName}</Link> : meshGatewayName}
+            </span>
+          ) : (
+            mesh.satellites.length > 0 && (
+              <span className="dim">
+                {mesh.satellites.length} mesh satellite{mesh.satellites.length === 1 ? "" : "s"}
+              </span>
+            )
+          )}
+        </div>
+        {satellite && (
+          <p className="dim" role="note" style={{ fontSize: "0.76rem", margin: "0.5rem 0 0" }}>
+            {satelliteReachabilityNote(device, meshGatewayName)}
+          </p>
+        )}
+      </header>
 
-        {uploads.length > 0 && (
-          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-            {uploads.map((u) => (
-              <li key={u.id} className="param-row">
-                <span className="path">
-                  {u.filename ?? u.file_type}
-                  <span className="src">
-                    {u.file_type}
-                    {u.file_size_bytes != null && ` · ${fmtBytes(u.file_size_bytes)}`}
-                    {u.received_at ? ` · received ${timeAgo(u.received_at)}` : ` · requested ${timeAgo(u.created_at)}`}
-                    {u.sha256 && ` · sha256 ${u.sha256.slice(0, 12)}…`}
-                  </span>
-                </span>
-                <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                  <StatusBadge value={u.status} />
-                  <button
-                    className="btn sm"
-                    disabled={u.status !== "RECEIVED"}
-                    title={u.status === "RECEIVED" ? "Download this file" : "The CPE has not pushed this file yet"}
-                    onClick={() => handleDownloadUpload(u)}
-                  >
-                    Download
+      <SubNav label="Device sections" items={navItems} current={section} />
+
+      <div className="device-content split two-col">
+        {section === "overview" && (
+          <>
+            <div className="panel">
+              <h3>Identity</h3>
+              <dl className="kv">
+                <dt>Identity (oui_serial)</dt>
+                <dd className="mono">{device.oui_serial}</dd>
+                <dt>Manufacturer / Model</dt>
+                <dd style={{ fontFamily: "var(--font-ui)" }}>
+                  {device.manufacturer} {device.product_class}
+                </dd>
+                <dt>Serial number</dt>
+                <dd>{device.serial_number}</dd>
+                <dt>Online status</dt>
+                <dd><StatusBadge value={device.online_status} /></dd>
+                <dt>Data model root</dt>
+                <dd>{device.data_model_root}</dd>
+                <dt>Connection Request URL</dt>
+                <dd>{device.connection_request_url ?? "unknown — awaiting an Inform with this parameter"}</dd>
+                <dt>Reachability mode</dt>
+                <dd><StatusBadge value={device.connection_request_mode} /></dd>
+                <dt>Last connection request</dt>
+                <dd>
+                  {device.last_connection_request_status
+                    ? `${device.last_connection_request_status} · ${timeAgo(device.last_connection_request_at)}`
+                    : "never attempted"}
+                </dd>
+              </dl>
+              {!caps.discovered && (
+                <div className="banner info" style={{ marginTop: "0.8rem" }}>
+                  This device's data model has not been discovered yet, so every sub-page is offered until the ACS knows what it supports.{" "}
+                  <button className="btn sm" onClick={handleDiscoverParameters} disabled={busy || !writable}>
+                    Discover capabilities
                   </button>
-                </span>
-              </li>
-            ))}
-          </ul>
+                </div>
+              )}
+            </div>
+            <MeshTopology device={device} mesh={mesh} />
+            {recentJobs}
+          </>
+        )}
+
+        {section === "wifi" && (
+          <>
+            <div className="panel">
+              <h3>Networks</h3>
+              {satellite ? (
+                // No Device.WiFi tree over CWMP on a satellite: the mesh SSIDs are
+                // set on the gateway and propagated by EasyMesh.
+                <p className="muted">Wi-Fi name and password for this mesh are set on its gateway ({meshGatewayName}).</p>
+              ) : (
+                <div className="form-row">
+                  <input aria-label="New WiFi SSID"
+                    placeholder="New WiFi SSID…"
+                    value={ssidInput}
+                    onChange={(e) => setSsidInput(e.target.value)}
+                    disabled={busy || !writable}
+                  />
+                  <button className="btn" onClick={handleSetSsid} disabled={busy || !writable || !ssidInput.trim()}>
+                    Set SSID
+                  </button>
+                </div>
+              )}
+              <div className="form-row">
+                {satellite ? (
+                  // A satellite has no Device.WiFi tree of its own: its clients are
+                  // reported by the gateway's EasyMesh controller.
+                  mesh.gateway ? (
+                    <Link className="btn" to={deviceLink(mesh.gateway.id)} style={{ width: "100%", justifyContent: "center" }}>
+                      Refresh WiFi clients on {meshGatewayName}
+                    </Link>
+                  ) : (
+                    <span className="dim" style={{ fontSize: "0.78rem" }}>
+                      WiFi clients of this mesh are reported by its gateway ({meshGatewayName}), not by the satellite.
+                    </span>
+                  )
+                ) : (
+                  <button className="btn" onClick={handleRefreshWifiClients} disabled={busy || !writable} style={{ width: "100%", justifyContent: "center" }}>
+                    Refresh WiFi clients
+                  </button>
+                )}
+              </div>
+            </div>
+            <WiFiInsights deviceId={id} satelliteOf={satellite ? meshGatewayName : undefined} />
+          </>
+        )}
+
+        {section === "cellular" && (
+          <>
+            <SimPanel deviceId={id} role={role} writable={writable} />
+            <div className="panel">
+              <h3>
+                Cellular parameters
+                <button className="btn sm" onClick={handleRefreshCellular} disabled={busy || !writable}>
+                  Refresh cellular diagnostics
+                </button>
+              </h3>
+              {Object.keys(cellularParams).length === 0 ? (
+                <p className="dim" style={{ fontSize: "0.82rem", margin: 0 }}>
+                  No cellular values read yet. Refresh cellular diagnostics to read signal, cell and SIM state.
+                </p>
+              ) : (
+                <ParameterBrowser params={cellularParams} writable={paramNames} selectedPath={null} onSelect={() => {}} renderDetail={() => null} />
+              )}
+            </div>
+          </>
+        )}
+
+        {section === "connectivity" && (
+          <>
+            <div className="panel">
+              <h3>Connection Request</h3>
+              <dl className="kv">
+                <dt>Connection Request URL</dt>
+                <dd>{device.connection_request_url ?? "unknown — awaiting an Inform with this parameter"}</dd>
+                <dt>Reachability mode</dt>
+                <dd><StatusBadge value={device.connection_request_mode} /></dd>
+                <dt>Last connection request</dt>
+                <dd>
+                  {device.last_connection_request_status
+                    ? `${device.last_connection_request_status} · ${timeAgo(device.last_connection_request_at)}`
+                    : "never attempted"}
+                </dd>
+              </dl>
+              <div className="form-row">
+                <input
+                  type="number"
+                  aria-label="Schedule inform delay (seconds)"
+                  min={60}
+                  value={scheduleDelay}
+                  onChange={(e) => setScheduleDelay(Number(e.target.value))}
+                  disabled={busy || !writable}
+                  style={{ maxWidth: "8rem" }}
+                />
+                <button
+                  className="btn"
+                  onClick={handleScheduleInform}
+                  disabled={busy || !writable || scheduleDelay < 1}
+                  title="Tells the device to Inform again after this many seconds, independent of its periodic interval"
+                >
+                  Schedule Inform
+                </button>
+              </div>
+            </div>
+            <XmppPanel deviceId={id} writable={writable} />
+            <div className="panel">
+              <h3>Device authentication credentials</h3>
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", marginBottom: "0.45rem" }}>
+                <strong style={{ fontSize: "0.82rem" }}>CPE → ACS Digest</strong>
+                <button className="btn sm" onClick={handleRotateCWMPDigestCredential} disabled={busy || !writable}>
+                  Rotate CPE Digest
+                </button>
+              </div>
+              {cwmpDigestCredentials.length === 0 ? (
+                <p className="dim" style={{ fontSize: "0.78rem", marginTop: 0 }}>
+                  No per-device CWMP_DIGEST credential is recorded yet. Secure bootstrap should create one and keep it PENDING until this CPE reconnects with the generated credential and matching identity.
+                </p>
+              ) : (
+                cwmpDigestCredentials.map((credential) => (
+                  <div className="param-row" key={credential.id}>
+                    <span className="path">
+                      v{credential.version} <span style={{ color: "var(--ink-faint)" }}>· {credential.username}</span>
+                    </span>
+                    <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <StatusBadge value={credential.status} />
+                      {(credential.status === "GRACE" || credential.status === "PENDING") && (
+                        <button className="btn" onClick={() => handleRevokeCredential(credential.id)} disabled={busy || !writable}>
+                          Revoke
+                        </button>
+                      )}
+                    </span>
+                    {credential.status === "PENDING" && (
+                      <span className="src">Waiting for a matching authenticated Inform — manual activation is intentionally disabled.</span>
+                    )}
+                  </div>
+                ))
+              )}
+
+              <div style={{ borderTop: "1px solid var(--border)", margin: "0.9rem 0 0.75rem" }} />
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", marginBottom: "0.45rem" }}>
+                <strong style={{ fontSize: "0.82rem" }}>ACS → CPE Connection Request</strong>
+                <button className="btn sm" onClick={handleRotateCredential} disabled={busy || !writable}>
+                  Rotate CR credential
+                </button>
+              </div>
+              {connectionRequestCredentials.length === 0 ? (
+                <p className="dim" style={{ fontSize: "0.78rem", margin: 0 }}>
+                  No per-device Connection Request credential — the worker will use the configured shared ACS_CONNECTION_REQUEST_USERNAME/PASSWORD fallback until you rotate one.
+                </p>
+              ) : (
+                connectionRequestCredentials.map((credential) => (
+                  <div className="param-row" key={credential.id}>
+                    <span className="path">
+                      v{credential.version} <span style={{ color: "var(--ink-faint)" }}>· {credential.username}</span>
+                    </span>
+                    <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <StatusBadge value={credential.status} />
+                      {credential.status === "PENDING" && (
+                        <button className="btn" onClick={() => handleActivateCredential(credential.id)} disabled={busy || !writable}>
+                          Activate
+                        </button>
+                      )}
+                      {(credential.status === "GRACE" || credential.status === "PENDING") && (
+                        <button className="btn" onClick={() => handleRevokeCredential(credential.id)} disabled={busy || !writable}>
+                          Revoke
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+            <VPNTunnel id={id} writable={writable} />
+          </>
+        )}
+
+        {section === "diagnostics" && (
+          <>
+            <DeviceOnboardingPanel
+              device={device}
+              params={params}
+              jobs={jobs}
+              credentials={credentials}
+              writable={writable}
+              busy={busy}
+              onStartCWMPTrace={handleStartCWMPTrace}
+              onDiscoverParameters={handleDiscoverParameters}
+              onTestConnectionRequest={handleConnectionRequest}
+              onRefreshCellular={handleRefreshCellular}
+              onOpenCaptures={() => navigate("/captures")}
+            />
+            <div className="panel">
+              <h3>Diagnostics</h3>
+              <div className="form-row" style={{ marginTop: 0 }}>
+                <input aria-label="Ping host (e.g. 8.8.8.8)"
+                  placeholder="Ping host (e.g. 8.8.8.8)"
+                  value={pingHost}
+                  onChange={(e) => setPingHost(e.target.value)}
+                  disabled={busy || !writable || pingUnsupported !== null}
+                />
+                <button className="btn" onClick={handlePing} disabled={busy || !writable || !pingHost.trim() || pingUnsupported !== null}
+                  title={pingUnsupported ?? undefined}>
+                  Ping
+                </button>
+              </div>
+              {pingUnsupported && <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", margin: "0.3rem 0 0" }}>Ping unavailable: {pingUnsupported}</p>}
+              <div className="form-row">
+                <input aria-label="Traceroute host"
+                  placeholder="Traceroute host"
+                  value={tracerouteHost}
+                  onChange={(e) => setTracerouteHost(e.target.value)}
+                  disabled={busy || !writable || tracerouteUnsupported !== null}
+                />
+                <button className="btn" onClick={handleTraceroute} disabled={busy || !writable || !tracerouteHost.trim() || tracerouteUnsupported !== null}
+                  title={tracerouteUnsupported ?? undefined}>
+                  Traceroute
+                </button>
+              </div>
+              {tracerouteUnsupported && <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", margin: "0.3rem 0 0" }}>Traceroute unavailable: {tracerouteUnsupported}</p>}
+              <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
+                The device runs Ping/Traceroute after the current session and reports back on its next Inform (8 DIAGNOSTICS COMPLETE) — watch Recent jobs for the outcome; results land in the parameter cache (Parameters) under Device.IP.Diagnostics.*.
+              </p>
+            </div>
+            <div className="panel">
+              <h3>Session capture</h3>
+              <div className="form-row" style={{ marginTop: 0 }}>
+                <label className="field">
+                  <span>Protocol</span>
+                  <select
+                    value={captureProtocol}
+                    onChange={(event) => setCaptureProtocol(event.target.value as "CWMP" | "USP")}
+                    disabled={busy || !writable}
+                  >
+                    <option value="CWMP">CWMP</option>
+                    <option value="USP">USP</option>
+                  </select>
+                </label>
+                <button className="btn primary capture-start" onClick={handleStartCapture} disabled={busy || !writable}>
+                  Start capture
+                </button>
+              </div>
+              <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
+                Records this device's real session traffic for troubleshooting — redacted, capped at 30 minutes, and viewable from Captures.
+              </p>
+            </div>
+          </>
+        )}
+
+        {section === "firmware" && (
+          <>
+            <div className="panel">
+              <h3>Push firmware</h3>
+              <p className="dim" style={{ marginTop: 0, fontSize: "0.8rem" }}>
+                Sends one image to this device alone. For a fleet, use a canary rollout on the Rollouts screen instead — this
+                is for single-device work: an RMA replacement, or reproducing a report on a known build.
+              </p>
+              {firmwareImages.length === 0 ? (
+                <p className="dim" style={{ fontSize: "0.8rem", margin: 0 }}>
+                  No firmware images uploaded yet — add one on the Rollouts screen.
+                </p>
+              ) : (
+                <div className="form-row" style={{ marginTop: 0 }}>
+                  <select
+                    className="chip"
+                    aria-label="Firmware image"
+                    value={firmwareImageId}
+                    onChange={(e) => setFirmwareImageId(e.target.value)}
+                    disabled={busy || !writable}
+                    style={{ flex: 1 }}
+                  >
+                    {firmwareImages.map((img) => (
+                      <option key={img.id} value={img.id}>
+                        {img.vendor} {img.model} v{img.version} ({img.channel})
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="btn danger"
+                    onClick={handleFirmwarePush}
+                    disabled={busy || !writable || !firmwareImageId}
+                    title="Queues FIRMWARE_DOWNLOAD — the device applies it and reboots"
+                  >
+                    Push to this device
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="panel">
+              <h3>Upload from device</h3>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                <button className="btn" onClick={() => handleRequestUpload("1 Vendor Configuration File")} disabled={busy || !writable}>
+                  Request config backup
+                </button>
+                <button className="btn" onClick={() => handleRequestUpload("2 Vendor Log File")} disabled={busy || !writable}>
+                  Request log file
+                </button>
+              </div>
+              <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: uploads.length ? "0.6rem" : 0 }}>
+                The CPE pushes the file back independently of this session, so a request stays PENDING until it arrives — this
+                list refreshes with the rest of the panel.
+              </p>
+
+              {uploads.length > 0 && (
+                <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                  {uploads.map((u) => (
+                    <li key={u.id} className="param-row">
+                      <span className="path">
+                        {u.filename ?? u.file_type}
+                        <span className="src">
+                          {u.file_type}
+                          {u.file_size_bytes != null && ` · ${fmtBytes(u.file_size_bytes)}`}
+                          {u.received_at ? ` · received ${timeAgo(u.received_at)}` : ` · requested ${timeAgo(u.created_at)}`}
+                          {u.sha256 && ` · sha256 ${u.sha256.slice(0, 12)}…`}
+                        </span>
+                      </span>
+                      <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                        <StatusBadge value={u.status} />
+                        <button
+                          className="btn sm"
+                          disabled={u.status !== "RECEIVED"}
+                          title={u.status === "RECEIVED" ? "Download this file" : "The CPE has not pushed this file yet"}
+                          onClick={() => handleDownloadUpload(u)}
+                        >
+                          Download
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
+
+        {section === "ownership" && (
+          <>
+            <div className="panel">
+              <h3>Name, tags and location</h3>
+              <div className="form-row">
+                <input aria-label="Device name (shown instead of the identifier everywhere in the console)"
+                  placeholder="Name this device — e.g. Mrs Dlamini, 14 Oak Ave"
+                  value={labelInput}
+                  onChange={(e) => {
+                    setLabelInput(e.target.value);
+                    setLabelDirty(true);
+                  }}
+                  disabled={busy || !writable}
+                />
+                <button className="btn" onClick={handleSaveLabel} disabled={busy || !writable}>
+                  Save name
+                </button>
+              </div>
+
+              <div className="form-row">
+                <input aria-label="Tags (comma-separated)"
+                  placeholder="Tags (comma-separated)"
+                  value={tagsInput}
+                  onChange={(e) => {
+                    setTagsInput(e.target.value);
+                    setTagsDirty(true);
+                  }}
+                  disabled={busy || !writable}
+                />
+                <button className="btn" onClick={handleSaveTags} disabled={busy || !writable}>
+                  Save tags
+                </button>
+              </div>
+
+              <div className="form-row">
+                <input aria-label="Location (e.g. Rack 4, POP-West)"
+                  placeholder="Location (e.g. Rack 4, POP-West)"
+                  value={locationInput}
+                  onChange={(e) => {
+                    setLocationInput(e.target.value);
+                    setLocationDirty(true);
+                  }}
+                  disabled={busy || !writable}
+                />
+                <input aria-label="Latitude (optional, for the site map)"
+                  placeholder="Latitude"
+                  inputMode="decimal"
+                  style={{ maxWidth: "9rem" }}
+                  value={latInput}
+                  onChange={(e) => {
+                    setLatInput(e.target.value);
+                    setLocationDirty(true);
+                  }}
+                  disabled={busy || !writable}
+                />
+                <input aria-label="Longitude (optional, for the site map)"
+                  placeholder="Longitude"
+                  inputMode="decimal"
+                  style={{ maxWidth: "9rem" }}
+                  value={lonInput}
+                  onChange={(e) => {
+                    setLonInput(e.target.value);
+                    setLocationDirty(true);
+                  }}
+                  disabled={busy || !writable}
+                />
+                <button className="btn" onClick={handleSaveLocation} disabled={busy || !writable}>
+                  Save location
+                </button>
+              </div>
+            </div>
+            <DeviceTenancy deviceId={id} customerId={device.customer_id} writable={writable} />
+          </>
+        )}
+
+        {section === "parameters" && (
+          <>
+            <div className="panel">
+              <h3>Parameter cache{paramEntries.length === 0 ? " — empty" : ""}</h3>
+              {paramEntries.length === 0 ? (
+                <p style={{ color: "var(--ink-faint)", fontSize: "0.84rem", margin: 0 }}>
+                  No parameters read from this device yet — the cache populates from Inform and GET_PARAMETER jobs.
+                </p>
+              ) : (
+                <ParameterBrowser
+                  params={params}
+                  writable={paramNames}
+                  selectedPath={historyPath}
+                  onSelect={toggleHistory}
+                  renderDetail={() => (
+                    <div style={{ padding: "0.4rem 0 0.6rem 0.75rem", borderBottom: "1px solid var(--border)" }}>
+                      {historyLoading ? (
+                        <span className="dim" style={{ fontSize: "0.76rem" }}>Loading history…</span>
+                      ) : historyEntries.length === 0 ? (
+                        <span className="dim" style={{ fontSize: "0.76rem" }}>No recorded changes yet — history only records when a value actually changes.</span>
+                      ) : (
+                        historyEntries.map((entry, i) => (
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.76rem", fontFamily: "var(--font-mono)", padding: "0.15rem 0" }}>
+                            <span>{entry.value}</span>
+                            <span className="dim">{entry.source} · {timeAgo(entry.recorded_at)}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                />
+              )}
+            </div>
+            {recentJobs}
+            <DeviceCompatibility id={id} writable={writable} />
+            <div className="panel">
+              <h3>Object management</h3>
+              <div className="form-row" style={{ marginTop: 0 }}>
+                <input aria-label="Object path, e.g. Device.WiFi.SSID"
+                  placeholder="Object path, e.g. Device.WiFi.SSID."
+                  value={objectPath}
+                  onChange={(e) => setObjectPath(e.target.value)}
+                  disabled={busy || !writable}
+                />
+                <button className="btn" onClick={handleAddObject} disabled={busy || !writable || !objectPath.trim()}>
+                  Add
+                </button>
+                <button className="btn danger" onClick={handleDeleteObject} disabled={busy || !writable || !objectPath.trim()}>
+                  Delete
+                </button>
+              </div>
+              <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
+                Add creates a new instance under a parent path (e.g. <code>Device.WiFi.SSID.</code>) — the CPE assigns the instance number, shown once the job succeeds. Delete removes one specific instance (e.g. <code>Device.WiFi.SSID.3.</code>). Both must end in "."
+              </p>
+            </div>
+            <div className="panel">
+              <h3>Parameter attributes</h3>
+              <div className="form-row" style={{ marginTop: 0 }}>
+                <input aria-label="Parameter path to set, e.g. Device.DeviceInfo.SoftwareVersion"
+                  placeholder="Parameter path to set, e.g. Device.DeviceInfo.SoftwareVersion"
+                  value={attrSetPath}
+                  onChange={(e) => setAttrSetPath(e.target.value)}
+                  disabled={busy || !writable}
+                />
+                <select
+                  aria-label="Notification level"
+                  value={attrNotification}
+                  onChange={(e) => setAttrNotification(Number(e.target.value))}
+                  disabled={busy || !writable}
+                  style={{ maxWidth: "9rem" }}
+                >
+                  <option value={0}>0 — off</option>
+                  <option value={1}>1 — passive</option>
+                  <option value={2}>2 — active</option>
+                </select>
+                <button className="btn" onClick={handleSetParameterAttribute} disabled={busy || !writable || !attrSetPath.trim()}>
+                  Set
+                </button>
+              </div>
+              <div className="form-row">
+                <input aria-label="Paths to read, comma-separated"
+                  placeholder="Paths to read, comma-separated"
+                  value={attrGetPaths}
+                  onChange={(e) => setAttrGetPaths(e.target.value)}
+                  disabled={busy || !writable}
+                />
+                <button className="btn" onClick={handleGetParameterAttributes} disabled={busy || !writable || !attrGetPaths.trim()}>
+                  Get
+                </button>
+              </div>
+              <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
+                Configures whether the CPE actively Informs on a parameter's change (2), passively reports it on the next Inform anyway (1), or neither (0) — rather than the ACS having to poll for it. Get reads the current notification level back; the result appears inline in Recent jobs once the job succeeds.
+              </p>
+            </div>
+          </>
+        )}
+
+        {section === "remote" && (
+          <>
+            <DeviceConsole id={id} writable={writable} />
+            <RemoteShell id={id} writable={writable} />
+            <DeviceWebGUI id={id} writable={writable} unreachableNote={satellite ? satelliteReachabilityNote(device, meshGatewayName) : undefined} />
+          </>
         )}
       </div>
     </div>
