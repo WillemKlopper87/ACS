@@ -46,7 +46,7 @@ groups:
           description: "acs_jobs_stale_leases has been > 0 for 5 minutes — the lease reaper in cmd/acs is not running or cannot reach Postgres."
 
       - alert: JobsDeadLettered
-        expr: increase(acs_jobs_recovered_total{outcome="dead_lettered"}[15m]) > 0
+        expr: increase(acs_jobs_recovered_total{outcome=~"dead_lettered.*"}[15m]) > 0
         for: 0m
         labels:
           severity: warning
@@ -86,13 +86,16 @@ groups:
   - name: acs-edge
     rules:
       - alert: CWMPAuthFailures
-        expr: sum(rate(acs_http_requests_total{service="acs",status="4xx"}[5m])) > 1
-        for: 10m
+        # Not HTTP 4xx: every CWMP session starts with a normal 401 Digest
+        # challenge (result="challenge"), so a 4xx rate fires permanently on a
+        # large fleet. Only real credential rejections count here.
+        expr: sum(rate(acs_cwmp_auth_total{result=~"bad_credentials|bootstrap_failed"}[10m])) > 0.05
+        for: 15m
         labels:
           severity: warning
         annotations:
-          summary: "Sustained CWMP 4xx responses (likely CPE auth failures)"
-          description: "cmd/acs is returning 4xx at more than 1/s for 10 minutes — a fleet-wide credential mismatch, or an unauthenticated scanner."
+          summary: "Sustained CWMP credential rejections"
+          description: "CPEs are presenting wrong Digest or bootstrap credentials (more than 3/min for 15 minutes) — a credential mismatch after graduation, a factory-reset device needing re-enrolment, or a scanner."
 
       - alert: TransferEndpointRejections
         expr: sum(rate(acs_http_requests_total{service="api",route=~"PUT /api/v1/uploads/.*",status="4xx"}[5m])) > 0.2

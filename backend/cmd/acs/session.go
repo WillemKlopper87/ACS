@@ -139,7 +139,15 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	} else if h.auth.Enabled() {
 		ok, stale, identity := h.auth.Verify(r)
 		if !ok {
-			h.logger.Warn("authentication failed or missing", "remote", r.RemoteAddr)
+			result := "bad_credentials"
+			switch {
+			case strings.TrimSpace(r.Header.Get("Authorization")) == "":
+				result = "challenge" // normal first request of every Digest session
+			case stale:
+				result = "stale"
+			}
+			h.metrics.CWMPAuthTotal.WithLabelValues(result).Inc()
+			h.logger.Warn("authentication failed or missing", "remote", r.RemoteAddr, "result", result)
 			h.captureAuthFailure(r.Context(), remoteIP(r))
 			// Drain the unauthenticated encoded body before the challenge so
 			// keep-alive survives on CPEs that retry the same connection.
@@ -151,6 +159,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		h.metrics.CWMPAuthTotal.WithLabelValues("ok").Inc()
 		bound.credentialDeviceID = identity.BoundDeviceID
 		bound.credentialUsername = identity.Username
 		bound.sharedCredential = identity.SharedCredential

@@ -99,7 +99,7 @@ var rules = []rule{
 	{"uploaded_files", func(p Policy) int { return p.StaleUploadSlotsDays },
 		"status = 'PENDING' AND created_at < $1", "id"},
 	{"password_reset_tokens", func(p Policy) int { return p.ResetTokensDays },
-		"(used_at IS NOT NULL OR expires_at < now()) AND expires_at < $1", "id"},
+		"(used_at IS NOT NULL OR expires_at < now()) AND expires_at < $1", "token"},
 	{"capture_sessions", func(p Policy) int { return p.CaptureSessionsDays },
 		"(status <> 'ACTIVE' AND COALESCE(stopped_at, expires_at) < $1) OR (status = 'ACTIVE' AND expires_at < $1)", "id"},
 }

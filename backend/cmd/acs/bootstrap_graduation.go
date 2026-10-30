@@ -119,6 +119,9 @@ func bootstrapCWMPGraduationGuardWithDeps(next http.HandlerFunc, deps bootstrapG
 			// The normal handler logs its own auth failures; without this line a
 			// wrong bootstrap password is invisible in acs.log.
 			deps.log().Warn("bootstrap credential authentication failed", "stale", stale, "remote", r.RemoteAddr)
+			if deps.metrics != nil {
+				deps.metrics.CWMPAuthTotal.WithLabelValues("bootstrap_failed").Inc()
+			}
 			_, _ = io.Copy(io.Discard, r.Body)
 			if stale {
 				deps.bootstrapAuth.ChallengeStale(w)

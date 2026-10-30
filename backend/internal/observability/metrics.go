@@ -39,6 +39,11 @@ type Metrics struct {
 
 	RateLimitRejectedTotal prometheus.Counter
 
+	// CWMPAuthTotal counts CWMP authentication outcomes. Every CWMP session
+	// starts with an unauthenticated POST answered by a Digest challenge
+	// (result=challenge), so HTTP 4xx rates are not an auth-failure signal.
+	CWMPAuthTotal *prometheus.CounterVec
+
 	DevicesOnline *prometheus.GaugeVec
 
 	factory promauto.Factory
@@ -118,6 +123,11 @@ func NewMetrics(service string) *Metrics {
 			Help:        "Requests rejected by a rate limiter.",
 			ConstLabels: constLabels,
 		}),
+		CWMPAuthTotal: factory.NewCounterVec(prometheus.CounterOpts{
+			Name:        "acs_cwmp_auth_total",
+			Help:        "CWMP authentication outcomes: ok, challenge (no credentials yet, normal first request), stale, bad_credentials, bootstrap_ok, bootstrap_failed.",
+			ConstLabels: constLabels,
+		}, []string{"result"}),
 		DevicesOnline: factory.NewGaugeVec(prometheus.GaugeOpts{
 			Name:        "acs_devices_online",
 			Help:        "Devices currently in each online_status.",
