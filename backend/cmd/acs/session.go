@@ -419,6 +419,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	h.onboardingListener.onboarded(device.ID, r.RemoteAddr)
 	h.recoverAbandonedDiscovery(ctx, device.ID)
 	h.recoverDroppedSessionJobs(ctx, device.ID, inform.Event)
+	h.releaseAwaitingDiagnostics(ctx, device.ID, inform.HasEventCode(cwmp.EventDiagnosticsComplete))
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "acs_session",
@@ -917,8 +918,9 @@ func (h *handler) recoverDroppedSessionJobs(ctx context.Context, deviceID string
 			methodKeys[method][e.CommandKey] = true
 		}
 	}
+	diagnosticsComplete := cwmp.Inform{Event: events}.HasEventCode(cwmp.EventDiagnosticsComplete)
 	for _, job := range dropped {
-		action := jobs.ClassifyDroppedSessionJob(job, methodKeys)
+		action := jobs.ClassifyDroppedSessionJob(job, methodKeys, diagnosticsComplete)
 		applied, err := h.jobs.ApplyDroppedSessionAction(ctx, job, action)
 		if err != nil {
 			h.logger.Error("recover dropped-session job", "err", err, "job_id", job.ID)
@@ -930,6 +932,7 @@ func (h *handler) recoverDroppedSessionJobs(ctx context.Context, deviceID string
 		outcome := map[jobs.DroppedSessionAction]string{
 			jobs.DroppedRequeue: "requeued", jobs.DroppedSucceeded: "succeeded (confirmed by Inform event)",
 			jobs.DroppedAwaitTransfer: "awaiting TransferComplete", jobs.DroppedFailed: "failed: outcome unknown, needs review",
+			jobs.DroppedDiagnosticsTriggered: "diagnostic trigger confirmed by 8 DIAGNOSTICS COMPLETE; polling for the result",
 		}[action]
 		h.logger.Warn("recovered job from a CWMP session the CPE dropped", "device_id", deviceID, "job_id", job.ID,
 			"command_key", job.CommandKey, "type", job.Type, "outcome", outcome)

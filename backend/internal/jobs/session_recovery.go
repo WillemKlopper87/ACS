@@ -27,14 +27,23 @@ const (
 	// DroppedFailed: outcome unknown for a non-repeatable type; fail now for
 	// operator review instead of after the 15-minute lease.
 	DroppedFailed
+	// DroppedDiagnosticsTriggered: a diagnostic trigger went unanswered but
+	// the new Inform carries "8 DIAGNOSTICS COMPLETE", proving the CPE took
+	// the trigger and ran the test. Poll for the result instead of
+	// re-triggering (which would restart the test and discard it).
+	DroppedDiagnosticsTriggered
 )
 
 // ClassifyDroppedSessionJob decides how to recover one job left RPC_SENT
 // when its device sends a new Inform. A CPE runs one CWMP session at a time,
 // so a new Inform means the earlier session is over and the RPC was never
 // answered. methodKeys holds the CommandKeys carried by "M <method>" events
-// of the new Inform, by method (e.g. "Reboot" -> {"reboot_2026...": true}).
-func ClassifyDroppedSessionJob(job *Job, methodKeys map[string]map[string]bool) DroppedSessionAction {
+// of the new Inform, by method (e.g. "Reboot" -> {"reboot_2026...": true});
+// diagnosticsComplete is whether it carries "8 DIAGNOSTICS COMPLETE".
+func ClassifyDroppedSessionJob(job *Job, methodKeys map[string]map[string]bool, diagnosticsComplete bool) DroppedSessionAction {
+	if diagnosticsComplete && IsCWMPDiagnosticType(job.Type) && !DiagnosticsTriggered(job) {
+		return DroppedDiagnosticsTriggered
+	}
 	switch job.Type {
 	case TypeReboot:
 		if methodKeys["Reboot"][job.CommandKey] {
@@ -90,6 +99,10 @@ func (r *Repository) ApplyDroppedSessionAction(ctx context.Context, job *Job, ac
 		query = `UPDATE jobs SET status='QUEUED', updated_at=now(), lease_owner=NULL, leased_until=NULL WHERE id=$1 AND attempts=$2 AND status='RPC_SENT'`
 	case DroppedSucceeded:
 		query = `UPDATE jobs SET status='SUCCESS', completed_at=now(), updated_at=now(), lease_owner=NULL, leased_until=NULL WHERE id=$1 AND attempts=$2 AND status='RPC_SENT'`
+	case DroppedDiagnosticsTriggered:
+		query = `UPDATE jobs SET status='QUEUED', updated_at=now(), lease_owner=NULL, leased_until=NULL,
+			diagnostics_deadline=COALESCE(diagnostics_deadline, now() + $3 * interval '1 second') WHERE id=$1 AND attempts=$2 AND status='RPC_SENT'`
+		args = append(args, int(DiagnosticsWindow(job).Seconds()))
 	case DroppedAwaitTransfer:
 		query = `UPDATE jobs SET status='AWAITING_TRANSFER_COMPLETE', updated_at=now(), lease_owner=NULL, leased_until=NULL WHERE id=$1 AND attempts=$2 AND status='RPC_SENT'`
 	case DroppedFailed:

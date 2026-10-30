@@ -1,6 +1,9 @@
 package jobs
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestClassifyDroppedSessionJob(t *testing.T) {
 	rebootKeys := map[string]map[string]bool{"Reboot": {"reboot_20261030_18ac76da": true}}
@@ -20,7 +23,30 @@ func TestClassifyDroppedSessionJob(t *testing.T) {
 		{"add object never repeated", Job{Type: TypeAddObject, Attempts: 1, MaxAttempts: 3}, nil, DroppedFailed},
 		{"factory reset never repeated", Job{Type: TypeFactoryReset, Attempts: 1, MaxAttempts: 3}, nil, DroppedFailed},
 	} {
-		if got := ClassifyDroppedSessionJob(&tc.job, tc.keys); got != tc.want {
+		if got := ClassifyDroppedSessionJob(&tc.job, tc.keys, false); got != tc.want {
+			t.Errorf("%s: got %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestClassifyDroppedSessionDiagnostics covers the FastMile pattern: the
+// session carrying a diagnostic trigger drops before the SPV response.
+func TestClassifyDroppedSessionDiagnostics(t *testing.T) {
+	deadline := time.Now().Add(time.Minute)
+	for _, tc := range []struct {
+		name     string
+		job      Job
+		complete bool
+		want     DroppedSessionAction
+	}{
+		{"unacked trigger is re-sent", Job{Type: TypeDiagnosticsPing, Attempts: 1, MaxAttempts: DiagnosticsMaxAttempts}, false, DroppedRequeue},
+		{"unacked trigger proven by 8 DIAGNOSTICS COMPLETE is polled", Job{Type: TypeDiagnosticsPing, Attempts: 1, MaxAttempts: DiagnosticsMaxAttempts}, true, DroppedDiagnosticsTriggered},
+		{"traceroute trigger proven too", Job{Type: TypeDiagnosticsTraceroute, Attempts: 1, MaxAttempts: DiagnosticsMaxAttempts}, true, DroppedDiagnosticsTriggered},
+		{"TR-143 trigger proven too", Job{Type: TypeDiagnosticsDownload, Attempts: 1, MaxAttempts: DiagnosticsMaxAttempts}, true, DroppedDiagnosticsTriggered},
+		{"dropped poll is polled again", Job{Type: TypeDiagnosticsPing, Attempts: 3, MaxAttempts: DiagnosticsMaxAttempts, DiagnosticsDeadline: &deadline}, true, DroppedRequeue},
+		{"8 does not affect other types", Job{Type: TypeGetParameter, Attempts: 1, MaxAttempts: 3}, true, DroppedRequeue},
+	} {
+		if got := ClassifyDroppedSessionJob(&tc.job, nil, tc.complete); got != tc.want {
 			t.Errorf("%s: got %d, want %d", tc.name, got, tc.want)
 		}
 	}
