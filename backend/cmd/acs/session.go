@@ -409,6 +409,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	)
 	h.onboardingListener.onboarded(device.ID, r.RemoteAddr)
 	h.recoverAbandonedDiscovery(ctx, device.ID)
+	h.recoverDroppedSessionJobs(ctx, device.ID, inform.Event)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "acs_session",
@@ -737,7 +738,13 @@ func (h *handler) handleTransferComplete(ctx context.Context, w http.ResponseWri
 		}
 	}
 
-	if job.Status != jobs.StatusAwaitingTransferComplete && job.Status != jobs.StatusRPCSent {
+	if jobs.LateTransferReconcilable(job) {
+		// The ACS had given up on this transfer (lease/session lost or
+		// deadline passed) but the device is now reporting its real outcome:
+		// apply it rather than leaving a possibly successful flash FAILED.
+		h.logger.Info("reconciling late TransferComplete for a transfer the ACS had given up on",
+			"command_key", tc.CommandKey, "job_id", job.ID, "previous_fault", *job.FaultCode)
+	} else if job.Status != jobs.StatusAwaitingTransferComplete && job.Status != jobs.StatusRPCSent {
 		h.logger.Info("duplicate or late TransferComplete ignored", "command_key", tc.CommandKey, "job_id", job.ID, "status", job.Status)
 		w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
 		w.WriteHeader(http.StatusOK)
@@ -874,6 +881,53 @@ func connectionRequestBehindNAT(rawURL, informSource string) (behind, known bool
 		return false, false
 	}
 	return !advertised.Equal(source), true
+}
+
+// recoverDroppedSessionJobs runs on every Inform. A CPE has one CWMP session
+// at a time, so any session-dispatched job still RPC_SENT was sent in an
+// earlier session the CPE ended without answering (Nokia FastMile drops
+// sessions mid-exchange without a fault). Without this, such jobs waited for
+// the 15-minute lease, and Download/Upload/Reboot were then dead-lettered as
+// LEASE_EXPIRED_UNSAFE_RETRY even when they had executed — a successful
+// firmware flash could be counted as failed and trigger a rollout rollback.
+func (h *handler) recoverDroppedSessionJobs(ctx context.Context, deviceID string, events []cwmp.EventStruct) {
+	dropped, err := h.jobs.DroppedSessionJobs(ctx, deviceID)
+	if err != nil {
+		h.logger.Error("load dropped-session jobs", "err", err, "device_id", deviceID)
+		return
+	}
+	if len(dropped) == 0 {
+		return
+	}
+	methodKeys := map[string]map[string]bool{}
+	for _, e := range events {
+		if method, ok := strings.CutPrefix(strings.TrimSpace(e.EventCode), "M "); ok {
+			if methodKeys[method] == nil {
+				methodKeys[method] = map[string]bool{}
+			}
+			methodKeys[method][e.CommandKey] = true
+		}
+	}
+	for _, job := range dropped {
+		action := jobs.ClassifyDroppedSessionJob(job, methodKeys)
+		applied, err := h.jobs.ApplyDroppedSessionAction(ctx, job, action)
+		if err != nil {
+			h.logger.Error("recover dropped-session job", "err", err, "job_id", job.ID)
+			continue
+		}
+		if !applied {
+			continue
+		}
+		outcome := map[jobs.DroppedSessionAction]string{
+			jobs.DroppedRequeue: "requeued", jobs.DroppedSucceeded: "succeeded (confirmed by Inform event)",
+			jobs.DroppedAwaitTransfer: "awaiting TransferComplete", jobs.DroppedFailed: "failed: outcome unknown, needs review",
+		}[action]
+		h.logger.Warn("recovered job from a CWMP session the CPE dropped", "device_id", deviceID, "job_id", job.ID,
+			"command_key", job.CommandKey, "type", job.Type, "outcome", outcome)
+		if action == jobs.DroppedSucceeded {
+			h.metrics.JobsCompletedTotal.WithLabelValues(job.Type, jobs.StatusSuccess).Inc()
+		}
+	}
 }
 
 func extractConnectionRequestURL(list []cwmp.ParameterValueStruct) string {
