@@ -60,9 +60,10 @@ func (h *handler) autoDiscoverParameters(ctx context.Context, device *devices.De
 // to fold this into (unlike SET_PARAMETER's), so it has nowhere else to
 // live.
 type discoveryResultDetail struct {
-	Root           string `json:"root"`
-	ParameterCount int    `json:"parameter_count"`
-	WritableCount  int    `json:"writable_count"`
+	Root           string   `json:"root"`
+	ParameterCount int      `json:"parameter_count"`
+	WritableCount  int      `json:"writable_count"`
+	Skipped        []string `json:"skipped,omitempty"`
 }
 
 // completeParameterDiscovery handles PARAMETER_DISCOVERY's response
@@ -75,6 +76,14 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 	var payload jobs.ParameterDiscoveryPayload
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
 		h.logger.Error("failed to unmarshal parameter discovery payload", "err", err, "job_id", job.ID)
+		return
+	}
+
+	// A fault on one object deep in an incremental walk says that subtree is
+	// unservable on this firmware, not that the root is wrong: skip it and
+	// keep walking. Root-level faults still take the fallback path below.
+	if payload.Incremental && payload.Cursor != "" && body.Fault != nil {
+		h.skipDiscoveryObject(ctx, deviceID, job, payload, "fault "+body.Fault.CWMPCode()+": "+body.Fault.CWMPMessage())
 		return
 	}
 
@@ -110,13 +119,8 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 
 	list := body.GetParameterNamesResponse.ParameterList
 	writableByName := make(map[string]bool, len(list))
-	writableCount := 0
 	for _, p := range list {
-		writable := p.Writable == "1" || p.Writable == "true"
-		writableByName[p.Name] = writable
-		if writable {
-			writableCount++
-		}
+		writableByName[p.Name] = p.Writable == "1" || p.Writable == "true"
 	}
 	if payload.Incremental {
 		done, err := jobs.AdvanceDiscovery(&payload, writableByName)
@@ -131,11 +135,19 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 			return
 		}
 		writableByName = payload.Names
-		writableCount = 0
-		for _, writable := range writableByName {
-			if writable {
-				writableCount++
-			}
+	}
+
+	h.finishParameterDiscovery(ctx, deviceID, job, payload, writableByName)
+}
+
+// finishParameterDiscovery persists a completed walk: the snapshot, the
+// confirmed data-model root, the job result (including any objects skipped
+// because the CPE could not serve them) and the audit record.
+func (h *handler) finishParameterDiscovery(ctx context.Context, deviceID string, job *jobs.Job, payload jobs.ParameterDiscoveryPayload, writableByName map[string]bool) {
+	writableCount := 0
+	for _, writable := range writableByName {
+		if writable {
+			writableCount++
 		}
 	}
 
@@ -157,7 +169,7 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 	}
 
 	if err := h.jobs.MarkSuccessWithDetail(ctx, job.ID, discoveryResultDetail{
-		Root: payload.Root, ParameterCount: len(writableByName), WritableCount: writableCount,
+		Root: payload.Root, ParameterCount: len(writableByName), WritableCount: writableCount, Skipped: payload.Skipped,
 	}); err != nil {
 		h.logger.Error("failed to mark discovery job success", "err", err, "job_id", job.ID)
 	}
@@ -165,10 +177,52 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 
 	if err := h.auditor.Record(ctx, "system", deviceID, "ParameterDiscoveryCompleted", map[string]any{
 		"job_id": job.ID, "command_key": job.CommandKey, "root": payload.Root,
-		"parameter_count": len(writableByName), "writable_count": writableCount,
+		"parameter_count": len(writableByName), "writable_count": writableCount, "skipped": payload.Skipped,
 	}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
 	h.logger.Info("parameter discovery completed", "device_id", deviceID, "root", payload.Root,
-		"parameter_count", len(writableByName), "writable_count", writableCount, "command_key", job.CommandKey)
+		"parameter_count", len(writableByName), "writable_count", writableCount, "skipped", len(payload.Skipped), "command_key", job.CommandKey)
+}
+
+// skipDiscoveryObject abandons the object the walk is on (see
+// jobs.SkipDiscoveryCursor) and either requeues the walk at the next object
+// or, when that was the last one, completes discovery with what was found.
+func (h *handler) skipDiscoveryObject(ctx context.Context, deviceID string, job *jobs.Job, payload jobs.ParameterDiscoveryPayload, reason string) {
+	skipped := payload.Cursor
+	done, err := jobs.SkipDiscoveryCursor(&payload)
+	if err != nil {
+		_ = h.jobs.MarkFailed(ctx, job.ID, "", err.Error())
+		h.logger.Warn("parameter discovery abandoned", "device_id", deviceID, "command_key", job.CommandKey, "err", err)
+		return
+	}
+	h.logger.Warn("parameter discovery skipped an object the CPE could not serve",
+		"device_id", deviceID, "object", skipped, "reason", reason, "command_key", job.CommandKey)
+	if done {
+		h.finishParameterDiscovery(ctx, deviceID, job, payload, payload.Names)
+		return
+	}
+	if err := h.jobs.RequeueDiscovery(ctx, job, payload); err != nil {
+		h.logger.Error("persist discovery progress", "err", err, "job_id", job.ID)
+	}
+}
+
+// recoverAbandonedDiscovery runs on every Inform. A CPE has one session at a
+// time, so a new Inform means any GetParameterNames still RPC_SENT from an
+// earlier session was never answered: the CPE dropped the session on that
+// object. Skip it now rather than letting the 15-minute lease expire and the
+// reaper resend the same object, which would stall discovery indefinitely.
+func (h *handler) recoverAbandonedDiscovery(ctx context.Context, deviceID string) {
+	inFlight, err := h.jobs.InFlightDiscoveries(ctx, deviceID)
+	if err != nil {
+		h.logger.Error("load in-flight discovery", "err", err, "device_id", deviceID)
+		return
+	}
+	for _, job := range inFlight {
+		var payload jobs.ParameterDiscoveryPayload
+		if err := json.Unmarshal(job.Payload, &payload); err != nil || !payload.Incremental || payload.Cursor == "" {
+			continue // root-level or legacy full-tree walks keep the lease/reaper path
+		}
+		h.skipDiscoveryObject(ctx, deviceID, job, payload, "CPE ended the session without responding")
+	}
 }

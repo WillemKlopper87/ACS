@@ -66,6 +66,56 @@ func AdvanceDiscovery(p *ParameterDiscoveryPayload, names map[string]bool) (bool
 	return false, nil
 }
 
+// DiscoveryMaxSkipped bounds how many objects one walk may skip before the
+// device is treated as unable to serve discovery at all.
+const DiscoveryMaxSkipped = 32
+
+// SkipDiscoveryCursor abandons the object currently being walked — the CPE
+// faulted on it, or dropped the session instead of answering (observed on
+// Nokia FastMile 1.2501.00.0798 for Device.DynamicDNS.Client.) — records it
+// in Skipped, and advances to the next pending object. It reports done when
+// nothing is left to walk. Skipping is safe because discovery is read-only;
+// retrying the same object would only stall the walk forever.
+func SkipDiscoveryCursor(p *ParameterDiscoveryPayload) (bool, error) {
+	if p.Cursor == "" {
+		return false, fmt.Errorf("discovery has no object in progress to skip")
+	}
+	if len(p.Skipped) >= DiscoveryMaxSkipped {
+		return false, fmt.Errorf("discovery skipped more than %d objects the device could not serve", DiscoveryMaxSkipped)
+	}
+	if p.Visited == nil {
+		p.Visited = map[string]bool{}
+	}
+	p.Visited[p.Cursor] = true
+	p.Skipped = append(p.Skipped, p.Cursor)
+	if len(p.Pending) == 0 {
+		p.Cursor = ""
+		return true, nil
+	}
+	p.Cursor, p.Pending = p.Pending[0], p.Pending[1:]
+	return false, nil
+}
+
+// InFlightDiscoveries returns the device's PARAMETER_DISCOVERY jobs whose
+// GetParameterNames is still awaiting a response.
+func (r *Repository) InFlightDiscoveries(ctx context.Context, deviceID string) ([]*Job, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE device_id=$1 AND type=$2 AND status=$3 ORDER BY created_at`,
+		deviceID, TypeParameterDiscovery, StatusRPCSent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Job
+	for rows.Next() {
+		job, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, job)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) RequeueDiscovery(ctx context.Context, job *Job, payload ParameterDiscoveryPayload) error {
 	raw, err := json.Marshal(payload)
 	if err != nil {

@@ -402,6 +402,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 		"cwmp_namespace", ns,
 	)
 	h.onboardingListener.onboarded(device.ID, r.RemoteAddr)
+	h.recoverAbandonedDiscovery(ctx, device.ID)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "acs_session",

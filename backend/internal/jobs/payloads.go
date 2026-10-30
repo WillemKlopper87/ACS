@@ -203,6 +203,7 @@ type ParameterDiscoveryPayload struct {
 	Pending      []string                   `json:"pending,omitempty"`
 	Visited      map[string]bool            `json:"visited,omitempty"`
 	Names        map[string]bool            `json:"names,omitempty"`
+	Skipped      []string                   `json:"skipped,omitempty"`
 	Firmware     string                     `json:"firmware,omitempty"`
 	Capabilities map[string]json.RawMessage `json:"capabilities,omitempty"`
 }
