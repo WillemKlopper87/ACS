@@ -1630,6 +1630,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/satellites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the mesh satellites linked to this gateway (tenancy-scoped)
+         * @description Devices whose gateway_device_id is this device, i.e. mesh satellites (e.g. Nokia WiFi Beacon 3.1) that reported this gateway's identity via TR-111 Device.GatewayInfo.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["Device"][];
+                            total: number;
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/tags": {
         parameters: {
             query?: never;
@@ -6119,6 +6171,10 @@ export interface components {
             reboot_requested_at?: string;
             /** @description Seconds from the last acknowledged reboot/reset until the device informed again */
             last_reboot_duration_seconds?: number;
+            /** @description Mesh satellites only: the gateway device this unit sits behind, resolved from TR-111 Device.GatewayInfo (unset when unknown or the gateway is not registered) */
+            gateway_device_id?: string;
+            /** @description Mesh satellites only: the gateway identity (OUI+ProductClass+SerialNumber natural key) reported in Device.GatewayInfo */
+            gateway_oui_serial?: string;
         };
         WiFiNetwork: {
             instance: number;
