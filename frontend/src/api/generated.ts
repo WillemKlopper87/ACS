@@ -2308,6 +2308,8 @@ export interface paths {
                                 download_path?: string;
                                 upload_path?: string;
                             };
+                            ping?: components["schemas"]["DiagnosticCapability"];
+                            traceroute?: components["schemas"]["DiagnosticCapability"];
                         };
                     };
                 };
@@ -2351,13 +2353,7 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description Accepted */
-                202: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
+                202: components["responses"]["DiagnosticQueueResponse"];
                 /** @description Invalid or disallowed target URL */
                 400: {
                     headers: {
@@ -2389,7 +2385,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Queue DIAGNOSTICS_PING — trigger + poll cycle, resolves to SUCCESS/FAILED/TIMEOUT (diagnostics.run permission) */
+        /**
+         * Queue DIAGNOSTICS_PING — trigger, wait for the CPE's next session (8 DIAGNOSTICS COMPLETE), poll; resolves to SUCCESS/FAILED/TIMEOUT (diagnostics.run permission)
+         * @description Requires a discovered, writable IPPing object; only inputs discovery proved writable are sent.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -2413,7 +2412,14 @@ export interface paths {
                 };
             };
             responses: {
-                202: components["responses"]["QueueResponse"];
+                202: components["responses"]["DiagnosticQueueResponse"];
+                /** @description Diagnostic not supported by the device's discovered data model, or discovery has not run */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         delete?: never;
@@ -2456,7 +2462,14 @@ export interface paths {
                 };
             };
             responses: {
-                202: components["responses"]["QueueResponse"];
+                202: components["responses"]["DiagnosticQueueResponse"];
+                /** @description Diagnostic not supported by the device's discovered data model, or discovery has not run */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         delete?: never;
@@ -6171,6 +6184,12 @@ export interface components {
             command_key?: string;
             status?: string;
         };
+        DiagnosticCapability: {
+            supported?: boolean;
+            path?: string;
+            /** @description Why discovery rules the diagnostic out */
+            reason?: string;
+        };
         /** @description Mirrors cmd/api's captureSessionResponse (design §4/§7). */
         CaptureSession: {
             /** Format: uuid */
@@ -6231,7 +6250,7 @@ export interface components {
             device_id?: string;
             type?: string;
             /** @enum {string} */
-            status?: "QUEUED" | "RPC_SENT" | "IN_PROGRESS" | "AWAITING_TRANSFER_COMPLETE" | "SUCCESS" | "FAILED" | "TIMEOUT";
+            status?: "QUEUED" | "RPC_SENT" | "IN_PROGRESS" | "AWAITING_TRANSFER_COMPLETE" | "AWAITING_DIAGNOSTICS_COMPLETE" | "SUCCESS" | "FAILED" | "TIMEOUT";
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */
@@ -6631,6 +6650,20 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["QueueResponse"];
+            };
+        };
+        /** @description Diagnostic job queued */
+        DiagnosticQueueResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": {
+                    command_key?: string;
+                    status?: string;
+                    /** @description Optional inputs not sent because discovery did not prove them writable (the CPE's defaults apply) */
+                    skipped_inputs?: string[];
+                };
             };
         };
     };

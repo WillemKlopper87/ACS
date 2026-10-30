@@ -26,8 +26,8 @@ type reachabilityInfo struct {
 }
 
 // createDiagnosticsPingRequest mirrors design doc v3 §10.1's IPPing input
-// parameters. Only Host is required; the rest default to sane values a
-// GenieACS-style ping test would use.
+// parameters. Only Host is required; the rest default to
+// internal/diagnostics' Ping defaults (shared with scheduled pings).
 type createDiagnosticsPingRequest struct {
 	Host                string `json:"host"`
 	NumberOfRepetitions int    `json:"number_of_repetitions,omitempty"`
@@ -36,16 +36,30 @@ type createDiagnosticsPingRequest struct {
 	DSCP                int    `json:"dscp,omitempty"`
 }
 
-const (
-	diagPingDefaultRepetitions = 4
-	diagPingDefaultTimeoutMS   = 5000
-	diagPingDefaultBlockSize   = 64
-	// diagPingMaxAttempts caps how many times cmd/acs will requeue a
-	// DIAGNOSTICS_PING job for another poll before giving up as a
-	// TIMEOUT — a device whose DiagnosticsState never leaves "Requested"
-	// would otherwise poll forever (build plan §4 Phase 5).
-	diagPingMaxAttempts = 15
-)
+// discoveredNames returns the device's discovered parameter names (nil if
+// discovery never ran), writing a 500 and returning false on a read error.
+func (h *handler) discoveredNames(w http.ResponseWriter, r *http.Request, deviceID string) (map[string]bool, bool) {
+	discovered, err := h.params.GetNames(r.Context(), deviceID)
+	if err != nil {
+		h.logger.Error("failed to read discovered parameter names", "err", err, "device_id", deviceID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, false
+	}
+	if discovered == nil {
+		return nil, true
+	}
+	return discovered.Names, true
+}
+
+// writeDiagnosticQueued answers a queued diagnostic, listing the optional
+// inputs discovery did not prove writable (the CPE's own defaults apply).
+func writeDiagnosticQueued(w http.ResponseWriter, job *jobs.Job, skipped []string) {
+	body := map[string]any{"command_key": job.CommandKey, "status": job.Status}
+	if len(skipped) > 0 {
+		body["skipped_inputs"] = skipped
+	}
+	writeJSON(w, http.StatusAccepted, body)
+}
 
 // createConnectionRequest queues a CONNECTION_REQUEST job (design doc v3
 // §8.4). Unlike PUT parameters, this never talks to the CPE synchronously
@@ -151,9 +165,14 @@ func (h *handler) getDiagnosticsCapabilities(w http.ResponseWriter, r *http.Requ
 	if discovered != nil {
 		names = discovered.Names
 	}
+	ping, traceroute := diagnostics.PingTracerouteCapabilities(names,
+		adapters.DiagnosticsPrefix(device.DataModelRoot, adapters.DiagnosticPing),
+		adapters.DiagnosticsPrefix(device.DataModelRoot, adapters.DiagnosticTraceroute))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"discovered_at": discoveredAtString(discovered),
 		"tr143":         adapters.ResolveTR143Capability(names),
+		"ping":          ping,
+		"traceroute":    traceroute,
 	})
 }
 
@@ -210,12 +229,12 @@ func (h *handler) refreshWifiClients(w http.ResponseWriter, r *http.Request) {
 }
 
 // createDiagnosticsPing queues a DIAGNOSTICS_PING job (design doc v3
-// §10.1). Unlike the other job types, this one polls itself to
-// completion — cmd/acs's dispatch loop requeues the same job for another
-// GetParameterValues poll until DiagnosticsState leaves "Requested"
-// instead of finalizing after one round-trip. The REST response here is
-// just "queued"; poll GET /jobs/{command_key} for the outcome, same as
-// CONNECTION_REQUEST and FIRMWARE_DOWNLOAD.
+// §10.1). The job triggers the test, waits for the CPE's next session
+// (ideally the "8 DIAGNOSTICS COMPLETE" Inform) and polls the result there
+// — see internal/jobs/diagnostics.go. The device must have discovered a
+// writable IPPing object (409 otherwise: e.g. a Nokia Beacon 3.1 has no
+// Device.IP.Diagnostics. at all), and only inputs discovery proved
+// writable are sent. Poll GET /jobs/{command_key} for the outcome.
 func (h *handler) createDiagnosticsPing(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	device, ok := h.getScopedDevice(w, r, id)
@@ -232,35 +251,33 @@ func (h *handler) createDiagnosticsPing(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "host is required", http.StatusBadRequest)
 		return
 	}
-	if req.NumberOfRepetitions == 0 {
-		req.NumberOfRepetitions = diagPingDefaultRepetitions
+	payload := jobs.DiagnosticsPingPayload{
+		Host:                req.Host,
+		NumberOfRepetitions: req.NumberOfRepetitions,
+		Timeout:             req.Timeout,
+		DataBlockSize:       req.DataBlockSize,
+		DSCP:                req.DSCP,
+		Prefix:              adapters.DiagnosticsPrefix(device.DataModelRoot, adapters.DiagnosticPing),
 	}
-	if req.Timeout == 0 {
-		req.Timeout = diagPingDefaultTimeoutMS
+	diagnostics.ApplyPingDefaults(&payload)
+	names, ok := h.discoveredNames(w, r, id)
+	if !ok {
+		return
 	}
-	if req.DataBlockSize == 0 {
-		req.DataBlockSize = diagPingDefaultBlockSize
+	plan, err := diagnostics.PlanPing(names, &payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
 	}
 
-	job, err := h.jobs.CreateWithMaxAttempts(r.Context(), id, jobs.TypeDiagnosticsPing,
-		jobs.DiagnosticsPingPayload{
-			Host:                req.Host,
-			NumberOfRepetitions: req.NumberOfRepetitions,
-			Timeout:             req.Timeout,
-			DataBlockSize:       req.DataBlockSize,
-			DSCP:                req.DSCP,
-			Prefix:              adapters.DiagnosticsPrefix(device.DataModelRoot, adapters.DiagnosticPing),
-		}, operatorFromRequest(r), diagPingMaxAttempts)
+	job, err := h.jobs.CreateWithMaxAttempts(r.Context(), id, jobs.TypeDiagnosticsPing, payload,
+		operatorFromRequest(r), jobs.DiagnosticsMaxAttempts)
 	if err != nil {
 		h.logger.Error("failed to queue diagnostics ping", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"command_key": job.CommandKey,
-		"status":      job.Status,
-	})
+	writeDiagnosticQueued(w, job, plan.Skipped)
 }
 
 // createDiagnosticsTracerouteRequest mirrors design doc v3 §10.1's
@@ -276,16 +293,9 @@ type createDiagnosticsTracerouteRequest struct {
 	MaxHopCount   int    `json:"max_hop_count,omitempty"`
 }
 
-const (
-	diagTracerouteDefaultTries     = 3
-	diagTracerouteDefaultTimeoutMS = 5000
-	diagTracerouteDefaultBlockSize = 38
-	diagTracerouteDefaultMaxHops   = 30
-	// diagTracerouteMaxAttempts mirrors diagPingMaxAttempts — same poll-
-	// loop shape, same reason for a cap (build plan §4 Phase 5).
-	diagTracerouteMaxAttempts = 15
-)
-
+// createDiagnosticsTraceroute is createDiagnosticsPing for TraceRoute, with
+// the same discovery gating (the FastMile's TraceRoute has no Timeout or
+// DSCP leaves, so those inputs are skipped rather than faulting 9005).
 func (h *handler) createDiagnosticsTraceroute(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	device, ok := h.getScopedDevice(w, r, id)
@@ -302,50 +312,40 @@ func (h *handler) createDiagnosticsTraceroute(w http.ResponseWriter, r *http.Req
 		http.Error(w, "host is required", http.StatusBadRequest)
 		return
 	}
-	if req.NumberOfTries == 0 {
-		req.NumberOfTries = diagTracerouteDefaultTries
+	payload := jobs.DiagnosticsTraceroutePayload{
+		Host:          req.Host,
+		NumberOfTries: req.NumberOfTries,
+		Timeout:       req.Timeout,
+		DataBlockSize: req.DataBlockSize,
+		DSCP:          req.DSCP,
+		MaxHopCount:   req.MaxHopCount,
+		Prefix:        adapters.DiagnosticsPrefix(device.DataModelRoot, adapters.DiagnosticTraceroute),
 	}
-	if req.Timeout == 0 {
-		req.Timeout = diagTracerouteDefaultTimeoutMS
+	diagnostics.ApplyTracerouteDefaults(&payload)
+	names, ok := h.discoveredNames(w, r, id)
+	if !ok {
+		return
 	}
-	if req.DataBlockSize == 0 {
-		req.DataBlockSize = diagTracerouteDefaultBlockSize
-	}
-	if req.MaxHopCount == 0 {
-		req.MaxHopCount = diagTracerouteDefaultMaxHops
+	plan, err := diagnostics.PlanTraceroute(names, &payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
 	}
 
-	job, err := h.jobs.CreateWithMaxAttempts(r.Context(), id, jobs.TypeDiagnosticsTraceroute,
-		jobs.DiagnosticsTraceroutePayload{
-			Host:          req.Host,
-			NumberOfTries: req.NumberOfTries,
-			Timeout:       req.Timeout,
-			DataBlockSize: req.DataBlockSize,
-			DSCP:          req.DSCP,
-			MaxHopCount:   req.MaxHopCount,
-			Prefix:        adapters.DiagnosticsPrefix(device.DataModelRoot, adapters.DiagnosticTraceroute),
-		}, operatorFromRequest(r), diagTracerouteMaxAttempts)
+	job, err := h.jobs.CreateWithMaxAttempts(r.Context(), id, jobs.TypeDiagnosticsTraceroute, payload,
+		operatorFromRequest(r), jobs.DiagnosticsMaxAttempts)
 	if err != nil {
 		h.logger.Error("failed to queue diagnostics traceroute", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"command_key": job.CommandKey,
-		"status":      job.Status,
-	})
+	writeDiagnosticQueued(w, job, plan.Skipped)
 }
 
 type tr143Request struct {
 	URL            string `json:"url"`
 	TestFileLength uint64 `json:"test_file_length,omitempty"`
 }
-
-// tr143MaxAttempts mirrors diagPingMaxAttempts/diagTracerouteMaxAttempts —
-// same trigger-then-poll-to-completion shape, same reason for a cap on how
-// many times cmd/acs will requeue the job for another poll.
-const tr143MaxAttempts = 15
 
 func (h *handler) createTR143(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -386,21 +386,38 @@ func (h *handler) createTR143(w http.ResponseWriter, r *http.Request) {
 		req.TestFileLength = 1048576
 	}
 
-	var jobType string
-	var payload any
-	if direction == "upload" {
-		jobType, payload = jobs.TypeDiagnosticsUpload, jobs.DiagnosticsUploadPayload{URL: req.URL, Prefix: capability.UploadPath, USPCommand: capability.UploadCommand, TestFileLength: req.TestFileLength}
-	} else {
-		jobType, payload = jobs.TypeDiagnosticsDownload, jobs.DiagnosticsDownloadPayload{URL: req.URL, Prefix: capability.DownloadPath, USPCommand: capability.DownloadCommand}
+	upload := direction == "upload"
+	path, command := capability.DownloadPath, capability.DownloadCommand
+	if upload {
+		path, command = capability.UploadPath, capability.UploadCommand
 	}
-	if (direction == "upload" && capability.UploadPath == "" && capability.UploadCommand == "") || (direction == "download" && capability.DownloadPath == "" && capability.DownloadCommand == "") {
+	if path == "" && command == "" {
 		http.Error(w, "device has not advertised this TR-143 capability", http.StatusConflict)
 		return
 	}
-	job, err := h.jobs.CreateWithMaxAttempts(r.Context(), id, jobType, payload, operatorFromRequest(r), tr143MaxAttempts)
+	// A CWMP device (object path, no USP command) gets a wire plan from
+	// discovery: URL and DiagnosticsState must be writable, and the poll
+	// reads only this direction's discovered result leaves.
+	var plan diagnostics.Plan
+	if command == "" {
+		plan, err = diagnostics.PlanTR143(names, path, req.URL, upload, req.TestFileLength)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
+
+	var jobType string
+	var payload any
+	if upload {
+		jobType, payload = jobs.TypeDiagnosticsUpload, jobs.DiagnosticsUploadPayload{URL: req.URL, Prefix: path, USPCommand: command, TestFileLength: req.TestFileLength, DiagnosticsPlan: plan.DiagnosticsPlan}
+	} else {
+		jobType, payload = jobs.TypeDiagnosticsDownload, jobs.DiagnosticsDownloadPayload{URL: req.URL, Prefix: path, USPCommand: command, DiagnosticsPlan: plan.DiagnosticsPlan}
+	}
+	job, err := h.jobs.CreateWithMaxAttempts(r.Context(), id, jobType, payload, operatorFromRequest(r), jobs.DiagnosticsMaxAttempts)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"command_key": job.CommandKey, "status": job.Status})
+	writeDiagnosticQueued(w, job, plan.Skipped)
 }

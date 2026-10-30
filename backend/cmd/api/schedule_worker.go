@@ -8,8 +8,10 @@ import (
 
 	"acs/internal/devices"
 	"acs/internal/devices/adapters"
+	"acs/internal/diagnostics"
 	"acs/internal/jobs"
 	"acs/internal/observability"
+	"acs/internal/parameters"
 	"acs/internal/scheduler"
 )
 
@@ -30,6 +32,24 @@ type scheduleWorker struct {
 	devices   *devices.Repository
 	groups    *devices.GroupRepository
 	auditor   *observability.Auditor
+	// params gates scheduled diagnostics on discovery, as the interactive
+	// endpoints do.
+	params *parameters.Repository
+}
+
+// scheduledPingPayload turns a schedule's stored ping payload (the console
+// stores only {host}) into what the interactive endpoint would queue for
+// this device: its data-model prefix, the shared defaults — otherwise
+// NumberOfRepetitions/Timeout/DataBlockSize go out as 0 — and the
+// discovery-gated, typed wire plan.
+func scheduledPingPayload(p jobs.DiagnosticsPingPayload, device *devices.Device, names map[string]bool) (jobs.DiagnosticsPingPayload, error) {
+	p.Prefix = adapters.DiagnosticsPrefix(device.DataModelRoot, adapters.DiagnosticPing)
+	p.DiagnosticsPlan = jobs.DiagnosticsPlan{}
+	diagnostics.ApplyPingDefaults(&p)
+	if _, err := diagnostics.PlanPing(names, &p); err != nil {
+		return p, err
+	}
+	return p, nil
 }
 
 func (w *scheduleWorker) Run(ctx context.Context) {
@@ -147,17 +167,38 @@ func (w *scheduleWorker) fire(ctx context.Context, sj *scheduler.ScheduledJob) {
 		// per device here rather than once for the whole fan-out (same
 		// reason cmd/api's createDiagnosticsPing resolves it per device
 		// at creation time).
+		maxAttempts := 0
 		if sj.JobType == jobs.TypeDiagnosticsPing {
-			p := payload.(jobs.DiagnosticsPingPayload)
 			device, err := w.devices.Get(ctx, deviceID)
 			if err != nil {
 				w.logger.Error("failed to resolve device for scheduled diagnostics ping", "err", err, "scheduled_job_id", sj.ID, "device_id", deviceID)
 				continue
 			}
-			p.Prefix = adapters.DiagnosticsPrefix(device.DataModelRoot, adapters.DiagnosticPing)
-			jobPayload = p
+			var names map[string]bool
+			if w.params != nil {
+				discovered, err := w.params.GetNames(ctx, deviceID)
+				if err != nil {
+					w.logger.Error("failed to read discovery for scheduled diagnostics ping", "err", err, "scheduled_job_id", sj.ID, "device_id", deviceID)
+					continue
+				}
+				if discovered != nil {
+					names = discovered.Names
+				}
+			}
+			p, err := scheduledPingPayload(payload.(jobs.DiagnosticsPingPayload), device, names)
+			if err != nil {
+				w.logger.Warn("scheduled diagnostics ping skipped for device", "err", err, "scheduled_job_id", sj.ID, "device_id", deviceID)
+				continue
+			}
+			jobPayload, maxAttempts = p, jobs.DiagnosticsMaxAttempts
 		}
-		if _, err := w.jobs.Create(ctx, deviceID, sj.JobType, jobPayload, "scheduler:"+sj.Name); err != nil {
+		var err error
+		if maxAttempts > 0 {
+			_, err = w.jobs.CreateWithMaxAttempts(ctx, deviceID, sj.JobType, jobPayload, "scheduler:"+sj.Name, maxAttempts)
+		} else {
+			_, err = w.jobs.Create(ctx, deviceID, sj.JobType, jobPayload, "scheduler:"+sj.Name)
+		}
+		if err != nil {
 			w.logger.Error("failed to create job from schedule", "err", err, "scheduled_job_id", sj.ID, "device_id", deviceID)
 			continue
 		}

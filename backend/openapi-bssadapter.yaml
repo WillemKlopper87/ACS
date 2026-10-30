@@ -329,7 +329,7 @@ components:
         command_key: { type: string }
         device_id: { type: string }
         type: { type: string }
-        status: { type: string, enum: [QUEUED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, SUCCESS, FAILED, TIMEOUT] }
+        status: { type: string, enum: [QUEUED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, AWAITING_DIAGNOSTICS_COMPLETE, SUCCESS, FAILED, TIMEOUT] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         completed_at: { type: string, format: date-time, nullable: true }
