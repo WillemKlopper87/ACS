@@ -1,6 +1,9 @@
 package jobs
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestBoundedDiscoveryWalk(t *testing.T) {
 	p := ParameterDiscoveryPayload{Root: "Device.", Incremental: true}
@@ -111,18 +114,42 @@ func TestDiscoveryCollapsesRuntimeTableInstances(t *testing.T) {
 
 func TestIsRuntimeTable(t *testing.T) {
 	for table, want := range map[string]bool{
-		"Device.Hosts.Host.":                                              true,
-		"Device.DHCPv4.Server.Pool.1.Client.":                             true,
-		"Device.WiFi.AccessPoint.2.AssociatedDevice.":                     true,
-		"Device.WiFi.DataElements.AssociationEvent.AssociationEventData.": true,
-		"Device.WiFi.DataElements.Network.Device.1.Radio.1.BSS.2.STA.":    true,
-		"Device.DeviceInfo.VendorLogFile.":                                true,
-		"Device.DynamicDNS.Client.":                                       false,
-		"Device.WiFi.SSID.":                                               false,
-		"Device.IP.Interface.":                                            false,
+		"Device.Hosts.Host.":                                                                        true,
+		"Device.DHCPv4.Server.Pool.1.Client.":                                                       true,
+		"Device.WiFi.AccessPoint.2.AssociatedDevice.":                                               true,
+		"Device.WiFi.DataElements.AssociationEvent.AssociationEventData.":                           true,
+		"Device.WiFi.DataElements.Network.Device.1.Radio.1.BSS.2.STA.":                              true,
+		"Device.WiFi.DataElements.Network.Device.1.Radio.1.ScanResult.1.OpClassScan.1.ChannelScan.": true,
+		"Device.FaultMgmt.SupportedAlarm.":                                                          true,
+		"Device.InterfaceStack.":                                                                    true,
+		"Device.DeviceInfo.VendorLogFile.":                                                          true,
+		"Device.DynamicDNS.Client.":                                                                 false,
+		"Device.WiFi.SSID.":                                                                         false,
+		"Device.IP.Interface.":                                                                      false,
 	} {
 		if got := isRuntimeTable(table); got != want {
 			t.Errorf("isRuntimeTable(%q) = %v, want %v", table, got, want)
+		}
+	}
+}
+
+func TestDiscoveryCapsInstancesOfUnknownTables(t *testing.T) {
+	names := map[string]bool{}
+	for i := 1; i <= DiscoveryMaxInstancesPerTable+10; i++ {
+		names[fmt.Sprintf("Device.X_VENDOR.Table.%d.", i)] = false
+	}
+	p := ParameterDiscoveryPayload{Root: "Device.", Incremental: true, Cursor: "Device.X_VENDOR.Table."}
+	if _, err := AdvanceDiscovery(&p, names); err != nil {
+		t.Fatal(err)
+	}
+	walked := append([]string{p.Cursor}, p.Pending...)
+	if len(walked) != DiscoveryMaxInstancesPerTable {
+		t.Fatalf("walked %d instances, want the lowest %d", len(walked), DiscoveryMaxInstancesPerTable)
+	}
+	for _, path := range walked {
+		var n int
+		if _, err := fmt.Sscanf(path, "Device.X_VENDOR.Table.%d.", &n); err != nil || n > DiscoveryMaxInstancesPerTable {
+			t.Fatalf("walked %q, want only instances 1..%d", path, DiscoveryMaxInstancesPerTable)
 		}
 	}
 }

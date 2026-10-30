@@ -175,7 +175,29 @@ var runtimeTableTemplates = []string{
 	"DisassociationEvent.DisassociationEventData.",
 	"FailedConnectionEvent.FailedConnectionEventData.",
 	"BSS.{i}.STA.",
+	// Neighbour scans nest four runtime tables deep
+	// (ScanResult.{i}.OpClassScan.{i}.ChannelScan.{i}.NeighborBSS.{i}).
+	"ScanResult.",
+	"OpClassScan.",
+	"ChannelScan.",
+	"NeighborBSS.",
+	"UnassociatedSTA.",
+	"CapableOperatingClassProfile.",
+	"CurrentOperatingClassProfile.",
+	// Alarm catalogues/logs and the derived interface-layering table.
+	"FaultMgmt.SupportedAlarm.",
+	"FaultMgmt.CurrentAlarm.",
+	"FaultMgmt.HistoryEvent.",
+	"FaultMgmt.ExpeditedEvent.",
+	"FaultMgmt.QueuedEvent.",
+	"InterfaceStack.",
 }
+
+// DiscoveryMaxInstancesPerTable caps how many instances of any one table a
+// walk descends into (lowest numbers first), so a runtime table missing from
+// runtimeTableTemplates cannot consume the whole object budget on its own.
+// Configuration tables (SSIDs, interfaces, bridges) stay well below it.
+const DiscoveryMaxInstancesPerTable = 32
 
 var (
 	instanceObjectRE  = regexp.MustCompile(`^(.*\.)(\d+)\.$`)
@@ -197,29 +219,42 @@ func isRuntimeTable(table string) bool {
 	return false
 }
 
-// collapseRuntimeInstances drops every instance object of a runtime table
-// except the lowest-numbered one. One GetParameterNames response lists the
-// instances of one table, so the minimum here is the table's minimum.
+// collapseRuntimeInstances limits which instance objects of a table the walk
+// descends into: only the lowest-numbered instance of a runtime table, and at
+// most DiscoveryMaxInstancesPerTable (lowest first) of any other table. One
+// GetParameterNames response lists the instances of one table, so the
+// ordering here is the table's own.
 func collapseRuntimeInstances(objects []string) []string {
-	lowest := map[string]int{}
+	instances := map[string][]int{}
 	for _, path := range objects {
-		if m := instanceObjectRE.FindStringSubmatch(path); m != nil && isRuntimeTable(m[1]) {
-			n, err := strconv.Atoi(m[2])
-			if err != nil {
-				continue
-			}
-			if current, seen := lowest[m[1]]; !seen || n < current {
-				lowest[m[1]] = n
+		if m := instanceObjectRE.FindStringSubmatch(path); m != nil {
+			if n, err := strconv.Atoi(m[2]); err == nil {
+				instances[m[1]] = append(instances[m[1]], n)
 			}
 		}
 	}
-	if len(lowest) == 0 {
+	if len(instances) == 0 {
 		return objects
+	}
+	allowed := map[string]map[int]bool{}
+	for table, numbers := range instances {
+		sort.Ints(numbers)
+		limit := DiscoveryMaxInstancesPerTable
+		if isRuntimeTable(table) {
+			limit = 1
+		}
+		if len(numbers) > limit {
+			numbers = numbers[:limit]
+		}
+		allowed[table] = map[int]bool{}
+		for _, n := range numbers {
+			allowed[table][n] = true
+		}
 	}
 	kept := objects[:0]
 	for _, path := range objects {
-		if m := instanceObjectRE.FindStringSubmatch(path); m != nil && isRuntimeTable(m[1]) {
-			if n, err := strconv.Atoi(m[2]); err == nil && n != lowest[m[1]] {
+		if m := instanceObjectRE.FindStringSubmatch(path); m != nil {
+			if n, err := strconv.Atoi(m[2]); err == nil && !allowed[m[1]][n] {
 				continue
 			}
 		}
