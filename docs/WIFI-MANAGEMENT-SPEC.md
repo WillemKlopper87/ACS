@@ -71,6 +71,33 @@ Refresh = one GPV per table root (`Device.WiFi.AccessPoint.`, `Device.WiFi.DataE
 
 Per-client actions: none native on this firmware (no MAC deny list). "Block device" is possible only if `Firewall.Chain.{c}.Rule.{r}` supports a source-MAC match — verify (§9) before offering it.
 
+### 3.3a Insights (Grandstream GDMS-style overview)
+
+The CPE reports state and cumulative counters only while a CWMP session is open, and there is no time series on the device. So every chart has to be built by the ACS. It samples counters on periodic Informs (every 60 s on the field FastMile) and stores the differences between samples. Data starts when sampling is switched on, with no backfill. Each widget below maps to its source on FastMile 1.2501.00.0798:
+
+| GDMS widget | ACS source | Fidelity |
+|---|---|---|
+| Device counts (router / AP / clients, online vs offline) | devices table; Beacons via the mesh gateway link; client count = active `AssociatedDevice` + EasyMesh `STA` rows | Exact |
+| Bandwidth usage (up/down over 2 h / 1 d / 1 w / 1 m) | Δ of `SSID.{i}.Stats.Bytes{Sent,Received}` per primary/guest SSID; WAN = `Cellular.Interface.1.X_ALU-COM_LifeTimeDataCounter.TotalBytes*` or `IP.Interface.{wan}.Stats.*` | Exact at the sample interval; counter wrap or reboot resets are detected and dropped |
+| Top SSIDs | the same SSID Δs, ranked | Exact |
+| Top clients (MAC, name, total/up/down) | Δ of EasyMesh `STA.{s}.Bytes{Sent,Received}` keyed by MAC; name from `Hosts.Host.HostName` / `STA.Hostname` | Good. The counters reset on re-association, which is handled as a new baseline. `AssociatedDevice` has no byte counters, so this works only on EasyMesh CPEs. |
+| Top devices (CPE, total/up/down) | per-CPE WAN Δ, fleet-wide | Exact |
+| Clients count over time | count of active clients per sample | Exact |
+| New / return clients | ACS client registry (MAC, first_seen, last_seen) per CPE | Inflated by MAC randomisation, because a private MAC rotates per SSID or per day. MACs with the locally administered bit set (the 2nd hex digit is 2/6/A/E) are shown as a separate "private MAC" count. |
+| Average connection time | session start = first sample seen (or `STA.LastConnectTime` / `MultiAPSTA.AssociationTime`), end = first sample missing | ±1 sample interval |
+| Client manufacturer | IEEE OUI registry lookup on the MAC (bundled file) | Randomised MACs cannot be resolved and are shown as "Private". On a modern phone fleet that is most clients. |
+| Client OS | No DHCP option-55/60 fingerprint over CWMP (`DHCPv4.Server.Pool.Client` exposes only Chaddr/IP/lease). Inferred from hostname patterns (Galaxy-*, iPhone, Redmi-*, android-*) and labelled **inferred**. | Weak |
+| Guest sessions / by authentication | `Hosts.Host.X_ALU-COM_GuestDevice` and association to a guest SSID. There is no captive portal on this firmware, so the only authentication methods are PSK or Enterprise, taken from the AP's `Security.ModeEnabled`. Portal/voucher/SMS auth needs the NaaS portal (§8). | Partial |
+| Alerts (critical / warning / info) | existing `alert_incidents` | Exact |
+
+**Sampling budget.** Use one partial-path GetParameterValues per small object: `SSID.{i}.Stats.`, `Hosts.Host.`, `AccessPoint.{primary,guest}.AssociatedDevice.`. Do not sample the whole `DataElements.Network.Device.` tree. Its STA rows carry capability blobs and measurement reports, and the FastMile drops CWMP sessions on large bursts. Instead read only the STA byte, rate and signal leaves by explicit path, using the instances already discovered. The cadence is configurable (default every 5th Inform, about 5 min). Before raising the cadence, measure session-drop rates in the field.
+
+**Storage.** Two tables:
+- `wifi_samples` (device, ts, ssid instance, byte counters, client count), downsampled to 1 h after 7 days.
+- `wifi_clients` (device, MAC, first_seen, last_seen, last hostname, last SSID, OUI vendor, `private_mac`), with the same retention as other telemetry.
+
+Client MACs and hostnames are personal data, so neither table is granted to `grafana_ro`.
+
 ### 3.4 Radios
 
 | Field | Path | FastMile |
