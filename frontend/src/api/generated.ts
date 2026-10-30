@@ -6132,7 +6132,7 @@ export interface components {
             band?: string;
             security_mode?: string;
             /** @enum {string} */
-            role: "primary" | "guest" | "unbound";
+            role: "primary" | "guest" | "unbound" | "disabled";
             name_path?: string;
             enable_path?: string;
             passphrase_path?: string;

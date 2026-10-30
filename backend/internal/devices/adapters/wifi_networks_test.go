@@ -94,3 +94,13 @@ func TestWiFiNetworkReadPathsExcludeSecretsAndClients(t *testing.T) {
 		}
 	}
 }
+
+func TestDisabledSSIDIsNeverPrimary(t *testing.T) {
+	names, cache := fastMileWiFi()
+	cache["Device.WiFi.SSID.2.Enable"] = parameters.CachedValue{Value: "0"}
+	for _, n := range ResolveWiFiNetworks(names, cache).Networks {
+		if n.Instance == 2 && n.Role != WiFiRoleDisabled {
+			t.Fatalf("disabled SSID.2 role = %q, want disabled", n.Role)
+		}
+	}
+}

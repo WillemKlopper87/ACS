@@ -2533,7 +2533,7 @@ components:
         guest: { type: boolean }
         band: { type: string }
         security_mode: { type: string }
-        role: { type: string, enum: [primary, guest, unbound] }
+        role: { type: string, enum: [primary, guest, unbound, disabled] }
         name_path: { type: string }
         enable_path: { type: string }
         passphrase_path: { type: string }

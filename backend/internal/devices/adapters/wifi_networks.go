@@ -14,9 +14,10 @@ import (
 // EasyMesh backhaul BSS that no fronthaul AccessPoint references) must not
 // be renamed as a side effect.
 const (
-	WiFiRolePrimary = "primary"
-	WiFiRoleGuest   = "guest"
-	WiFiRoleUnbound = "unbound"
+	WiFiRolePrimary  = "primary"
+	WiFiRoleGuest    = "guest"
+	WiFiRoleUnbound  = "unbound"
+	WiFiRoleDisabled = "disabled"
 )
 
 // WiFiNetwork is one TR-181 SSID joined with the AccessPoint that serves
@@ -175,6 +176,10 @@ func ResolveWiFiNetworks(names map[string]bool, cache map[string]parameters.Cach
 			net.Role = WiFiRoleGuest
 		case net.AccessPoint == "":
 			net.Role = WiFiRoleUnbound
+		case net.Enabled != nil && !*net.Enabled:
+			// Nokia FastMile ships extra factory SSIDs (NOKIA-xxxx-3/4/7/8);
+			// renaming "the Wi-Fi" must not touch networks that are off.
+			net.Role = WiFiRoleDisabled
 		default:
 			net.Role = WiFiRolePrimary
 		}
