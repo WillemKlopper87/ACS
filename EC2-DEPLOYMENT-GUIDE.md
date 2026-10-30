@@ -84,6 +84,7 @@ operator API, console, Grafana, or Prometheus.
 |---|---|---|---|
 | `7547` | TCP | `<cpe-management-cidrs>` | **CWMP gateway** — CPE Inform/RPC traffic. The production profile also enforces `ACS_CWMP_ALLOWED_CIDRS` in the application. |
 | `3478` | UDP | `<cpe-management-cidrs>` | **STUN server** — optional NAT traversal and UDP Connection Request binding. |
+| `5222` | TCP | `<cpe-public-egress-cidrs>` | **XMPP** (Prosody, opt-in `ACS_XMPP_ENABLED=1`) — CPEs behind CGNAT hold an outbound session for TR-069 Annex K XMPP Connection Request. See `docs/XMPP-CONNECTION-REQUEST.md`. |
 | `9877` | TCP | `<usp-agent-cidrs>` | **USP WebSocket** — lab uses plaintext; production terminates TLS and authenticates a certificate-bound agent principal. |
 | `1883` / `8883` | TCP | `<usp-agent-cidrs>` | **USP MQTT** — `1883` is lab plaintext; production uses TLS on `8883`. Open only the one you use. |
 | `8080` | TCP | `<operator-cidr>` | **REST API** for the lab profile. Production binds it to loopback behind one authenticated HTTPS ingress. |
@@ -96,6 +97,7 @@ operator API, console, Grafana, or Prometheus.
 ```
 Inbound: 7547/tcp from <cpe-cidrs>     (CWMP)
 Inbound: 3478/udp from <cpe-cidrs>     (STUN, optional)
+Inbound: 5222/tcp from <cpe-egress-cidrs> (XMPP Connection Request, optional)
 Inbound: 9877/tcp or 8883/tcp from <usp-agent-cidrs> (USP, if used)
 Inbound: 8080/tcp and 5173/tcp from <operator-cidr>  (lab only)
 Inbound: 22/tcp from <your-cidr>   (SSH)
