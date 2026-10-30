@@ -150,3 +150,31 @@ describe("SimPanel", () => {
     expect(screen.queryByText("655010000005678")).toBeNull();
   });
 });
+
+describe("SimPanel labels", () => {
+  it("names each identifier precisely when a device reports several of a kind", async () => {
+    // Field paths from the FastMile 1.2501.00.0798 (2026-10-30), where
+    // IMEISV, the in-use IMSI and eSIM profile ICCIDs all carried a bare
+    // "IMEI", "IMSI" or "ICCID" label.
+    const c = "Device.Cellular.Interface.1.";
+    getSIM.mockResolvedValue({
+      ...masked,
+      identifiers: [
+        field("imei", c + "IMEI", "35602983•••9357", true),
+        field("imei", c + "IMEISV", "35602983••••3511", true),
+        field("imsi", c + "USIM.IMSI", "65506••••••0013", true),
+        field("imsi", c + "X_ALU-COM_CurrentUsedIMSI", "65506••••••0013", true),
+        field("iccid", c + "USIM.ICCID", "89••••••••••••••0134", true),
+        field("iccid", c + "X_ALU-COM_ESIM.ActiveProfileICCID", "", false),
+        field("iccid", c + "X_ALU-COM_ESIM.CurrentUsedProfileICCID", "", false),
+        field("eid", c + "X_ALU-COM_ESIM.Eid", "", false),
+      ],
+      context: [field("context", c + "X_ALU-COM_ESIM.ProfileNumberOfEntries", "0", false)],
+    });
+    render(<SimPanel deviceId="gw-1" role="manager" writable />);
+    await screen.findByText("IMEISV");
+    for (const label of ["IMEI", "IMSI", "ICCID", "IMSI in use", "eSIM active profile ICCID", "eSIM profile in use (ICCID)", "EID (eSIM)", "eSIM profiles"]) {
+      expect(screen.getAllByText(label)).toHaveLength(1);
+    }
+  });
+});

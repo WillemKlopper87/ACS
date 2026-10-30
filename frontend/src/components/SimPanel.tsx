@@ -14,9 +14,22 @@ const MIN_REASON = 10;
 
 const KIND_LABEL: Record<string, string> = { imsi: "IMSI", iccid: "ICCID", msisdn: "MSISDN", imei: "IMEI", eid: "EID (eSIM)" };
 
+// A device can report several identifiers of one kind (FastMile
+// 1.2501.00.0798: IMEI and IMEISV, the SIM's IMSI and the IMSI in use, the
+// SIM's ICCID and two eSIM profile ICCIDs), so the leaf names the field.
+function identifierLabel(field: Field): string {
+  const leaf = field.path.slice(field.path.lastIndexOf(".") + 1).replace(/^X_[A-Z0-9-]+_/, "");
+  if (leaf === "IMEISV") return "IMEISV";
+  if (leaf === "CurrentUsedIMSI") return "IMSI in use";
+  if (leaf === "ActiveProfileICCID") return "eSIM active profile ICCID";
+  if (leaf === "CurrentUsedProfileICCID") return "eSIM profile in use (ICCID)";
+  return KIND_LABEL[field.kind] ?? field.kind.toUpperCase();
+}
+
 function contextLabel(path: string): string {
   const leaf = path.slice(path.lastIndexOf(".") + 1);
   if (leaf === "Status") return path.includes("ESIM") ? "eSIM status" : "SIM status";
+  if (leaf === "ProfileNumberOfEntries") return "eSIM profiles";
   return leaf.replace(/^X_[A-Z0-9-]+_/, "");
 }
 
@@ -178,7 +191,7 @@ export function SimPanel({ deviceId, role, writable }: { deviceId: string; role:
       )}
 
       {shown.identifiers.map((f) => (
-        <FieldRow key={f.path} label={KIND_LABEL[f.kind] ?? f.kind.toUpperCase()} field={f} />
+        <FieldRow key={f.path} label={identifierLabel(f)} field={f} />
       ))}
       {shown.context.map((f) => (
         <FieldRow key={f.path} label={contextLabel(f.path)} field={f} />
