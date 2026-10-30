@@ -101,6 +101,19 @@ describe("Nokia onboarding assessment", () => {
     expect(result.hints.find((hint) => hint.id === "nokia-private-cr")?.detail).toContain("10.10.178.31");
   });
 
+  it("recognizes a Beacon reporting manufacturer ALCL as Nokia family", () => {
+    const result = assessDeviceOnboarding(
+      device({ manufacturer: "ALCL", oui: "F89B6E", product_class: "Beacon 3.1", cwmp_auth_mode: "DIGEST" }),
+      {},
+      [],
+      [],
+    );
+    expect(result.vendorFamily).toBe("Nokia");
+    expect(result.isNokia).toBe(true);
+    expect(result.isHuawei).toBe(false);
+    expect(result.hints.some((hint) => hint.id === "nokia-read-only-first")).toBe(true);
+  });
+
   it("shows a pending CWMP Digest credential as waiting for bound reconnect", () => {
     const result = assessDeviceOnboarding(
       device({

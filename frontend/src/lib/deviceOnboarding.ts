@@ -1,8 +1,9 @@
 import type { Credential, Device, Job, ParameterCache } from "../api/types";
+import { vendorFamilyOf, type VendorFamily } from "./vendorFamily";
 
 export type OnboardingCheckStatus = "pass" | "warn" | "fail" | "pending";
 export type TroubleshootingSeverity = "info" | "warning" | "critical";
-export type VendorFamily = "Huawei" | "Nokia" | "Other";
+export type { VendorFamily } from "./vendorFamily";
 
 export interface OnboardingCheck {
   id: string;
@@ -143,10 +144,11 @@ export function assessDeviceOnboarding(
 ): DeviceOnboardingAssessment {
   const manufacturer = normalized(device.manufacturer);
   const model = normalized(device.product_class);
-  const isHuawei = manufacturer.includes("huawei") || model.includes("huawei");
+  // "ALCL" (Nokia WiFi Beacon) is Nokia family; see lib/vendorFamily.
+  const vendorFamily: VendorFamily = vendorFamilyOf(manufacturer, model);
+  const isHuawei = vendorFamily === "Huawei";
   const isHuaweiN5368X = isHuawei && /n5368x?|5g\s*cpe\s*pro/.test(model);
-  const isNokia = manufacturer.includes("nokia") || model.includes("nokia") || model.includes("fastmile");
-  const vendorFamily: VendorFamily = isHuawei ? "Huawei" : isNokia ? "Nokia" : "Other";
+  const isNokia = vendorFamily === "Nokia";
   const recentFailures = jobs.filter((job) => FAILURE_STATUSES.has(job.status)).slice(0, 5);
   const lastCR = (device.last_connection_request_status ?? "").trim().toUpperCase();
   const parameterCount = Object.keys(params).length;

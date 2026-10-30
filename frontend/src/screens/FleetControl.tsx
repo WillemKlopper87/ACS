@@ -10,6 +10,7 @@ import { canWrite } from "../auth/roles";
 import { useLive } from "../lib/useLive";
 import { useSlashFocus } from "../lib/hotkeys";
 import { toast } from "../lib/toast";
+import { vendorLabel } from "../lib/vendorFamily";
 
 type BulkActionType = "CONNECTION_REQUEST" | "REFRESH_CELLULAR" | "SET_PARAMETER" | "APPLY_TEMPLATE";
 
@@ -227,10 +228,10 @@ export function FleetControl() {
       {
         id: "vendor",
         header: "Vendor / Model",
-        accessorFn: (d) => `${d.manufacturer} ${d.product_class}`,
+        accessorFn: (d) => `${vendorLabel(d.manufacturer)} ${d.product_class}`,
         cell: ({ row }) => (
           <span className="dim" style={{ fontFamily: "var(--font-ui)" }}>
-            {row.original.manufacturer} · {row.original.product_class}
+            {vendorLabel(row.original.manufacturer)} · {row.original.product_class}
           </span>
         ),
       },
@@ -289,7 +290,7 @@ export function FleetControl() {
               style={activeGroup === key ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
               onClick={() => setActiveGroup(activeGroup === key ? null : key)}
             >
-              {g.Manufacturer} <StatusBadge value={g.OnlineStatus} /> <StatusBadge value={g.ConnectionRequestMode} />
+              {vendorLabel(g.Manufacturer)} <StatusBadge value={g.OnlineStatus} /> <StatusBadge value={g.ConnectionRequestMode} />
               <span className="dim">({g.Count})</span>
             </button>
           );
