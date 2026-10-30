@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"regexp"
+	"strings"
 )
 
 // InboundEnvelope covers every message shape the ACS needs to receive in
@@ -39,6 +40,37 @@ type InboundBody struct {
 	GetParameterAttributesResponse *GetParameterAttributesResponse `xml:"GetParameterAttributesResponse"`
 	UploadResponse                 *UploadResponse                 `xml:"UploadResponse"`
 	Fault                          *SoapFault                      `xml:"Fault"`
+
+	// GetRPCMethods is the CPE-initiated request (TR-069 §A.3.1.1), which
+	// the ACS must answer with GetRPCMethodsResponse. Some firmwares send
+	// it right after InformResponse on 0 BOOTSTRAP.
+	GetRPCMethods *GetRPCMethodsRequest `xml:"GetRPCMethods"`
+	// Unmatched collects every other body element so a CPE-initiated
+	// method the ACS does not implement can be answered with Fault 8000
+	// instead of being mistaken for the empty "any work for me?" POST.
+	Unmatched []UnmatchedElement `xml:",any"`
+}
+
+// GetRPCMethodsRequest is the (argument-less) CPE-initiated GetRPCMethods.
+type GetRPCMethodsRequest struct{}
+
+// UnmatchedElement records the name of a body element no field above knew.
+type UnmatchedElement struct {
+	XMLName xml.Name
+}
+
+// UnsupportedRequest returns the local name of a CPE-initiated method the
+// ACS does not implement (e.g. AutonomousTransferComplete, Kicked,
+// RequestDownload), or "" when there is none. Unknown *Response elements
+// are deliberately not reported: those answer an ACS-initiated RPC and keep
+// their existing dispatch handling.
+func (b InboundBody) UnsupportedRequest() string {
+	for _, el := range b.Unmatched {
+		if el.XMLName.Local != "" && !strings.HasSuffix(el.XMLName.Local, "Response") {
+			return el.XMLName.Local
+		}
+	}
+	return ""
 }
 
 // IsEmpty reports whether this is the empty-body POST a CPE sends to ask
@@ -59,7 +91,9 @@ func (b InboundBody) IsEmpty() bool {
 		b.SetParameterAttributesResponse == nil &&
 		b.GetParameterAttributesResponse == nil &&
 		b.UploadResponse == nil &&
-		b.Fault == nil
+		b.Fault == nil &&
+		b.GetRPCMethods == nil &&
+		b.UnsupportedRequest() == ""
 }
 
 // ParseEnvelope parses a raw CWMP HTTP request body. An empty body (the

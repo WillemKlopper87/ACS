@@ -208,7 +208,36 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if method, ok := writeCPEInitiatedReply(w, env.Body, respID, ns); ok {
+		h.logger.Info("answered CPE-initiated RPC", "method", method, "remote", r.RemoteAddr)
+		return
+	}
+
 	h.dispatch(ctx, w, r, env.Body, bound)
+}
+
+// writeCPEInitiatedReply answers a CPE-initiated request other than Inform
+// and TransferComplete: GetRPCMethods gets its response, any other request
+// method gets Fault 8000. Without this, such a request parsed as an empty
+// POST and the ACS replied with an unrelated RPC, which strict CPE stacks
+// treat as a protocol error and abort the session. It reports the method
+// name and whether it wrote a reply.
+func writeCPEInitiatedReply(w http.ResponseWriter, body cwmp.InboundBody, respID, ns string) (string, bool) {
+	var out []byte
+	method := "GetRPCMethods"
+	switch {
+	case body.GetRPCMethods != nil:
+		out = cwmp.RenderGetRPCMethodsResponseNS(respID, ns)
+	case body.UnsupportedRequest() != "":
+		method = body.UnsupportedRequest()
+		out = cwmp.RenderMethodNotSupportedFaultNS(respID, ns)
+	default:
+		return "", false
+	}
+	w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
+	return method, true
 }
 
 // captureAuthFailure records only the fact that a CWMP request failed

@@ -22,6 +22,37 @@ func RenderGetRPCMethods(id string) []byte {
 	return renderEnvelope(id, `<cwmp:GetRPCMethods></cwmp:GetRPCMethods>`)
 }
 
+// ACSSupportedMethods is what the ACS advertises in GetRPCMethodsResponse:
+// the CPE-initiated methods it actually answers (TR-069 Table 4 lists
+// Inform as required; TransferComplete and GetRPCMethods are handled too).
+var ACSSupportedMethods = []string{"Inform", "GetRPCMethods", "TransferComplete"}
+
+// RenderGetRPCMethodsResponseNS answers a CPE-initiated GetRPCMethods. The
+// id must echo the request's cwmp:ID and ns the CPE's namespace version.
+func RenderGetRPCMethodsResponseNS(id, ns string) []byte {
+	var sb strings.Builder
+	sb.WriteString(`<cwmp:GetRPCMethodsResponse><MethodList soap-enc:arrayType="xsd:string[`)
+	sb.WriteString(strconv.Itoa(len(ACSSupportedMethods)))
+	sb.WriteString(`]">`)
+	for _, m := range ACSSupportedMethods {
+		sb.WriteString(`<string>`)
+		sb.WriteString(m)
+		sb.WriteString(`</string>`)
+	}
+	sb.WriteString(`</MethodList></cwmp:GetRPCMethodsResponse>`)
+	return renderEnvelopeNS(id, sb.String(), ns)
+}
+
+// RenderMethodNotSupportedFaultNS answers a CPE-initiated method the ACS
+// does not implement with ACS fault 8000 "Method not supported" (TR-069
+// §A.5.1, a Server fault).
+func RenderMethodNotSupportedFaultNS(id, ns string) []byte {
+	body := `<soap-env:Fault><faultcode>Server</faultcode><faultstring>CWMP fault</faultstring>` +
+		`<detail><cwmp:Fault><FaultCode>8000</FaultCode><FaultString>Method not supported</FaultString></cwmp:Fault></detail>` +
+		`</soap-env:Fault>`
+	return renderEnvelopeNS(id, body, ns)
+}
+
 // GetParameterNamesResponse lists parameter names/writability under the
 // requested path.
 type GetParameterNamesResponse struct {

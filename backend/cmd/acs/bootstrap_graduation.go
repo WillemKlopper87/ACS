@@ -149,6 +149,17 @@ func bootstrapCWMPGraduationGuardWithDeps(next http.HandlerFunc, deps bootstrapG
 			return
 		}
 
+		// A CPE-initiated request (e.g. GetRPCMethods on 0 BOOTSTRAP) must get
+		// its own response; the credential-install SPV waits for the
+		// following empty POST.
+		respID := env.Header.ID
+		if respID == "" {
+			respID = cwmp.NewID()
+		}
+		if _, ok := writeCPEInitiatedReply(w, env.Body, respID, cwmp.DetectCWMPNamespace(raw)); ok {
+			return
+		}
+
 		switch {
 		case env.Body.IsEmpty():
 			handleBootstrapCredentialInstall(w, r, cred, device, ns)
