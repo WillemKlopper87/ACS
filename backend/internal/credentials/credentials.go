@@ -37,10 +37,34 @@ const (
 	// first Inform authenticated with a PENDING credential is the proof
 	// the CPE applied it (see cmd/acs's Digest lookup hook).
 	TypeCWMPDigest = "CWMP_DIGEST"
+	// TypeXMPP is the CPE's own login to the ACS's XMPP server (TR-181
+	// Device.XMPP.Connection.{i}.Username/Password) for TR-069 Annex K
+	// XMPP Connection Request. It is created only by XMPP provisioning
+	// (cmd/api/xmpp_provisioner.go), never by the generic rotate endpoint,
+	// and activates once the CPE reports a ConnReqJabberID — proof it
+	// logged in with it.
+	TypeXMPP = "XMPP"
 )
 
-// ValidType reports whether t is a credential_type this package manages.
+// ValidType reports whether t is a credential_type the generic rotation
+// endpoint manages. XMPP is deliberately excluded: rotating it means
+// re-running XMPP provisioning, which also updates the server account.
 func ValidType(t string) bool { return t == TypeConnectionRequest || t == TypeCWMPDigest }
+
+// GenerateXMPPCredential produces a per-device XMPP account: a localpart
+// with 64 random bits ("xmpp-" prefix, lowercase hex so it is valid under
+// every XMPP nodeprep profile) and a 192-bit password.
+func GenerateXMPPCredential() (username, password string, err error) {
+	u := make([]byte, 8)
+	if _, err := rand.Read(u); err != nil {
+		return "", "", fmt.Errorf("generate username: %w", err)
+	}
+	p := make([]byte, 24)
+	if _, err := rand.Read(p); err != nil {
+		return "", "", fmt.Errorf("generate password: %w", err)
+	}
+	return "xmpp-" + hex.EncodeToString(u), hex.EncodeToString(p), nil
+}
 
 const (
 	StatusPending = "PENDING"

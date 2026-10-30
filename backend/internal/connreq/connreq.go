@@ -59,6 +59,19 @@ const (
 	OutcomeUDPSendFailed     = "UDP_SEND_FAILED"
 	OutcomeUDPInformReceived = "UDP_SENT_INFORM_RECEIVED"
 	OutcomeUDPNoInform       = "UDP_SENT_NO_INFORM"
+
+	// XMPP (TR-069 Annex K) outcomes, set by cmd/api/connreq_worker.go.
+	// INFORM_RECEIVED: the CPE acknowledged the connectionRequest iq and
+	// a "6 CONNECTION REQUEST" Inform followed. NO_INFORM: acknowledged,
+	// but no session within the wait window. ERROR: the CPE (or the server
+	// on its behalf, e.g. resource offline) answered with an iq error, or
+	// no answer came in time. UNAVAILABLE: the ACS itself had no XMPP
+	// session to send it on. ERROR and UNAVAILABLE fall back to the HTTP /
+	// Annex G / periodic-Inform behaviour.
+	OutcomeXMPPInformReceived = "XMPP_SENT_INFORM_RECEIVED"
+	OutcomeXMPPNoInform       = "XMPP_SENT_NO_INFORM"
+	OutcomeXMPPError          = "XMPP_ERROR"
+	OutcomeXMPPUnavailable    = "XMPP_UNAVAILABLE"
 )
 
 // Attempt performs the Connection Request GET, retrying once with the

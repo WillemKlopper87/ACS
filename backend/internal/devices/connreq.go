@@ -32,26 +32,46 @@ func (r *Repository) UpdateConnectionRequestURL(ctx context.Context, deviceID, u
 // the URL host with the address the Inform arrived from (a mismatch means
 // NAT/CGNAT, e.g. Nokia FastMile on a carrier network advertising
 // 10.10.178.14 while informing from a public address). Behind NAT the mode
-// becomes PERIODIC_FALLBACK_ONLY unless STUN/Annex G already works; a device
-// that is no longer behind NAT is reset from PERIODIC_FALLBACK_ONLY to
-// UNKNOWN so Connection Request is tried again.
+// becomes PERIODIC_FALLBACK_ONLY unless STUN/Annex G or XMPP (Annex K)
+// already works — both reach a NAT'd device, so a NAT judgement must never
+// downgrade them; a device that is no longer behind NAT is reset from
+// PERIODIC_FALLBACK_ONLY to UNKNOWN so Connection Request is tried again.
+// The judgement itself is also kept in connection_request_behind_nat, which
+// the connreq worker consults for XMPP-mode devices when the ACS's own XMPP
+// session is down (migration 0081).
 func (r *Repository) ClassifyConnectionRequestNAT(ctx context.Context, deviceID string, behindNAT bool) error {
 	var err error
 	if behindNAT {
 		_, err = r.db.ExecContext(ctx, `
-			UPDATE devices SET connection_request_mode = $2, last_updated_at = now()
-			WHERE id = $1 AND connection_request_mode NOT IN ($2, $3)
-		`, deviceID, ModePeriodicFallback, ModeSTUNAnnexG)
+			UPDATE devices SET
+				connection_request_mode = CASE WHEN connection_request_mode IN ($2, $3, $4) THEN connection_request_mode ELSE $2 END,
+				connection_request_behind_nat = true,
+				last_updated_at = now()
+			WHERE id = $1 AND (connection_request_mode NOT IN ($2, $3, $4) OR connection_request_behind_nat IS DISTINCT FROM true)
+		`, deviceID, ModePeriodicFallback, ModeSTUNAnnexG, ModeXMPP)
 	} else {
 		_, err = r.db.ExecContext(ctx, `
-			UPDATE devices SET connection_request_mode = $2, last_updated_at = now()
-			WHERE id = $1 AND connection_request_mode = $3
+			UPDATE devices SET
+				connection_request_mode = CASE WHEN connection_request_mode = $3 THEN $2 ELSE connection_request_mode END,
+				connection_request_behind_nat = false,
+				last_updated_at = now()
+			WHERE id = $1 AND (connection_request_mode = $3 OR connection_request_behind_nat IS DISTINCT FROM false)
 		`, deviceID, ModeUnknown, ModePeriodicFallback)
 	}
 	if err != nil {
 		return fmt.Errorf("classify connection request nat: %w", err)
 	}
 	return nil
+}
+
+// ConnectionRequestBehindNAT reports the last Inform-time NAT judgement
+// (see ClassifyConnectionRequestNAT); false when it was never judged.
+func (r *Repository) ConnectionRequestBehindNAT(ctx context.Context, deviceID string) (bool, error) {
+	var behind sql.NullBool
+	if err := r.db.QueryRowContext(ctx, `SELECT connection_request_behind_nat FROM devices WHERE id = $1`, deviceID).Scan(&behind); err != nil {
+		return false, fmt.Errorf("read connection request nat judgement: %w", err)
+	}
+	return behind.Valid && behind.Bool, nil
 }
 
 // OpenReenrollment lets a device that already graduated use the bootstrap
@@ -109,14 +129,15 @@ func (r *Repository) UpdateDataModelRoot(ctx context.Context, deviceID, root str
 // UNKNOWN/PERIODIC_FALLBACK, so it's fine to overwrite those; a mode of
 // DIRECT_IPV4/DIRECT_IPV6 (a Connection Request that already succeeded
 // directly) is left untouched since direct reachability is strictly better
-// than STUN and shouldn't be downgraded by this.
+// than STUN and shouldn't be downgraded by this — and neither is XMPP
+// (Annex K), which reaches the device with no inbound path at all.
 func (r *Repository) UpdateSTUNStatus(ctx context.Context, deviceID, udpConnectionRequestAddress string, natDetected bool) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE devices SET
 			udp_connection_request_address = $2,
 			nat_detected = $3,
 			connection_request_mode = CASE
-				WHEN $3 AND connection_request_mode NOT IN ('DIRECT_IPV4', 'DIRECT_IPV6') THEN 'STUN_ANNEX_G'
+				WHEN $3 AND connection_request_mode NOT IN ('DIRECT_IPV4', 'DIRECT_IPV6', 'XMPP') THEN 'STUN_ANNEX_G'
 				ELSE connection_request_mode
 			END,
 			last_updated_at = now()
