@@ -172,11 +172,24 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   const handleSetSsid = () =>
     withBusy(async () => {
       if (!ssidInput.trim()) throw new ApiError(400, "SSID cannot be empty");
-      const res = await api.putDeviceParameters(id, [
-        { name: "Device.WiFi.SSID.1.SSID", value: ssidInput.trim(), type: "string" },
-      ]);
+      // Resolve every primary (non-guest, AP-bound) SSID from discovery
+      // instead of assuming Device.WiFi.SSID.1, which on multi-SSID CPEs
+      // renamed one band only or a guest network.
+      const wifi = await api.getWiFiNetworks(id);
+      if (!wifi.supported) throw new ApiError(409, wifi.reason || "No Wi-Fi networks resolved for this device");
+      if (!wifi.complete) {
+        const read = await api.getParametersLive(id, wifi.refresh_paths ?? []);
+        throw new ApiError(409, `Wi-Fi roles not known yet — queued ${read.command_key} to read them; retry after the device's next check-in`);
+      }
+      const targets = (wifi.primary ?? []).filter((n) => n.name_path && n.name_writable);
+      if (targets.length === 0) throw new ApiError(409, "No writable primary Wi-Fi network on this device");
+      const res = await api.putDeviceParameters(
+        id,
+        targets.map((n) => ({ name: n.name_path as string, value: ssidInput.trim(), type: "string" })),
+      );
       setSsidInput("");
-      return `Queued ${res.command_key} — applies on the device's next session`;
+      const bands = targets.map((n) => n.band || `SSID ${n.instance}`).join(" + ");
+      return `Queued ${res.command_key} — renames ${bands}; applies on the device's next session`;
     });
 
   const handleSaveTags = () =>

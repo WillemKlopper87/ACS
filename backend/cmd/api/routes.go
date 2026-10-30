@@ -165,6 +165,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("GET", "/api/v1/devices/{id}/standards-assessment", ro, h.getStandardsAssessment)
 	route("GET", "/api/v1/devices/{id}/connection-diagnostics", ro, h.getConnectionDiagnostics)
 	route("GET", "/api/v1/devices/{id}/wifi-topology", ro, h.getWiFiTopology)
+	route("GET", "/api/v1/devices/{id}/wifi/networks", ro, h.getWiFiNetworks)
 	route("GET", "/api/v1/standards/dictionary", ro, h.getStandardDictionary)
 	routePerm("POST", "/api/v1/devices/{id}/bulk-data/configure", operators.PermDevicesWrite, h.configureBulkData)
 	routePerm("POST", "/api/v1/devices/{id}/discover-instances", operators.PermDiagnosticsRun, h.discoverInstances)

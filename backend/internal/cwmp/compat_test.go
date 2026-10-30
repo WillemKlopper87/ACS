@@ -149,3 +149,10 @@ func TestMethodNotSupportedFaultIsCWMP8000(t *testing.T) {
 		t.Fatalf("fault cwmp:ID = %q, want rpc-2", env.Header.ID)
 	}
 }
+
+func TestSetParameterValuesPrefixesBareTypes(t *testing.T) {
+	out := RenderSetParameterValues("id-1", []ParameterValueStruct{{Name: "Device.WiFi.SSID.1.Enable", Value: "1", Type: "boolean"}}, "k")
+	if !bytes.Contains(out, []byte(`xsi:type="xsd:boolean"`)) {
+		t.Fatalf("bare boolean type not rendered as xsd:boolean: %s", out)
+	}
+}

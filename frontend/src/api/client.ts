@@ -291,6 +291,9 @@ export const api = {
   getConnectionDiagnostics: (id: string) =>
       request<paths["/api/v1/devices/{id}/connection-diagnostics"]["get"]["responses"]["200"]["content"]["application/json"]>(`/api/v1/devices/${id}/connection-diagnostics`),
 
+  getWiFiNetworks: (id: string) =>
+    request<paths["/api/v1/devices/{id}/wifi/networks"]["get"]["responses"]["200"]["content"]["application/json"]>(`/api/v1/devices/${id}/wifi/networks`),
+
   getParameterNames: (id: string) =>
     request<{ names: Record<string, boolean>; discovered_at: string | null }>(`/api/v1/devices/${id}/parameter-names`),
 

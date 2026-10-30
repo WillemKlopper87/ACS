@@ -135,6 +135,12 @@ func RenderSetParameterValues(id string, params []ParameterValueStruct, paramete
 		sb.WriteString(`<ParameterValueStruct><Name>`)
 		sb.WriteString(escapeXML(p.Name))
 		valueType := p.Type
+		if valueType != "" && !strings.HasPrefix(valueType, "xsd:") {
+			// Callers (BSS MODIFY_WIFI, config templates) pass bare "boolean"
+			// or "unsignedInt"; without the prefix they fell through to
+			// xsd:string and strict CPEs fault 9006.
+			valueType = "xsd:" + valueType
+		}
 		switch valueType {
 		case "xsd:string", "xsd:boolean", "xsd:int", "xsd:unsignedInt", "xsd:long", "xsd:unsignedLong", "xsd:dateTime", "xsd:base64Binary", "xsd:hexBinary":
 		default:

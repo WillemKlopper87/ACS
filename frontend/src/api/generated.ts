@@ -157,6 +157,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/wifi/networks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolved TR-181 Wi-Fi networks (SSID + AccessPoint + Radio) with role primary/guest/unbound
+         * @description Built from the device's discovered names and cached values instead of assuming Device.WiFi.SSID.1. Never includes passphrases. When complete is false, GET refresh_paths before writing; read_paths refreshes the whole view.
+         */
+        get: operations["WiFiNetworks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/wifi-topology": {
         parameters: {
             query?: never;
@@ -6100,6 +6120,27 @@ export interface components {
             /** @description Seconds from the last acknowledged reboot/reset until the device informed again */
             last_reboot_duration_seconds?: number;
         };
+        WiFiNetwork: {
+            instance: number;
+            ssid_object: string;
+            access_point?: string;
+            radio?: string;
+            name?: string;
+            enabled?: boolean;
+            advertised?: boolean;
+            guest?: boolean;
+            band?: string;
+            security_mode?: string;
+            /** @enum {string} */
+            role: "primary" | "guest" | "unbound";
+            name_path?: string;
+            enable_path?: string;
+            passphrase_path?: string;
+            name_writable: boolean;
+            enable_writable: boolean;
+            passphrase_writable: boolean;
+            ap_inferred?: boolean;
+        };
         DeviceGroupCount: {
             Manufacturer?: string;
             OnlineStatus?: string;
@@ -6979,6 +7020,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    WiFiNetworks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                id: components["parameters"]["DeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resolved Wi-Fi networks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        supported?: boolean;
+                        reason?: string;
+                        complete?: boolean;
+                        networks?: components["schemas"]["WiFiNetwork"][];
+                        primary?: components["schemas"]["WiFiNetwork"][];
+                        refresh_paths?: string[];
+                        read_paths?: string[];
+                    };
+                };
             };
         };
     };

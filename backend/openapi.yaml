@@ -281,6 +281,33 @@ paths:
         "500":
           description: Persistence failed
 
+  /api/v1/devices/{id}/wifi/networks:
+    get:
+      tags: [Diagnostics]
+      operationId: WiFiNetworks
+      summary: Resolved TR-181 Wi-Fi networks (SSID + AccessPoint + Radio) with role primary/guest/unbound
+      description: >
+        Built from the device's discovered names and cached values instead of assuming Device.WiFi.SSID.1.
+        Never includes passphrases. When complete is false, GET refresh_paths before writing; read_paths
+        refreshes the whole view.
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+      responses:
+        "200":
+          description: Resolved Wi-Fi networks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  supported: { type: boolean }
+                  reason: { type: string }
+                  complete: { type: boolean }
+                  networks: { type: array, items: { $ref: "#/components/schemas/WiFiNetwork" } }
+                  primary: { type: array, items: { $ref: "#/components/schemas/WiFiNetwork" } }
+                  refresh_paths: { type: array, items: { type: string } }
+                  read_paths: { type: array, items: { type: string } }
+
   /api/v1/devices/{id}/wifi-topology:
     get:
       tags: [Diagnostics]
@@ -2491,6 +2518,29 @@ components:
         reenroll_until: { type: string, format: date-time, description: Open operator re-enrolment window (bootstrap allowed until this time) }
         reboot_requested_at: { type: string, format: date-time, description: Set while an ACS-requested reboot/reset is in progress (online_status REBOOTING) }
         last_reboot_duration_seconds: { type: integer, description: Seconds from the last acknowledged reboot/reset until the device informed again }
+
+    WiFiNetwork:
+      type: object
+      required: [instance, ssid_object, role, name_writable, enable_writable, passphrase_writable]
+      properties:
+        instance: { type: integer }
+        ssid_object: { type: string }
+        access_point: { type: string }
+        radio: { type: string }
+        name: { type: string }
+        enabled: { type: boolean }
+        advertised: { type: boolean }
+        guest: { type: boolean }
+        band: { type: string }
+        security_mode: { type: string }
+        role: { type: string, enum: [primary, guest, unbound] }
+        name_path: { type: string }
+        enable_path: { type: string }
+        passphrase_path: { type: string }
+        name_writable: { type: boolean }
+        enable_writable: { type: boolean }
+        passphrase_writable: { type: boolean }
+        ap_inferred: { type: boolean }
 
     DeviceGroupCount:
       type: object

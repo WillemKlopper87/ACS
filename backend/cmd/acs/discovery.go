@@ -24,6 +24,7 @@ import (
 
 	"acs/internal/cwmp"
 	"acs/internal/devices"
+	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
 	"acs/internal/parameters"
 )
@@ -190,6 +191,17 @@ func (h *handler) finishParameterDiscovery(ctx context.Context, deviceID string,
 	}
 	h.logger.Info("parameter discovery completed", "device_id", deviceID, "root", payload.Root,
 		"parameter_count", len(writableByName), "writable_count", writableCount, "skipped", len(payload.Skipped), "command_key", job.CommandKey)
+
+	// Read the non-secret Wi-Fi values (SSID names, guest flags, AccessPoint
+	// references, radio bands) once the tree is known, so the resolved Wi-Fi
+	// network view is complete before an operator or BSS order needs it.
+	if payload.Root == rootDevice2 {
+		if paths := adapters.WiFiNetworkReadPaths(writableByName); len(paths) > 0 {
+			if _, err := h.jobs.Create(ctx, deviceID, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, "system:wifi-state"); err != nil {
+				h.logger.Error("failed to queue Wi-Fi state read", "err", err, "device_id", deviceID)
+			}
+		}
+	}
 }
 
 // skipDiscoveryObject defers (first failure) or abandons (second failure)
