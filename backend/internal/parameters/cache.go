@@ -55,6 +55,7 @@ func (r *Repository) Upsert(ctx context.Context, deviceID string, values map[str
 	if len(values) == 0 {
 		return nil
 	}
+	values = redactSecrets(values)
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
