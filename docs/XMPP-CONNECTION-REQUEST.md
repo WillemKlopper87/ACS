@@ -46,7 +46,7 @@ with Inform event `6 CONNECTION REQUEST` — seconds instead of a minute.
   keep the session alive, run two admin commands). The maintained Go
   libraries are either large (mellium.im/xmpp pulls a sizeable dependency
   tree) or expose the subset awkwardly (xmppo/go-xmpp's synchronous `Recv`
-  loop, no iq correlation). ~700 lines on the standard library keep
+  loop, no iq correlation). ~1,300 lines (heavily commented) on the standard library keep
   `govulncheck` unchanged, are covered end to end against an in-process fake
   server, and SCRAM is checked against the RFC 5802 / RFC 7677 vectors.
   TLS is mandatory: the client refuses a server that does not offer
