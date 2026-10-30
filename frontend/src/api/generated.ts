@@ -2205,6 +2205,121 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/sim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SIM / subscriber identity view with IMSI, ICCID, MSISDN, IMEI and EID masked for every role; SIM PIN never returned */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SIMView"];
+                    };
+                };
+                /** @description Device not found or outside the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/sim/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disclose full subscriber identifiers (human superadmin only; reason required; audited as SubscriberIdentityRevealed) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Why the identity is needed, e.g. RICA subscriber verification or a lawful-interception directive */
+                        reason: string;
+                        /** @description Optional case or directive reference */
+                        reference?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Full identifiers (Cache-Control no-store) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SIMView"];
+                    };
+                };
+                /** @description Missing or too-short reason */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Caller is not a human superadmin (the BSS service token is refused) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The audit record could not be written */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/cellular-capabilities": {
         parameters: {
             query?: never;
@@ -6020,6 +6135,27 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        SIMField: {
+            /** @enum {string} */
+            kind: "imsi" | "iccid" | "msisdn" | "imei" | "eid" | "context";
+            path: string;
+            value: string;
+            masked: boolean;
+            /** Format: date-time */
+            updated_at: string;
+            source: string;
+        };
+        SIMView: {
+            device_id: string;
+            supported: boolean;
+            reason?: string;
+            revealed: boolean;
+            identifiers: components["schemas"]["SIMField"][];
+            /** @description Non-identifying SIM state: USIM status, MCC/MNC/PLMN/SPN, eSIM status */
+            context: components["schemas"]["SIMField"][];
+            /** @description Discovered SIM paths without a cached value; read them with POST /parameters/get */
+            refresh_paths: string[];
+        };
         /**
          * @description Rank order readonly < noc < manager < superadmin (build plan §9's RBAC tier expansion)
          * @enum {string}

@@ -364,6 +364,10 @@ func (h *handler) getParameters(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Subscriber identifiers (IMSI/ICCID/MSISDN/IMEI/EID) are masked for
+	// every caller here, superadmin included: the full values are disclosed
+	// only through the audited GET /devices/{id}/sim (superadmin-only).
+	cached = parameters.RedactSubscriberIdentifiers(cached, false)
 	out := make(map[string]cachedValueResponse, len(cached))
 	for name, v := range cached {
 		if wanted != nil && !wanted[name] {
@@ -396,10 +400,11 @@ func (h *handler) getParameterHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	kind := parameters.SubscriberIdentifierKind(name)
 	items := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		items = append(items, map[string]any{
-			"value": e.Value, "type": e.Type, "source": e.Source, "recorded_at": e.RecordedAt.Format(time.RFC3339),
+			"value": parameters.MaskSubscriberIdentifier(kind, e.Value), "type": e.Type, "source": e.Source, "recorded_at": e.RecordedAt.Format(time.RFC3339),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"name": name, "items": items})

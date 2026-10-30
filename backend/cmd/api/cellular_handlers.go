@@ -81,6 +81,8 @@ func buildCellularCapabilitiesResponse(device *devices.Device, discovered *param
 			Path: resolution.Path, Standard: resolution.Standard, Discovered: resolution.Discovered,
 		}
 		if value, present := cached[resolution.Path]; present {
+			// IMSI/ICCID/IMEI: masked; full values only via GET .../sim.
+			value.Value = parameters.MaskSubscriberIdentifier(parameters.SubscriberIdentifierKind(resolution.Path), value.Value)
 			normalized := adapters.NormalizeCellularValue(value.Value)
 			values[string(field)] = cellularTelemetryValue{Path: resolution.Path, Value: normalized.Value, Raw: value.Value, UpdatedAt: value.UpdatedAt.Format(time.RFC3339), Source: value.Source}
 		}

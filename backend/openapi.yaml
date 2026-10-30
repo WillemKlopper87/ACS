@@ -1182,6 +1182,42 @@ paths:
                   names: { type: object, additionalProperties: { type: boolean } }
                   discovered_at: { type: string, format: date-time, nullable: true }
 
+  /api/v1/devices/{id}/sim:
+    get:
+      tags: [Diagnostics]
+      summary: SIM / subscriber identity view with IMSI, ICCID, MSISDN, IMEI and EID masked for every role; SIM PIN never returned
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SIMView" }
+        "404": { description: Device not found or outside the caller's scope }
+  /api/v1/devices/{id}/sim/reveal:
+    post:
+      tags: [Diagnostics]
+      summary: Disclose full subscriber identifiers (human superadmin only; reason required; audited as SubscriberIdentityRevealed)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 10, description: "Why the identity is needed, e.g. RICA subscriber verification or a lawful-interception directive" }
+                reference: { type: string, description: "Optional case or directive reference" }
+      responses:
+        "200":
+          description: Full identifiers (Cache-Control no-store)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SIMView" }
+        "400": { description: Missing or too-short reason }
+        "403": { description: Caller is not a human superadmin (the BSS service token is refused) }
+        "503": { description: The audit record could not be written, so nothing was disclosed }
   /api/v1/devices/{id}/cellular-capabilities:
     get:
       tags: [Diagnostics]
@@ -2412,6 +2448,27 @@ components:
           schema: { $ref: "#/components/schemas/QueueResponse" }
 
   schemas:
+    SIMField:
+      type: object
+      required: [kind, path, value, masked, updated_at, source]
+      properties:
+        kind: { type: string, enum: [imsi, iccid, msisdn, imei, eid, context] }
+        path: { type: string }
+        value: { type: string }
+        masked: { type: boolean }
+        updated_at: { type: string, format: date-time }
+        source: { type: string }
+    SIMView:
+      type: object
+      required: [device_id, supported, revealed, identifiers, context, refresh_paths]
+      properties:
+        device_id: { type: string }
+        supported: { type: boolean }
+        reason: { type: string }
+        revealed: { type: boolean }
+        identifiers: { type: array, items: { $ref: "#/components/schemas/SIMField" } }
+        context: { type: array, items: { $ref: "#/components/schemas/SIMField" }, description: "Non-identifying SIM state: USIM status, MCC/MNC/PLMN/SPN, eSIM status" }
+        refresh_paths: { type: array, items: { type: string }, description: "Discovered SIM paths without a cached value; read them with POST /parameters/get" }
     Role:
       type: string
       enum: [readonly, noc, manager, superadmin]

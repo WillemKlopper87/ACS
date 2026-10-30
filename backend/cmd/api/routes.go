@@ -178,6 +178,8 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	routePerm("DELETE", "/api/v1/devices/{id}/bulk-data/receivers/{receiver_id}", operators.PermDevicesWrite, h.revokeBulkData)
 	mux.HandleFunc("POST /api/v1/bulk-data/{id}/receive", metrics.InstrumentHTTP("POST /api/v1/bulk-data/{id}/receive", h.receiveBulkData))
 	route("GET", "/api/v1/devices/{id}/cellular-capabilities", ro, h.getCellularCapabilities)
+	route("GET", "/api/v1/devices/{id}/sim", ro, h.getSIM)               // identifiers masked for every role
+	route("POST", "/api/v1/devices/{id}/sim/reveal", admin, h.revealSIM) // human superadmin only, reason required, audited
 	route("GET", "/api/v1/devices/{id}/diagnostics-capabilities", ro, h.getDiagnosticsCapabilities)
 	routePerm("POST", "/api/v1/devices/{id}/cli/credentials", operators.PermCLIAccess, h.createCLICredential)
 	route("GET", "/api/v1/devices/{id}/cli/credentials", ro, h.listCLICredentials)
