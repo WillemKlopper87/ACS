@@ -30,6 +30,7 @@ describe("StatusBadge", () => {
   it.each([
     ["LEASE_EXPIRED_UNSAFE_RETRY", "pill-danger"],
     ["AWAITING_TRANSFER_COMPLETE", "pill-pending"],
+    ["AWAITING_DIAGNOSTICS_COMPLETE", "pill-pending"],
   ])("does not leave %s on the neutral fallback", (value, expectedClass) => {
     const { container } = render(<StatusBadge value={value} />);
     expect(container.querySelector("span")?.className).toContain(expectedClass);

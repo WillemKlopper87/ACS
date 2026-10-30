@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
+import type { DiagnosticsCapabilities } from "../api/client";
 import type { Credential, Device, FirmwareImage, Job, ParameterCache, ParameterHistoryEntry, UploadedFile } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { DeviceConsole } from "../components/DeviceConsole";
@@ -20,6 +21,7 @@ import { toast } from "../lib/toast";
 import { MeshTopology } from "../components/MeshTopology";
 import { useMeshTopology } from "../lib/useMeshTopology";
 import { deviceLink, gatewayName, isMeshSatellite, satelliteReachabilityNote, satelliteRebootWarning } from "../lib/mesh";
+import { skippedNote, unsupportedReason } from "../lib/diagnostics";
 
 export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const navigate = useNavigate();
@@ -52,6 +54,9 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   const [historyLoading, setHistoryLoading] = useState(false);
   // Discovered names -> writable, for the parameter browser's RW marks/filter.
   const [paramNames, setParamNames] = useState<Record<string, boolean> | null>(null);
+  // null until loaded (or if the read fails): controls stay enabled and the
+  // server's own 409 still gates the request.
+  const [diagCaps, setDiagCaps] = useState<DiagnosticsCapabilities | null>(null);
   const [tagsInput, setTagsInput] = useState("");
   const [tagsDirty, setTagsDirty] = useState(false);
   const tagsDirtyRef = useRef(tagsDirty);
@@ -120,7 +125,11 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       (r) => setParamNames(r.names && Object.keys(r.names).length > 0 ? r.names : null),
       () => setParamNames(null),
     );
+    setDiagCaps(null);
+    api.getDiagnosticsCapabilities(id).then(setDiagCaps, () => setDiagCaps(null));
   }, [id]);
+  const pingUnsupported = unsupportedReason(diagCaps?.ping);
+  const tracerouteUnsupported = unsupportedReason(diagCaps?.traceroute);
 
   // The image catalogue is small and slow-changing, so it's fetched once
   // per panel rather than on every poll like the device state above.
@@ -247,14 +256,14 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
     withBusy(async () => {
       if (!pingHost.trim()) throw new ApiError(400, "Host cannot be empty");
       const res = await api.createDiagnosticsPing(id, pingHost.trim());
-      return `Ping queued: ${res.command_key} — polls to completion, watch Recent jobs`;
+      return `Ping queued: ${res.command_key}${skippedNote(res.skipped_inputs)} — result read on the device's next session, watch Recent jobs`;
     });
 
   const handleTraceroute = () =>
     withBusy(async () => {
       if (!tracerouteHost.trim()) throw new ApiError(400, "Host cannot be empty");
       const res = await api.createDiagnosticsTraceroute(id, tracerouteHost.trim());
-      return `Traceroute queued: ${res.command_key} — polls to completion, watch Recent jobs`;
+      return `Traceroute queued: ${res.command_key}${skippedNote(res.skipped_inputs)} — result read on the device's next session, watch Recent jobs`;
     });
 
   const handleStartCapture = () =>
@@ -773,23 +782,27 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
             placeholder="Ping host (e.g. 8.8.8.8)"
             value={pingHost}
             onChange={(e) => setPingHost(e.target.value)}
-            disabled={busy || !writable}
+            disabled={busy || !writable || pingUnsupported !== null}
           />
-          <button className="btn" onClick={handlePing} disabled={busy || !writable || !pingHost.trim()}>
+          <button className="btn" onClick={handlePing} disabled={busy || !writable || !pingHost.trim() || pingUnsupported !== null}
+            title={pingUnsupported ?? undefined}>
             Ping
           </button>
         </div>
+        {pingUnsupported && <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", margin: "0.3rem 0 0" }}>Ping unavailable: {pingUnsupported}</p>}
         <div className="form-row">
           <input aria-label="Traceroute host"
             placeholder="Traceroute host"
             value={tracerouteHost}
             onChange={(e) => setTracerouteHost(e.target.value)}
-            disabled={busy || !writable}
+            disabled={busy || !writable || tracerouteUnsupported !== null}
           />
-          <button className="btn" onClick={handleTraceroute} disabled={busy || !writable || !tracerouteHost.trim()}>
+          <button className="btn" onClick={handleTraceroute} disabled={busy || !writable || !tracerouteHost.trim() || tracerouteUnsupported !== null}
+            title={tracerouteUnsupported ?? undefined}>
             Traceroute
           </button>
         </div>
+        {tracerouteUnsupported && <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", margin: "0.3rem 0 0" }}>Traceroute unavailable: {tracerouteUnsupported}</p>}
         <div className="form-row">
           {satellite ? (
             // A satellite has no Device.WiFi tree of its own: its clients are
@@ -810,7 +823,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
           )}
         </div>
         <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
-          Ping/Traceroute poll to completion — watch Recent jobs for the outcome; results land in the parameter cache above under Device.IP.Diagnostics.*.
+          The device runs Ping/Traceroute after the current session and reports back on its next Inform (8 DIAGNOSTICS COMPLETE) — watch Recent jobs for the outcome; results land in the parameter cache above under Device.IP.Diagnostics.*.
         </p>
       </div>
 

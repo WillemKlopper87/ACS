@@ -350,6 +350,7 @@ func main() {
 		devices:   h.devices,
 		groups:    h.groups,
 		auditor:   observability.NewAuditor(db),
+		params:    h.params,
 	}
 	go scheduleW.Run(ctx)
 

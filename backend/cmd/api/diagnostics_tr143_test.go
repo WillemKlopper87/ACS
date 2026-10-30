@@ -9,14 +9,22 @@ import (
 )
 
 // seedTR143Capability records a discovered-parameter-names row advertising
-// both TR-143 diagnostic objects, the way a real ParameterDiscovery job's
-// result would — ResolveTR143Capability only recognizes a capability the
-// device actually discovered, never a static guess.
+// both TR-143 diagnostic objects and their writable trigger leaves, the way
+// a real ParameterDiscovery job's result would — ResolveTR143Capability only
+// recognizes a capability the device actually discovered, never a static
+// guess, and the CWMP wire plan needs the URL/DiagnosticsState leaves.
 func seedTR143Capability(t *testing.T, e *testEnv, deviceID string) {
 	t.Helper()
 	if err := e.h.params.SaveNames(e.ctx, deviceID, map[string]bool{
-		"Device.IP.Diagnostics.DownloadDiagnostics.": true,
-		"Device.IP.Diagnostics.UploadDiagnostics.":   true,
+		"Device.IP.Diagnostics.DownloadDiagnostics.":                  false,
+		"Device.IP.Diagnostics.DownloadDiagnostics.DownloadURL":       true,
+		"Device.IP.Diagnostics.DownloadDiagnostics.DiagnosticsState":  true,
+		"Device.IP.Diagnostics.DownloadDiagnostics.TestBytesReceived": false,
+		"Device.IP.Diagnostics.UploadDiagnostics.":                    false,
+		"Device.IP.Diagnostics.UploadDiagnostics.UploadURL":           true,
+		"Device.IP.Diagnostics.UploadDiagnostics.TestFileLength":      true,
+		"Device.IP.Diagnostics.UploadDiagnostics.DiagnosticsState":    true,
+		"Device.IP.Diagnostics.UploadDiagnostics.TestBytesSent":       false,
 	}); err != nil {
 		t.Fatalf("seed TR-143 capability: %v", err)
 	}

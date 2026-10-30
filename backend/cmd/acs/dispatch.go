@@ -6,6 +6,7 @@ import (
 	"acs/internal/cwmp"
 	"acs/internal/devices"
 	"acs/internal/devices/adapters"
+	"acs/internal/diagnostics"
 	"acs/internal/jobs"
 	"acs/internal/parameters"
 	"acs/internal/tmf/telemetry"
@@ -30,43 +31,36 @@ func defaultDiagPrefix(kind string) string {
 	return adapters.DiagnosticsPrefix(devices.DataModelRootDevice2, kind)
 }
 
-// diagIPPingPollPaths is what a poll (attempts >= 2) reads back: the
-// state plus every result parameter TR-181/TR-098 both define for IPPing
-// (same leaf names, different subtree root — adapters.DiagnosticsPrefix),
-// so the parameter cache ends up populated the moment the diagnostic
-// completes rather than needing a second round-trip.
+// diagIPPingPollPaths is the poll read for a ping job queued before
+// discovery-filtered plans existed: the state plus every result parameter
+// TR-181/TR-098 both define for IPPing (same leaf names, different subtree
+// root — adapters.DiagnosticsPrefix), so the parameter cache is populated
+// the moment the diagnostic completes. New jobs carry their own PollPaths.
 func diagIPPingPollPaths(prefix string) []string {
-	return []string{
-		prefix + "DiagnosticsState",
-		prefix + "SuccessCount",
-		prefix + "FailureCount",
-		prefix + "AverageResponseTime",
-		prefix + "MinimumResponseTime",
-		prefix + "MaximumResponseTime",
-	}
+	return prefixed(prefix, append([]string{"DiagnosticsState"}, diagnostics.PingResultLeaves...))
 }
 
 // diagTraceroutePollPaths — see diagIPPingPollPaths. RouteHops.{i}.* is a
-// dynamic-length table TR-069 itself defines with no fixed path list to
-// poll, so only RouteHopsNumberOfEntries is read back here — an operator
-// wanting per-hop detail can follow up with an ordinary GET_PARAMETER
-// using that count, the same way this ACS already leaves WiFi
-// associated-device detail to GET_PARAMETER rather than a dedicated
-// parser.
+// dynamic-length table, so only RouteHopsNumberOfEntries is read back; an
+// operator wanting per-hop detail follows up with an ordinary GET_PARAMETER.
 func diagTraceroutePollPaths(prefix string) []string {
-	return []string{
-		prefix + "DiagnosticsState",
-		prefix + "ResponseTime",
-		prefix + "RouteHopsNumberOfEntries",
-	}
+	return prefixed(prefix, append([]string{"DiagnosticsState"}, diagnostics.TracerouteResultLeaves...))
 }
 
+// diagTR143PollPaths is the legacy poll list (both directions' result
+// leaves); new jobs poll only the leaves discovery found for their direction.
 func diagTR143PollPaths(prefix string) []string {
-	return []string{
-		prefix + "DiagnosticsState", prefix + "ROMTime", prefix + "BOMTime", prefix + "EOMTime",
-		prefix + "TestBytesReceived", prefix + "TestBytesSent", prefix + "TotalBytesReceived", prefix + "TotalBytesSent",
-		prefix + "TCPOpenRequestTime", prefix + "TCPOpenResponseTime",
+	return prefixed(prefix, []string{"DiagnosticsState", "ROMTime", "BOMTime", "EOMTime",
+		"TestBytesReceived", "TestBytesSent", "TotalBytesReceived", "TotalBytesSent",
+		"TCPOpenRequestTime", "TCPOpenResponseTime"})
+}
+
+func prefixed(prefix string, leaves []string) []string {
+	out := make([]string, len(leaves))
+	for i, leaf := range leaves {
+		out[i] = prefix + leaf
 	}
+	return out
 }
 
 // renderJobRequest turns a leased job into the CWMP RPC request bytes to
@@ -112,27 +106,24 @@ func (h *handler) renderJobRequest(job *jobs.Job) (body []byte, ok bool) {
 		if prefix == "" {
 			prefix = defaultDiagPrefix(adapters.DiagnosticPing)
 		}
-		if job.Attempts <= 1 {
+		if !jobs.DiagnosticsTriggered(job) {
 			// Trigger: TR-069 diagnostics aren't a dedicated RPC — the
 			// ACS writes the diagnostic's input parameters and kicks it
 			// off via an ordinary SetParameterValues with
-			// DiagnosticsState=Requested (v3 §10.1). Later attempts poll
-			// instead (see below); attempts counts from Lease, so 1 means
-			// this is the very first dispatch.
-			params := []cwmp.ParameterValueStruct{
-				{Name: prefix + "Host", Value: payload.Host},
-				{Name: prefix + "NumberOfRepetitions", Value: strconv.Itoa(payload.NumberOfRepetitions)},
-				{Name: prefix + "Timeout", Value: strconv.Itoa(payload.Timeout)},
-				{Name: prefix + "DataBlockSize", Value: strconv.Itoa(payload.DataBlockSize)},
-				{Name: prefix + "DSCP", Value: strconv.Itoa(payload.DSCP)},
-				{Name: prefix + "DiagnosticsState", Value: "Requested"},
-			}
-			return cwmp.RenderSetParameterValues(id, params, job.CommandKey), true
+			// DiagnosticsState=Requested (v3 §10.1). Once the CPE acks it
+			// the job waits for a later session (internal/jobs/
+			// diagnostics.go) and every later dispatch polls instead.
+			return cwmp.RenderSetParameterValues(id, diagnosticTrigger(payload.Trigger, prefix,
+				"Host", payload.Host,
+				"NumberOfRepetitions", strconv.Itoa(payload.NumberOfRepetitions),
+				"Timeout", strconv.Itoa(payload.Timeout),
+				"DataBlockSize", strconv.Itoa(payload.DataBlockSize),
+				"DSCP", strconv.Itoa(payload.DSCP),
+			), job.CommandKey), true
 		}
 		// Poll: read DiagnosticsState (and the result parameters, so a
-		// completed poll needs no further round-trip) until it leaves
-		// "Requested".
-		return cwmp.RenderGetParameterValues(id, diagIPPingPollPaths(prefix)), true
+		// completed poll needs no further round-trip).
+		return cwmp.RenderGetParameterValues(id, diagnosticPollPaths(payload.PollPaths, diagIPPingPollPaths(prefix))), true
 
 	case jobs.TypeDiagnosticsTraceroute:
 		var payload jobs.DiagnosticsTraceroutePayload
@@ -143,54 +134,43 @@ func (h *handler) renderJobRequest(job *jobs.Job) (body []byte, ok bool) {
 		if prefix == "" {
 			prefix = defaultDiagPrefix(adapters.DiagnosticTraceroute)
 		}
-		if job.Attempts <= 1 {
-			params := []cwmp.ParameterValueStruct{
-				{Name: prefix + "Host", Value: payload.Host},
-				{Name: prefix + "NumberOfTries", Value: strconv.Itoa(payload.NumberOfTries)},
-				{Name: prefix + "Timeout", Value: strconv.Itoa(payload.Timeout)},
-				{Name: prefix + "DataBlockSize", Value: strconv.Itoa(payload.DataBlockSize)},
-				{Name: prefix + "DSCP", Value: strconv.Itoa(payload.DSCP)},
-				{Name: prefix + "MaxHopCount", Value: strconv.Itoa(payload.MaxHopCount)},
-				{Name: prefix + "DiagnosticsState", Value: "Requested"},
-			}
-			return cwmp.RenderSetParameterValues(id, params, job.CommandKey), true
+		if !jobs.DiagnosticsTriggered(job) {
+			return cwmp.RenderSetParameterValues(id, diagnosticTrigger(payload.Trigger, prefix,
+				"Host", payload.Host,
+				"NumberOfTries", strconv.Itoa(payload.NumberOfTries),
+				"Timeout", strconv.Itoa(payload.Timeout),
+				"DataBlockSize", strconv.Itoa(payload.DataBlockSize),
+				"DSCP", strconv.Itoa(payload.DSCP),
+				"MaxHopCount", strconv.Itoa(payload.MaxHopCount),
+			), job.CommandKey), true
 		}
-		return cwmp.RenderGetParameterValues(id, diagTraceroutePollPaths(prefix)), true
+		return cwmp.RenderGetParameterValues(id, diagnosticPollPaths(payload.PollPaths, diagTraceroutePollPaths(prefix))), true
 
 	case jobs.TypeDiagnosticsDownload, jobs.TypeDiagnosticsUpload:
 		var payload struct {
 			URL            string `json:"url"`
-			Prefix         string `json:"prefix"`
 			TestFileLength uint64 `json:"test_file_length"`
+			jobs.DiagnosticsPlan
 		}
 		if err := json.Unmarshal(job.Payload, &payload); err != nil {
 			return nil, false
 		}
-		// jobs.DiagnosticsDownloadPayload/DiagnosticsUploadPayload have the
-		// identical two fields, both JSON-tagged the same way, so the
-		// anonymous struct above already decodes either one — kept
-		// anonymous rather than switching on job.Type to unmarshal into
-		// the type-specific struct only to read the same two fields.
-		prefix := payload.Prefix
-		if prefix == "" {
-			prefix = "Device.IP.Diagnostics." + map[bool]string{true: "UploadDiagnostics.", false: "DownloadDiagnostics."}[job.Type == jobs.TypeDiagnosticsUpload]
-		}
-		if job.Attempts <= 1 {
-			urlLeaf := "DownloadURL"
-			if job.Type == jobs.TypeDiagnosticsUpload {
-				urlLeaf = "UploadURL"
-			}
-			params := []cwmp.ParameterValueStruct{{Name: prefix + urlLeaf, Value: payload.URL}, {Name: prefix + "DiagnosticsState", Value: "Requested"}}
+		// jobs.DiagnosticsDownloadPayload/DiagnosticsUploadPayload share
+		// these JSON fields, so the anonymous struct above decodes either
+		// one without switching on job.Type first.
+		prefix := diagnosticPayloadPrefix(job)
+		if !jobs.DiagnosticsTriggered(job) {
 			if job.Type == jobs.TypeDiagnosticsUpload {
 				length := payload.TestFileLength
 				if length == 0 {
 					length = 1048576
 				}
-				params = append(params, cwmp.ParameterValueStruct{Name: prefix + "TestFileLength", Value: strconv.FormatUint(length, 10), Type: "xsd:unsignedLong"})
+				return cwmp.RenderSetParameterValues(id, diagnosticTrigger(payload.Trigger, prefix,
+					"UploadURL", payload.URL, "TestFileLength", strconv.FormatUint(length, 10)), job.CommandKey), true
 			}
-			return cwmp.RenderSetParameterValues(id, params, job.CommandKey), true
+			return cwmp.RenderSetParameterValues(id, diagnosticTrigger(payload.Trigger, prefix, "DownloadURL", payload.URL), job.CommandKey), true
 		}
-		return cwmp.RenderGetParameterValues(id, diagTR143PollPaths(prefix)), true
+		return cwmp.RenderGetParameterValues(id, diagnosticPollPaths(payload.PollPaths, diagTR143PollPaths(prefix))), true
 
 	case jobs.TypeAddObject:
 		var payload jobs.AddObjectPayload
@@ -407,125 +387,8 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 		h.logger.Info("upload accepted, awaiting transfer complete",
 			"job_id", job.ID, "command_key", job.CommandKey, "device_id", deviceID, "status", body.UploadResponse.Status)
 
-	case jobs.TypeDiagnosticsPing:
-		if job.Attempts <= 1 {
-			// The trigger (SetParameterValues) was acked — the CPE has
-			// accepted the request, not run it yet. Requeue so the next
-			// dispatch on this device polls instead of re-triggering.
-			if body.SetParameterValuesResponse == nil {
-				h.markUnexpectedResponse(ctx, deviceID, job)
-				return
-			}
-			h.requeueDiagnostic(ctx, deviceID, job, "triggered, awaiting result")
-			return
-		}
-
-		// A poll (GetParameterValues) came back.
-		if body.GetParameterValuesResponse == nil {
-			h.markUnexpectedResponse(ctx, deviceID, job)
-			return
-		}
-		list := body.GetParameterValuesResponse.ParameterList
-		h.cacheParameterValues(ctx, deviceID, list, parameters.SourceGetValues)
-
-		var pingPayload jobs.DiagnosticsPingPayload
-		if err := json.Unmarshal(job.Payload, &pingPayload); err != nil {
-			h.logger.Error("failed to unmarshal diagnostics ping payload; assuming TR-181", "err", err, "job_id", job.ID)
-		}
-		pingPrefix := pingPayload.Prefix
-		if pingPrefix == "" {
-			pingPrefix = defaultDiagPrefix(adapters.DiagnosticPing)
-		}
-
-		switch state := diagnosticsState(list, pingPrefix); state {
-		case "Requested", "":
-			// Still running (or the CPE hasn't populated the state param
-			// yet) — poll again.
-			h.requeueDiagnostic(ctx, deviceID, job, "still running")
-		case "Complete":
-			h.markJobSuccess(ctx, deviceID, job)
-		default:
-			// TR-181 error states, e.g. Error_CannotResolveHostName,
-			// Error_Internal, Error_Other.
-			if err := h.jobs.MarkFailed(ctx, job.ID, "", state); err != nil {
-				h.logger.Error("failed to mark job failed", "err", err, "job_id", job.ID)
-			}
-			h.auditFailure(ctx, deviceID, job, "", state)
-		}
-
-	case jobs.TypeDiagnosticsTraceroute:
-		if job.Attempts <= 1 {
-			if body.SetParameterValuesResponse == nil {
-				h.markUnexpectedResponse(ctx, deviceID, job)
-				return
-			}
-			h.requeueDiagnostic(ctx, deviceID, job, "triggered, awaiting result")
-			return
-		}
-
-		if body.GetParameterValuesResponse == nil {
-			h.markUnexpectedResponse(ctx, deviceID, job)
-			return
-		}
-		list := body.GetParameterValuesResponse.ParameterList
-		h.cacheParameterValues(ctx, deviceID, list, parameters.SourceGetValues)
-
-		var tracePayload jobs.DiagnosticsTraceroutePayload
-		if err := json.Unmarshal(job.Payload, &tracePayload); err != nil {
-			h.logger.Error("failed to unmarshal diagnostics traceroute payload; assuming TR-181", "err", err, "job_id", job.ID)
-		}
-		tracePrefix := tracePayload.Prefix
-		if tracePrefix == "" {
-			tracePrefix = defaultDiagPrefix(adapters.DiagnosticTraceroute)
-		}
-
-		switch state := diagnosticsState(list, tracePrefix); state {
-		case "Requested", "":
-			h.requeueDiagnostic(ctx, deviceID, job, "still running")
-		case "Complete":
-			h.markJobSuccess(ctx, deviceID, job)
-		default:
-			if err := h.jobs.MarkFailed(ctx, job.ID, "", state); err != nil {
-				h.logger.Error("failed to mark job failed", "err", err, "job_id", job.ID)
-			}
-			h.auditFailure(ctx, deviceID, job, "", state)
-		}
-
-	case jobs.TypeDiagnosticsDownload, jobs.TypeDiagnosticsUpload:
-		if job.Attempts <= 1 {
-			if body.SetParameterValuesResponse == nil {
-				h.markUnexpectedResponse(ctx, deviceID, job)
-				return
-			}
-			h.requeueDiagnostic(ctx, deviceID, job, "TR-143 triggered, awaiting result")
-			return
-		}
-		if body.GetParameterValuesResponse == nil {
-			h.markUnexpectedResponse(ctx, deviceID, job)
-			return
-		}
-		list := body.GetParameterValuesResponse.ParameterList
-		h.cacheParameterValues(ctx, deviceID, list, parameters.SourceGetValues)
-		prefix := "Device.IP.Diagnostics.DownloadDiagnostics."
-		if job.Type == jobs.TypeDiagnosticsUpload {
-			prefix = "Device.IP.Diagnostics.UploadDiagnostics."
-		}
-		var payload struct {
-			Prefix string `json:"prefix"`
-		}
-		_ = json.Unmarshal(job.Payload, &payload)
-		if payload.Prefix != "" {
-			prefix = payload.Prefix
-		}
-		switch state := diagnosticsState(list, prefix); state {
-		case "Requested", "":
-			h.requeueDiagnostic(ctx, deviceID, job, "TR-143 still running")
-		case "Complete":
-			h.markTR143Success(ctx, deviceID, job, list, prefix, job.Type == jobs.TypeDiagnosticsUpload)
-		default:
-			_ = h.jobs.MarkFailed(ctx, job.ID, "", state)
-			h.auditFailure(ctx, deviceID, job, "", state)
-		}
+	case jobs.TypeDiagnosticsPing, jobs.TypeDiagnosticsTraceroute, jobs.TypeDiagnosticsDownload, jobs.TypeDiagnosticsUpload:
+		h.completeDiagnostic(ctx, deviceID, job, body)
 
 	case jobs.TypeAddObject:
 		if body.AddObjectResponse == nil {
@@ -631,27 +494,158 @@ func (h *handler) markUnexpectedResponse(ctx context.Context, deviceID string, j
 	h.auditFailure(ctx, deviceID, job, "", msg)
 }
 
-// requeueDiagnostic cycles a DIAGNOSTICS_PING job back to QUEUED for
-// another poll, unless it has exhausted max_attempts — without a cap, a
-// device whose DiagnosticsState never leaves "Requested" would poll
-// forever (build plan §4 Phase 5).
-func (h *handler) requeueDiagnostic(ctx context.Context, deviceID string, job *jobs.Job, detail string) {
-	if job.Attempts >= job.MaxAttempts {
-		msg := "diagnostic did not complete within " + strconv.Itoa(job.MaxAttempts) + " attempts"
+// completeDiagnostic handles the CPE's answer to a diagnostic's trigger or
+// poll (lifecycle in internal/jobs/diagnostics.go). An acknowledged trigger,
+// or a poll that still reads a pending state, parks the job until the next
+// Inform — never back to QUEUED within this session, where the CPE cannot
+// have started the test yet.
+func (h *handler) completeDiagnostic(ctx context.Context, deviceID string, job *jobs.Job, body cwmp.InboundBody) {
+	if !jobs.DiagnosticsTriggered(job) {
+		if body.SetParameterValuesResponse == nil {
+			h.markUnexpectedResponse(ctx, deviceID, job)
+			return
+		}
+		h.awaitDiagnostic(ctx, deviceID, job, "triggered; awaiting 8 DIAGNOSTICS COMPLETE or the next session")
+		return
+	}
+	if body.GetParameterValuesResponse == nil {
+		h.markUnexpectedResponse(ctx, deviceID, job)
+		return
+	}
+	list := body.GetParameterValuesResponse.ParameterList
+	h.cacheParameterValues(ctx, deviceID, list, parameters.SourceGetValues)
+	prefix := diagnosticPayloadPrefix(job)
+	state := diagnosticsState(list, prefix)
+	switch classifyDiagnosticsState(state) {
+	case diagPending:
+		h.awaitDiagnostic(ctx, deviceID, job, "DiagnosticsState still "+strconv.Quote(state))
+	case diagComplete:
+		if job.Type == jobs.TypeDiagnosticsDownload || job.Type == jobs.TypeDiagnosticsUpload {
+			h.markTR143Success(ctx, deviceID, job, list, prefix, job.Type == jobs.TypeDiagnosticsUpload)
+			return
+		}
+		h.markJobSuccess(ctx, deviceID, job)
+	default:
+		// TR-181 error states, e.g. Error_CannotResolveHostName,
+		// Error_Internal, Error_Other, Canceled.
+		if err := h.jobs.MarkFailed(ctx, job.ID, "", state); err != nil {
+			h.logger.Error("failed to mark job failed", "err", err, "job_id", job.ID)
+		}
+		h.auditFailure(ctx, deviceID, job, "", state)
+	}
+}
+
+type diagStateClass int
+
+const (
+	diagPending diagStateClass = iota
+	diagComplete
+	diagFailed
+)
+
+// classifyDiagnosticsState maps a polled DiagnosticsState onto the job's
+// next step. "None" counts as pending: a CPE may report it until the queued
+// test actually starts, and the time deadline still ends a test the CPE
+// really abandoned.
+func classifyDiagnosticsState(state string) diagStateClass {
+	switch state {
+	case "", "Requested", "None":
+		return diagPending
+	case "Complete", "Completed":
+		return diagComplete
+	}
+	return diagFailed
+}
+
+// awaitDiagnostic parks a diagnostic until the device's next Inform, unless
+// its time deadline (or the max_attempts backstop) is exhausted, in which
+// case it ends as TIMEOUT.
+func (h *handler) awaitDiagnostic(ctx context.Context, deviceID string, job *jobs.Job, detail string) {
+	if jobs.DiagnosticsExpired(job, time.Now()) || job.Attempts >= job.MaxAttempts {
+		msg := "diagnostic did not complete by its deadline"
+		if job.Attempts >= job.MaxAttempts {
+			msg = "diagnostic did not complete within " + strconv.Itoa(job.MaxAttempts) + " attempts"
+		}
 		if err := h.jobs.MarkTimeout(ctx, job.ID, msg); err != nil {
 			h.logger.Error("failed to mark job timeout", "err", err, "job_id", job.ID)
 		}
 		h.metrics.JobsCompletedTotal.WithLabelValues(job.Type, jobs.StatusTimeout).Inc()
-		h.logger.Warn("diagnostic exhausted max attempts", "job_id", job.ID, "command_key", job.CommandKey,
-			"device_id", deviceID, "attempts", job.Attempts, "max_attempts", job.MaxAttempts)
+		h.logger.Warn("diagnostic timed out", "job_id", job.ID, "command_key", job.CommandKey,
+			"device_id", deviceID, "attempts", job.Attempts, "detail", msg)
 		return
 	}
-	if err := h.jobs.Requeue(ctx, job.ID); err != nil {
-		h.logger.Error("failed to requeue diagnostic job", "err", err, "job_id", job.ID)
+	applied, err := h.jobs.MarkAwaitingDiagnostics(ctx, job, jobs.DiagnosticsWindow(job))
+	if err != nil {
+		h.logger.Error("failed to park diagnostic job", "err", err, "job_id", job.ID)
 		return
 	}
-	h.logger.Info("diagnostic requeued for poll", "job_id", job.ID, "command_key", job.CommandKey,
-		"device_id", deviceID, "attempts", job.Attempts, "detail", detail)
+	if applied {
+		h.logger.Info("diagnostic awaiting completion", "job_id", job.ID, "command_key", job.CommandKey,
+			"device_id", deviceID, "attempts", job.Attempts, "detail", detail)
+	}
+}
+
+// releaseAwaitingDiagnostics runs on every Inform: a new session is the
+// earliest point a parked diagnostic may be polled, and releasing once per
+// Inform keeps it to one poll per session.
+func (h *handler) releaseAwaitingDiagnostics(ctx context.Context, deviceID string, diagnosticsComplete bool) {
+	n, err := h.jobs.ReleaseAwaitingDiagnostics(ctx, deviceID)
+	if err != nil {
+		h.logger.Error("failed to release awaiting diagnostics", "err", err, "device_id", deviceID)
+		return
+	}
+	if n > 0 {
+		h.logger.Info("polling awaiting diagnostics in this session", "device_id", deviceID, "jobs", n,
+			"diagnostics_complete_event", diagnosticsComplete)
+	}
+}
+
+// diagnosticTrigger returns the trigger's SetParameterValues list: the plan
+// resolved from discovery at job creation when there is one, otherwise (a
+// job queued before plans existed) every standard input from pairs
+// (leaf, value, ...), typed per TR-181, with DiagnosticsState last.
+func diagnosticTrigger(planned []jobs.ParameterWrite, prefix string, pairs ...string) []cwmp.ParameterValueStruct {
+	if len(planned) > 0 {
+		params := make([]cwmp.ParameterValueStruct, len(planned))
+		for i, p := range planned {
+			params[i] = cwmp.ParameterValueStruct{Name: p.Name, Value: p.Value, Type: p.Type}
+		}
+		return params
+	}
+	params := make([]cwmp.ParameterValueStruct, 0, len(pairs)/2+1)
+	for i := 0; i+1 < len(pairs); i += 2 {
+		params = append(params, cwmp.ParameterValueStruct{Name: prefix + pairs[i], Value: pairs[i+1], Type: diagnostics.LeafType(pairs[i])})
+	}
+	return append(params, cwmp.ParameterValueStruct{Name: prefix + "DiagnosticsState", Value: "Requested", Type: diagnostics.LeafType("DiagnosticsState")})
+}
+
+// diagnosticPollPaths prefers the discovery-filtered poll list stored on the
+// job over the full standard list.
+func diagnosticPollPaths(planned, standard []string) []string {
+	if len(planned) > 0 {
+		return planned
+	}
+	return standard
+}
+
+// diagnosticPayloadPrefix resolves the diagnostic object a job targets.
+func diagnosticPayloadPrefix(job *jobs.Job) string {
+	var payload struct {
+		Prefix string `json:"prefix"`
+	}
+	_ = json.Unmarshal(job.Payload, &payload)
+	if payload.Prefix != "" {
+		return payload.Prefix
+	}
+	switch job.Type {
+	case jobs.TypeDiagnosticsTraceroute:
+		return defaultDiagPrefix(adapters.DiagnosticTraceroute)
+	case jobs.TypeDiagnosticsDownload:
+		return "Device.IP.Diagnostics.DownloadDiagnostics."
+	case jobs.TypeDiagnosticsUpload:
+		return "Device.IP.Diagnostics.UploadDiagnostics."
+	}
+	return defaultDiagPrefix(adapters.DiagnosticPing)
 }
 
 // diagnosticsState reads a diagnostic's DiagnosticsState parameter out of

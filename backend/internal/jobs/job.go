@@ -45,9 +45,14 @@ const (
 	StatusRPCSent                  = "RPC_SENT"
 	StatusInProgress               = "IN_PROGRESS"
 	StatusAwaitingTransferComplete = "AWAITING_TRANSFER_COMPLETE"
-	StatusSuccess                  = "SUCCESS"
-	StatusFailed                   = "FAILED"
-	StatusTimeout                  = "TIMEOUT"
+	// StatusAwaitingDiagnosticsComplete: a CWMP diagnostic's trigger was
+	// acknowledged and the CPE runs the test after the session ends. Lease
+	// never hands it out; the device's next Inform requeues it for one poll
+	// (see diagnostics.go).
+	StatusAwaitingDiagnosticsComplete = "AWAITING_DIAGNOSTICS_COMPLETE"
+	StatusSuccess                     = "SUCCESS"
+	StatusFailed                      = "FAILED"
+	StatusTimeout                     = "TIMEOUT"
 )
 
 // sessionDispatchableTypes are the job types cmd/acs's per-device Lease
@@ -92,6 +97,10 @@ type Job struct {
 	ResultDetail   json.RawMessage
 	IdempotencyKey *string
 	RequestHash    *string
+	// DiagnosticsDeadline is set once a CWMP diagnostic's trigger has been
+	// acknowledged: non-nil means "triggered, poll for the result", and the
+	// time bounds how long the ACS waits for the CPE to finish.
+	DiagnosticsDeadline *time.Time
 }
 
 type Repository struct {
@@ -104,7 +113,7 @@ func NewRepository(db *sql.DB) *Repository {
 
 const jobColumns = `id, command_key, device_id, type, status, payload, attempts, max_attempts,
 	created_by, created_at, updated_at, started_at, completed_at, fault_code, fault_string, result_detail,
-	idempotency_key, request_hash`
+	idempotency_key, request_hash, diagnostics_deadline`
 
 var ErrIdempotencyConflict = errors.New("idempotency key was already used with a different request")
 
@@ -396,14 +405,14 @@ type scanner interface {
 func scanJob(s scanner) (*Job, error) {
 	var j Job
 	var createdBy sql.NullString
-	var startedAt, completedAt sql.NullTime
+	var startedAt, completedAt, diagnosticsDeadline sql.NullTime
 	var faultCode, faultString sql.NullString
 	var idempotencyKey, requestHash sql.NullString
 	var resultDetail []byte
 
 	if err := s.Scan(&j.ID, &j.CommandKey, &j.DeviceID, &j.Type, &j.Status, &j.Payload,
 		&j.Attempts, &j.MaxAttempts, &createdBy, &j.CreatedAt, &j.UpdatedAt,
-		&startedAt, &completedAt, &faultCode, &faultString, &resultDetail, &idempotencyKey, &requestHash); err != nil {
+		&startedAt, &completedAt, &faultCode, &faultString, &resultDetail, &idempotencyKey, &requestHash, &diagnosticsDeadline); err != nil {
 		return nil, fmt.Errorf("scan job: %w", err)
 	}
 	if resultDetail != nil {
@@ -432,6 +441,10 @@ func scanJob(s scanner) (*Job, error) {
 	}
 	if requestHash.Valid {
 		j.RequestHash = &requestHash.String
+	}
+	if diagnosticsDeadline.Valid {
+		t := diagnosticsDeadline.Time
+		j.DiagnosticsDeadline = &t
 	}
 	return &j, nil
 }

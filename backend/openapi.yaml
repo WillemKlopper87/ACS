@@ -1330,6 +1330,8 @@ paths:
                     properties:
                       download_path: { type: string }
                       upload_path: { type: string }
+                  ping: { $ref: "#/components/schemas/DiagnosticCapability" }
+                  traceroute: { $ref: "#/components/schemas/DiagnosticCapability" }
 
   /api/v1/devices/{id}/diagnostics/tr143/{direction}:
     post:
@@ -1351,15 +1353,16 @@ paths:
               properties:
                 url: { type: string, format: uri }
       responses:
-        "202": { description: Accepted }
+        "202": { $ref: "#/components/responses/DiagnosticQueueResponse" }
         "400": { description: Invalid or disallowed target URL }
-        "409": { description: Device capability not discovered }
+        "409": { description: Device capability not discovered, or its URL/DiagnosticsState leaves are not discovered writable }
 
   # --- Diagnostics ---
   /api/v1/devices/{id}/diagnostics/ping:
     post:
       tags: [Diagnostics]
-      summary: Queue DIAGNOSTICS_PING — trigger + poll cycle, resolves to SUCCESS/FAILED/TIMEOUT (diagnostics.run permission)
+      summary: Queue DIAGNOSTICS_PING — trigger, wait for the CPE's next session (8 DIAGNOSTICS COMPLETE), poll; resolves to SUCCESS/FAILED/TIMEOUT (diagnostics.run permission)
+      description: Requires a discovered, writable IPPing object; only inputs discovery proved writable are sent.
       parameters: [{ $ref: "#/components/parameters/DeviceId" }]
       requestBody:
         required: true
@@ -1375,7 +1378,8 @@ paths:
                 data_block_size: { type: integer }
                 dscp: { type: integer }
       responses:
-        "202": { $ref: "#/components/responses/QueueResponse" }
+        "202": { $ref: "#/components/responses/DiagnosticQueueResponse" }
+        "409": { description: "Diagnostic not supported by the device's discovered data model, or discovery has not run" }
 
   /api/v1/devices/{id}/diagnostics/traceroute:
     post:
@@ -1397,7 +1401,8 @@ paths:
                 dscp: { type: integer }
                 max_hop_count: { type: integer }
       responses:
-        "202": { $ref: "#/components/responses/QueueResponse" }
+        "202": { $ref: "#/components/responses/DiagnosticQueueResponse" }
+        "409": { description: "Diagnostic not supported by the device's discovered data model, or discovery has not run" }
 
   # --- Captures ---
   /api/v1/devices/{id}/captures:
@@ -2541,6 +2546,20 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/QueueResponse" }
+    DiagnosticQueueResponse:
+      description: Diagnostic job queued
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [command_key, status]
+            properties:
+              command_key: { type: string }
+              status: { type: string }
+              skipped_inputs:
+                type: array
+                items: { type: string }
+                description: Optional inputs not sent because discovery did not prove them writable (the CPE's defaults apply)
 
   schemas:
     WiFiInsights:
@@ -2828,6 +2847,14 @@ components:
         command_key: { type: string }
         status: { type: string }
 
+    DiagnosticCapability:
+      type: object
+      required: [supported]
+      properties:
+        supported: { type: boolean }
+        path: { type: string }
+        reason: { type: string, description: Why discovery rules the diagnostic out }
+
     CaptureSession:
       type: object
       description: Mirrors cmd/api's captureSessionResponse (design §4/§7).
@@ -2879,7 +2906,7 @@ components:
         command_key: { type: string }
         device_id: { type: string }
         type: { type: string }
-        status: { type: string, enum: [QUEUED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, SUCCESS, FAILED, TIMEOUT] }
+        status: { type: string, enum: [QUEUED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, AWAITING_DIAGNOSTICS_COMPLETE, SUCCESS, FAILED, TIMEOUT] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         completed_at: { type: string, format: date-time, nullable: true }

@@ -48,14 +48,16 @@ func runLeaseReaper(ctx context.Context, repo *jobs.Repository, metrics *observa
 		if err != nil {
 			logger.Error("lease reaper pass failed", "err", err)
 		} else {
-			if res.Requeued+res.DeadLettered+res.DeadLetteredUnsafeRetry+res.TimedOut > 0 {
+			if res.Requeued+res.DeadLettered+res.DeadLetteredUnsafeRetry+res.TimedOut+res.DiagnosticsTimedOut > 0 {
 				logger.Warn("recovered stranded jobs", "requeued", res.Requeued, "dead_lettered", res.DeadLettered,
-					"dead_lettered_unsafe_retry", res.DeadLetteredUnsafeRetry, "transfer_timeout", res.TimedOut)
+					"dead_lettered_unsafe_retry", res.DeadLetteredUnsafeRetry, "transfer_timeout", res.TimedOut,
+					"diagnostics_timeout", res.DiagnosticsTimedOut)
 			}
 			metrics.JobsRecoveredTotal.WithLabelValues("requeued").Add(float64(res.Requeued))
 			metrics.JobsRecoveredTotal.WithLabelValues("dead_lettered").Add(float64(res.DeadLettered))
 			metrics.JobsRecoveredTotal.WithLabelValues("dead_lettered_unsafe_retry").Add(float64(res.DeadLetteredUnsafeRetry))
 			metrics.JobsRecoveredTotal.WithLabelValues("transfer_timeout").Add(float64(res.TimedOut))
+			metrics.JobsRecoveredTotal.WithLabelValues("diagnostics_timeout").Add(float64(res.DiagnosticsTimedOut))
 		}
 		if n, err := repo.CountStaleLeases(ctx); err == nil {
 			metrics.JobsStaleLeases.Set(float64(n))

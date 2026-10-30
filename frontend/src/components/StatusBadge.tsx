@@ -30,6 +30,9 @@ const TONE_BY_VALUE: Record<string, string> = {
   ELIGIBLE: "neutral",
   DOWNLOADING: "pending",
   AWAITING_TRANSFER_COMPLETE: "pending",
+  // A diagnostic the CPE runs after the triggering session; read back on
+  // its next Inform ("8 DIAGNOSTICS COMPLETE").
+  AWAITING_DIAGNOSTICS_COMPLETE: "pending",
   ACTIVE: "pending",
   BLOCKED: "danger",
   COMPLETED: "ok",
@@ -51,6 +54,7 @@ const LABEL_BY_VALUE: Record<string, string> = {
   PERIODIC_FALLBACK_ONLY: "periodic fallback",
   LEASE_EXPIRED_UNSAFE_RETRY: "expired — not retried",
   AWAITING_TRANSFER_COMPLETE: "awaiting transfer",
+  AWAITING_DIAGNOSTICS_COMPLETE: "awaiting result",
   DIRECT_IPV4: "direct IPv4",
   DIRECT_IPV6: "direct IPv6",
   XMPP_SENT_INFORM_RECEIVED: "inform received (XMPP)",
