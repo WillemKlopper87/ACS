@@ -158,6 +158,13 @@ Canonical model extension in `adapters/canonical.go`: replace instance-1 constan
 - **Rate limiting:** not available on the CPE (this firmware). NaaS applies per-subscriber bandwidth upstream (BNG/UPF, 5G QoS/slice — the FastMile exposes `Cellular.AccessPoint.{i}.X_ALU-COM_{SST,SD,DNN}`) or via RADIUS attributes at the edge that enforces them.
 - The discovery library (`ci/compatibility/discoveries/`) is the shared capability catalogue both systems read.
 
+## 9a. Confirmed on-device (FastMile 1.2501.00.0798, 2026-10-30)
+
+- `Security.ModesSupported` = `None, WPA2-Personal, WPA2-Enterprise, WPA-WPA2-Personal, WPA-WPA2-Enterprise, WPA2-WPA3-Personal, WPA3-Personal-Transition, WPA3-Personal`; current `ModeEnabled` = `WPA2-WPA3-Personal`. **Enterprise / RADIUS is supported.** Hide `None` (open) behind a confirmation; no WPA3-Enterprise.
+- **No RADIUS shared-secret parameter** over TR-069 (only `RadiusServerIPAddr`, `RadiusServerPort`, `SecondaryRadiusServerIPAddr`). The secret must be set once via the Nokia web UI (zero-touch gap — raise with Nokia). No RADIUS accounting parameters.
+- **No `Device.LocalAgent.` / `Device.MQTT.`** in the CWMP tree: the TR-369/USP agent cannot be configured over TR-069. Pointing it at the ACS USP controller is a manual web-UI step (TR-369 page: broker address, port, TLS, controller endpoint ID) or a Nokia pre-config item.
+- No `Device.QoS.Shaper`/`Policer`/`Queue` (only `QoS.Classification`), no MAC allow/deny, no `Device.CaptivePortal.`.
+
 ## 9. Field tests required before release (FastMile 1.2501.00.0798)
 
 1. **AddObject** `Device.WiFi.SSID.` and `Device.WiFi.AccessPoint.` → instance numbers, default state, DeleteObject cleanup.
