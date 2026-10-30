@@ -68,6 +68,10 @@ type DeviceSatellitesResponse =
   paths["/api/v1/devices/{id}/satellites"]["get"]["responses"]["200"]["content"]["application/json"];
 type DiagnosticQueueResponse =
   paths["/api/v1/devices/{id}/diagnostics/ping"]["post"]["responses"]["202"]["content"]["application/json"];
+export type WiFiInsightsData =
+  paths["/api/v1/devices/{id}/wifi/insights"]["get"]["responses"]["200"]["content"]["application/json"];
+export type WiFiInsightsWindow = "2h" | "1d" | "1w" | "1m";
+export type SIMView = paths["/api/v1/devices/{id}/sim"]["get"]["responses"]["200"]["content"]["application/json"];
 export type DiagnosticsCapabilities =
   paths["/api/v1/devices/{id}/diagnostics-capabilities"]["get"]["responses"]["200"]["content"]["application/json"];
 
@@ -322,6 +326,21 @@ export const api = {
 
   getWiFiNetworks: (id: string) =>
     request<paths["/api/v1/devices/{id}/wifi/networks"]["get"]["responses"]["200"]["content"]["application/json"]>(`/api/v1/devices/${id}/wifi/networks`),
+
+  /** Sampled Wi-Fi bandwidth, clients and SSID usage over a window (spec §3.3a). */
+  getWiFiInsights: (id: string, window: WiFiInsightsWindow) =>
+    request<WiFiInsightsData>(`/api/v1/devices/${id}/wifi/insights?window=${window}`),
+
+  /** SIM / subscriber identifiers, masked for every role. */
+  getSIM: (id: string) => request<SIMView>(`/api/v1/devices/${id}/sim`),
+
+  /** Full SIM identifiers: human superadmin only, reason required, audited server-side. */
+  revealSIM: (id: string, reason: string, reference: string) =>
+    request<SIMView>(`/api/v1/devices/${id}/sim/reveal`, {
+      method: "POST",
+      body: JSON.stringify({ reason, reference }),
+      cache: "no-store",
+    }),
 
   getParameterNames: (id: string) =>
     request<{ names: Record<string, boolean>; discovered_at: string | null }>(`/api/v1/devices/${id}/parameter-names`),

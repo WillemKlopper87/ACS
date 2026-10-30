@@ -136,8 +136,7 @@ Known 7547 exploits target specific CPE web stacks (RomPager "Misfortune Cookie"
 ## 4. Remaining backlog (after deploy and hardening)
 
 1. **Console pages:**
-   - Wi-Fi insights page (bandwidth chart, client counts, top SSIDs/clients, vendors, inferred OS, client list), using `GET /wifi/insights`.
-   - SIM panel: masked view, plus a superadmin "Reveal" dialog with reason and reference.
+   - ~~Wi-Fi insights~~ and ~~SIM panel~~: done, as panels on the device detail (`components/WiFiInsights.tsx`, `components/SimPanel.tsx`). Checked against the real API on seeded data, including the audited reveal. Still to check on the FastMile: real sample data after deploy.
    - XMPP provision button.
 2. **Policy and template typing (P1 #13):**
    - `internal/policy` enforce.go: SPV types from the TR-181 dictionary, deduplicate writes, skip writes the cache shows are already in place.

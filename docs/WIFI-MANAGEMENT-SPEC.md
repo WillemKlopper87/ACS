@@ -115,7 +115,7 @@ Configuration:
 
 Still open:
 
-- Console page.
+- ~~Console page~~: done as the device-detail "Wi-Fi insights" panel (`frontend/src/components/WiFiInsights.tsx`): window selector, summary tiles, bandwidth and client charts with table views, top SSIDs/clients, vendors, inferred OS and the client list.
 - Fleet-wide (multi-CPE) top devices.
 - Measuring the FastMile session-drop rate with sampling switched on.
 
