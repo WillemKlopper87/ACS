@@ -557,6 +557,9 @@ func (h *handler) putParameters(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if refuseProtectedWrite(w, writeNames(payload)...) {
+		return
+	}
 	if err := h.validateWritableParameters(r.Context(), id, payload); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -647,6 +650,9 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 		payload, err := buildSetParameterPayload(req.Parameters)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if refuseProtectedWrite(w, writeNames(payload)...) {
 			return
 		}
 		setParamPayload = payload

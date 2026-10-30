@@ -69,7 +69,7 @@ This summary is for another Claude agent working on this repository. It records 
 4. **TLS:** use the EC2 public **IP** now; a **DNS name will come later**. The design must make the switch to a public-CA certificate a configuration change only.
 5. **Hardening timing:** start after the background agents finished. They have; hardening is now the next work item.
 6. **Wi-Fi page:** a separate page for SSIDs, clients and access methods (spec). Client authentication via portal, forms or tokens is a later phase, belonging with NaaS.
-7. **Secrets and dangerous parameters.** The Wi-Fi page and API never return passphrases. A server-side denylist covers: **Not implemented yet (verified 2026-10-30, `docs/GAP-ANALYSIS-2026-10-30.md`): no write path refuses these today, so do not rely on it.**
+7. **Secrets and dangerous parameters.** The Wi-Fi page and API never return passphrases. A server-side denylist covers: **Implemented 2026-10-30** (`internal/parameters/protected.go`): every write job is refused for these parameters, whatever the path; only credential rotation and XMPP provisioning are exempted, in code.
    - `Tr69Disabled`
    - `RemoteWebDebug`
    - the Nokia server URL / operator lock

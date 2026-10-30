@@ -74,6 +74,9 @@ func (h *handler) createPolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name, parameter_name, and desired_value are required", http.StatusBadRequest)
 		return
 	}
+	if refuseProtectedWrite(w, req.ParameterName) {
+		return
+	}
 
 	// audit P0.5: same rule as groups/templates — a scoped operator must
 	// name a customer_id within their own scope.

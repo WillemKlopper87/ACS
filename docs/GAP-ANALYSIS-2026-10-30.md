@@ -10,6 +10,8 @@ How far the ACS is from the product described in `docs/CONSOLE-UX-PROPOSAL-2026-
 References are `file:line` at the time of writing.
 
 > **Correction: there is no dangerous-parameter denylist in the code.** `HANDOFF-PLAN-2026-10-30.md`, `SESSION-SUMMARY-2026-10-30.md` and the console proposal describe a server-side denylist (`Tr69Disabled`, `RemoteWebDebug`, the Nokia server URL and operator lock, the NWCC URLs, `RegulatoryDomain`, ManagementServer URL and credentials). The code has none. A grep of `backend/` and `frontend/src` finds no such list. The only write check, `validateDiscoveredWritableParameters` (`backend/cmd/api/device_handlers.go:520`), accepts any discovered, writable parameter. On the FastMile that includes `ManagementServer.URL`, `X_ALU-COM_WanAccessCfg.Tr69Disabled` and the operator-lock fields. One wrong template, policy, bulk write or API call can cut a CPE off from the ACS. This is the top item below.
+>
+> **Fixed the same day.** `internal/parameters/protected.go` now lists the protected parameters, taken from the field FastMile and Beacon trees and generalised to TR-181 and TR-098. Job creation refuses any write to them on every path: API, console, bulk, templates, policies, schedules and BSS orders. The API answers 403 with the reason, and templates, policies and schedules that contain one cannot be saved. Only credential rotation and XMPP provisioning are exempted, through `jobs.AllowProtectedWrites`; bootstrap graduation writes through its own path. Tests: `internal/parameters/protected_test.go`, `internal/jobs/protected_write_test.go`, `cmd/api/protected_writes_integration_test.go`.
 
 ## 1. Scorecard
 
@@ -17,7 +19,7 @@ References are `file:line` at the time of writing.
 |---|---|---|
 | **CWMP core** (sessions, auth, RPCs) | Strong | 17 RPC job types; per-device Digest with graduation; XMPP; dropped-session recovery. Missing: TR-471 / UDP echo, `ChangeDUState`, transfer-queue RPCs, CWMP 1.4+ negotiation. Plus correctness items C2, C3, C5, C6, C11. |
 | **USP (TR-369)** | Partial | Controller handles Get/Set/Add/Delete/Operate/Notify over WebSocket and MQTT. Never qualified on a physical USP CPE; long Operate loses its lease (C3). |
-| **Safety of writes** | **Weak** | No dangerous-parameter denylist (above). Policies and templates write `xsd:string` (P1 #13). No firmware image↔model check (P1 #14). |
+| **Safety of writes** | Partial | Protected-parameter guard done (above). Policies and templates write `xsd:string` (P1 #13). No firmware image↔model check (P1 #14). |
 | **Security** | Partial | Masking, redaction (0085/0086), audited SIM reveal and TLS listener are done. Open: S2–S10 from the code review; no operator SSO/MFA; plaintext CWMP on the lab host; credential rotation over SPV. |
 | **Vendor coverage** | Weak | **No model is "supported"** under the project's own rule (`COMPATIBILITY.md:126`). Nokia FastMile and Beacon are partial (read-only passed). Huawei, Teltonika and Zyxel are not yet tested on real devices. |
 | **Wi-Fi** | Partial | Per-instance resolver, bulk Set Wi-Fi and insights (backend + panel) are done. Missing: the management page; event/campaign SSIDs; the hard-coded client refresh (P1 #9). |
@@ -34,7 +36,7 @@ References are `file:line` at the time of writing.
 
 | # | Gap | Why | Size |
 |---|---|---|---|
-| 1 | **Dangerous-parameter denylist** | Any write path can repoint or disable the ACS link, change the operator lock, or enable remote debug. It must be enforced server-side for every write path: API, templates, policies, bulk, BSS orders, the console's `set`. | Small: one shared check plus tests |
+| 1 | ~~**Dangerous-parameter denylist**~~ **done** | Any write path can repoint or disable the ACS link, change the operator lock, or enable remote debug. It must be enforced server-side for every write path: API, templates, policies, bulk, BSS orders, the console's `set`. | Small: one shared check plus tests |
 | 2 | **CI is dead** (D1) | No automated gate on 80+ commits today. DB suites have run once, locally. | Billing fix, or a self-hosted runner |
 | 3 | **Lab CWMP in plaintext; allowlist not applied on EC2** | SPV values (Wi-Fi and APN passwords) and Digest exchanges can be intercepted. Security group and `ACS_CWMP_ALLOWED_CIDRS` are not set on the host. | Deploy steps exist (handoff §3a) |
 | 4 | **S2 bootstrap trust-on-first-use** | A leaked bootstrap secret enrols any not-yet-established serial. The onboarding "strict mode" closes this. | Medium |
@@ -96,7 +98,7 @@ The technical core already competes. This ACS falls behind on safety rails (deny
 ## 6. Recommended order
 
 1. **This week: safety.**
-   - Implement the denylist on every write path, with tests.
+   - ~~Implement the denylist on every write path, with tests.~~ Done.
    - Fix CI: the billing problem, or a self-hosted runner.
    - Finish the EC2 deploy with TLS and the allowlist.
    - Run handoff field checks 1–8.
