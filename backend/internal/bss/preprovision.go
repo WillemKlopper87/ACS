@@ -33,6 +33,11 @@ func ParseOUISerial(s string) (oui, serial string) {
 	return strings.ToUpper(parts[0]), parts[len(parts)-1]
 }
 
+// CurrentMapping returns the account's current mapping of one device.
+func (r *Repository) CurrentMapping(ctx context.Context, accountID, deviceID string) (*AccountDeviceMapping, error) {
+	return r.getByAccountDevice(ctx, accountID, deviceID)
+}
+
 // SetMappingStatus changes a current mapping's status.
 func (r *Repository) SetMappingStatus(ctx context.Context, mappingID, status string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE account_device_mappings SET status = $2, updated_at = now()

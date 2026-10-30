@@ -197,6 +197,8 @@ func main() {
 	// states (the handlers are intentionally implemented in tmf640.go).
 	mux.HandleFunc("GET /tmf-api/serviceActivationAndConfiguration/v4/service", metrics.InstrumentHTTP("GET /tmf-api/serviceActivationAndConfiguration/v4/service", h.listServices))
 	mux.HandleFunc("GET /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", h.getService))
+	mux.HandleFunc("PATCH /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", metrics.InstrumentHTTP("PATCH /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", h.patchService))
+	mux.HandleFunc("GET /tmf-api/serviceActivationAndConfiguration/v4/monitor/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceActivationAndConfiguration/v4/monitor/{id}", h.getMonitor))
 	mux.HandleFunc("POST /tmf-api/serviceProblemManagement/v4/serviceProblem", metrics.InstrumentHTTP("POST /tmf-api/serviceProblemManagement/v4/serviceProblem", h.createTMF656Problem))
 	mux.HandleFunc("GET /tmf-api/serviceProblemManagement/v4/serviceProblem/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceProblemManagement/v4/serviceProblem/{id}", h.getTMF656Problem))
 	mux.HandleFunc("GET /tmf-api/serviceProblemManagement/v4/serviceProblem", metrics.InstrumentHTTP("GET /tmf-api/serviceProblemManagement/v4/serviceProblem", h.listTMF656Problems))
@@ -823,9 +825,9 @@ func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
 // the audit record and log line -- extracted here as the ONE place this
 // sequence exists (design docs/superpowers/specs/
 // 2026-09-13-bss-tmf640-design.md §4.2), shared by createOrder
-// (/bss/v1/orders) and patchService (TMF640's PATCH /service/{id}, added
-// in a later task in this same plan) so neither path can drift from the
-// other's outbox semantics.
+// (/bss/v1/orders) and patchService (TMF640's PATCH /service/{id},
+// tmf640_patch.go) so neither path can drift from the other's outbox
+// semantics.
 //
 // On a genuine InsertPending race (bss.ErrOrderAlreadyExists returned
 // unwrapped, per errors.Is), the caller is responsible for routing to
