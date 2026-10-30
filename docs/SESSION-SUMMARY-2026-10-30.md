@@ -7,7 +7,7 @@ This summary is for another Claude agent working on this repository. It records 
 - **All of this work is on branch `fix/cwmp-cpe-initiated-rpcs`, PR #79 → `main`.** It is not merged to `main`.
   - Size: 41 first-parent commits, 185 files, about +19k/−0.7k lines.
   - If you are working on `main` or another branch, expect conflicts until PR #79 lands. Merge or rebase onto it rather than re-implementing anything listed here.
-- **Migration numbers 0079–0085 are taken by this branch**, so the next free one is **0086**:
+- **Migration numbers 0079–0086 are taken by this branch**, so the next free one is **0087**:
 
   | Migration | Purpose |
   |---|---|
@@ -18,6 +18,7 @@ This summary is for another Claude agent working on this repository. It records 
   | 0083 | Mesh gateway link |
   | 0084 | Wi-Fi insights |
   | 0085 | Redact cached secrets |
+  | 0086 | Redact secrets in finished job payloads (added by the second session, see the handoff plan) |
 
   If your branch already added migrations in that range, renumber yours.
 - **Files changed heavily here, so conflicts are likely:**

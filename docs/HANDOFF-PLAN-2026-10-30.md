@@ -25,18 +25,23 @@ This plan is for a fresh Claude Code session picking up this work. Work on branc
 | merge `9bf0a9e` | XMPP Connection Request (Annex K): `internal/xmpp`, `internal/xmppprov`, migration 0081, Prosody under compose profile `xmpp`, `POST /devices/{id}/xmpp/provision`. Runbook: `docs/XMPP-CONNECTION-REQUEST.md`. |
 | merge `ba61978` | Diagnostics: C1 (wait for a later session or `8 DIAGNOSTICS COMPLETE`; migration 0082), C8 (typed inputs), gating by discovery (Beacon → 409), scheduled-ping defaults. |
 | `84088ff` | Secrets are never stored in the parameter cache or its history. Migration 0085 scrubs existing rows. |
+| `c6fdc44` | Test only: `TestIntegration_CPESession` now answers the `system:confirm` read-back. It failed after dropped-session recovery (`5b0fe18`) because the abandoned read is now requeued first, which is the intended behaviour. |
+| `89bfac7` | `GET /schedules` masks secrets in payloads (`parameters.RedactPayloadSecrets`); stored payloads are unchanged so the worker still sends real values. |
+| `2474988` | Migration **0086**: a trigger redacts secrets in `jobs.payload` when a job reaches SUCCESS, FAILED or TIMEOUT (any code path), and scrubs jobs that already finished. Queued and in-flight jobs keep their values. |
+| `a3577c2` | Lab TLS migration: optional second listener `ACS_TLS_ADDR` (TLS) beside plain HTTP on `ACS_ADDR`, `scripts/acs-cert.sh` (private CA + IP-SAN server cert in `~/.acs-tls/`), and a test pinning that `ACS_CWMP_ALLOWED_CIDRS` is enforced in the lab profile. |
 
 ### Verification so far
 - Local: backend `go vet` and `go test ./...` pass; frontend `tsc -b`, `vitest` (19 files, 95 tests) and lint pass.
 - **No Postgres was available locally, and GitHub Actions does not run.** Every CI job is refused for billing ("recent account payments have failed or your spending limit needs to be increased"; code review D1). So the DB-backed tests for all the new SQL have **never run**: insights, mesh link, bulk SET_WIFI, report identity, diagnostics lifecycle, XMPP worker and the 0081–0085 migrations.
-- **First task:** run them against a throwaway Postgres (commands in `docs/SESSION-SUMMARY-2026-10-30.md` §5), fix any failures, and only then deploy. **Never** point `ACS_TEST_POSTGRES_DSN` at the EC2 database: the tests drop the schema.
+- **Done 2026-10-30 (second session):** all DB-backed suites ran against a throwaway Postgres 18 with `-race`: the CI list plus `internal/retention`, `internal/uspprincipal` and all of `cmd/api` (16 packages, all pass after the `c6fdc44` test fix). Migrations 0001–0086: clean apply, idempotent re-run, `-check` ready, three concurrent runners. `internal/retention` and `internal/uspprincipal` were missing from CI's DB step and are now added.
+- Rerun them before deploying anything new: commands in `docs/SESSION-SUMMARY-2026-10-30.md` §5. **Never** point `ACS_TEST_POSTGRES_DSN` at the EC2 database: the tests drop the schema.
 - Fixing GitHub billing (or self-hosting a runner) would bring CI back.
 
 ## 2. Deploy and field-test the merged work (EC2)
 
 ```bash
 cd ~/ACS && git pull
-sg docker -c "PATH=\$PATH:/usr/local/go/bin ./scripts/start.sh"   # applies migrations 0081–0085
+sg docker -c "PATH=\$PATH:/usr/local/go/bin ./scripts/start.sh"   # applies migrations 0081–0086
 ```
 
 Run these checks in order, using the device ids above:
@@ -93,11 +98,12 @@ Do these in this order. Change one CPE setting at a time, and keep the Nokia web
    - 3478/udp: closed. STUN is unusable on this firmware.
    - 22: admin IP only.
    - Grafana, Prometheus, API and Postgres stay on 127.0.0.1 (already the compose default). Reach them over an SSH tunnel.
-2. **ACS source-IP allowlist** `ACS_CWMP_ALLOWED_CIDRS` with the same ranges: defence in depth if the security group is widened by mistake. Check whether the lab profile enforces it when set (`cmd/acs/production_config.go`, `internal/netguard`). If it is only enforced in the production profile, make it apply in the lab profile whenever it is set.
-3. **TLS with an IP certificate:**
-   - Add `scripts/acs-cert.sh`, modelled on `scripts/xmpp-cert.sh`. It generates a private CA plus a server cert with SAN `IP:13.247.225.68` and sets `ACS_TLS_CERT`/`ACS_TLS_KEY` (the env names already exist in `cmd/acs/main.go`).
-   - Add an **optional second listener**, e.g. `ACS_TLS_ADDR=:7548`. Today cmd/acs serves either HTTP or HTTPS on one address. The second listener keeps HTTP on 7547 alive during migration so a failed TLS test cannot strand a device.
-   - Set `ACS_TLS_MIN_VERSION=1.2`.
+2. **ACS source-IP allowlist** `ACS_CWMP_ALLOWED_CIDRS` with the same ranges: defence in depth if the security group is widened by mistake. **Done in code:** it was already enforced in the lab profile whenever set; `TestLabCIDRAllowlistEnforced` now pins that. Add it to `~/.acs-secrets.env` (e.g. `export ACS_CWMP_ALLOWED_CIDRS="66.18.65.65/32"`) and restart. It covers both listeners.
+3. **TLS with an IP certificate.** **Code done**; deploy steps on EC2:
+   ```bash
+   scripts/acs-cert.sh 13.247.225.68     # private CA + server cert with IP SAN, in ~/.acs-tls/
+   ```
+   Then add the four lines it prints to `~/.acs-secrets.env` (`ACS_TLS_CERT`, `ACS_TLS_KEY`, `ACS_TLS_MIN_VERSION=1.2`, `ACS_TLS_ADDR=:7548`), open 7548/tcp to the same ranges as 7547, and rerun `start.sh`. With `ACS_TLS_ADDR` set, 7547 stays plain HTTP (it still needs `ACS_CWMP_ALLOW_PLAINTEXT=true`) and 7548 serves TLS; the production profile refuses `ACS_TLS_ADDR`. Verified locally: HTTP 200 on the plain port, TLS 1.3 200 on the TLS port with the CA, 403 on both when the allowlist excludes the client.
    - **Later, with a DNS name:** replace the cert files with a public CA cert (e.g. Let's Encrypt) for that name. Only the cert and the CPE URL change; no code changes.
 4. **CPE TLS test (FastMile first, not the Beacon):**
    - The data model has no CA-certificate parameter, so it is unknown whether the FastMile verifies the ACS certificate. Test both: a self-signed cert first, then (once there is a DNS name) a public-CA cert.
@@ -105,8 +111,9 @@ Do these in this order. Change one CPE setting at a time, and keep the Nokia web
    - Record the result in `docs/COMPATIBILITY.md`. Only once the FastMile works over TLS: switch to the production profile (`ACS_DEPLOYMENT_PROFILE=production`, which requires TLS, TLS ≥1.2, allowed CIDRs and a non-wildcard `ACS_ADDR`), then close plain 7547.
    - The Beacon inherits ACS settings from the FastMile, so do it last and expect its 8–11 min recovery.
 5. **Remaining secret exposure:**
-   - Scheduled-job payloads are returned by `GET /schedules` (`cmd/api/schedule_handlers.go`); mask secret-named parameters there with `parameters.IsSecretParameter`.
-   - The jobs table `payload` keeps SPV secrets for the 90-day retention. Consider redacting secret values in the payload once the job reaches a terminal state.
+   - ~~Scheduled-job payloads returned by `GET /schedules`~~: done (`89bfac7`).
+   - ~~SPV secrets kept in `jobs.payload` for the 90-day retention~~: done (`2474988`, migration 0086).
+   - Still open (code review S1): Digest credential rotation goes through SPV, not the encrypted credential store.
    - The XMPP password, like Connection Request credential rotation, travels in the SPV. That stays plain text on the wire until TLS (step 3) is in place.
 
 ### 3b. CPE side (FastMile 1.2501, all over TR-069 unless noted)
@@ -147,7 +154,7 @@ Known 7547 exploits target specific CPE web stacks (RomPager "Misfortune Cookie"
 
 ## 5. Conventions for the next session
 
-- **Migrations:** 0081–0085 are used, so the next one is **0086**. They are embedded from `backend/internal/store/migrations`.
+- **Migrations:** 0081–0086 are used, so the next one is **0087**. They are embedded from `backend/internal/store/migrations`.
 - **Checks before every commit:**
   - backend: `gofmt -l .`, `go vet ./...`, `go test ./...`
   - frontend: `npx tsc -b`, `npx vitest run`, `npm run lint`

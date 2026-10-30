@@ -183,7 +183,7 @@ jobs:
         # of the usp-subscriptions plan) and were never added here either
         # (tracked-forward gap from Task 3's review) -- added now. -p 1:
         # every one resets the same database.
-        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./internal/subscriptions/ ./internal/parameters/ ./internal/wifiinsights/ ./internal/bulkdata/ ./internal/captures/ ./cmd/acs/ ./cmd/uspc/ ./cmd/bssadapter/
+        run: go test -race -count=1 -p 1 ./internal/store/ ./internal/bss/ ./internal/auth/ ./internal/jobs/ ./internal/devices/ ./internal/subscriptions/ ./internal/parameters/ ./internal/wifiinsights/ ./internal/bulkdata/ ./internal/captures/ ./internal/retention/ ./internal/uspprincipal/ ./cmd/acs/ ./cmd/uspc/ ./cmd/bssadapter/
       - name: placeholder secrets are refused (fail-closed)
         run: |
           set +e
