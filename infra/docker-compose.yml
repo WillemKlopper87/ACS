@@ -1,6 +1,7 @@
 # Network exposure (audit P1.5): only the two ports a CPE or an operator
 # must reach from outside are published on all interfaces by default (CWMP
-# 7547 and STUN 3478 on the acs service). Postgres, Prometheus, Grafana,
+# 7547 and STUN 3478 on the acs service), plus XMPP 5222 when the opt-in
+# "xmpp" profile runs (CPEs connect to it). Postgres, Prometheus, Grafana,
 # the API, the BSS adapter, and the frontend otherwise bind to 127.0.0.1.
 # For the host-based dev quickstart, scripts/start.sh can deliberately set
 # GRAFANA_BIND/PROMETHEUS_BIND to 0.0.0.0 so those UIs are reachable on
@@ -104,6 +105,42 @@ services:
     depends_on:
       - prometheus
 
+  # TR-069 Annex K XMPP Connection Request server (docs/XMPP-CONNECTION-REQUEST.md),
+  # opt-in via `--profile xmpp` — scripts/start.sh starts it only when
+  # ACS_XMPP_ENABLED=1, so a stack without XMPP is unchanged. CGNAT'd CPEs
+  # hold an outbound TLS session on 5222; cmd/api connects to it on
+  # 127.0.0.1:5222 as the ACS account (an admin, so it can create per-CPE
+  # accounts over XEP-0133). Variables use `:-` rather than `:?` on purpose:
+  # compose interpolates every service, and a stack without XMPP must not
+  # fail to start; the entrypoint refuses to run without them instead.
+  # Pinned to the 0.12 release series (the config relies on its
+  # `Lua.os.getenv`, foreground-by-default and mod_admin_adhoc behaviour);
+  # pin the digest once pulled for a production-like deployment.
+  prosody:
+    image: prosodyim/prosody:0.12
+    profiles: ["xmpp"]
+    restart: unless-stopped
+    ports:
+      - "${ACS_XMPP_BIND:-0.0.0.0}:5222:5222"
+    environment:
+      ACS_XMPP_DOMAIN: ${ACS_XMPP_DOMAIN:-}
+      ACS_XMPP_USER: ${ACS_XMPP_USER:-acs}
+      ACS_XMPP_PASSWORD: ${ACS_XMPP_PASSWORD:-}
+    entrypoint: ["/bin/bash", "/opt/acs/prosody-entrypoint.sh"]
+    volumes:
+      - ./prosody/prosody.cfg.lua:/etc/prosody/prosody.cfg.lua:ro
+      - ./prosody/prosody-entrypoint.sh:/opt/acs/prosody-entrypoint.sh:ro
+      # Certificate + key as xmpp.crt / xmpp.key (scripts/xmpp-cert.sh
+      # creates a self-signed pair; point ACS_XMPP_CERT_DIR at a directory
+      # with a CA-issued pair to replace it).
+      - ${ACS_XMPP_CERT_DIR:-./prosody/certs}:/certs:ro
+      - acs_prosody_data:/var/lib/prosody
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/5222'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
   # --- Containerized app services, opt-in via `--profile containerized` ---
   #
   # Everything above this line stays the default (`docker compose up -d
@@ -199,3 +236,4 @@ volumes:
   acs_alertmanager_data:
   acs_prometheus_data:
   acs_grafana_data:
+  acs_prosody_data:
