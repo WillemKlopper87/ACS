@@ -550,15 +550,25 @@ const maxBulkDevices = 500
 type bulkActionRequest struct {
 	DeviceIDs      []string         `json:"device_ids,omitempty"`
 	GroupID        string           `json:"group_id,omitempty"` // alternative to device_ids — targets a device_groups member set (build plan §4 Phase 7)
-	Action         string           `json:"action"`             // SET_PARAMETER | CONNECTION_REQUEST | REFRESH_CELLULAR
+	Action         string           `json:"action"`             // SET_PARAMETER | SET_WIFI | CONNECTION_REQUEST | REFRESH_CELLULAR
 	Parameters     []parameterInput `json:"parameters,omitempty"`
 	TimeoutSeconds int              `json:"timeout_seconds,omitempty"`
+	// SET_WIFI only: written to every primary Wi-Fi network each device
+	// resolves (see planWiFiWrites); at least one is required.
+	WiFiSSID     string `json:"wifi_ssid,omitempty"`
+	WiFiPassword string `json:"wifi_password,omitempty"`
+	WiFiEnabled  *bool  `json:"wifi_enabled,omitempty"`
 }
 
 type bulkActionResult struct {
 	DeviceID   string `json:"device_id"`
 	CommandKey string `json:"command_key,omitempty"`
 	Error      string `json:"error,omitempty"`
+	// SET_WIFI: the networks written ("SSID 1 (2.4GHz) + SSID 5 (5GHz)"),
+	// or — when the device's Wi-Fi roles were not cached yet — the read
+	// queued instead of a write (Error is set in that case).
+	Detail            string `json:"detail,omitempty"`
+	RefreshCommandKey string `json:"refresh_command_key,omitempty"`
 }
 
 // bulkAction is the "mass unit control" capability a fleet-scale review
@@ -594,6 +604,7 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var setParamPayload jobs.SetParameterPayload
+	var wifi wifiSettings
 	if req.Action == jobs.TypeSetParameter {
 		payload, err := buildSetParameterPayload(req.Parameters)
 		if err != nil {
@@ -601,6 +612,12 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		setParamPayload = payload
+	} else if req.Action == bulkActionSetWiFi {
+		wifi = wifiSettings{SSID: req.WiFiSSID, Password: req.WiFiPassword, Enabled: req.WiFiEnabled}
+		if err := wifi.validate(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	} else if req.Action != jobs.TypeConnectionRequest && req.Action != "REFRESH_CELLULAR" {
 		http.Error(w, fmt.Sprintf("unsupported bulk action %q", req.Action), http.StatusBadRequest)
 		return
@@ -643,6 +660,9 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 			} else {
 				result.CommandKey = job.CommandKey
 			}
+
+		case bulkActionSetWiFi:
+			result = h.bulkSetWiFi(r.Context(), deviceID, wifi, operator)
 
 		case jobs.TypeConnectionRequest:
 			job, err := h.jobs.Create(r.Context(), deviceID, jobs.TypeConnectionRequest,

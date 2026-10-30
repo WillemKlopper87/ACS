@@ -935,12 +935,15 @@ paths:
               properties:
                 device_ids: { type: array, items: { type: string }, description: "Alternative to group_id" }
                 group_id: { type: string, description: "Alternative to device_ids — resolves a device_groups member set" }
-                action: { type: string, enum: [SET_PARAMETER, CONNECTION_REQUEST, REFRESH_CELLULAR] }
+                action: { type: string, enum: [SET_PARAMETER, SET_WIFI, CONNECTION_REQUEST, REFRESH_CELLULAR] }
                 parameters:
                   type: array
                   items: { $ref: "#/components/schemas/ParameterInput" }
                   description: "Required when action is SET_PARAMETER"
                 timeout_seconds: { type: integer }
+                wifi_ssid: { type: string, maxLength: 32, description: "SET_WIFI: new network name, written to every primary (enabled, non-guest, AccessPoint-bound) SSID the device resolves — never guest, unbound or disabled SSIDs. TR-098 devices keep WLANConfiguration.1." }
+                wifi_password: { type: string, minLength: 8, maxLength: 63, writeOnly: true, description: "SET_WIFI: WPA passphrase for the same primary networks" }
+                wifi_enabled: { type: boolean, description: "SET_WIFI: Enable flag of the same primary networks. Disabled networks are no longer primary, so re-enable them per device." }
       responses:
         "202": { description: Per-device outcome (one failure doesn't block the rest), content: { application/json: { schema: { $ref: "#/components/schemas/BulkActionResponse" } } } }
 
@@ -2622,6 +2625,8 @@ components:
               device_id: { type: string }
               command_key: { type: string }
               error: { type: string }
+              detail: { type: string, description: "SET_WIFI: the networks written, e.g. \"SSID 1 (2.4GHz) + SSID 5 (5GHz)\"" }
+              refresh_command_key: { type: string, description: "SET_WIFI: the device's Wi-Fi roles were not cached yet, so this read was queued instead of a write (error is set); retry after the device's next session" }
 
     Job:
       type: object

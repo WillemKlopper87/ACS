@@ -1559,10 +1559,16 @@ export interface paths {
                         /** @description Alternative to device_ids — resolves a device_groups member set */
                         group_id?: string;
                         /** @enum {string} */
-                        action: "SET_PARAMETER" | "CONNECTION_REQUEST" | "REFRESH_CELLULAR";
+                        action: "SET_PARAMETER" | "SET_WIFI" | "CONNECTION_REQUEST" | "REFRESH_CELLULAR";
                         /** @description Required when action is SET_PARAMETER */
                         parameters?: components["schemas"]["ParameterInput"][];
                         timeout_seconds?: number;
+                        /** @description SET_WIFI: new network name, written to every primary (enabled, non-guest, AccessPoint-bound) SSID the device resolves — never guest, unbound or disabled SSIDs. TR-098 devices keep WLANConfiguration.1. */
+                        wifi_ssid?: string;
+                        /** @description SET_WIFI: WPA passphrase for the same primary networks */
+                        wifi_password?: string;
+                        /** @description SET_WIFI: Enable flag of the same primary networks. Disabled networks are no longer primary, so re-enable them per device. */
+                        wifi_enabled?: boolean;
                     };
                 };
             };
@@ -6224,6 +6230,10 @@ export interface components {
                 device_id?: string;
                 command_key?: string;
                 error?: string;
+                /** @description SET_WIFI: the networks written, e.g. "SSID 1 (2.4GHz) + SSID 5 (5GHz)" */
+                detail?: string;
+                /** @description SET_WIFI: the device's Wi-Fi roles were not cached yet, so this read was queued instead of a write (error is set); retry after the device's next session */
+                refresh_command_key?: string;
             }[];
         };
         Job: {
