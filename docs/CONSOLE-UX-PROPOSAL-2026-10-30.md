@@ -8,6 +8,7 @@ Status: proposal, 2026-10-30. Nothing here is built yet; §6 lists the decisions
 4. Model it on the sale or procurement: device and SIM mapped to the end user or ISP by commercial model, APN/DNN settings applied, and the CPE network-locked to the MNO's MCC/MNC.
 5. Move session captures into a troubleshooting area for NOC and tier-2 support.
 6. Compare with typical ACS workflows in open-source and commercial products (§7).
+7. Position the ACS as a BSS-integrated, multi-protocol device management platform, with multi-CPE group management for business clients, e.g. an event SSID across a client's sites (§8).
 
 The findings come from reading the console source (`frontend/src`) and from the live FastMile on the EC2 lab. File references are at the time of writing.
 
@@ -288,3 +289,94 @@ Main sources:
 - [Grandstream TR-069 guide](https://documentation.grandstream.com/knowledge-base/tr-069-guide/)
 - [Zyxel DMS docs (development domain, lower confidence)](https://shared-cloud-docs.dev.tr069.cloud/docs/intro)
 - [Nokia Corteca news](https://www.nokia.com/newsroom/nokias-corteca-cloud-for-device-and-wi-fi-management-adds-hundreds-of-legacy-broadband-devices-mwc25/)
+
+## 8. Positioning and Proposal D: business estates and Wi-Fi campaigns
+
+### What this ACS should be
+The user's aim (2026-10-30): more than a TR-069 server. A **device management platform for an MNO/ISP** that integrates deeply with the BSS. It should give the operator connectivity, control and rich features to remotely assess, report on and troubleshoot every device it sells or hands out. It should also let large clients be managed as estates of many CPEs, for example adding an SSID for an event across all of a client's sites (as Grandstream GDMS does).
+
+The five pillars:
+
+| Pillar | Built today | Added by this proposal |
+|---|---|---|
+| **Connectivity**: reach every device | CWMP with per-device credentials; XMPP Connection Request for CGNAT; a USP (TR-369) controller over WebSocket and MQTT; a VPN overlay (peer generation); SNMP used only as an identity fallback (`internal/oidfallback`) | The Connectivity sub-page; a fleet-wide reachability view in Troubleshooting |
+| **Control**: configure safely at scale | Verified writes with read-back; templates; policies; groups; bulk Set Wi-Fi; canary firmware rollouts; scheduled jobs | Service plans with cellular profiles; onboarding; estates; Wi-Fi campaigns (below) |
+| **Insight**: assess and report | Wi-Fi insights; cellular/5G telemetry; SIM view; device report export; dashboards | Estate- and campaign-level reports |
+| **Assurance**: troubleshoot | Diagnostics (ping, traceroute, TR-143); session captures; onboarding checks; compatibility evidence; alarms and incidents | The Troubleshooting area; the Diagnostics sub-page; SIM-swap and network-lock alarms |
+| **Integration**: BSS/NaaS-native | TMF638/639/640/641/642/656/688; a write-ahead order outbox; webhooks; OAuth2 clients | BSS pre-provisioning; onboarding events; campaigns callable from the NaaS |
+
+"Multi-protocol" is real for CWMP and USP today. Other device protocols should be added only with a concrete device to support, rather than claimed up front.
+
+### Estates: a business client's devices across many sites
+- **Estate** = one business account (from §4) with many **sites**, each with one or more gateways and mesh satellites. Retail subscribers are an estate of one; nothing extra is needed for them.
+- **Dynamic groups:** today's groups are static member lists. Add rule-based groups (tenant, account/estate, site, model, tag, service plan, firmware), so "all Nokia gateways of client X" stays correct as devices are added or replaced.
+- **Estate view** (under Devices or the account): sites on a map, devices per site, online/offline, open alarms, Wi-Fi clients and usage per site, and firmware/compliance roll-up. Estate reports (uptime, signal, usage per site) come from the same data as device reports.
+- **Delegated access (later):** a business client's own administrator gets a read-only, estate-scoped login. That is possible because operator scoping already exists per tenant; it would need an estate scope.
+
+### Wi-Fi campaigns: for example an event SSID across an estate
+A **campaign** applies one Wi-Fi network definition to many CPEs for a period, then reverts it.
+
+**Definition:**
+- SSID name and band(s)
+- security: WPA2/WPA3-Personal with a passphrase, or Enterprise against the NaaS RADIUS
+- hidden or advertised
+- client isolation
+- max clients
+- guest flag
+- start and end time, with timezone
+- target: an estate, a group, sites or devices
+
+**Preview (dry run), per device:**
+- which SSID slot it will use
+- exactly what it will write
+- why a device is skipped: no free slot, mesh satellite (its SSIDs follow the gateway), unsupported setting, or offline
+
+**Execution:**
+1. At the start time, every target gets a verified job:
+   - it records the slot's current values
+   - it writes the definition
+   - it reads the values back
+2. Progress shows per device: applied, waiting for check-in, failed (with reason), or skipped.
+3. At the end time the ACS restores the recorded values (or disables the slot) and verifies again.
+4. A device that was offline catches up at its next check-in. Restore always runs, even for a device that never applied the campaign.
+
+**Safety:**
+- Campaigns never touch the primary or existing guest networks.
+- Passphrases are write-only and redacted once the job finishes (migration 0086).
+- One campaign per slot per device.
+
+**Reporting:** devices applied, clients and usage on the campaign SSID (Wi-Fi insights already sample per SSID), and an export.
+
+**On FastMile 1.2501.00.0798** (discovered tree):
+- **Writable on a spare slot:** the four factory-disabled slots (SSID/AccessPoint 3, 4, 7, 8) expose:
+  - `SSID.{i}.SSID` and `Enable`
+  - `AccessPoint.{i}.Security.ModeEnabled` and `KeyPassphrase`
+  - `IsolationEnable`
+  - `MaxAssociatedDevices`
+  - `SSIDAdvertisementEnabled`
+  - `SSID.{i}.X_ALU-COM_IsGuestSSID`
+- **Not available:**
+  - no per-SSID rate limiting or QoS
+  - no captive portal (that belongs to the NaaS, §8 of the Wi-Fi spec)
+  - no on-device schedule
+- **Timing:** start and stop are ACS-driven, so behind CGNAT they take effect at the next check-in. With XMPP Connection Request they take seconds. Event campaigns are a strong reason to roll XMPP out.
+- **To field-test before release:** whether an enabled extra SSID is propagated by the FastMile's EasyMesh controller to its Beacons.
+
+**Building blocks that already exist:**
+- the per-instance Wi-Fi resolver (to find free slots and know primary/guest)
+- verified SPV jobs
+- bulk `SET_WIFI` with per-device outcomes
+- scheduled jobs
+- groups
+- Wi-Fi insights per SSID
+- secret redaction
+
+What is new:
+- the campaign record with its saved prior values
+- slot allocation
+- the start/end scheduler
+- the campaign screen
+
+### Where it fits in the phases
+- **Phase 2b (quick win, after Phase 1):** Wi-Fi campaigns on today's static groups, with schedule, preview and revert. This needs no onboarding entities and delivers the event-SSID use case early.
+- **Phase 5:** estates on top of the Phase 2 site and account entities, plus dynamic groups, estate reports, and later delegated client access.
