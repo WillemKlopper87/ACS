@@ -443,7 +443,7 @@ func (h *handler) listOnboardings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	list, err := h.onboarding.List(r.Context(), onboarding.ListFilter{State: r.URL.Query().Get("state"), CustomerIDs: customerIDs, Scoped: scoped})
+	list, err := h.onboarding.List(r.Context(), onboarding.ListFilter{State: r.URL.Query().Get("state"), DeviceID: r.URL.Query().Get("device_id"), CustomerIDs: customerIDs, Scoped: scoped})
 	if err != nil {
 		h.writeOnboardingError(w, err, "list onboardings")
 		return

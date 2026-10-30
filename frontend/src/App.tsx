@@ -20,7 +20,7 @@ const ENV_LABEL = import.meta.env.VITE_ENV_LABEL as string | undefined;
 // has no VITE_GRAFANA_URL.
 const GRAFANA = grafanaLink(import.meta.env.VITE_GRAFANA_URL as string | undefined, import.meta.env.VITE_API_BASE_URL as string | undefined);
 
-type Screen = "dashboard" | "fleet" | "devices" | "control" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help" | "alerting";
+type Screen = "dashboard" | "fleet" | "devices" | "onboarding" | "control" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help" | "alerting";
 
 const THEME_LABEL: Record<Theme, string> = { dark: "Dark", light: "Light", unfold: "Unfold", fluent: "Fluent 2" };
 
@@ -40,6 +40,7 @@ const NAV: { id: Screen; label: string; adminOnly?: boolean; group: string }[] =
   { group: "Monitor", id: "alerting", label: "Alerting" },
 
   { group: "Devices", id: "fleet", label: "Inventory" },
+  { group: "Devices", id: "onboarding", label: "Onboarding" },
   { group: "Devices", id: "control", label: "Bulk actions" },
   { group: "Devices", id: "groups", label: "Groups" },
 
@@ -114,6 +115,7 @@ const SCREEN_COMPONENT: Record<Screen, ComponentType> = {
   dashboard: screen(() => import("./screens/Dashboard"), "Dashboard"),
   fleet: screen(() => import("./screens/DeviceFleet"), "DeviceFleet"),
   devices: screen(() => import("./screens/DeviceWorkspace"), "DeviceWorkspace"),
+  onboarding: screen(() => import("./screens/Onboarding"), "Onboarding"),
   control: screen(() => import("./screens/FleetControl"), "FleetControl"),
   health: screen(() => import("./screens/FleetHealthScreen"), "FleetHealthScreen"),
   jobs: screen(() => import("./screens/Jobs"), "Jobs"),

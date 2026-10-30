@@ -1,7 +1,7 @@
 # Onboarding: from sale to service
 
-Status: slice 1 (backend and API), 2026-10-30. The console screens (slice 2) and BSS
-pre-provisioning (slice 3) are not built yet. The design is in
+Status: slices 1 and 2 (backend, API and console), 2026-10-30. BSS pre-provisioning
+(slice 3) is not built yet. The design is in
 [CONSOLE-UX-PROPOSAL-2026-10-30.md §4](CONSOLE-UX-PROPOSAL-2026-10-30.md#4-proposal-c-a-business-onboarding-workflow).
 
 ## What a sale records
@@ -86,9 +86,20 @@ curl -X POST "$ACS/api/v1/onboardings" -H "Authorization: Bearer $TOKEN" -H 'Con
 }'
 ```
 
-## Not in slice 1
+## Console
 
-- Console: the Onboarding screen (Planned, In progress, Unclaimed, Completed/failed), the wizard and the timeline on the device Overview.
+**Devices → Onboarding** (`/onboarding/<tab>`):
+
+- **Needs attention** (ON_HOLD, FAILED), **In progress**, **Planned**, **Completed**, with counts. Selecting a sale shows its step-by-step timeline, the reason it is waiting or stopped, the masked SIM, and *Retry checks*, *Cancel* and *Open device*.
+- **Unclaimed**: CPEs that checked in with no sale, each with *Claim*.
+- **Setup → Sites** and **Service plans**: lists and create forms. The plan form checks MCC+MNC codes before sending and forces discovery when a cellular profile is set.
+- **New sale** wizard: Device (serial, optional OUI, ICCID, IMSI, IMEI, role) → Who (customer, BSS account reference, commercial model) → Where (existing site of that customer, a new site, or none) → What (plan, with a summary of what it writes) → Review.
+
+A device's **Ownership** sub-page shows its sale's timeline, or *Claim device* when it has none.
+Changes need the manager role (`tenancy.manage`); other roles can look.
+
+## Not built yet
+
 - BSS: TMF641 `add` and `POST /bss/v1/mappings` creating PLANNED onboardings, `PENDING_ACTIVE` → `ACTIVE`, `ONBOARDING_STATE_CHANGED` webhooks and TMF688 events.
 - Strict mode (`ACS_ONBOARDING_REQUIRE_PLAN`): unclaimed CPEs kept on the bootstrap credential.
 - Bulk import of account, site and plan columns, and the `label` import bug.

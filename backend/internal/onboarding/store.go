@@ -244,6 +244,7 @@ func (r *Repository) Get(ctx context.Context, id string) (*Onboarding, error) {
 
 type ListFilter struct {
 	State       string
+	DeviceID    string
 	CustomerIDs []string
 	Scoped      bool
 	Limit       int
@@ -254,8 +255,8 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]Onboarding, erro
 		f.Limit = 500
 	}
 	rows, err := r.db.QueryContext(ctx, `SELECT `+onboardingColumns+` FROM onboardings
-		WHERE ($1 = '' OR state = $1) AND (NOT $2 OR customer_id::text = ANY($3))
-		ORDER BY updated_at DESC LIMIT $4`, f.State, f.Scoped, store.StringArray(f.CustomerIDs), f.Limit)
+		WHERE ($1 = '' OR state = $1) AND (NOT $2 OR customer_id::text = ANY($3)) AND ($5 = '' OR device_id::text = $5)
+		ORDER BY updated_at DESC LIMIT $4`, f.State, f.Scoped, store.StringArray(f.CustomerIDs), f.Limit, f.DeviceID)
 	if err != nil {
 		return nil, fmt.Errorf("list onboardings: %w", err)
 	}

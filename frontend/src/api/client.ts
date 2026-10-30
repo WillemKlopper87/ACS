@@ -79,6 +79,15 @@ export type XMPPProvisionRequest = NonNullable<
 >["content"]["application/json"];
 export type DiagnosticsCapabilities =
   paths["/api/v1/devices/{id}/diagnostics-capabilities"]["get"]["responses"]["200"]["content"]["application/json"];
+export type Site = components["schemas"]["Site"];
+export type SiteInput = components["schemas"]["SiteInput"];
+export type ServicePlan = components["schemas"]["ServicePlan"];
+export type ServicePlanInput = components["schemas"]["ServicePlanInput"];
+export type CellularProfile = components["schemas"]["CellularProfile"];
+export type Onboarding = components["schemas"]["Onboarding"];
+export type OnboardingInput = components["schemas"]["OnboardingInput"];
+export type OnboardingState = components["schemas"]["OnboardingState"];
+export type UnclaimedDevice = components["schemas"]["UnclaimedDevice"];
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -702,6 +711,25 @@ export const api = {
   listVPNPeers: () => request<{ items: VPNPeer[] }>("/api/v1/vpn/peers"),
   revokeVPNPeer: (peerId: string) => request<void>(`/api/v1/vpn/peers/${peerId}`, { method: "DELETE" }),
   getVPNConcentrator: () => request<VPNConcentrator>("/api/v1/vpn/concentrator"),
+
+  // --- Onboarding (docs/ONBOARDING.md) ---
+  listSites: () => request<{ items: Site[] }>("/api/v1/sites"),
+  createSite: (input: SiteInput) => request<Site>("/api/v1/sites", { method: "POST", body: JSON.stringify(input) }),
+  listServicePlans: () => request<{ items: ServicePlan[] }>("/api/v1/service-plans"),
+  createServicePlan: (input: ServicePlanInput) =>
+    request<ServicePlan>("/api/v1/service-plans", { method: "POST", body: JSON.stringify(input) }),
+  listOnboardings: (filter: { state?: OnboardingState; device_id?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (filter.state) qs.set("state", filter.state);
+    if (filter.device_id) qs.set("device_id", filter.device_id);
+    const q = qs.toString();
+    return request<{ items: Onboarding[] }>(`/api/v1/onboardings${q ? `?${q}` : ""}`);
+  },
+  createOnboarding: (input: OnboardingInput) =>
+    request<Onboarding>("/api/v1/onboardings", { method: "POST", body: JSON.stringify(input) }),
+  cancelOnboarding: (id: string) => request<Onboarding>(`/api/v1/onboardings/${id}/cancel`, { method: "POST" }),
+  retryOnboarding: (id: string) => request<Onboarding>(`/api/v1/onboardings/${id}/retry`, { method: "POST" }),
+  listUnclaimedDevices: () => request<{ items: UnclaimedDevice[] }>("/api/v1/onboardings/unclaimed"),
 };
 
 export { ApiError };

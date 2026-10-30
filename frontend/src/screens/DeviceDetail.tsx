@@ -11,6 +11,7 @@ import { RemoteShell } from "../components/RemoteShell";
 import { DeviceWebGUI } from "../components/DeviceWebGUI";
 import { VPNTunnel } from "../components/VPNTunnel";
 import { DeviceTenancy } from "../components/DeviceTenancy";
+import { DeviceSale } from "../components/DeviceSale";
 import { fmtBytes, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
@@ -963,6 +964,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
 
         {section === "ownership" && (
           <>
+            <DeviceSale device={device} />
             <div className="panel">
               <h3>Name, tags and location</h3>
               <div className="form-row">

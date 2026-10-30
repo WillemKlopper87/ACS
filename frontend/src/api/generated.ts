@@ -4720,6 +4720,8 @@ export interface paths {
             parameters: {
                 query?: {
                     state?: components["schemas"]["OnboardingState"];
+                    /** @description The onboardings of one device, newest first */
+                    device_id?: string;
                 };
                 header?: never;
                 path?: never;

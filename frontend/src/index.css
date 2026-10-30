@@ -950,3 +950,49 @@ input:focus, select.chip:focus {
   .subnav a.on { border-bottom-color: var(--accent); }
   .subnav-group { margin: 0; padding: 0.4rem 0.3rem 0 0.8rem; white-space: nowrap; }
 }
+
+/* --- Onboarding (screens/Onboarding.tsx, docs/ONBOARDING.md) ---------- */
+.ob-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; font-size: 0.84rem; }
+.split-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; margin-top: 0.9rem; }
+@media (min-width: 900px) { .split-workspace { grid-template-columns: 11.5rem minmax(0, 1fr); } }
+.split-content { min-width: 0; }
+.ob-hint { font-size: 0.8rem; margin: 0.4rem 0 0.6rem; }
+.ob-detail { margin-top: 0.9rem; display: grid; gap: 0.8rem; }
+.ob-detail-head { display: flex; justify-content: space-between; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
+.ob-detail-head h3 { margin: 0; font-family: var(--font-mono); }
+.ob-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.ob-state { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; font-size: 0.84rem; }
+.ob-reason { color: var(--ink-dim); }
+.ob-timeline { list-style: none; margin: 0.7rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-size: 0.82rem; }
+.ob-step { display: flex; align-items: center; gap: 0.35rem; color: var(--ink-faint); }
+.ob-mark {
+  display: inline-grid; place-items: center; width: 1.15rem; height: 1.15rem; border-radius: 50%;
+  border: 1px solid var(--border); font-size: 0.7rem; line-height: 1;
+}
+.ob-step.done { color: var(--ink-dim); }
+.ob-step.done .ob-mark { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.ob-step.current { color: var(--ink); font-weight: 600; }
+.ob-step.current .ob-mark { color: var(--pending); border-color: var(--pending); }
+.ob-step.blocked { color: var(--ink); font-weight: 600; }
+.ob-step.blocked .ob-mark { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
+.ob-times { font-size: 0.76rem; margin: 0.5rem 0 0; }
+.ob-wizard { width: min(44rem, 100%); max-height: min(44rem, 92vh); }
+.ob-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: 0.3rem; flex-wrap: wrap; font-size: 0.78rem; counter-reset: ob; }
+.ob-steps li {
+  counter-increment: ob; padding: 0.2rem 0.55rem; border-radius: 999px; border: 1px solid var(--border); color: var(--ink-faint);
+}
+.ob-steps li::before { content: counter(ob) ". "; }
+.ob-steps li.done { color: var(--ink-dim); }
+.ob-steps li.on { color: var(--ink); border-color: var(--accent); font-weight: 600; }
+.ob-fieldset { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.6rem 0.8rem 0.8rem; margin: 0.6rem 0 0; }
+.ob-fieldset legend { font-size: 0.78rem; color: var(--ink-dim); padding: 0 0.3rem; }
+.ob-fieldset .field.inline { margin-top: 0.35rem; }
+.ob-choice { display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.84rem; margin-bottom: 0.6rem; }
+.ob-choice label { display: flex; align-items: center; gap: 0.35rem; cursor: pointer; }
+.ob-claimed { margin: 0.2rem 0 0; font-family: var(--font-mono); font-size: 0.86rem; }
+.ob-invalid { color: var(--danger); font-size: 0.74rem; }
+.ob-plan { margin-top: 0.6rem; }
+@media (max-width: 600px) {
+  .ob-detail .kv, .ob-wizard .kv, .ob-plan { grid-template-columns: minmax(0, 1fr); gap: 0.1rem; }
+  .ob-detail .kv dd, .ob-wizard .kv dd { margin-bottom: 0.4rem; }
+}

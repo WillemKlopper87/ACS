@@ -2012,6 +2012,7 @@ paths:
       summary: List onboardings, most recently changed first
       parameters:
         - { name: state, in: query, required: false, schema: { $ref: "#/components/schemas/OnboardingState" } }
+        - { name: device_id, in: query, required: false, schema: { type: string }, description: "The onboardings of one device, newest first" }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Onboarding" } } } } } } }
 

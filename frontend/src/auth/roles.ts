@@ -18,3 +18,11 @@ export function canAdmin(role: string | null): boolean {
   if (role === null) return true;
   return (RANK[role] ?? -1) >= RANK.superadmin;
 }
+
+// canManage reports whether role clears the "manager" bar, the default
+// holder of curated permissions such as tenancy.manage (onboarding). The
+// matrix is superadmin-configurable, so the API stays the real check.
+export function canManage(role: string | null): boolean {
+  if (role === null) return true;
+  return (RANK[role] ?? -1) >= RANK.manager;
+}

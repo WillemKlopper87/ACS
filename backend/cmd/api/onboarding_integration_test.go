@@ -107,6 +107,9 @@ func TestIntegration_OnboardingAPI(t *testing.T) {
 	if r := e.call("root", "GET", "/api/v1/onboardings/unclaimed", nil); strings.Contains(r.body, stray) {
 		t.Fatalf("claimed device still unclaimed: %s", r.body)
 	}
+	if r := decodeBody[struct{ Items []onboardingResponse }](t, e.call("root", "GET", "/api/v1/onboardings?device_id="+stray, nil)); len(r.Items) != 1 || r.Items[0].ExpectedSerial != "STRAY0001" {
+		t.Fatalf("onboardings of the device = %+v", r.Items)
+	}
 
 	// Cancel once; a closed onboarding cannot be cancelled or retried.
 	if r := e.call("root", "POST", "/api/v1/onboardings/"+o.ID+"/cancel", nil); r.code != http.StatusOK || !strings.Contains(r.body, "CANCELLED") {
