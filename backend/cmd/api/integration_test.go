@@ -42,6 +42,7 @@ import (
 	"acs/internal/transfer"
 	"acs/internal/uploads"
 	"acs/internal/vpn"
+	"acs/internal/xmppprov"
 
 	"database/sql"
 
@@ -138,6 +139,8 @@ func newTestEnv(t *testing.T) *testEnv {
 
 		captures:           captures.NewRepository(db),
 		captureMaxDuration: 30 * time.Minute,
+
+		xmppProvisioning: xmppprov.NewRepository(db),
 	}
 	mux := h.registerRoutes(metrics, db)
 	srv := httptest.NewServer(withJWTAuth(testJWTSecret, testServiceToken, h.tokenCurrent, withBodyLimit(mux)))

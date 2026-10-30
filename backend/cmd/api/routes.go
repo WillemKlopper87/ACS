@@ -121,6 +121,10 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("GET", "/api/v1/devices/{id}/credentials", ro, h.listDeviceCredentials)
 	routePerm("POST", "/api/v1/devices/{id}/credentials/{credential_id}/activate", operators.PermCredentialManage, h.activateDeviceCredential)
 	routePerm("POST", "/api/v1/devices/{id}/credentials/{credential_id}/revoke", operators.PermCredentialManage, h.revokeDeviceCredential)
+	// TR-069 Annex K XMPP Connection Request: zero-touch provisioning
+	// creates a per-device XMPP credential, so it is credential.manage.
+	routePerm("POST", "/api/v1/devices/{id}/xmpp/provision", operators.PermCredentialManage, h.provisionXMPP)
+	route("GET", "/api/v1/devices/{id}/xmpp", ro, h.getDeviceXMPP)
 	routePerm("POST", "/api/v1/scheduled-jobs", operators.PermScheduleManage, h.createScheduledJob)
 	route("GET", "/api/v1/scheduled-jobs", ro, h.listScheduledJobs)
 	routePerm("DELETE", "/api/v1/scheduled-jobs/{id}", operators.PermScheduleManage, h.deleteScheduledJob)
