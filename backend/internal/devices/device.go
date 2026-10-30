@@ -85,9 +85,13 @@ const (
 
 // Connection request reachability modes (design doc v3 §12.2).
 const (
-	ModeDirectIPv4       = "DIRECT_IPV4"
-	ModeDirectIPv6       = "DIRECT_IPV6"
-	ModeSTUNAnnexG       = "STUN_ANNEX_G"
+	ModeDirectIPv4 = "DIRECT_IPV4"
+	ModeDirectIPv6 = "DIRECT_IPV6"
+	ModeSTUNAnnexG = "STUN_ANNEX_G"
+	// ModeXMPP: an XMPP Connection Request (TR-069 Annex K) provoked a
+	// "6 CONNECTION REQUEST" Inform — the device holds an outbound XMPP
+	// session to the ACS's server, so CGNAT no longer matters.
+	ModeXMPP             = "XMPP"
 	ModePeriodicFallback = "PERIODIC_FALLBACK_ONLY"
 	ModeUnknown          = "UNKNOWN"
 )

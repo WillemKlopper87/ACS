@@ -36,15 +36,18 @@ func ConnectionChecks(device *Device, agent *UspAgent, now time.Time) []Connecti
 	if device.LastConnectionRequestStatus != nil {
 		status := *device.LastConnectionRequestStatus
 		actions := map[string]string{
-			"DNS_FAILURE":        "Check the connection-request hostname and ACS resolver.",
-			"TLS_FAILURE":        "Check certificate validity, hostname, trust chain and device clock.",
-			"HTTP_401":           "Check connection-request credentials and authentication methods.",
-			"HTTP_404":           "Check the connection-request URL path supplied by the CPE.",
-			"TCP_FAILURE":        "Check routing, device listener, firewall and NAT reachability.",
-			"TIMEOUT":            "Check reachability and the device's connection-request response time.",
-			"BLOCKED_BY_POLICY":  "Check the configured device network allow-list.",
-			"UDP_SENT_NO_INFORM": "Check the UDP address/NAT binding and whether the CPE sends an Inform after wake-up.",
-			"HTTP_200":           "A wake-up was accepted; verify that a subsequent Inform arrived.",
+			"DNS_FAILURE":         "Check the connection-request hostname and ACS resolver.",
+			"TLS_FAILURE":         "Check certificate validity, hostname, trust chain and device clock.",
+			"HTTP_401":            "Check connection-request credentials and authentication methods.",
+			"HTTP_404":            "Check the connection-request URL path supplied by the CPE.",
+			"TCP_FAILURE":         "Check routing, device listener, firewall and NAT reachability.",
+			"TIMEOUT":             "Check reachability and the device's connection-request response time.",
+			"BLOCKED_BY_POLICY":   "Check the configured device network allow-list.",
+			"UDP_SENT_NO_INFORM":  "Check the UDP address/NAT binding and whether the CPE sends an Inform after wake-up.",
+			"HTTP_200":            "A wake-up was accepted; verify that a subsequent Inform arrived.",
+			"XMPP_SENT_NO_INFORM": "The CPE acknowledged the XMPP connection request but opened no session; check its Connection Request credentials and rate limiting.",
+			"XMPP_ERROR":          "Check the CPE's XMPP Connection Status and ConnReqJabberID, and that ConnReqAllowedJabberIDs lists the ACS JID.",
+			"XMPP_UNAVAILABLE":    "The ACS has no XMPP session; check the XMPP server and the ACS_XMPP_* settings.",
 		}
 		checks = append(checks, ConnectionCheck{"connection_request", "observed", status, actions[status]})
 	}

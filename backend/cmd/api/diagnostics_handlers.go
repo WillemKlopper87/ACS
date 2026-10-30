@@ -85,6 +85,9 @@ func (h *handler) createConnectionRequest(w http.ResponseWriter, r *http.Request
 	if device.ConnectionRequestURL == nil || *device.ConnectionRequestURL == "" {
 		recommendation = "No ConnectionRequestURL known for this device yet — it must send at least one Inform first."
 	}
+	if device.ConnectionRequestMode == devices.ModeXMPP {
+		recommendation = "Device has previously been reached by XMPP Connection Request (TR-069 Annex K); it is tried first."
+	}
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"command_key": job.CommandKey,

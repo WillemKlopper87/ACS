@@ -207,4 +207,13 @@ type ParameterDiscoveryPayload struct {
 	Retried      map[string]bool            `json:"retried,omitempty"`
 	Firmware     string                     `json:"firmware,omitempty"`
 	Capabilities map[string]json.RawMessage `json:"capabilities,omitempty"`
+	// Merge marks a subtree discovery (e.g. a freshly AddObject'ed
+	// "Device.XMPP.Connection.1."): one GetParameterNames(Root,
+	// NextLevel=false) whose result replaces only the names under Root in
+	// the device's existing discovered tree, instead of publishing a new
+	// whole-tree snapshot. It never changes data_model_root and is not an
+	// "active discovery" for the one-walk-per-device rule. Used by XMPP
+	// provisioning, whose new instance's leaves are unknown until the CPE
+	// has created it.
+	Merge bool `json:"merge,omitempty"`
 }

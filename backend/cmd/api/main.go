@@ -52,6 +52,7 @@ import (
 	"acs/internal/uploads"
 	"acs/internal/vpn"
 	"acs/internal/wifiinsights"
+	"acs/internal/xmppprov"
 )
 
 func main() {
@@ -278,6 +279,8 @@ func main() {
 
 		captures:           captureRepo,
 		captureMaxDuration: captureMaxDuration,
+
+		xmppProvisioning: xmppprov.NewRepository(db),
 	}
 	if h.bssToken == "" {
 		logger.Warn("ACS_BSS_API_TOKEN not set — BSS admin-panel troubleshooting calls will hit the adapter unauthenticated (fine only if cmd/bssadapter also has no ACS_BSS_API_TOKEN set)")
@@ -290,6 +293,21 @@ func main() {
 	if err := bootstrapAdmin(ctx, h, os.Getenv("ACS_BOOTSTRAP_ADMIN_USERNAME"), os.Getenv("ACS_BOOTSTRAP_ADMIN_PASSWORD")); err != nil {
 		logger.Error("failed to bootstrap admin operator", "err", err)
 		os.Exit(1)
+	}
+
+	// TR-069 Annex K XMPP Connection Request (connreq_xmpp.go,
+	// xmpp_provisioner.go). Entirely off when ACS_XMPP_SERVER is unset.
+	xmppCfg, err := xmppFromEnv(logger)
+	if err != nil {
+		logger.Error("invalid XMPP configuration", "err", err)
+		os.Exit(1)
+	}
+	h.xmpp = xmppCfg
+	if xmppCfg != nil {
+		go xmppCfg.client.Run(ctx)
+		logger.Info("XMPP Connection Request enabled", "acs_jid", xmppCfg.client.BareJID(), "server", os.Getenv("ACS_XMPP_SERVER"), "cpe_server_address", xmppCfg.cpeServerAddress)
+	} else {
+		logger.Info("ACS_XMPP_SERVER not set — XMPP Connection Request (TR-069 Annex K) disabled")
 	}
 
 	mux := h.registerRoutes(metrics, db)
@@ -310,7 +328,20 @@ func main() {
 		netPolicy:   netPolicy,
 		params:      h.params,
 	}
+	if xmppCfg != nil {
+		worker.xmpp = xmppCfg.client // only when configured: a typed-nil interface would not read as "off"
+	}
 	go worker.Run(ctx)
+
+	xmppProv := &xmppProvisioner{
+		logger:      logger,
+		repo:        h.xmppProvisioning,
+		jobs:        h.jobs,
+		params:      h.params,
+		credentials: h.credentials,
+		auditor:     observability.NewAuditor(db),
+	}
+	go xmppProv.Run(ctx)
 
 	scheduleW := &scheduleWorker{
 		logger:    logger,
@@ -471,4 +502,9 @@ type handler struct {
 	// captureMaxDuration bounds how long an on-demand capture session
 	// this process starts stays ACTIVE — see ACS_CAPTURE_MAX_DURATION.
 	captureMaxDuration time.Duration
+
+	// xmpp is nil unless ACS_XMPP_* configures XMPP Connection Request;
+	// xmppProvisioning persists the zero-touch provisioning state machine.
+	xmpp             *xmppSettings
+	xmppProvisioning *xmppprov.Repository
 }

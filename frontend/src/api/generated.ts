@@ -3798,6 +3798,137 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/xmpp/provision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start zero-touch XMPP Connection Request provisioning over TR-069 (credential.manage permission)
+         * @description Generates a per-device XMPP credential (stored encrypted, type XMPP), creates the account on the ACS's XMPP server, then drives the CPE through a persisted, resumable state machine: AddObject Device.XMPP.Connection. (and its Server. sub-object if the CPE did not create one), subtree GetParameterNames to learn the new instance's writable leaves, SetParameterValues for the account/domain/resource/TLS/keepalive/server, then ManagementServer.ConnReqXMPPConnection and ConnReqAllowedJabberIDs, and finally reads ConnReqJabberID until the CPE has logged in (which activates the credential). Idempotent: a run in progress is returned with 202, a finished one with 200 unless restart is set. Audited as XMPPProvisioning; secrets never appear in the response or the audit log.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * @description Set the vendor's Device.XMPP.X_*_CertificateVerificationRequired to false (lab self-signed server certificate only).
+                         * @default false
+                         */
+                        relax_certificate_verification?: boolean;
+                        /**
+                         * @description Set the vendor's Device.XMPP.X_*_BypassHostnameCheck to true (server reached by IP).
+                         * @default false
+                         */
+                        bypass_hostname_check?: boolean;
+                        /**
+                         * @description Re-provision a device whose last run is DONE or FAILED, with a fresh credential.
+                         * @default false
+                         */
+                        restart?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Already provisioned (restart not requested) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["XMPPProvisionResponse"];
+                    };
+                };
+                /** @description Started */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["XMPPProvisionResponse"];
+                    };
+                };
+                /** @description Device has no discovered writable Device.XMPP.Connection. table */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The XMPP server refused to create the device account */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description XMPP is not configured on this ACS */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/xmpp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** XMPP Connection Request state — the ACS's XMPP session, what the CPE reports, provisioning progress */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DeviceXMPPState"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scheduled-jobs": {
         parameters: {
             query?: never;
@@ -6429,6 +6560,7 @@ export interface components {
             last_inform_at?: string;
             last_inform_event_codes?: string[];
             connection_request_url?: string;
+            /** @description DIRECT_IPV4, DIRECT_IPV6, STUN_ANNEX_G, XMPP, PERIODIC_FALLBACK_ONLY or UNKNOWN */
             connection_request_mode?: string;
             /** Format: date-time */
             last_connection_request_at?: string;
@@ -6724,14 +6856,73 @@ export interface components {
             failure_rate?: number;
             terminal_count?: number;
         };
+        XMPPProvisioning: {
+            /** @enum {string} */
+            state: "ADD_CONNECTION" | "DISCOVER_CONNECTION" | "ADD_SERVER" | "DISCOVER_SERVER" | "CONFIGURE" | "BIND" | "VERIFY" | "DONE" | "FAILED";
+            /** @description e.g. Device.XMPP.Connection.1. */
+            connection_path?: string;
+            server_path?: string;
+            /** @description The XMPP credential (see /credentials); its password is never returned */
+            credential_id?: string;
+            /** @description The job the current state is waiting on */
+            job_id?: string;
+            attempts: number;
+            domain: string;
+            resource: string;
+            server_address: string;
+            server_port: number;
+            keepalive_interval: number;
+            acs_jid: string;
+            relax_certificate_verification: boolean;
+            bypass_hostname_check: boolean;
+            /** @description ConnReqJabberID read back from the CPE */
+            jabber_id?: string;
+            connection_status?: string;
+            last_error?: string;
+            requested_by?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            completed_at?: string | null;
+        };
+        XMPPProvisionResponse: {
+            existing?: boolean;
+            provisioning?: components["schemas"]["XMPPProvisioning"];
+        };
+        DeviceXMPPState: {
+            device_id?: string;
+            acs?: {
+                configured?: boolean;
+                connected?: boolean;
+                jid?: string;
+                /** Format: date-time */
+                connected_since?: string | null;
+                last_error?: string;
+                cpe_server_address?: string;
+                cpe_server_port?: number;
+            };
+            cpe?: {
+                conn_req_jabber_id?: string;
+                conn_req_jabber_id_valid?: boolean;
+                supported_conn_req_methods?: string;
+                conn_req_xmpp_connection?: string;
+                connection_request_mode?: string;
+                xmpp_connection_status?: string;
+            };
+            provisioning?: components["schemas"]["XMPPProvisioning"] | null;
+            /** Format: date-time */
+            as_of?: string;
+        };
         Credential: {
             id: string;
             version: number;
             /**
-             * @description Direction of authentication protected by this credential.
+             * @description Direction of authentication protected by this credential. XMPP is the CPE's login to the ACS's XMPP server (created only by XMPP provisioning).
              * @enum {string}
              */
-            credential_type: "CONNECTION_REQUEST" | "CWMP_DIGEST";
+            credential_type: "CONNECTION_REQUEST" | "CWMP_DIGEST" | "XMPP";
             username: string;
             /** @enum {string} */
             status: "PENDING" | "ACTIVE" | "GRACE" | "REVOKED";

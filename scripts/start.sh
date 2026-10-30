@@ -188,6 +188,36 @@ wait_url() {
 }
 
 wait_url "Prometheus" "http://127.0.0.1:9090/-/ready"
+
+# --- XMPP Connection Request server (TR-069 Annex K) -------------------
+# Opt-in (ACS_XMPP_ENABLED=1 in ~/.acs-secrets.env): CGNAT'd CPEs keep an
+# outbound XMPP session here so Connection Requests reach them in seconds.
+# docs/XMPP-CONNECTION-REQUEST.md. TCP 5222 must be open to the CPEs'
+# public egress in the security group. Exported before cmd/api starts so
+# provisioning tells CPEs to dial this host's public address.
+if [ "${ACS_XMPP_ENABLED:-0}" = "1" ]; then
+  echo "=== Starting XMPP server (Prosody) ==="
+  export ACS_XMPP_CPE_SERVER_ADDRESS="${ACS_XMPP_CPE_SERVER_ADDRESS:-$PUBLIC_IP}"
+  if [ -z "${ACS_XMPP_CERT_DIR:-}" ]; then
+    "$ROOT/scripts/xmpp-cert.sh" "$PUBLIC_IP"
+  fi
+  (cd "$ROOT/infra" && docker compose --profile xmpp up -d prosody)
+  XMPP_READY=0
+  for _ in $(seq 1 30); do
+    if (exec 3<>/dev/tcp/127.0.0.1/5222) 2>/dev/null; then
+      XMPP_READY=1
+      break
+    fi
+    sleep 2
+  done
+  if [ "$XMPP_READY" = "1" ]; then
+    echo "XMPP server is accepting connections."
+  else
+    echo "WARNING: XMPP server did not open 5222 within 60s — check 'docker compose --profile xmpp logs prosody'. cmd/api keeps retrying."
+  fi
+else
+  echo "XMPP Connection Request disabled (ACS_XMPP_ENABLED is not 1); not starting Prosody."
+fi
 # Grafana's health endpoint can return 200 before the DB field is useful;
 # the final whole-stack healthcheck validates the response body as well.
 wait_url "Grafana" "http://127.0.0.1:3000/api/health"
@@ -277,6 +307,9 @@ else
 fi
 echo "CWMP URL:    $CWMP_SCHEME://$PUBLIC_IP:7547/cwmp"
 echo "STUN:        $PUBLIC_IP:3478 (UDP)"
+if [ "${ACS_XMPP_ENABLED:-0}" = "1" ]; then
+  echo "XMPP:        $ACS_XMPP_CPE_SERVER_ADDRESS:5222 (TCP, domain $ACS_XMPP_DOMAIN, ACS JID $ACS_XMPP_JID)"
+fi
 echo "USP WS:      $USP_SCHEME://$PUBLIC_IP:9877/usp"
 echo "USP MQTT:    $PUBLIC_IP:1883"
 echo "BSS adapter: http://127.0.0.1:8090 (host-local; use TLS reverse proxy for northbound access)"

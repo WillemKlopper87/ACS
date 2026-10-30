@@ -130,6 +130,10 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 	for _, p := range list {
 		writableByName[p.Name] = p.Writable == "1" || p.Writable == "true"
 	}
+	if payload.Merge {
+		h.finishSubtreeMerge(ctx, deviceID, job, payload, writableByName)
+		return
+	}
 	if payload.Incremental {
 		done, err := jobs.AdvanceDiscovery(&payload, writableByName)
 		if err != nil {
@@ -205,6 +209,32 @@ func (h *handler) finishParameterDiscovery(ctx context.Context, deviceID string,
 		// it so the satellite is linked to that gateway (see mesh.go).
 		h.queueGatewayInfoRead(ctx, deviceID, writableByName)
 	}
+}
+
+// finishSubtreeMerge completes a Merge discovery (see
+// jobs.ParameterDiscoveryPayload.Merge): the names under payload.Root
+// replace that subtree in the device's existing tree. Unlike a full walk it
+// publishes no new snapshot and leaves data_model_root alone.
+func (h *handler) finishSubtreeMerge(ctx context.Context, deviceID string, job *jobs.Job, payload jobs.ParameterDiscoveryPayload, writableByName map[string]bool) {
+	if err := h.params.MergeDiscoveredSubtree(ctx, deviceID, payload.Root, writableByName); err != nil {
+		h.logger.Error("failed to merge discovered subtree", "err", err, "device_id", deviceID, "root", payload.Root)
+		_ = h.jobs.MarkFailed(ctx, job.ID, "", "failed to merge discovered subtree: "+err.Error())
+		return
+	}
+	writableCount := 0
+	for _, writable := range writableByName {
+		if writable {
+			writableCount++
+		}
+	}
+	if err := h.jobs.MarkSuccessWithDetail(ctx, job.ID, discoveryResultDetail{
+		Root: payload.Root, ParameterCount: len(writableByName), WritableCount: writableCount,
+	}); err != nil {
+		h.logger.Error("failed to mark subtree discovery success", "err", err, "job_id", job.ID)
+	}
+	h.metrics.JobsCompletedTotal.WithLabelValues(job.Type, jobs.StatusSuccess).Inc()
+	h.logger.Info("subtree discovery merged", "device_id", deviceID, "root", payload.Root,
+		"parameter_count", len(writableByName), "writable_count", writableCount, "command_key", job.CommandKey)
 }
 
 // skipDiscoveryObject defers (first failure) or abandons (second failure)

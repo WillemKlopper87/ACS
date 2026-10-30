@@ -279,7 +279,9 @@ func collapseRuntimeInstances(objects []string) []string {
 // nil when none is active. Concurrent walks of the same tree only compete
 // for the device's sessions, so callers reuse the active one.
 func (r *Repository) ActiveDiscovery(ctx context.Context, deviceID string) (*Job, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE device_id=$1 AND type=$2 AND status IN ($3,$4) ORDER BY created_at LIMIT 1`,
+	// Subtree merges (ParameterDiscoveryPayload.Merge) are single RPCs, not
+	// tree walks, and must not block or masquerade as one.
+	row := r.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE device_id=$1 AND type=$2 AND status IN ($3,$4) AND COALESCE((payload->>'merge')::boolean, false) = false ORDER BY created_at LIMIT 1`,
 		deviceID, TypeParameterDiscovery, StatusQueued, StatusRPCSent)
 	job, err := scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
