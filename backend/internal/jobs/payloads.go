@@ -78,6 +78,20 @@ type DiagnosticsPingPayload struct {
 	// Empty means "resolve TR-181 for backward compatibility" (any job
 	// queued before this field existed) — cmd/acs falls back accordingly.
 	Prefix string `json:"prefix,omitempty"`
+	DiagnosticsPlan
+}
+
+// DiagnosticsPlan is the CWMP wire plan for a diagnostic, resolved from the
+// device's discovered parameter names when the job is created
+// (internal/diagnostics): Trigger is the typed SetParameterValues list
+// (only leaves discovery proved writable, DiagnosticsState=Requested last)
+// and PollPaths the result leaves discovery proved exist — a
+// GetParameterValues naming one unknown leaf faults 9005 as a whole. Both
+// empty means a job created before plans existed; cmd/acs then falls back
+// to the full standard leaf set.
+type DiagnosticsPlan struct {
+	Trigger   []ParameterWrite `json:"trigger,omitempty"`
+	PollPaths []string         `json:"poll_paths,omitempty"`
 }
 
 // DiagnosticsTraceroutePayload is the payload shape for a
@@ -96,12 +110,14 @@ type DiagnosticsTraceroutePayload struct {
 	// Prefix — see DiagnosticsPingPayload.Prefix's doc comment; same
 	// resolve-once-at-creation convention, same backward-compat default.
 	Prefix string `json:"prefix,omitempty"`
+	DiagnosticsPlan
 }
 
 type DiagnosticsDownloadPayload struct {
 	URL        string `json:"url"`
 	Prefix     string `json:"prefix"`
 	USPCommand string `json:"usp_command,omitempty"`
+	DiagnosticsPlan
 }
 
 type DiagnosticsUploadPayload struct {
@@ -109,6 +125,7 @@ type DiagnosticsUploadPayload struct {
 	Prefix         string `json:"prefix"`
 	USPCommand     string `json:"usp_command,omitempty"`
 	TestFileLength uint64 `json:"test_file_length,omitempty"`
+	DiagnosticsPlan
 }
 
 // AddObjectPayload is the payload shape for an ADD_OBJECT job.
