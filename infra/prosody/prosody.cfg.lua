@@ -9,8 +9,12 @@
 -- scripts/gen-env.sh); the entrypoint (prosody-entrypoint.sh) creates the
 -- ACS account from ACS_XMPP_USER/ACS_XMPP_PASSWORD on every start.
 
-local domain = Lua.os.getenv("ACS_XMPP_DOMAIN") or "xmpp.acs.lab"
-local acs_user = Lua.os.getenv("ACS_XMPP_USER") or "acs"
+-- ENV_<NAME> reads an environment variable on both Prosody 0.12 (the image
+-- docker-compose.yml pins) and 13. `Lua.os.getenv` exists only on 13 and made
+-- the 0.12 container exit at startup ("attempt to index a nil value (global
+-- 'Lua')"); plain `os.getenv` works but is deprecated on 13.
+local domain = ENV_ACS_XMPP_DOMAIN or "xmpp.acs.lab"
+local acs_user = ENV_ACS_XMPP_USER or "acs"
 
 -- The ACS account is the only admin: XEP-0133 (mod_admin_adhoc) lets it
 -- create one account per CPE over its existing session during zero-touch
