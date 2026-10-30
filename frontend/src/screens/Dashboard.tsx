@@ -20,7 +20,7 @@ import { toast } from "../lib/toast";
 const GROUP_BY_LABEL: Record<string, string> = { customer: "Customer", region: "Region", project: "Project", manufacturer: "Manufacturer" };
 const STATUS_TONE: Record<string, string> = {
   ONLINE: "var(--ok)", OFFLINE: "var(--danger)", UNKNOWN: "var(--ink-faint)",
-  DIRECT_IPV4: "var(--ok)", DIRECT_IPV6: "var(--ok)", STUN_ANNEX_G: "var(--warn)",
+  DIRECT_IPV4: "var(--ok)", DIRECT_IPV6: "var(--ok)", STUN_ANNEX_G: "var(--warn)", XMPP: "var(--ok)",
   PERIODIC_FALLBACK_ONLY: "var(--warn)", UNREACHABLE: "var(--danger)", REBOOTING: "var(--warn)",
 };
 

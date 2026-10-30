@@ -7,6 +7,9 @@ const TONE_BY_VALUE: Record<string, string> = {
   HTTP_200_INFORM_RECEIVED: "ok",
   DIRECT_IPV4: "ok",
   DIRECT_IPV6: "ok",
+  // XMPP Connection Request (TR-069 Annex K): reached through CGNAT.
+  XMPP: "ok",
+  XMPP_SENT_INFORM_RECEIVED: "ok",
   QUEUED: "pending",
   RPC_SENT: "pending",
   IN_PROGRESS: "pending",
@@ -50,6 +53,7 @@ const LABEL_BY_VALUE: Record<string, string> = {
   AWAITING_TRANSFER_COMPLETE: "awaiting transfer",
   DIRECT_IPV4: "direct IPv4",
   DIRECT_IPV6: "direct IPv6",
+  XMPP_SENT_INFORM_RECEIVED: "inform received (XMPP)",
   IN_PROGRESS: "in progress",
   RPC_SENT: "RPC sent",
 };
