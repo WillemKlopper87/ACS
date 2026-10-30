@@ -1,6 +1,9 @@
 package adapters
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const sampleXML = `<?xml version="1.0" encoding="UTF-8"?>
 <cwmp:cwmpDataModel vendor="Acme" model="Widget 5000" specVersion="TR-181 i2">
@@ -181,5 +184,35 @@ func TestFirmwareProfileRequiresEvidenceAndSelectsVariant(t *testing.T) {
 	r.catalogs[1].QualificationEvidence = ""
 	if r.MatchFirmwareProfile("Example Inc", "5G-CPE", "2.0").Qualified {
 		t.Fatal("missing test evidence accepted")
+	}
+}
+
+// Field test 2026-10-30: the FastMile 5G Gateway 2 reports ProductClass
+// 3TG02241, and the Beacon 3.1 mesh unit reports Manufacturer "ALCL".
+func TestNokiaFieldDevicesMatchByModel(t *testing.T) {
+	r := NewRegistry()
+	for _, tc := range []struct{ manufacturer, productClass, wantVendor string }{
+		{"Nokia", "3TG02241", "Nokia"},
+		{"ALCL", "Beacon 3.1", "ALCL"},
+	} {
+		m := r.MatchProfile(tc.manufacturer, tc.productClass)
+		if m.MatchedBy != "model" || m.Catalog.Vendor != tc.wantVendor {
+			t.Errorf("MatchProfile(%q, %q) = vendor %q by %q, want %q by model", tc.manufacturer, tc.productClass, m.Catalog.Vendor, m.MatchedBy, tc.wantVendor)
+		}
+	}
+
+	_, paths := r.MatchCellularDiagnostics("Nokia")
+	for _, p := range paths {
+		if strings.Contains(p, "X_NOKIA_") {
+			t.Errorf("Nokia diagnostics include %q; firmware 1.2501.00.0798 uses X_ALU-COM_", p)
+		}
+	}
+	want := "Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.RSRPCurrent"
+	found := false
+	for _, p := range paths {
+		found = found || p == want
+	}
+	if !found {
+		t.Errorf("Nokia diagnostics %v missing %s", paths, want)
 	}
 }
