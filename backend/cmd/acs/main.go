@@ -243,18 +243,22 @@ func main() {
 	mux := newACSMux(h.handleCWMP, metrics, db)
 
 	addr := devicePlane.Addr
-	server := &http.Server{
-		Addr:    addr,
-		Handler: restrictRemoteCIDRs(mux, devicePlane.AllowedCIDRs),
-		// CPE HTTP stacks are slow and often on lossy last-mile links —
-		// generous per-request timeouts, but never unbounded, so a stalled
-		// connection can't hold a socket forever. IdleTimeout covers the
-		// keep-alive gap between envelopes within a CWMP session.
-		ReadHeaderTimeout: 30 * time.Second,
-		ReadTimeout:       2 * time.Minute,
-		WriteTimeout:      2 * time.Minute,
-		IdleTimeout:       5 * time.Minute,
+	handler := restrictRemoteCIDRs(mux, devicePlane.AllowedCIDRs)
+	newServer := func(addr string) *http.Server {
+		return &http.Server{
+			Addr:    addr,
+			Handler: handler,
+			// CPE HTTP stacks are slow and often on lossy last-mile links —
+			// generous per-request timeouts, but never unbounded, so a stalled
+			// connection can't hold a socket forever. IdleTimeout covers the
+			// keep-alive gap between envelopes within a CWMP session.
+			ReadHeaderTimeout: 30 * time.Second,
+			ReadTimeout:       2 * time.Minute,
+			WriteTimeout:      2 * time.Minute,
+			IdleTimeout:       5 * time.Minute,
+		}
 	}
+	server := newServer(addr)
 
 	certFile := devicePlane.TLSCert
 	keyFile := devicePlane.TLSKey
@@ -334,6 +338,16 @@ func main() {
 	}
 	server.TLSConfig = tlsCfg
 
+	// ACS_TLS_ADDR (lab only, see loadDevicePlaneConfig): TLS on a second
+	// listener while ACS_ADDR stays plain HTTP, so a CPE whose ACS URL is
+	// moved to HTTPS and fails the handshake can still be recovered over
+	// HTTP. Same handler, CIDR allowlist and TLS settings.
+	var tlsServer *http.Server
+	if devicePlane.TLSAddr != "" {
+		tlsServer = newServer(devicePlane.TLSAddr)
+		tlsServer.TLSConfig = tlsCfg
+	}
+
 	ctx2, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -354,9 +368,18 @@ func main() {
 		logger.Info("stun server disabled (ACS_STUN_ADDR=off)")
 	}
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	if tlsServer != nil {
+		go func() {
+			logger.Info("CWMP gateway listening (TLS, second listener)", "addr", devicePlane.TLSAddr, "path", "/cwmp")
+			errCh <- tlsServer.ListenAndServeTLS(certFile, keyFile)
+		}()
+	}
 	go func() {
-		if certFile != "" && keyFile != "" {
+		if tlsServer != nil {
+			logger.Warn("CWMP gateway listening WITHOUT TLS beside the TLS listener (ACS_TLS_ADDR migration mode)", "addr", addr, "tls_addr", devicePlane.TLSAddr, "path", "/cwmp")
+			errCh <- server.ListenAndServe()
+		} else if certFile != "" && keyFile != "" {
 			logger.Info("CWMP gateway listening (TLS)", "addr", addr, "path", "/cwmp")
 			errCh <- server.ListenAndServeTLS(certFile, keyFile)
 		} else {
@@ -376,6 +399,9 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
+		if tlsServer != nil {
+			_ = tlsServer.Shutdown(shutdownCtx)
+		}
 	}
 }
 

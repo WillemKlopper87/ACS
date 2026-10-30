@@ -90,6 +90,10 @@ export ACS_TLS_MIN_VERSION=""
 # Empty means the CWMP endpoint runs plain HTTP.
 export ACS_TLS_CERT=""
 export ACS_TLS_KEY=""
+# Lab TLS migration: a second CWMP listener serving TLS (e.g. ":7548") while
+# ACS_ADDR (:7547) stays plain HTTP as the recovery path. Needs
+# ACS_TLS_CERT/KEY (scripts/acs-cert.sh). Empty means one listener.
+export ACS_TLS_ADDR=""
 
 # --- XMPP Connection Request (TR-069 Annex K) ---
 # docs/XMPP-CONNECTION-REQUEST.md. Off until set to "1": scripts/start.sh
@@ -302,6 +306,7 @@ chmod 600 "$COMPOSE_ENV"
   echo "ACS_TLS_MIN_VERSION=$ACS_TLS_MIN_VERSION"
   echo "ACS_TLS_CERT=$ACS_TLS_CERT"
   echo "ACS_TLS_KEY=$ACS_TLS_KEY"
+  echo "ACS_TLS_ADDR=${ACS_TLS_ADDR:-}"
   echo "ACS_XMPP_SERVER=${ACS_XMPP_SERVER:-}"
   echo "ACS_XMPP_DOMAIN=$ACS_XMPP_DOMAIN"
   echo "ACS_XMPP_JID=$ACS_XMPP_JID"

@@ -11,8 +11,12 @@ import (
 )
 
 type devicePlaneConfig struct {
-	Profile                string
-	Addr                   string
+	Profile string
+	Addr    string
+	// TLSAddr, lab only, adds a second listener serving TLS while Addr
+	// keeps serving plain HTTP: a CPE can be moved to HTTPS one at a time
+	// with HTTP still up as its recovery path.
+	TLSAddr                string
 	TLSCert                string
 	TLSKey                 string
 	TLSMinVersion          uint16
@@ -22,7 +26,7 @@ type devicePlaneConfig struct {
 }
 
 func loadDevicePlaneConfig(getenv func(string) string) (devicePlaneConfig, error) {
-	c := devicePlaneConfig{Profile: getenv("ACS_DEPLOYMENT_PROFILE"), Addr: getenv("ACS_ADDR"), TLSCert: getenv("ACS_TLS_CERT"), TLSKey: getenv("ACS_TLS_KEY"), AllowBasic: getenv("ACS_AUTH_ALLOW_BASIC") == "1" || getenv("ACS_AUTH_ALLOW_BASIC") == "true", AllowSharedEstablished: getenv("ACS_CWMP_ALLOW_SHARED_ESTABLISHED") == "1" || getenv("ACS_CWMP_ALLOW_SHARED_ESTABLISHED") == "true"}
+	c := devicePlaneConfig{Profile: getenv("ACS_DEPLOYMENT_PROFILE"), Addr: getenv("ACS_ADDR"), TLSAddr: getenv("ACS_TLS_ADDR"), TLSCert: getenv("ACS_TLS_CERT"), TLSKey: getenv("ACS_TLS_KEY"), AllowBasic: getenv("ACS_AUTH_ALLOW_BASIC") == "1" || getenv("ACS_AUTH_ALLOW_BASIC") == "true", AllowSharedEstablished: getenv("ACS_CWMP_ALLOW_SHARED_ESTABLISHED") == "1" || getenv("ACS_CWMP_ALLOW_SHARED_ESTABLISHED") == "true"}
 	if c.Profile == "" {
 		c.Profile = "lab"
 	}
@@ -48,6 +52,17 @@ func loadDevicePlaneConfig(getenv func(string) string) (devicePlaneConfig, error
 	}
 	if c.Profile != "lab" && c.Profile != "production" {
 		return c, fmt.Errorf("ACS_DEPLOYMENT_PROFILE must be lab or production")
+	}
+	if c.TLSAddr != "" {
+		if c.Profile == "production" {
+			return c, fmt.Errorf("production profile forbids ACS_TLS_ADDR: it keeps plain HTTP on ACS_ADDR; serve TLS on ACS_ADDR instead")
+		}
+		if c.TLSCert == "" || c.TLSKey == "" {
+			return c, fmt.Errorf("ACS_TLS_ADDR requires ACS_TLS_CERT and ACS_TLS_KEY")
+		}
+		if c.TLSAddr == c.Addr {
+			return c, fmt.Errorf("ACS_TLS_ADDR must differ from ACS_ADDR")
+		}
 	}
 	if c.Profile == "production" {
 		if c.TLSCert == "" || c.TLSKey == "" {

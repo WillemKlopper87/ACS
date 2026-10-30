@@ -305,7 +305,12 @@ else
   echo "Console:     $FRONTEND_PUBLIC_URL"
   echo "API:         $API_PUBLIC_URL"
 fi
-echo "CWMP URL:    $CWMP_SCHEME://$PUBLIC_IP:7547/cwmp"
+if [ -n "${ACS_TLS_ADDR:-}" ] && [ "$CWMP_SCHEME" = "https" ]; then
+  echo "CWMP URL:    http://$PUBLIC_IP:7547/cwmp (plain, recovery path)"
+  echo "CWMP TLS:    https://$PUBLIC_IP:${ACS_TLS_ADDR##*:}/cwmp (second listener)"
+else
+  echo "CWMP URL:    $CWMP_SCHEME://$PUBLIC_IP:7547/cwmp"
+fi
 echo "STUN:        $PUBLIC_IP:3478 (UDP)"
 if [ "${ACS_XMPP_ENABLED:-0}" = "1" ]; then
   echo "XMPP:        $ACS_XMPP_CPE_SERVER_ADDRESS:5222 (TCP, domain $ACS_XMPP_DOMAIN, ACS JID $ACS_XMPP_JID)"
