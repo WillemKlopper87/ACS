@@ -60,8 +60,13 @@ type connectionRequestWorker struct {
 	// bridge already enforce.
 	netPolicy netguard.Policy
 	// params (optional) supplies the cached PeriodicInformInterval so the
-	// CGNAT fallback never loosens an already short interval.
+	// CGNAT fallback never loosens an already short interval, and the
+	// cached ConnReqJabberID the XMPP path addresses.
 	params *parameters.Repository
+	// xmpp (optional) is the ACS's XMPP client for TR-069 Annex K
+	// Connection Requests (connreq_xmpp.go); nil when ACS_XMPP_* is unset,
+	// which leaves the worker's behaviour exactly as before.
+	xmpp xmppConnectionRequester
 }
 
 // attemptGET checks the target against the device-network policy (audit
@@ -159,6 +164,14 @@ func (w *connectionRequestWorker) process(ctx context.Context, job *jobs.Job) {
 		udpAddr = *device.UDPConnectionRequestAddress
 	}
 
+	in := w.connReqInputsFor(ctx, device, udpAddr)
+	if selectConnReqPath(in) == connReqPathXMPP {
+		if w.attemptXMPP(ctx, device, job, in.JabberID, username, password, wait) {
+			return
+		}
+		in.XMPPConfigured = false // fall back to the paths below
+	}
+
 	if device.ConnectionRequestURL == nil || *device.ConnectionRequestURL == "" {
 		if udpAddr != "" {
 			// No TCP path at all, but STUN gave us a reflexive address —
@@ -173,10 +186,12 @@ func (w *connectionRequestWorker) process(ctx context.Context, job *jobs.Job) {
 		return
 	}
 
-	if device.ConnectionRequestMode == devices.ModePeriodicFallback && udpAddr == "" {
+	if selectConnReqPath(in) == connReqPathBehindNAT {
 		// Classified behind NAT on Inform with no STUN address: a direct
 		// GET to the advertised (private/CGNAT) URL cannot arrive. Do not
 		// spend the dial timeout; queued work runs at the next Inform.
+		// (Also reached by an XMPP-mode NAT'd device whose XMPP attempt
+		// just failed — see selectConnReqPath.)
 		_ = w.devices.RecordConnectionRequestAttempt(ctx, device.ID, connreq.OutcomeBehindNAT, "")
 		_ = w.jobs.MarkFailed(ctx, job.ID, connreq.OutcomeBehindNAT,
 			"device is behind NAT and has no STUN/Annex G address; queued work runs at its next periodic Inform")
