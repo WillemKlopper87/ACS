@@ -14,6 +14,7 @@ import { fmtBytes, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { useLive } from "../lib/useLive";
+import { ParameterBrowser } from "../components/ParameterBrowser";
 import { useEscape } from "../lib/hotkeys";
 import { toast } from "../lib/toast";
 
@@ -46,6 +47,8 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   const [historyPath, setHistoryPath] = useState<string | null>(null);
   const [historyEntries, setHistoryEntries] = useState<ParameterHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  // Discovered names -> writable, for the parameter browser's RW marks/filter.
+  const [paramNames, setParamNames] = useState<Record<string, boolean> | null>(null);
   const [tagsInput, setTagsInput] = useState("");
   const [tagsDirty, setTagsDirty] = useState(false);
   const tagsDirtyRef = useRef(tagsDirty);
@@ -104,6 +107,16 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  // Discovery evidence changes only when discovery reruns; fetch it once per
+  // device rather than on every 5-second poll.
+  useEffect(() => {
+    setParamNames(null);
+    api.getParameterNames(id).then(
+      (r) => setParamNames(r.names && Object.keys(r.names).length > 0 ? r.names : null),
+      () => setParamNames(null),
+    );
   }, [id]);
 
   // The image catalogue is small and slow-changing, so it's fetched once
@@ -575,33 +588,28 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
             No parameters read from this device yet — the cache populates from Inform and GET_PARAMETER jobs.
           </p>
         ) : (
-          paramEntries.map(([path, v]) => (
-            <div key={path}>
-              <div className="param-row" style={{ cursor: "pointer" }} onClick={() => toggleHistory(path)} title="Click to view value history">
-                <span className="path">{path}</span>
-                <span className="val">{v.value}</span>
-                <span className="src">
-                  {v.source} · {timeAgo(v.updated_at)} · {historyPath === path ? "hide history ▲" : "history ▼"}
-                </span>
+          <ParameterBrowser
+            params={params}
+            writable={paramNames}
+            selectedPath={historyPath}
+            onSelect={toggleHistory}
+            renderDetail={() => (
+              <div style={{ padding: "0.4rem 0 0.6rem 0.75rem", borderBottom: "1px solid var(--border)" }}>
+                {historyLoading ? (
+                  <span className="dim" style={{ fontSize: "0.76rem" }}>Loading history…</span>
+                ) : historyEntries.length === 0 ? (
+                  <span className="dim" style={{ fontSize: "0.76rem" }}>No recorded changes yet — history only records when a value actually changes.</span>
+                ) : (
+                  historyEntries.map((entry, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.76rem", fontFamily: "var(--font-mono)", padding: "0.15rem 0" }}>
+                      <span>{entry.value}</span>
+                      <span className="dim">{entry.source} · {timeAgo(entry.recorded_at)}</span>
+                    </div>
+                  ))
+                )}
               </div>
-              {historyPath === path && (
-                <div style={{ padding: "0.4rem 0 0.6rem 0.75rem", borderBottom: "1px solid var(--border)" }}>
-                  {historyLoading ? (
-                    <span className="dim" style={{ fontSize: "0.76rem" }}>Loading history…</span>
-                  ) : historyEntries.length === 0 ? (
-                    <span className="dim" style={{ fontSize: "0.76rem" }}>No recorded changes yet — history only records when a value actually changes.</span>
-                  ) : (
-                    historyEntries.map((entry, i) => (
-                      <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.76rem", fontFamily: "var(--font-mono)", padding: "0.15rem 0" }}>
-                        <span>{entry.value}</span>
-                        <span className="dim">{entry.source} · {timeAgo(entry.recorded_at)}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-          ))
+            )}
+          />
         )}
 
         <h3 style={{ marginTop: "1.4rem" }}>Recent jobs</h3>
