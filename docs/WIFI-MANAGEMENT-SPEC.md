@@ -117,9 +117,14 @@ Per-client actions: none native on this firmware (no MAC deny list). "Block devi
 
 Implement as a server-side denylist (vendor-scoped, from the catalog) enforced in `validateWritableParameters`, not only hidden in the UI.
 
-## 6. Second controller: Nokia WiFi Cloud Controller (NWCC)
+## 6. Controller authority (decided 2026-10-30)
 
-The FastMile carries `X_ALU-COM_NWCC.{L1Server,L2Server,RemoteMobileAccess}.URL`, `X_ALU-COM_FastmileController.URL` and a TR-369 agent pointed at controller `self.nokia:nwcc` (MQTT/TLS, broker currently empty). If NWCC is active it also writes Wi-Fi config. Decide per deployment: ACS/NaaS authoritative (leave NWCC unconfigured; the page warns if NWCC URLs are set) **or** integrate with NWCC. The page must surface which controller is authoritative.
+**Decision: the ACS is the mandatory, authoritative device manager.** Every CPE is managed through the ACS; nothing else writes device configuration. The NaaS platform integrates *on top of* the ACS (§8) and never talks to CPEs directly.
+
+Consequences for the Nokia WiFi Cloud Controller (NWCC):
+- The FastMile carries `X_ALU-COM_NWCC.{L1Server,L2Server,RemoteMobileAccess}.URL`, `X_ALU-COM_FastmileController.URL` and a TR-369 agent pointed at controller `self.nokia:nwcc` (MQTT/TLS, broker currently empty). NWCC is **not** used as a parallel controller.
+- The ACS takes over the controller role, preferably also over USP by pointing the CPE's TR-369 agent at the ACS's own USP controller (`cmd/uspc`, MQTT over TLS) — a persistent CPE-initiated connection that works through CGNAT. NWCC's proprietary (non-TR-181) features are out of scope.
+- The ACS records the NWCC/controller URLs as evidence and **alerts if any becomes non-empty** or if config changes appear that the ACS did not make (`4 VALUE CHANGE` with an empty CommandKey, already audited as `UnsolicitedValueChange`). Clearing them is an explicit, confirmed operator action (they are on the §5 denylist for the Wi-Fi page).
 
 ## 7. API additions
 
@@ -137,8 +142,19 @@ Canonical model extension in `adapters/canonical.go`: replace instance-1 constan
 
 ## 8. NaaS / RADIUS boundary
 
-- **Standalone:** the ACS configures the CPE (SSIDs, security, guest WLAN, radios, policies) and shows clients.
+- **Standalone:** the ACS configures the CPE (SSIDs, security, guest WLAN, radios, policies) and shows clients. It must be fully usable without NaaS.
 - **With NaaS:** NaaS owns subscribers, access policy and **per-user authentication** (portal, form, token, certificate) through its **RADIUS/AAA**; the ACS points the SSID at that RADIUS (`Security.RadiusServer*`, Enterprise mode) and exposes the client view northbound (TMF639/BSS adapter).
+- **How NaaS drives the ACS** (all through ACS northbound APIs, never directly to CPEs):
+
+  | NaaS need | ACS mechanism (existing → to extend) |
+  |---|---|
+  | Issue commands | BSS adapter orders / TMF641 service orders → generalise beyond `MODIFY_WIFI` to the Wi-Fi API (§7) |
+  | Workflows that enforce rules/scenarios | Policies (enforcement on Inform), config templates, scheduled jobs → expose as NaaS-callable APIs with idempotency keys |
+  | Troubleshooting | Diagnostics (fix C1/C8 first), on-demand parameter reads, CWMP/USP session captures, discovery/compatibility evidence |
+  | State and events | TMF639 inventory, TMF642 alarms, TMF688 events / webhooks |
+  | Capability catalogue | `ci/compatibility/discoveries/` (plain files) |
+
+  Prerequisites from the 2026-10-30 review before NaaS is connected: BSS tenant isolation (S3, S5), per-instance Wi-Fi resolution instead of `SSID.1` (§7), webhook delivery claiming (C9), cellular sentinel/field mapping so northbound signal data is correct.
 - **Rate limiting:** not available on the CPE (this firmware). NaaS applies per-subscriber bandwidth upstream (BNG/UPF, 5G QoS/slice — the FastMile exposes `Cellular.AccessPoint.{i}.X_ALU-COM_{SST,SD,DNN}`) or via RADIUS attributes at the edge that enforces them.
 - The discovery library (`ci/compatibility/discoveries/`) is the shared capability catalogue both systems read.
 
