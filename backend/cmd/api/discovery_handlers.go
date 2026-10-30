@@ -47,6 +47,19 @@ func (h *handler) createParameterDiscovery(w http.ResponseWriter, r *http.Reques
 	if firmware == "" {
 		firmware = values["InternetGatewayDevice.DeviceInfo.SoftwareVersion"].Value
 	}
+	// One walk per device: a second concurrent walk of the same tree only
+	// competes for the device's sessions. Return the active job instead, so
+	// callers (console, scripts/discover-devices.py) poll that one.
+	active, err := h.jobs.ActiveDiscovery(r.Context(), id)
+	if err != nil {
+		h.logger.Error("failed to check active parameter discovery", "err", err, "device_id", id)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if active != nil {
+		writeJSON(w, http.StatusAccepted, map[string]any{"command_key": active.CommandKey, "status": active.Status, "existing": true})
+		return
+	}
 	job, err := h.jobs.CreateWithMaxAttempts(r.Context(), id, jobs.TypeParameterDiscovery,
 		jobs.ParameterDiscoveryPayload{Root: root, FallbackRoot: fallback, Incremental: req.Incremental, Firmware: firmware}, operatorFromRequest(r), jobs.DiscoveryMaxObjects)
 	if err != nil {

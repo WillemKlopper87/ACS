@@ -46,6 +46,13 @@ func (h *handler) autoDiscoverParameters(ctx context.Context, device *devices.De
 			firmware = values["InternetGatewayDevice.DeviceInfo.SoftwareVersion"].Value
 		}
 	}
+	if active, err := h.jobs.ActiveDiscovery(ctx, device.ID); err != nil {
+		h.logger.Error("check active parameter discovery", "err", err, "device_id", device.ID)
+		return
+	} else if active != nil {
+		h.logger.Info("parameter discovery already active; not queuing another", "device_id", device.ID, "command_key", active.CommandKey)
+		return
+	}
 	job, err := h.jobs.CreateWithMaxAttempts(ctx, device.ID, jobs.TypeParameterDiscovery,
 		jobs.ParameterDiscoveryPayload{Root: root, FallbackRoot: fallback, Incremental: true, Firmware: firmware}, "system:bootstrap-discovery", jobs.DiscoveryMaxObjects)
 	if err != nil {

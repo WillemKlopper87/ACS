@@ -79,3 +79,50 @@ func TestSkipDiscoveryCursorIsBounded(t *testing.T) {
 		t.Fatal("skipping with no object in progress must fail")
 	}
 }
+
+// Runtime-state tables (LAN clients, Wi-Fi events, log files) are walked at
+// their lowest instance only; configuration tables keep every instance.
+func TestDiscoveryCollapsesRuntimeTableInstances(t *testing.T) {
+	p := ParameterDiscoveryPayload{Root: "Device.", Incremental: true, Cursor: "Device.Hosts.Host."}
+	_, err := AdvanceDiscovery(&p, map[string]bool{
+		"Device.Hosts.Host.":    false,
+		"Device.Hosts.Host.3.":  false,
+		"Device.Hosts.Host.1.":  false,
+		"Device.Hosts.Host.22.": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := append([]string{p.Cursor}, p.Pending...); len(got) != 1 || got[0] != "Device.Hosts.Host.1." {
+		t.Fatalf("runtime table walk = %v, want only Device.Hosts.Host.1.", got)
+	}
+	if _, ok := p.Names["Device.Hosts.Host.22."]; !ok {
+		t.Fatal("collapsed instance should still be recorded as a discovered object, just not walked")
+	}
+
+	p = ParameterDiscoveryPayload{Root: "Device.", Incremental: true, Cursor: "Device.WiFi.SSID."}
+	if _, err := AdvanceDiscovery(&p, map[string]bool{"Device.WiFi.SSID.1.": false, "Device.WiFi.SSID.2.": false}); err != nil {
+		t.Fatal(err)
+	}
+	if got := append([]string{p.Cursor}, p.Pending...); len(got) != 2 {
+		t.Fatalf("configuration table walk = %v, want both SSID instances", got)
+	}
+}
+
+func TestIsRuntimeTable(t *testing.T) {
+	for table, want := range map[string]bool{
+		"Device.Hosts.Host.":                                              true,
+		"Device.DHCPv4.Server.Pool.1.Client.":                             true,
+		"Device.WiFi.AccessPoint.2.AssociatedDevice.":                     true,
+		"Device.WiFi.DataElements.AssociationEvent.AssociationEventData.": true,
+		"Device.WiFi.DataElements.Network.Device.1.Radio.1.BSS.2.STA.":    true,
+		"Device.DeviceInfo.VendorLogFile.":                                true,
+		"Device.DynamicDNS.Client.":                                       false,
+		"Device.WiFi.SSID.":                                               false,
+		"Device.IP.Interface.":                                            false,
+	} {
+		if got := isRuntimeTable(table); got != want {
+			t.Errorf("isRuntimeTable(%q) = %v, want %v", table, got, want)
+		}
+	}
+}

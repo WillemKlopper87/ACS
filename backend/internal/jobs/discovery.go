@@ -2,9 +2,13 @@ package jobs
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -46,6 +50,7 @@ func AdvanceDiscovery(p *ParameterDiscoveryPayload, names map[string]bool) (bool
 		}
 	}
 	sort.Strings(objects)
+	objects = collapseRuntimeInstances(objects)
 	queued := map[string]bool{}
 	for _, path := range p.Pending {
 		queued[path] = true
@@ -142,4 +147,96 @@ func (r *Repository) RecordDiscoveryFallback(ctx context.Context, id, commandKey
 	}
 	_, err = r.db.ExecContext(ctx, `UPDATE jobs SET result_detail=$2,updated_at=now() WHERE id=$1 AND type='PARAMETER_DISCOVERY'`, id, raw)
 	return err
+}
+
+// runtimeTableTemplates are multi-instance tables whose rows describe live
+// network state (connected clients, processes, sockets, routes) rather than
+// configuration. Every row has the same parameters, so discovery walks only
+// the lowest-numbered instance: walking all of them inflated the Nokia
+// FastMile walk past the object budget (22+ Hosts.Host rows, each with its
+// own IPv4Address/IPv6Address sub-tables) without adding capability
+// information. Configuration tables (WiFi.SSID.{i}, IP.Interface.{i}, ...)
+// are still walked per instance because writes need per-instance evidence.
+var runtimeTableTemplates = []string{
+	"Hosts.Host.",
+	"AssociatedDevice.",
+	"DHCPv4.Server.Pool.{i}.Client.",
+	"DHCPv6.Server.Pool.{i}.Client.",
+	"DeviceInfo.ProcessStatus.Process.",
+	"IP.ActivePort.",
+	"IPv4Forwarding.",
+	"IPv6Forwarding.",
+	"ManagementServer.ManageableDevice.",
+	"NeighboringWiFiDiagnostic.Result.",
+	"DeviceInfo.VendorLogFile.",
+	// EasyMesh Data Elements (TR-181 Device.WiFi.DataElements.): event logs
+	// and per-station rows grow with every Wi-Fi association.
+	"AssociationEvent.AssociationEventData.",
+	"DisassociationEvent.DisassociationEventData.",
+	"FailedConnectionEvent.FailedConnectionEventData.",
+	"BSS.{i}.STA.",
+}
+
+var (
+	instanceObjectRE  = regexp.MustCompile(`^(.*\.)(\d+)\.$`)
+	instanceSegmentRE = regexp.MustCompile(`\.\d+\.`)
+)
+
+// isRuntimeTable reports whether a table path such as
+// "Device.DHCPv4.Server.Pool.1.Client." is one of runtimeTableTemplates.
+func isRuntimeTable(table string) bool {
+	template := table
+	for instanceSegmentRE.MatchString(template) {
+		template = instanceSegmentRE.ReplaceAllString(template, ".{i}.")
+	}
+	for _, suffix := range runtimeTableTemplates {
+		if strings.HasSuffix(template, "."+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// collapseRuntimeInstances drops every instance object of a runtime table
+// except the lowest-numbered one. One GetParameterNames response lists the
+// instances of one table, so the minimum here is the table's minimum.
+func collapseRuntimeInstances(objects []string) []string {
+	lowest := map[string]int{}
+	for _, path := range objects {
+		if m := instanceObjectRE.FindStringSubmatch(path); m != nil && isRuntimeTable(m[1]) {
+			n, err := strconv.Atoi(m[2])
+			if err != nil {
+				continue
+			}
+			if current, seen := lowest[m[1]]; !seen || n < current {
+				lowest[m[1]] = n
+			}
+		}
+	}
+	if len(lowest) == 0 {
+		return objects
+	}
+	kept := objects[:0]
+	for _, path := range objects {
+		if m := instanceObjectRE.FindStringSubmatch(path); m != nil && isRuntimeTable(m[1]) {
+			if n, err := strconv.Atoi(m[2]); err == nil && n != lowest[m[1]] {
+				continue
+			}
+		}
+		kept = append(kept, path)
+	}
+	return kept
+}
+
+// ActiveDiscovery returns the device's QUEUED or RPC_SENT discovery job, or
+// nil when none is active. Concurrent walks of the same tree only compete
+// for the device's sessions, so callers reuse the active one.
+func (r *Repository) ActiveDiscovery(ctx context.Context, deviceID string) (*Job, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE device_id=$1 AND type=$2 AND status IN ($3,$4) ORDER BY created_at LIMIT 1`,
+		deviceID, TypeParameterDiscovery, StatusQueued, StatusRPCSent)
+	job, err := scanJob(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return job, err
 }
