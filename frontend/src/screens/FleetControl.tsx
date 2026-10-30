@@ -1,7 +1,7 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { BulkActionResponse, ConfigTemplate, Device, DeviceGroupCount } from "../api/types";
+import type { BulkActionResponse, BulkActionResult, ConfigTemplate, Device, DeviceGroupCount } from "../api/types";
 import { DataTable } from "../components/DataTable";
 import { StatusBadge } from "../components/StatusBadge";
 import { timeAgo } from "../lib/format";
@@ -10,8 +10,9 @@ import { canWrite } from "../auth/roles";
 import { useLive } from "../lib/useLive";
 import { useSlashFocus } from "../lib/hotkeys";
 import { toast } from "../lib/toast";
+import { wifiInputValid } from "../lib/wifi";
 
-type BulkActionType = "CONNECTION_REQUEST" | "REFRESH_CELLULAR" | "SET_PARAMETER" | "APPLY_TEMPLATE";
+type BulkActionType = "CONNECTION_REQUEST" | "REFRESH_CELLULAR" | "SET_WIFI" | "APPLY_TEMPLATE";
 
 const PAGE_SIZES = [50, 100, 250, 500];
 
@@ -41,6 +42,7 @@ export function FleetControl() {
 
   const [actionType, setActionType] = useState<BulkActionType>("CONNECTION_REQUEST");
   const [ssidValue, setSsidValue] = useState("");
+  const [wifiPassword, setWifiPassword] = useState("");
   const [templates, setTemplates] = useState<ConfigTemplate[]>([]);
   const [templateId, setTemplateId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -187,13 +189,15 @@ export function FleetControl() {
         loadGroups();
         return;
       }
+      // SET_WIFI resolves each device's primary networks server-side (every
+      // band of the home network, never guest/disabled SSIDs) instead of
+      // writing a fixed Device.WiFi.SSID.1, which renamed one band only.
       const res =
-        actionType === "SET_PARAMETER"
-          ? await api.bulkAction(ids, "SET_PARAMETER", {
-              parameters: [{ name: "Device.WiFi.SSID.1.SSID", value: ssidValue, type: "string" }],
-            })
+        actionType === "SET_WIFI"
+          ? await api.bulkAction(ids, "SET_WIFI", { wifiSsid: ssidValue.trim(), wifiPassword })
           : await api.bulkAction(ids, actionType, { timeoutSeconds: 30 });
       setResult(res);
+      if (actionType === "SET_WIFI") setWifiPassword("");
       setSelectedIds(new Set());
       toast(`${res.action}: ${res.succeeded} of ${res.requested} queued successfully`, res.succeeded === res.requested ? "success" : "info");
       loadGroups();
@@ -249,6 +253,7 @@ export function FleetControl() {
     [],
   );
 
+  const deviceNames = useMemo(() => new Map(devices.map((d) => [d.id, d.label || d.oui_serial])), [devices]);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const allOnPageSelected = visible.length > 0 && visible.every((d) => selectedIds.has(d.id));
 
@@ -362,16 +367,28 @@ export function FleetControl() {
             <select className="chip" aria-label="Bulk action" value={actionType} onChange={(e) => setActionType(e.target.value as BulkActionType)}>
               <option value="CONNECTION_REQUEST">Queue Connection Request</option>
               <option value="REFRESH_CELLULAR">Refresh cellular diagnostics</option>
-              <option value="SET_PARAMETER">Set WiFi SSID</option>
+              <option value="SET_WIFI">Set Wi-Fi name / password</option>
               <option value="APPLY_TEMPLATE">Apply config template</option>
             </select>
-            {actionType === "SET_PARAMETER" && (
-              <input aria-label="New SSID"
-                placeholder="New SSID…"
-                value={ssidValue}
-                onChange={(e) => setSsidValue(e.target.value)}
-                style={{ background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 6, padding: "0.4rem 0.6rem", color: "var(--ink)", fontFamily: "var(--font-mono)", fontSize: "0.82rem" }}
-              />
+            {actionType === "SET_WIFI" && (
+              <>
+                <input aria-label="New SSID"
+                  placeholder="New SSID… (all primary bands)"
+                  value={ssidValue}
+                  onChange={(e) => setSsidValue(e.target.value)}
+                  maxLength={32}
+                  style={inputStyle}
+                />
+                <input aria-label="New Wi-Fi password (optional)"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="New password (optional)"
+                  value={wifiPassword}
+                  onChange={(e) => setWifiPassword(e.target.value)}
+                  maxLength={63}
+                  style={inputStyle}
+                />
+              </>
             )}
             {actionType === "APPLY_TEMPLATE" && (
               <select className="chip" aria-label="Template" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
@@ -390,7 +407,7 @@ export function FleetControl() {
               disabled={
                 busy ||
                 !writable ||
-                (actionType === "SET_PARAMETER" && !ssidValue.trim()) ||
+                (actionType === "SET_WIFI" && !wifiInputValid(ssidValue, wifiPassword)) ||
                 (actionType === "APPLY_TEMPLATE" && !templateId)
               }
               title={writable ? undefined : "Read-only role — bulk actions require operator or admin"}
@@ -405,23 +422,41 @@ export function FleetControl() {
         </div>
       )}
 
-      {result && (
-        <div className="banner info" style={{ marginTop: "0.9rem" }}>
-          <b>{result.action}</b>: {result.succeeded} of {result.requested} queued successfully.
-          {result.results.some((r) => r.error) && (
-            <div style={{ marginTop: "0.4rem", fontFamily: "var(--font-mono)", fontSize: "0.78rem" }}>
-              {result.results
-                .filter((r) => r.error)
-                .slice(0, 5)
-                .map((r) => (
-                  <div key={r.device_id}>
-                    {r.device_id.slice(0, 8)}… — {r.error}
-                  </div>
-                ))}
-            </div>
-          )}
-        </div>
-      )}
+      {result && <BulkOutcomes result={result} deviceName={(id) => deviceNames.get(id)} />}
     </section>
+  );
+}
+
+const inputStyle = {
+  background: "var(--surface-2)",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  padding: "0.4rem 0.6rem",
+  color: "var(--ink)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "0.82rem",
+} as const;
+
+function outcomeText(r: BulkActionResult): string {
+  if (r.error) return r.refresh_command_key ? `${r.error} (read ${r.refresh_command_key})` : r.error;
+  return r.detail ? `queued ${r.command_key} — ${r.detail}` : `queued ${r.command_key}`;
+}
+
+// BulkOutcomes lists every device's result, failures first: with SET_WIFI
+// each device resolves its own networks, so "8 of 10 queued" alone hides
+// which units need discovery, a role read, or a different approach.
+export function BulkOutcomes({ result, deviceName }: { result: BulkActionResponse; deviceName?: (id: string) => string | undefined }) {
+  const rows = [...result.results].sort((a, b) => Number(!a.error) - Number(!b.error));
+  return (
+    <div className={`banner ${result.succeeded === result.requested ? "info" : "error"}`} style={{ marginTop: "0.9rem" }}>
+      <b>{result.action}</b>: {result.succeeded} of {result.requested} queued successfully.
+      <div style={{ marginTop: "0.4rem", fontFamily: "var(--font-mono)", fontSize: "0.78rem", maxHeight: "16rem", overflowY: "auto" }}>
+        {rows.map((r) => (
+          <div key={r.device_id} data-outcome={r.error ? "failed" : "queued"}>
+            {r.error ? "✗" : "✓"} {deviceName?.(r.device_id) ?? `${r.device_id.slice(0, 8)}…`} — {outcomeText(r)}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
