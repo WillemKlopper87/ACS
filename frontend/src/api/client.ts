@@ -54,7 +54,7 @@ import type {
 } from "./types";
 import { getAuthState, clearAuth, markAuthRequired } from "../auth/tokenStore";
 import { markApiReachable } from "../lib/apiHealth";
-import type { paths } from "./generated";
+import type { components, paths } from "./generated";
 
 // Generated contract (audit P2.5): src/api/generated.ts is produced from
 // backend/openapi.yaml by `npm run generate:api`, and CI fails if it
@@ -72,6 +72,11 @@ export type WiFiInsightsData =
   paths["/api/v1/devices/{id}/wifi/insights"]["get"]["responses"]["200"]["content"]["application/json"];
 export type WiFiInsightsWindow = "2h" | "1d" | "1w" | "1m";
 export type SIMView = paths["/api/v1/devices/{id}/sim"]["get"]["responses"]["200"]["content"]["application/json"];
+export type DeviceXMPPState = components["schemas"]["DeviceXMPPState"];
+export type XMPPProvisioning = components["schemas"]["XMPPProvisioning"];
+export type XMPPProvisionRequest = NonNullable<
+  paths["/api/v1/devices/{id}/xmpp/provision"]["post"]["requestBody"]
+>["content"]["application/json"];
 export type DiagnosticsCapabilities =
   paths["/api/v1/devices/{id}/diagnostics-capabilities"]["get"]["responses"]["200"]["content"]["application/json"];
 
@@ -333,6 +338,16 @@ export const api = {
 
   /** SIM / subscriber identifiers, masked for every role. */
   getSIM: (id: string) => request<SIMView>(`/api/v1/devices/${id}/sim`),
+
+  /** XMPP Connection Request state: the ACS's session, the CPE's view, provisioning progress. */
+  getDeviceXMPP: (id: string) => request<DeviceXMPPState>(`/api/v1/devices/${id}/xmpp`),
+
+  /** Starts (or, with restart, re-runs) zero-touch XMPP provisioning; idempotent while a run is active. */
+  provisionXMPP: (id: string, body: XMPPProvisionRequest) =>
+    request<components["schemas"]["XMPPProvisionResponse"]>(`/api/v1/devices/${id}/xmpp/provision`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   /** Full SIM identifiers: human superadmin only, reason required, audited server-side. */
   revealSIM: (id: string, reason: string, reference: string) =>

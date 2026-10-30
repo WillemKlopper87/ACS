@@ -165,6 +165,11 @@ it is set in `~/.acs-secrets.env`. The self-signed certificate names
 
 ### 4. Provision
 
+From the console: open the device, then **XMPP Connection Request → Set up…**,
+tick both certificate options for the lab's self-signed certificate, and
+**Start provisioning**. The panel lists the steps and refreshes every 15 s.
+The same over the API:
+
 ```bash
 API=http://127.0.0.1:8080; DEV=<device-uuid>; TOKEN=<operator JWT with credential.manage>
 curl -s -X POST "$API/api/v1/devices/$DEV/xmpp/provision" \

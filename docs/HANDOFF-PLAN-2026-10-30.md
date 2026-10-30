@@ -76,7 +76,8 @@ Run these checks in order, using the device ids above:
    - It writes SSID.1 and SSID.5 (and their passphrases if given), never guest or disabled SSIDs.
 7. **XMPP:** follow `docs/XMPP-CONNECTION-REQUEST.md`:
    - Allow TCP 5222 from 66.18.65.65/32 only.
-   - Set `ACS_XMPP_ENABLED=1`, then provision with the lab cert-relax flags.
+   - Set `ACS_XMPP_ENABLED=1`, then provision with the lab cert-relax flags: on the device page, **XMPP Connection Request → Set up…**, tick both options. The panel shows each step and refreshes itself.
+   - The Prosody config used Prosody 13 syntax (`Lua.os.getenv`) while compose pins 0.12, so the container exited at startup; fixed to `ENV_*` and checked locally (Prosody 0.12 up, ACS session established over the pinned certificate, a console-started run created the per-device account, credential, first job and audit row).
    - Expect `DONE` after about 6–10 minutes.
    - Then `POST /connection-request` gives `XMPP_SENT_INFORM_RECEIVED`.
    - Confirm on the device:
@@ -137,7 +138,7 @@ Known 7547 exploits target specific CPE web stacks (RomPager "Misfortune Cookie"
 
 1. **Console pages:**
    - ~~Wi-Fi insights~~ and ~~SIM panel~~: done, as panels on the device detail (`components/WiFiInsights.tsx`, `components/SimPanel.tsx`). Checked against the real API on seeded data, including the audited reveal. Still to check on the FastMile: real sample data after deploy.
-   - XMPP provision button.
+   - ~~XMPP provision button~~: done (`components/XmppPanel.tsx`).
 2. **Policy and template typing (P1 #13):**
    - `internal/policy` enforce.go: SPV types from the TR-181 dictionary, deduplicate writes, skip writes the cache shows are already in place.
    - Templates deferred until discovery; vendor-family (ALCL = Nokia) filters.

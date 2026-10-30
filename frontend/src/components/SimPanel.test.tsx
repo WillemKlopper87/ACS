@@ -107,9 +107,18 @@ describe("SimPanel", () => {
     fireEvent.change(screen.getByLabelText(/Reason/), { target: { value: "RICA verification for ticket 4471" } });
     vi.useFakeTimers({ shouldAdvanceTime: true });
     fireEvent.click(screen.getByRole("button", { name: "Reveal and record" }));
-    await waitFor(() => expect(screen.getByText("655010000005678")).toBeTruthy());
+    // Generous timeout: under a full parallel run the reveal can take longer
+    // than waitFor's 1 s default to render.
+    await screen.findByText("655010000005678", {}, { timeout: 5000 });
+    // The hide timer starts in an effect after that render; let React run
+    // it before moving the clock, or the advance can happen first.
+    await act(async () => {});
     await act(async () => {
-      vi.advanceTimersByTime(120_000);
+      vi.advanceTimersByTime(119_000);
+    });
+    expect(screen.getByText("655010000005678")).toBeTruthy();
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
     });
     expect(screen.queryByText("655010000005678")).toBeNull();
   });

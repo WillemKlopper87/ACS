@@ -888,5 +888,23 @@ input:focus, select.chip:focus {
 
 .sim-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.8rem; color: var(--ink-dim); }
 .sim-field textarea, .sim-field input { font: inherit; color: var(--ink); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.4rem 0.5rem; }
-.sim-reveal { width: min(32rem, 100%); }
+.sim-reveal { width: min(32rem, 100%); overflow-y: auto; }
 .sim-revealed { margin-bottom: 0.6rem; }
+
+/* --- XMPP Connection Request panel ---------------------------------------- */
+.xmpp-note { font-size: 0.78rem; margin: 0.5rem 0 0; }
+.xmpp-steps { list-style: none; margin: 0.6rem 0 0; padding: 0; counter-reset: step; font-size: 0.8rem; }
+.xmpp-steps li { counter-increment: step; display: flex; align-items: center; gap: 0.5rem; padding: 0.22rem 0; color: var(--ink-faint); }
+.xmpp-steps li::before {
+  content: counter(step); flex: none; width: 1.3rem; height: 1.3rem; border-radius: 50%; display: inline-grid; place-items: center;
+  font-family: var(--font-mono); font-size: 0.68rem; border: 1px solid var(--border); background: var(--surface-2);
+}
+.xmpp-steps li.done { color: var(--ink-dim); }
+.xmpp-steps li.done::before { content: "✓"; color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.xmpp-steps li.now { color: var(--ink); font-weight: 600; }
+.xmpp-steps li.now::before { border-color: var(--accent); color: var(--accent); }
+.xmpp-setup { width: min(34rem, 100%); overflow-y: auto; }
+.xmpp-opt { display: flex; gap: 0.55rem; align-items: flex-start; font-size: 0.84rem; }
+.xmpp-opt input { margin-top: 0.2rem; }
+.xmpp-opt label { display: flex; flex-direction: column; gap: 0.15rem; cursor: pointer; }
+.xmpp-opt .dim { font-size: 0.76rem; }

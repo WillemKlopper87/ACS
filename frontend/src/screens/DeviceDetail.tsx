@@ -21,6 +21,7 @@ import { toast } from "../lib/toast";
 import { MeshTopology } from "../components/MeshTopology";
 import { SimPanel } from "../components/SimPanel";
 import { WiFiInsights } from "../components/WiFiInsights";
+import { XmppPanel } from "../components/XmppPanel";
 import { useMeshTopology } from "../lib/useMeshTopology";
 import { deviceLink, gatewayName, isMeshSatellite, satelliteReachabilityNote, satelliteRebootWarning } from "../lib/mesh";
 import { skippedNote, unsupportedReason } from "../lib/diagnostics";
@@ -634,6 +635,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
 
       <MeshTopology device={device} mesh={mesh} />
       <SimPanel deviceId={id} role={role} writable={writable} />
+      <XmppPanel deviceId={id} writable={writable} />
       <WiFiInsights deviceId={id} satelliteOf={satellite ? meshGatewayName : undefined} />
 
       <div className="panel">
