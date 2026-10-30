@@ -648,6 +648,12 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			_, paths, _ := h.cellularDiagnosticPaths(r.Context(), device)
+			if len(paths) == 0 {
+				// e.g. a mesh satellite with no cellular radio: do not queue an
+				// empty GetParameterValues and report it as success.
+				result.Error = "no discovered cellular parameters for this device"
+				break
+			}
 			job, err := h.jobs.Create(r.Context(), deviceID, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, operator)
 			if err != nil {
 				result.Error = err.Error()

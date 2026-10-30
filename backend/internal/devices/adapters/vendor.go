@@ -47,6 +47,13 @@ func (c Catalog) CellularDiagnosticParams() []string {
 func CellularDiagnosticParamsFromNames(names map[string]bool) []string {
 	seen := make(map[string]struct{})
 	for path := range names {
+		// Only cellular subtrees: a whole-tree keyword scan also picked up
+		// Wi-Fi band/bandwidth leaves and runtime rows such as EasyMesh
+		// STA.1.SignalStrength, and one vanished instance faults the whole
+		// GetParameterValues (9005) on the Nokia FastMile.
+		if !isCellularPath(path) || strings.HasSuffix(path, ".") {
+			continue
+		}
 		leaf := strings.ToUpper(lastPathSegment(path))
 		for _, keyword := range cellularDiagnosticKeywords {
 			if strings.Contains(leaf, keyword) {

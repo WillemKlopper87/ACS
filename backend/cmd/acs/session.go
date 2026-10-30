@@ -810,15 +810,27 @@ func (h *handler) detectCellularStateChanges(ctx context.Context, deviceID strin
 		return nil
 	}
 	var changes map[string]telemetry.CellularStateChange
+	// Sentinel "no value" placeholders compare as empty, so a value that is
+	// merely absent on both sides is not reported as a state change.
+	stateValue := func(v string) string {
+		if adapters.IsCellularSentinel(v) {
+			return ""
+		}
+		return v
+	}
 	for path, p := range candidates {
 		old, existed := cached[path]
-		if existed && old.Value == p.Value {
+		oldValue, newValue := stateValue(old.Value), stateValue(p.Value)
+		if existed && oldValue == newValue {
+			continue
+		}
+		if !existed && newValue == "" {
 			continue
 		}
 		if changes == nil {
 			changes = make(map[string]telemetry.CellularStateChange)
 		}
-		changes[path] = telemetry.CellularStateChange{Old: old.Value, New: p.Value}
+		changes[path] = telemetry.CellularStateChange{Old: oldValue, New: newValue}
 	}
 	return changes
 }
