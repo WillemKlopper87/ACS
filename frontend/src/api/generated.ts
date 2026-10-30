@@ -6185,7 +6185,7 @@ export interface components {
             status?: string;
         };
         DiagnosticCapability: {
-            supported?: boolean;
+            supported: boolean;
             path?: string;
             /** @description Why discovery rules the diagnostic out */
             reason?: string;
@@ -6659,8 +6659,8 @@ export interface components {
             };
             content: {
                 "application/json": {
-                    command_key?: string;
-                    status?: string;
+                    command_key: string;
+                    status: string;
                     /** @description Optional inputs not sent because discovery did not prove them writable (the CPE's defaults apply) */
                     skipped_inputs?: string[];
                 };

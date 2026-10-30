@@ -29,6 +29,7 @@ const STATUS_TONE: Record<string, string> = {
   RPC_SENT: "pending",
   IN_PROGRESS: "pending",
   AWAITING_TRANSFER_COMPLETE: "pending",
+  AWAITING_DIAGNOSTICS_COMPLETE: "pending",
 };
 
 const RECENCY_LABEL: Record<string, string> = {

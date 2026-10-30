@@ -2421,6 +2421,7 @@ components:
         application/json:
           schema:
             type: object
+            required: [command_key, status]
             properties:
               command_key: { type: string }
               status: { type: string }
@@ -2600,6 +2601,7 @@ components:
 
     DiagnosticCapability:
       type: object
+      required: [supported]
       properties:
         supported: { type: boolean }
         path: { type: string }

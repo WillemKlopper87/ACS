@@ -64,6 +64,10 @@ import type { paths } from "./generated";
 // legacy to be migrated over time.
 type LoginResponse =
   paths["/api/v1/auth/login"]["post"]["responses"]["200"]["content"]["application/json"];
+type DiagnosticQueueResponse =
+  paths["/api/v1/devices/{id}/diagnostics/ping"]["post"]["responses"]["202"]["content"]["application/json"];
+export type DiagnosticsCapabilities =
+  paths["/api/v1/devices/{id}/diagnostics-capabilities"]["get"]["responses"]["200"]["content"]["application/json"];
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -258,16 +262,21 @@ export const api = {
     }),
 
   createDiagnosticsPing: (id: string, host: string) =>
-    request<QueueResponse>(`/api/v1/devices/${id}/diagnostics/ping`, {
+    request<DiagnosticQueueResponse>(`/api/v1/devices/${id}/diagnostics/ping`, {
       method: "POST",
       body: JSON.stringify({ host }),
     }),
 
   createDiagnosticsTraceroute: (id: string, host: string) =>
-    request<QueueResponse>(`/api/v1/devices/${id}/diagnostics/traceroute`, {
+    request<DiagnosticQueueResponse>(`/api/v1/devices/${id}/diagnostics/traceroute`, {
       method: "POST",
       body: JSON.stringify({ host }),
     }),
+
+  // Which diagnostics the device's discovered data model supports — the
+  // same rules the create endpoints enforce with a 409.
+  getDiagnosticsCapabilities: (id: string) =>
+    request<DiagnosticsCapabilities>(`/api/v1/devices/${id}/diagnostics-capabilities`),
 
   getParameterHistory: (id: string, name: string) =>
     request<{ name: string; items: ParameterHistoryEntry[] }>(`/api/v1/devices/${id}/parameters/history?name=${encodeURIComponent(name)}`),
