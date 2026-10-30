@@ -186,7 +186,7 @@ The CPE then gets the right **APN/DNN** settings and should be **network-locked 
 - **Network lock to the MNO's MCC/MNC:** on this firmware it is not a list the ACS can write.
   - The FastMile's **operator lock** comes from Nokia's pre-configuration server. The settings involved are `X_ALU-COM_ModemDeviceInfo.X_ALU-COM_NokiaServerURL`, `ForceDownloadPreconfigFromServer`, `ObtainOPIDFromPLMN` and `QueryBOENGServerInOperatorLock`.
   - TR-069 exposes only switches around the lock, such as `X_ALU-COM_BlockingTrafficByOperatorLock`.
-  - These are deliberately on the server-side dangerous-parameter denylist: a wrong value can strand the device.
+  - These are deliberately on the server-side dangerous-parameter denylist: a wrong value can strand the device. (Correction: that denylist is not implemented yet; it is gap #1 in `docs/GAP-ANALYSIS-2026-10-30.md`.)
 
   So:
   1. **Set up the lock with Nokia:** an operator pre-configuration for MCC 655 / MNC 06 (the PLMN the field FastMile reports, `USIM.X_ALU-COM_PLMN = 65506`), applied by Nokia's server or at the factory.

@@ -120,7 +120,7 @@ Do these in this order. Change one CPE setting at a time, and keep the Nokia web
 ### 3b. CPE side (FastMile 1.2501, all over TR-069 unless noted)
 
 First read the current values with `POST /parameters/get`. Do not write until you know them.
-- `Device.IP.Interface.{wan}.X_ALU-COM_WanAccessCfg.{HttpsDisabled,SshDisabled}`: confirm WAN-side web UI and SSH are disabled (=1). **Never** write `Tr69Disabled`: it is on the server-side denylist and would cut off the ACS.
+- `Device.IP.Interface.{wan}.X_ALU-COM_WanAccessCfg.{HttpsDisabled,SshDisabled}`: confirm WAN-side web UI and SSH are disabled (=1). **Never** write `Tr69Disabled`: it is on the server-side denylist and would cut off the ACS. (The denylist is not implemented yet; see the gap analysis.)
 - `Device.ManagementServer.X_ALU-COM_ACSIPv4List`: appears to restrict which source IPs may send a Connection Request or act as ACS. Read the value, then test setting it to the ACS public IP. This needs care: a wrong value may lock out the ACS.
 - `Device.UserInterface.X_ALU-COM_Web{Normal,Super}Lockout.*`: check the lockout settings for web-UI brute force.
 - `Device.UserInterface.RemoteAccess.{Port,Protocol}`: record the values.
@@ -167,6 +167,6 @@ Known 7547 exploits target specific CPE web stacks (RomPager "Misfortune Cookie"
   - Full IMSI/ICCID/MSISDN/IMEI/EID only through the audited superadmin reveal.
   - Never return SIM PIN or Wi-Fi/credential secrets.
   - Client MACs and hostnames are personal data: keep them out of `grafana_ro` and out of the discovery library.
-- **Dangerous CPE parameters** stay on the server-side denylist: Tr69Disabled, RemoteWebDebug, the Nokia server URL / operator lock, the NWCC URLs, RegulatoryDomain, ManagementServer URL and credentials.
+- **Dangerous CPE parameters** stay on the server-side denylist: Tr69Disabled, RemoteWebDebug, the Nokia server URL / operator lock, the NWCC URLs, RegulatoryDomain, ManagementServer URL and credentials. **Not implemented yet (verified 2026-10-30, `docs/GAP-ANALYSIS-2026-10-30.md`): no write path refuses these today, so do not rely on it.**
 - **Don't run `docker system prune`** or other destructive commands on the EC2 host. The user approves deploys and pushes to `main`.
 - **Field-test write-ups** from this session (`NOKIA-FASTMILE-EC2-RUNBOOK.md`, `NOKIA-FASTMILE-FIELD-RESULT-2026-10-30.md`, `CODE_REVIEW_2026-10-30.md`) were kept outside the repository and are not part of this handoff. Their findings are folded into `docs/COMPATIBILITY.md`, `docs/NOKIA-FIELD-GAP-REPORT-2026-10-30.md` and this file.
