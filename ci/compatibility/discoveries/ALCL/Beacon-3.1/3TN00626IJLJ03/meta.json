@@ -1,0 +1,25 @@
+{
+  "acs_commit": "37e51a8",
+  "exported_at": "2026-10-30T10:36:51Z",
+  "hardware_versions": [
+    "3TN00512BABA"
+  ],
+  "last_discovered_at": "2026-10-30T10:15:08.872492Z",
+  "manufacturer": "ALCL",
+  "merged_command_keys": [
+    "discover_20261030_83d931d5"
+  ],
+  "model_name": "Nokia WiFi Beacon 3.1",
+  "never_observed": [],
+  "object_count": 26,
+  "oui": "F89B6E",
+  "parameter_count": 75,
+  "product_class": "Beacon 3.1",
+  "protocol": "CWMP",
+  "root": "Device.",
+  "root_data_model_version": "2.13",
+  "scope": "Names and access metadata only. Runtime tables (hosts, Wi-Fi clients/events, scans, alarms) are walked at their lowest instance; other tables at most 32 instances.",
+  "snapshots_merged": 1,
+  "software_version": "3TN00626IJLJ03",
+  "writable_count": 29
+}
