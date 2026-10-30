@@ -98,7 +98,7 @@ Do these in this order. Change one CPE setting at a time, and keep the Nokia web
    - 3478/udp: closed. STUN is unusable on this firmware.
    - 22: admin IP only.
    - Grafana, Prometheus, API and Postgres stay on 127.0.0.1 (already the compose default). Reach them over an SSH tunnel.
-2. **ACS source-IP allowlist** `ACS_CWMP_ALLOWED_CIDRS` with the same ranges: defence in depth if the security group is widened by mistake. **Done in code:** it was already enforced in the lab profile whenever set; `TestLabCIDRAllowlistEnforced` now pins that. Add it to `~/.acs-secrets.env` (e.g. `export ACS_CWMP_ALLOWED_CIDRS="66.18.65.65/32"`) and restart. It covers both listeners.
+2. **ACS source-IP allowlist** `ACS_CWMP_ALLOWED_CIDRS` with the same ranges: defence in depth if the security group is widened by mistake. **Done in code:** it was already enforced in the lab profile whenever set; `TestLabCIDRAllowlistEnforced` now pins that. Add it to `~/.acs-secrets.env` and restart. It covers both listeners and **every** path on them, including `/readyz` and `/metrics`, so it must also list `127.0.0.1/32` (the `start.sh`/`healthcheck.sh` readiness check) and the Prometheus container's Docker network (`prometheus.yml` scrapes `host.docker.internal:7547`). With only the CPE ranges, `start.sh` hangs waiting for cmd/acs and the ACS metrics in Grafana go blank. Example: `export ACS_CWMP_ALLOWED_CIDRS="66.18.65.65/32,127.0.0.1/32,<docker subnet>"`, with the subnet from `docker network inspect infra_default --format '{{(index .IPAM.Config 0).Subnet}}'`.
 3. **TLS with an IP certificate.** **Code done**; deploy steps on EC2:
    ```bash
    scripts/acs-cert.sh 13.247.225.68     # private CA + server cert with IP SAN, in ~/.acs-tls/
@@ -111,7 +111,7 @@ Do these in this order. Change one CPE setting at a time, and keep the Nokia web
    - Record the result in `docs/COMPATIBILITY.md`. Only once the FastMile works over TLS: switch to the production profile (`ACS_DEPLOYMENT_PROFILE=production`, which requires TLS, TLS ≥1.2, allowed CIDRs and a non-wildcard `ACS_ADDR`), then close plain 7547.
    - The Beacon inherits ACS settings from the FastMile, so do it last and expect its 8–11 min recovery.
 5. **Remaining secret exposure:**
-   - ~~Scheduled-job payloads returned by `GET /schedules`~~: done (`89bfac7`).
+   - ~~Scheduled-job payloads returned by `GET /api/v1/scheduled-jobs`~~: done (`89bfac7`).
    - ~~SPV secrets kept in `jobs.payload` for the 90-day retention~~: done (`2474988`, migration 0086).
    - Still open (code review S1): Digest credential rotation goes through SPV, not the encrypted credential store.
    - The XMPP password, like Connection Request credential rotation, travels in the SPV. That stays plain text on the wire until TLS (step 3) is in place.
