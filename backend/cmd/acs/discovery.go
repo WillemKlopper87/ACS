@@ -192,19 +192,25 @@ func (h *handler) finishParameterDiscovery(ctx context.Context, deviceID string,
 		"parameter_count", len(writableByName), "writable_count", writableCount, "skipped", len(payload.Skipped), "command_key", job.CommandKey)
 }
 
-// skipDiscoveryObject abandons the object the walk is on (see
-// jobs.SkipDiscoveryCursor) and either requeues the walk at the next object
-// or, when that was the last one, completes discovery with what was found.
+// skipDiscoveryObject defers (first failure) or abandons (second failure)
+// the object the walk is on (see jobs.SkipDiscoveryCursor) and either
+// requeues the walk at the next object or, when nothing is left, completes
+// discovery with what was found.
 func (h *handler) skipDiscoveryObject(ctx context.Context, deviceID string, job *jobs.Job, payload jobs.ParameterDiscoveryPayload, reason string) {
-	skipped := payload.Cursor
-	done, err := jobs.SkipDiscoveryCursor(&payload)
+	object := payload.Cursor
+	done, skipped, err := jobs.SkipDiscoveryCursor(&payload)
 	if err != nil {
 		_ = h.jobs.MarkFailed(ctx, job.ID, "", err.Error())
 		h.logger.Warn("parameter discovery abandoned", "device_id", deviceID, "command_key", job.CommandKey, "err", err)
 		return
 	}
-	h.logger.Warn("parameter discovery skipped an object the CPE could not serve",
-		"device_id", deviceID, "object", skipped, "reason", reason, "command_key", job.CommandKey)
+	if skipped {
+		h.logger.Warn("parameter discovery skipped an object the CPE could not serve",
+			"device_id", deviceID, "object", object, "reason", reason, "attempt", 2, "command_key", job.CommandKey)
+	} else {
+		h.logger.Info("parameter discovery deferred an object for one retry",
+			"device_id", deviceID, "object", object, "reason", reason, "command_key", job.CommandKey)
+	}
 	if done {
 		h.finishParameterDiscovery(ctx, deviceID, job, payload, payload.Names)
 		return

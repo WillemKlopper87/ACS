@@ -204,6 +204,7 @@ type ParameterDiscoveryPayload struct {
 	Visited      map[string]bool            `json:"visited,omitempty"`
 	Names        map[string]bool            `json:"names,omitempty"`
 	Skipped      []string                   `json:"skipped,omitempty"`
+	Retried      map[string]bool            `json:"retried,omitempty"`
 	Firmware     string                     `json:"firmware,omitempty"`
 	Capabilities map[string]json.RawMessage `json:"capabilities,omitempty"`
 }

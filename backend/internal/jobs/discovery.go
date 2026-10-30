@@ -75,18 +75,30 @@ func AdvanceDiscovery(p *ParameterDiscoveryPayload, names map[string]bool) (bool
 // device is treated as unable to serve discovery at all.
 const DiscoveryMaxSkipped = 32
 
-// SkipDiscoveryCursor abandons the object currently being walked — the CPE
-// faulted on it, or dropped the session instead of answering (observed on
-// Nokia FastMile 1.2501.00.0798 for Device.DynamicDNS.Client.) — records it
-// in Skipped, and advances to the next pending object. It reports done when
-// nothing is left to walk. Skipping is safe because discovery is read-only;
-// retrying the same object would only stall the walk forever.
-func SkipDiscoveryCursor(p *ParameterDiscoveryPayload) (bool, error) {
+// SkipDiscoveryCursor handles an object the CPE faulted on or dropped the
+// session for instead of answering. Nokia FastMile 1.2501.00.0798 drops
+// sessions mid-walk at objects that differ from run to run, so the first
+// failure only defers the object to the end of the walk (retried in a later
+// session); a second failure records it in Skipped. Either way the walk
+// advances, because resending the same object immediately could stall it
+// forever. It reports done when nothing is left to walk, and skipped when
+// the object was given up on rather than deferred. Skipping is safe because
+// discovery is read-only.
+func SkipDiscoveryCursor(p *ParameterDiscoveryPayload) (done, skipped bool, err error) {
 	if p.Cursor == "" {
-		return false, fmt.Errorf("discovery has no object in progress to skip")
+		return false, false, fmt.Errorf("discovery has no object in progress to skip")
+	}
+	if p.Retried == nil {
+		p.Retried = map[string]bool{}
+	}
+	if !p.Retried[p.Cursor] {
+		p.Retried[p.Cursor] = true
+		p.Pending = append(p.Pending, p.Cursor)
+		p.Cursor, p.Pending = p.Pending[0], p.Pending[1:]
+		return false, false, nil
 	}
 	if len(p.Skipped) >= DiscoveryMaxSkipped {
-		return false, fmt.Errorf("discovery skipped more than %d objects the device could not serve", DiscoveryMaxSkipped)
+		return false, false, fmt.Errorf("discovery skipped more than %d objects the device could not serve", DiscoveryMaxSkipped)
 	}
 	if p.Visited == nil {
 		p.Visited = map[string]bool{}
@@ -95,10 +107,10 @@ func SkipDiscoveryCursor(p *ParameterDiscoveryPayload) (bool, error) {
 	p.Skipped = append(p.Skipped, p.Cursor)
 	if len(p.Pending) == 0 {
 		p.Cursor = ""
-		return true, nil
+		return true, true, nil
 	}
 	p.Cursor, p.Pending = p.Pending[0], p.Pending[1:]
-	return false, nil
+	return false, true, nil
 }
 
 // InFlightDiscoveries returns the device's PARAMETER_DISCOVERY jobs whose
