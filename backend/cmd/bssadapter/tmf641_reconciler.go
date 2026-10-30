@@ -89,6 +89,15 @@ func (h *handler) resumeTMF641Item(ctx context.Context, work bss.ServiceOrderWor
 		return h.finishTMF641Item(ctx, work.Item, "COMPLETED", "")
 	case "add":
 		deviceID, err := h.mappings.DeviceIDForSerial(ctx, item.OUISerial)
+		if errors.Is(err, bss.ErrDeviceNotFound) {
+			o, ppErr := h.preProvision(ctx, tmf641PreProvision(req, item))
+			if ppErr == nil {
+				return h.mappings.MarkItemAwaitingDevice(ctx, work.Item.ID, o.ID)
+			}
+			if !errors.Is(ppErr, errPreProvisionUnavailable) {
+				err = ppErr
+			}
+		}
 		if err != nil {
 			return h.finishTMF641Item(ctx, work.Item, "FAILED", err.Error())
 		}

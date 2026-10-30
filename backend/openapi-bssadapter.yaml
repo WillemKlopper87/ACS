@@ -91,10 +91,37 @@ paths:
                 device_uuid: { type: string, description: "Optional — if supplied, must match what oui_serial actually resolves to" }
                 service_plan: { type: string }
                 role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "Optional. Defaults to gateway." }
+                pre_provision: { type: boolean, description: "For a device the ACS has not seen yet: record a sale (a PLANNED onboarding) and answer 202 instead of 404. The mapping is written PENDING_ACTIVE when the CPE first connects and becomes ACTIVE when its onboarding reaches IN_SERVICE. See docs/ONBOARDING.md." }
+                iccid: { type: string, description: "With pre_provision: the SIM sold with the CPE; the onboarding holds if the CPE reports another. Never echoed back." }
+                imsi: { type: string, description: "With pre_provision: as iccid. Its MCC+MNC is also checked against the plan's allowed networks." }
+                place:
+                  type: object
+                  description: "With pre_provision: where the CPE is installed. id is the BSS premise reference; a site is created on first use."
+                  properties:
+                    id: { type: string }
+                    name: { type: string }
+                    street: { type: string }
+                    city: { type: string }
+                    postalCode: { type: string }
+                    country: { type: string }
       responses:
         "200": { description: Mapping created/updated, content: { application/json: { schema: { $ref: "#/components/schemas/Mapping" } } } }
+        "202":
+          description: "pre_provision only: the device is unknown, so a sale was recorded and the mapping waits for the CPE"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account_id: { type: string }
+                  oui_serial: { type: string }
+                  service_plan: { type: string }
+                  role: { type: string }
+                  status: { type: string, enum: [AWAITING_DEVICE] }
+                  onboarding_id: { type: string }
+                  onboarding_state: { type: string }
         "400": { $ref: "#/components/responses/Error" }
-        "404": { description: "ErrDeviceNotMapped — no device found for that oui_serial", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "404": { description: "ErrDeviceNotMapped — no device found for that oui_serial (and pre_provision not set)", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
         "409": { description: "ErrRoleAlreadyAssigned — the account already has an active device in that role", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
 
   /bss/v1/mappings/{account_id}:

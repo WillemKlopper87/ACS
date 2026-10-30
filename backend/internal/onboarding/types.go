@@ -92,10 +92,14 @@ type Onboarding struct {
 	StateReason     string
 	ConfigJobs      []string
 	RequestedBy     string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	ContactedAt     *time.Time
-	InServiceAt     *time.Time
+	// BSSRole and BSSServicePlan are what a BSS order asked for, kept for
+	// the account mapping cmd/bssadapter writes on first contact.
+	BSSRole        string
+	BSSServicePlan string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	ContactedAt    *time.Time
+	InServiceAt    *time.Time
 }
 
 // Open reports whether the onboarding can still progress or be retried.

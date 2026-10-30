@@ -37,6 +37,7 @@ import (
 	"acs/internal/config"
 	"acs/internal/netguard"
 	"acs/internal/observability"
+	"acs/internal/onboarding"
 	"acs/internal/ratelimit"
 	"acs/internal/store"
 )
@@ -159,6 +160,7 @@ func main() {
 	h := &handler{
 		logger:             logger,
 		mappings:           bss.NewRepository(db),
+		onboarding:         onboarding.NewRepository(db),
 		acs:                bss.NewACSClient(acsBaseURL, 10*time.Second, internalServiceToken),
 		auditor:            observability.NewAuditor(db),
 		token:              token,
@@ -221,6 +223,7 @@ func main() {
 	go h.runEscalationLoop(ctx)
 	go h.runOrderReconcileLoop(ctx)
 	go h.runTMF641ReconcileLoop(ctx)
+	go h.runPreProvisionSyncLoop(ctx)
 
 	rateLimitPerSecond := envOrFloat("ACS_BSS_RATE_LIMIT_PER_SECOND", defaultRateLimitPerSecond)
 	rateLimitBurst := envOrInt("ACS_BSS_RATE_LIMIT_BURST", defaultRateLimitBurst)
@@ -412,8 +415,11 @@ func withMaxBody(next http.Handler) http.Handler {
 }
 
 type handler struct {
-	logger             *slog.Logger
-	mappings           *bss.Repository
+	logger   *slog.Logger
+	mappings *bss.Repository
+	// onboarding records pre-provisioned sales; nil keeps an unknown
+	// device an error, as before.
+	onboarding         *onboarding.Repository
 	acs                *bss.ACSClient
 	auditor            *observability.Auditor
 	token              string
@@ -499,6 +505,13 @@ type createMappingRequest struct {
 	DeviceUUID  string `json:"device_uuid"`
 	ServicePlan string `json:"service_plan"`
 	Role        string `json:"role"` // optional; defaults to gateway
+	// PreProvision: for a device the ACS has not seen, record a sale and
+	// answer 202 instead of 404 (preprovision.go). Opt-in, so integrations
+	// that rely on the 404 keep it.
+	PreProvision bool         `json:"pre_provision"`
+	ICCID        string       `json:"iccid"`
+	IMSI         string       `json:"imsi"`
+	Place        *tmf641Place `json:"place"`
 }
 
 type mappingResponse struct {
@@ -561,6 +574,23 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mapping, err := h.mappings.AssignDevice(r.Context(), req.AccountID, req.OUISerial, roleOrDefault(req.Role), req.ServicePlan)
+	if errors.Is(err, bss.ErrDeviceNotFound) && req.PreProvision {
+		o, ppErr := h.preProvision(r.Context(), preProvisionRequest{AccountID: req.AccountID, OUISerial: req.OUISerial, Role: req.Role,
+			ServicePlan: req.ServicePlan, ICCID: req.ICCID, IMSI: req.IMSI, Place: req.Place})
+		switch {
+		case ppErr == nil:
+			writeJSON(w, http.StatusAccepted, map[string]any{"account_id": req.AccountID, "oui_serial": req.OUISerial,
+				"service_plan": req.ServicePlan, "role": roleOrDefault(req.Role), "status": "AWAITING_DEVICE",
+				"onboarding_id": o.ID, "onboarding_state": o.State})
+			return
+		case errors.Is(ppErr, bss.ErrInvalidRole), errors.Is(ppErr, onboarding.ErrInvalid):
+			writeError(w, http.StatusBadRequest, "ErrInvalidRequest", ppErr.Error())
+			return
+		case !errors.Is(ppErr, errPreProvisionUnavailable):
+			writeError(w, http.StatusConflict, "ErrPreProvisionRefused", ppErr.Error())
+			return
+		}
+	}
 	if errors.Is(err, bss.ErrDeviceNotFound) {
 		writeError(w, http.StatusNotFound, "ErrDeviceNotMapped", err.Error())
 		return

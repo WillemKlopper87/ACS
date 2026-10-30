@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"acs/internal/bss"
 	"acs/internal/credentials"
 	"acs/internal/jobs"
 	"acs/internal/onboarding"
@@ -140,12 +141,14 @@ func TestIntegration_OnboardingFollowsInforms(t *testing.T) {
 // network the plan does not allow is held, with no configuration queued.
 func TestIntegration_OnboardingHoldsAForeignSIM(t *testing.T) {
 	h, srv, ctx := newTestGateway(t)
-	h.onboarding = onboarding.NewRepository(testDB(t, ctx))
+	db := testDB(t, ctx)
+	h.onboarding = onboarding.NewRepository(db)
+	h.tmfEvents = bss.NewRepository(db)
 	plan, err := h.onboarding.CreatePlan(ctx, onboarding.ServicePlan{Code: "P", Name: "P", AllowedPLMNs: []string{"65506"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	o, err := h.onboarding.Create(ctx, onboarding.Onboarding{ExpectedSerial: "OB0002", ServicePlanID: &plan.ID, Source: "bss"})
+	o, err := h.onboarding.Create(ctx, onboarding.Onboarding{ExpectedSerial: "OB0002", ServicePlanID: &plan.ID, Source: "bss", AccountRef: "ACC-2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,6 +163,17 @@ func TestIntegration_OnboardingHoldsAForeignSIM(t *testing.T) {
 	got, _ = h.onboarding.Get(ctx, o.ID)
 	if got.State != onboarding.StateOnHold || !strings.Contains(got.StateReason, "65510") || strings.Contains(got.StateReason, "655100000000013") {
 		t.Fatalf("foreign SIM = %s %q, want ON_HOLD naming the network, not the IMSI", got.State, got.StateReason)
+	}
+
+	// The BSS account hears each move as a TMF688 event, without the IMSI.
+	var events int
+	var last string
+	if err := db.QueryRowContext(ctx, `SELECT count(*), max(payload::text) FILTER (WHERE payload->>'state' = 'ON_HOLD') FROM tmf_events
+		WHERE event_type = 'OnboardingStateChangeEvent' AND account_id = 'ACC-2'`).Scan(&events, &last); err != nil {
+		t.Fatal(err)
+	}
+	if events != 2 || !strings.Contains(last, "65510") || strings.Contains(last, "655100000000013") {
+		t.Fatalf("events = %d, on hold = %s", events, last)
 	}
 }
 

@@ -154,6 +154,46 @@ func (r *Repository) CreatePlan(ctx context.Context, p ServicePlan) (*ServicePla
 	return plan, err
 }
 
+// ErrAmbiguousPlan: more than one customer has a plan with this code and
+// none is shared, so a caller that knows no customer cannot choose.
+var ErrAmbiguousPlan = errors.New("more than one customer has a service plan with this code")
+
+// PlanByCode finds a plan for a caller that knows only the BSS plan code:
+// the shared plan with that code, else the one customer plan that has it.
+func (r *Repository) PlanByCode(ctx context.Context, code string) (*ServicePlan, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+planColumns+` FROM service_plans WHERE code = $1
+		ORDER BY customer_id NULLS FIRST LIMIT 2`, strings.TrimSpace(code))
+	if err != nil {
+		return nil, fmt.Errorf("find plan by code: %w", err)
+	}
+	defer rows.Close()
+	var found []*ServicePlan
+	for rows.Next() {
+		p, err := scanPlan(rows)
+		if err != nil {
+			return nil, err
+		}
+		found = append(found, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	switch {
+	case len(found) == 0:
+		return nil, ErrNotFound
+	case found[0].CustomerID == nil || len(found) == 1:
+		return found[0], nil
+	default:
+		return nil, ErrAmbiguousPlan
+	}
+}
+
+// SiteByRef finds a customer's site by its BSS premise reference.
+func (r *Repository) SiteByRef(ctx context.Context, customerID *string, ref string) (*Site, error) {
+	return scanSite(r.db.QueryRowContext(ctx, `SELECT `+siteColumns+` FROM sites
+		WHERE external_ref = $2 AND COALESCE(customer_id::text, '') = COALESCE($1::text, '')`, customerID, strings.TrimSpace(ref)))
+}
+
 func (r *Repository) GetPlan(ctx context.Context, id string) (*ServicePlan, error) {
 	return scanPlan(r.db.QueryRowContext(ctx, `SELECT `+planColumns+` FROM service_plans WHERE id = $1`, id))
 }
@@ -195,14 +235,14 @@ func isPLMN(s string) bool {
 const onboardingColumns = `id, customer_id, device_id, COALESCE(expected_oui,''), expected_serial, COALESCE(expected_imei,''),
 	COALESCE(expected_iccid,''), COALESCE(expected_imsi,''), COALESCE(account_ref,''), site_id, service_plan_id, role,
 	commercial_model, source, COALESCE(external_ref,''), state, COALESCE(state_reason,''), config_jobs,
-	COALESCE(requested_by,''), created_at, updated_at, contacted_at, in_service_at`
+	COALESCE(requested_by,''), COALESCE(bss_role,''), COALESCE(bss_service_plan,''), created_at, updated_at, contacted_at, in_service_at`
 
 func scanOnboarding(row interface{ Scan(...any) error }) (*Onboarding, error) {
 	var o Onboarding
 	var jobs store.StringArray
 	err := row.Scan(&o.ID, &o.CustomerID, &o.DeviceID, &o.ExpectedOUI, &o.ExpectedSerial, &o.ExpectedIMEI, &o.ExpectedICCID,
 		&o.ExpectedIMSI, &o.AccountRef, &o.SiteID, &o.ServicePlanID, &o.Role, &o.CommercialModel, &o.Source, &o.ExternalRef,
-		&o.State, &o.StateReason, &jobs, &o.RequestedBy, &o.CreatedAt, &o.UpdatedAt, &o.ContactedAt, &o.InServiceAt)
+		&o.State, &o.StateReason, &jobs, &o.RequestedBy, &o.BSSRole, &o.BSSServicePlan, &o.CreatedAt, &o.UpdatedAt, &o.ContactedAt, &o.InServiceAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -225,13 +265,13 @@ func (r *Repository) Create(ctx context.Context, o Onboarding) (*Onboarding, err
 	}
 	created, err := scanOnboarding(r.db.QueryRowContext(ctx, `
 		INSERT INTO onboardings (id, customer_id, device_id, expected_oui, expected_serial, expected_imei, expected_iccid, expected_imsi,
-			account_ref, site_id, service_plan_id, role, commercial_model, source, external_ref, state, requested_by)
+			account_ref, site_id, service_plan_id, role, commercial_model, source, external_ref, state, requested_by, bss_role, bss_service_plan)
 		VALUES ($1, $2, $3, NULLIF($4,''), $5, NULLIF($6,''), NULLIF($7,''), NULLIF($8,''), NULLIF($9,''), $10, $11, $12, $13, $14,
-			NULLIF($15,''), 'PLANNED', NULLIF($16,''))
+			NULLIF($15,''), 'PLANNED', NULLIF($16,''), NULLIF($17,''), NULLIF($18,''))
 		RETURNING `+onboardingColumns,
 		uuid.NewString(), o.CustomerID, o.DeviceID, strings.ToUpper(strings.TrimSpace(o.ExpectedOUI)), o.ExpectedSerial,
 		strings.TrimSpace(o.ExpectedIMEI), strings.TrimSpace(o.ExpectedICCID), strings.TrimSpace(o.ExpectedIMSI), strings.TrimSpace(o.AccountRef),
-		o.SiteID, o.ServicePlanID, o.Role, o.CommercialModel, o.Source, o.ExternalRef, o.RequestedBy))
+		o.SiteID, o.ServicePlanID, o.Role, o.CommercialModel, o.Source, o.ExternalRef, o.RequestedBy, o.BSSRole, o.BSSServicePlan))
 	if err != nil && strings.Contains(err.Error(), "onboardings_open_serial_idx") {
 		return nil, ErrOpenOnboardingExists
 	}
@@ -270,6 +310,13 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]Onboarding, erro
 		out = append(out, *o)
 	}
 	return out, rows.Err()
+}
+
+// OpenBySerial returns the open onboarding for a serial, if any (at most
+// one exists: onboardings_open_serial_idx).
+func (r *Repository) OpenBySerial(ctx context.Context, serial string) (*Onboarding, error) {
+	return scanOnboarding(r.db.QueryRowContext(ctx, `SELECT `+onboardingColumns+` FROM onboardings
+		WHERE expected_serial = $1 AND state NOT IN ('IN_SERVICE', 'CANCELLED')`, strings.TrimSpace(serial)))
 }
 
 // OpenForDevice finds the open onboarding for an informing device: the one

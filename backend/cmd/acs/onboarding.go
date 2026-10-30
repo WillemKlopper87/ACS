@@ -6,8 +6,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"acs/internal/credentials"
 	"acs/internal/devices"
@@ -97,7 +99,27 @@ func (h *handler) reconcileOnboarding(ctx context.Context, device *devices.Devic
 		h.logger.Error("failed to write audit record", "err", err)
 	}
 	h.logger.Info("onboarding advanced", "onboarding_id", o.ID, "device_id", device.ID, "from", o.State, "to", d.State)
+	h.publishOnboardingEvent(ctx, o, d, bindTo)
 	return queued
+}
+
+// publishOnboardingEvent records a TMF688 OnboardingStateChangeEvent for a
+// sale with a BSS account, so a BSS subscribed to it sees installation
+// progress without polling (cmd/bssadapter fans tmf_events out to webhook
+// subscriptions). No SIM identifiers: the reason carries only masked ones.
+func (h *handler) publishOnboardingEvent(ctx context.Context, o *onboarding.Onboarding, d onboarding.Decision, deviceID string) {
+	if h.tmfEvents == nil || o.AccountRef == "" {
+		return
+	}
+	at := time.Now().UTC()
+	payload, _ := json.Marshal(map[string]any{
+		"onboardingId": o.ID, "externalId": o.ExternalRef, "serialNumber": o.ExpectedSerial,
+		"state": d.State, "previousState": o.State, "reason": d.Reason, "source": o.Source,
+	})
+	key := fmt.Sprintf("onboarding-%s-%s-%s-%d", o.ID, o.State, d.State, at.UnixNano())
+	if _, err := h.tmfEvents.CreateEvent(ctx, key, o.AccountRef, deviceID, "", "OnboardingStateChangeEvent", payload, at); err != nil {
+		h.logger.Error("failed to publish onboarding event", "err", err, "onboarding_id", o.ID)
+	}
 }
 
 // reconcileOnboardingAtSessionEnd runs the reconciler for a session's

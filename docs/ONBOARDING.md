@@ -1,7 +1,6 @@
 # Onboarding: from sale to service
 
-Status: slices 1 and 2 (backend, API and console), 2026-10-30. BSS pre-provisioning
-(slice 3) is not built yet. The design is in
+Status: slices 1–3 (backend, API, console and BSS pre-provisioning), 2026-10-30. The design is in
 [CONSOLE-UX-PROPOSAL-2026-10-30.md §4](CONSOLE-UX-PROPOSAL-2026-10-30.md#4-proposal-c-a-business-onboarding-workflow).
 
 ## What a sale records
@@ -98,9 +97,54 @@ curl -X POST "$ACS/api/v1/onboardings" -H "Authorization: Bearer $TOKEN" -H 'Con
 A device's **Ownership** sub-page shows its sale's timeline, or *Claim device* when it has none.
 Changes need the manager role (`tenancy.manage`); other roles can look.
 
+## BSS pre-provisioning
+
+A sale the BSS sends before installation no longer fails for an unknown CPE.
+
+**TMF641.** An `add` item whose `ouiSerial` the ACS has not seen records a PLANNED
+onboarding (source `bss`) and the item becomes **`AWAITING_DEVICE`**. Later items in the
+order wait behind it (a Wi-Fi `modify` runs only once the CPE is in service). Optional
+item fields: `iccid`, `imsi`, and `place` (`id` = BSS premise reference, `name`, `street`,
+`city`, `postalCode`, `country`; a site is created on first use).
+
+```json
+{"externalId": "SO-1", "accountId": "ACC-77", "orderItem": [
+  {"action": "add", "role": "gateway", "ouiSerial": "A4FC77+3TG02241+CSC25430018F", "servicePlan": "HOME-5G",
+   "imsi": "655060000000013", "place": {"id": "PREM-9", "name": "14 Oak Ave", "city": "Embalenhle"}},
+  {"action": "modify", "role": "gateway", "parameters": {"ssid": "Oak"}}]}
+```
+
+**`POST /bss/v1/mappings`** does the same with `"pre_provision": true` and answers **202**
+(`status: AWAITING_DEVICE`, `onboarding_id`). Without the flag an unknown device is
+still a 404, so existing integrations are unchanged.
+
+**What happens next** (cmd/bssadapter, every 15 s):
+
+| Onboarding | Account mapping | Order item |
+|---|---|---|
+| PLANNED | none | `AWAITING_DEVICE`, note "waiting for the device to connect" |
+| CONTACTED … CONFIGURING, ON_HOLD, FAILED | written `PENDING_ACTIVE` on first contact | `AWAITING_DEVICE`, note = state and reason |
+| IN_SERVICE | `ACTIVE` | `COMPLETED` with the mapping; later items run |
+| CANCELLED | ended (`corrected`) | `FAILED` "onboarding cancelled" |
+
+ON_HOLD and FAILED do not fail the order: an operator fixes the cause and uses *Retry*
+in the console. Cancelling the TMF641 order while its item awaits the device cancels the
+sale. Retrying an order is safe: the same serial and account get the same onboarding;
+another account cannot take over an open sale.
+
+**Which customer.** A BSS account is not an ACS customer. The **service plan code** ties
+the sale to one: the shared plan with that code, else the one customer plan with it (two
+customers with the same code and no shared plan is refused as ambiguous). An unknown
+code is kept on the mapping but configures nothing. A serial already in another
+customer's inventory is refused.
+
+**Events.** Every state change of a sale with an account reference is a TMF688
+`OnboardingStateChangeEvent` (`onboardingId`, `externalId`, `serialNumber`, `state`,
+`previousState`, `reason`, `source`; no SIM identifiers). Subscribe to that event type
+on a webhook or TMF688 hub to follow installation without polling.
+
 ## Not built yet
 
-- BSS: TMF641 `add` and `POST /bss/v1/mappings` creating PLANNED onboardings, `PENDING_ACTIVE` → `ACTIVE`, `ONBOARDING_STATE_CHANGED` webhooks and TMF688 events.
 - Strict mode (`ACS_ONBOARDING_REQUIRE_PLAN`): unclaimed CPEs kept on the bootstrap credential.
 - Bulk import of account, site and plan columns, and the `label` import bug.
 - Expiry of PLANNED records, replacement (RMA) hand-over, SIM-swap alarms after IN_SERVICE.

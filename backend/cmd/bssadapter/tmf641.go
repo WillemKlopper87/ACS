@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,6 +19,11 @@ type tmf641ItemRequest struct {
 	ServicePlan    string            `json:"servicePlan"`
 	UnassignReason string            `json:"unassignReason"`
 	Parameters     map[string]string `json:"parameters"`
+	// Pre-provisioning: the SIM sold with the CPE and where it goes, used
+	// when the CPE has not connected yet (preprovision.go).
+	ICCID string       `json:"iccid"`
+	IMSI  string       `json:"imsi"`
+	Place *tmf641Place `json:"place"`
 }
 type tmf641OrderRequest struct {
 	ExternalID string              `json:"externalId"`
@@ -127,6 +133,18 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 		}
 		if item.Action == "add" {
 			mapping, execErr := h.mappings.AssignDevice(r.Context(), req.AccountID, item.OUISerial, roleOrDefault(item.Role), item.ServicePlan)
+			if errors.Is(execErr, bss.ErrDeviceNotFound) {
+				// Sold before installation: wait for the CPE instead of
+				// failing. Later items stay PENDING behind this one.
+				if o, ppErr := h.preProvision(r.Context(), tmf641PreProvision(req, item)); ppErr == nil {
+					if execErr = h.mappings.MarkItemAwaitingDevice(r.Context(), items[i].ID, o.ID); execErr == nil {
+						items[i].Status = bss.ItemAwaitingDevice
+						break
+					}
+				} else if !errors.Is(ppErr, errPreProvisionUnavailable) {
+					execErr = ppErr
+				}
+			}
 			if execErr != nil {
 				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", execErr.Error())
 				items[i].Status = "FAILED"
@@ -190,6 +208,11 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 201, tmf641OrderResponse(order, items))
+}
+
+func tmf641PreProvision(req tmf641OrderRequest, item tmf641ItemRequest) preProvisionRequest {
+	return preProvisionRequest{AccountID: req.AccountID, ExternalRef: req.ExternalID, OUISerial: item.OUISerial, Role: item.Role,
+		ServicePlan: item.ServicePlan, ICCID: item.ICCID, IMSI: item.IMSI, Place: item.Place}
 }
 
 func tmf641OrderResponse(order *bss.ServiceOrder, items []bss.ServiceOrderItem) map[string]any {
