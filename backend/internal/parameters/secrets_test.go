@@ -1,6 +1,9 @@
 package parameters
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestIsSecretParameter(t *testing.T) {
 	secret := []string{
@@ -45,5 +48,35 @@ func TestRedactSecrets(t *testing.T) {
 	plain := map[string]CachedValue{"Device.WiFi.SSID.1.SSID": {Value: "x"}}
 	if got := redactSecrets(plain); len(got) != 1 || got["Device.WiFi.SSID.1.SSID"].Value != "x" {
 		t.Fatal("no-secret map altered")
+	}
+}
+
+func TestRedactPayloadSecrets(t *testing.T) {
+	in := []byte(`{"parameters":[` +
+		`{"name":"Device.WiFi.AccessPoint.1.Security.KeyPassphrase","value":"hunter2hunter2","type":"xsd:string"},` +
+		`{"name":"Device.ManagementServer.ConnectionRequestPassword","value":""},` +
+		`{"name":"Device.WiFi.SSID.1.SSID","value":"SENT-5G"}],` +
+		`"url":"https://fw.example/img.bin","username":"fw","password":"s3cret","parameter_key":"k1"}`)
+	out := string(RedactPayloadSecrets(in))
+	for _, leak := range []string{"hunter2hunter2", "s3cret"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("secret %q survived: %s", leak, out)
+		}
+	}
+	for _, keep := range []string{"SENT-5G", `"username":"fw"`, `"parameter_key":"k1"`, `"value":""`, "img.bin"} {
+		if !strings.Contains(out, keep) {
+			t.Fatalf("non-secret %s lost: %s", keep, out)
+		}
+	}
+	if strings.Count(out, SecretRedacted) != 2 {
+		t.Fatalf("want 2 redactions: %s", out)
+	}
+
+	plain := []byte(`{"paths": ["Device.WiFi.SSID.1.SSID"]}`)
+	if got := RedactPayloadSecrets(plain); string(got) != string(plain) {
+		t.Fatalf("payload without secrets rewritten: %s", got)
+	}
+	if got := RedactPayloadSecrets([]byte("not json")); string(got) != "not json" {
+		t.Fatalf("invalid JSON altered: %s", got)
 	}
 }
