@@ -873,15 +873,7 @@ func (h *handler) publishCellularStateChanges(ctx context.Context, deviceID stri
 	if h.tmfEvents == nil || len(changes) == 0 {
 		return
 	}
-	d, err := h.devices.Get(ctx, deviceID)
-	if err != nil {
-		h.logger.Warn("failed to load device for cellular state event", "error", err, "device_id", deviceID)
-		return
-	}
-	account := ""
-	if d.CustomerID != nil {
-		account = *d.CustomerID
-	}
+	account := telemetry.DeviceAccount(ctx, h.tmfEvents, deviceID)
 	if err := telemetry.PublishCellularStateChanged(ctx, h.tmfEvents, account, deviceID, "CWMP", changes, at); err != nil {
 		h.logger.Warn("failed to publish cellular state event", "error", err, "device_id", deviceID)
 	}

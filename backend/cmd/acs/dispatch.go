@@ -776,15 +776,7 @@ func (h *handler) publishTMFFault(ctx context.Context, deviceID, jobID, protocol
 	if h.tmfEvents == nil {
 		return
 	}
-	d, err := h.devices.Get(ctx, deviceID)
-	if err != nil {
-		h.logger.Warn("failed to load device for TMF fault", "error", err)
-		return
-	}
-	account := ""
-	if d.CustomerID != nil {
-		account = *d.CustomerID
-	}
+	account := telemetry.DeviceAccount(ctx, h.tmfEvents, deviceID)
 	if err := telemetry.PublishFault(ctx, h.tmfEvents, telemetry.Fault{AccountID: account, DeviceID: deviceID, JobID: jobID, Protocol: protocol, Code: code, Message: message}); err != nil {
 		h.logger.Warn("failed to publish TMF fault", "error", err, "device_id", deviceID)
 	}

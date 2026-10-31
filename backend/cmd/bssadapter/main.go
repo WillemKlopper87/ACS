@@ -404,6 +404,9 @@ func withRateLimit(limiter *ratelimit.Limiter, metrics *observability.Metrics, n
 		}
 		if !limiter.Allow(key) {
 			metrics.RateLimitRejectedTotal.Inc()
+			// A token frees within 1/rate seconds; at the default 5/s and any
+			// rate of at least 1/s, a client retrying after a second gets in.
+			w.Header().Set("Retry-After", "1")
 			writeError(w, http.StatusTooManyRequests, "ErrRateLimited", "rate limit exceeded, slow down")
 			return
 		}

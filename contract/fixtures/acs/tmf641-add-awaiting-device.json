@@ -1,7 +1,7 @@
 {
   "name": "acs/tmf641-add-awaiting-device",
   "description": "TMF641 add for an unseen CPE: the item is AWAITING_DEVICE and the modify behind it stays PENDING.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0e05248+I2, 2026-10-31. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit dd81ba9+I2-fixes, 2026-10-31. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
@@ -10,18 +10,18 @@
       "mutating": true,
       "body": {
         "externalId": "SO-CONTRACT-1",
-        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/382786bd-0dda-4686-a497-561cec3015dc",
-        "id": "382786bd-0dda-4686-a497-561cec3015dc",
-        "orderDate": "2026-10-31T08:00:39.067215+02:00",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/9113fd29-1caa-4aa7-b6c3-b764030320bd",
+        "id": "9113fd29-1caa-4aa7-b6c3-b764030320bd",
+        "orderDate": "2026-10-31T08:38:09.91979+02:00",
         "orderItem": [
           {
-            "id": "823a8af5-5327-43e6-80f3-92693a9c068c",
+            "id": "7ef91469-8d49-49ef-8326-20275fee46df",
             "action": "add",
             "state": "AWAITING_DEVICE",
             "role": "gateway"
           },
           {
-            "id": "655638e6-a4ca-4789-bc35-1d6bc0606b02",
+            "id": "19ad22cd-edc8-41f9-95fc-4aa778766111",
             "action": "modify",
             "state": "PENDING",
             "role": "gateway"
@@ -69,18 +69,18 @@
       "mutating": false,
       "body": {
         "externalId": "SO-CONTRACT-1",
-        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/382786bd-0dda-4686-a497-561cec3015dc",
-        "id": "382786bd-0dda-4686-a497-561cec3015dc",
-        "orderDate": "2026-10-31T08:00:39.067215+02:00",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/9113fd29-1caa-4aa7-b6c3-b764030320bd",
+        "id": "9113fd29-1caa-4aa7-b6c3-b764030320bd",
+        "orderDate": "2026-10-31T08:38:09.91979+02:00",
         "orderItem": [
           {
-            "id": "823a8af5-5327-43e6-80f3-92693a9c068c",
+            "id": "7ef91469-8d49-49ef-8326-20275fee46df",
             "action": "add",
             "state": "AWAITING_DEVICE",
             "role": "gateway"
           },
           {
-            "id": "655638e6-a4ca-4789-bc35-1d6bc0606b02",
+            "id": "19ad22cd-edc8-41f9-95fc-4aa778766111",
             "action": "modify",
             "state": "PENDING",
             "role": "gateway"

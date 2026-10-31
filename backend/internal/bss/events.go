@@ -69,6 +69,7 @@ func (r *Repository) EventsAfter(ctx context.Context, customerID string, after i
 		if err := rows.Scan(&e.ID, &e.Type, &e.OccurredAt, &e.Sequence, &customer, &account, &deviceID, &ouiSerial, &e.Data); err != nil {
 			return nil, err
 		}
+		e.OccurredAt = e.OccurredAt.UTC()
 		if customer.Valid {
 			e.CustomerID = &customer.String
 		}

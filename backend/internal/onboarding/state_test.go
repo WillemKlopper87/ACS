@@ -96,6 +96,12 @@ func TestEvaluateHoldsOnForeignNetwork(t *testing.T) {
 	if d := Evaluate(o, plan, Facts{Informed: true, Secured: true}); d.State != StateContacted || !d.ReadSIM {
 		t.Fatalf("IMSI unknown: %+v, want a SIM read", d)
 	}
+	// A wrong ICCID holds at once, even while the IMSI the plan needs is
+	// still unknown.
+	o.ExpectedICCID = "89270000000000001234"
+	if d := Evaluate(o, plan, Facts{Informed: true, Secured: true, ICCID: "89270000000000009999"}); d.State != StateOnHold || d.Code != CodeSIMMismatch {
+		t.Fatalf("wrong ICCID, IMSI unknown: %+v, want ON_HOLD SIM_MISMATCH", d)
+	}
 }
 
 func TestEvaluateFailsOnConfigFailureAndLeavesTerminalStatesAlone(t *testing.T) {

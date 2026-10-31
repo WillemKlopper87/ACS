@@ -86,12 +86,18 @@ $$ LANGUAGE plpgsql;
 -- ONLINE from OFFLINE/UNREACHABLE. DeviceUnreachable: the liveness reaper
 -- moved it to UNREACHABLE (no contact for the unreachable threshold, 90
 -- minutes by default). Pre-registered devices that never connected emit
--- nothing until their first contact.
+-- nothing until their first contact. A device that has connected and then
+-- joins a customer (a pre-provisioned sale binds it on first contact, or
+-- a mapping assigns it) emits DeviceSeen into that customer's stream too,
+-- with joinedCustomer, since its first DeviceSeen belonged to no customer.
 CREATE FUNCTION devices_emit_events() RETURNS trigger AS $$
 BEGIN
     IF NEW.last_inform_at IS NOT NULL AND (TG_OP = 'INSERT' OR OLD.last_inform_at IS NULL) THEN
         PERFORM emit_device_event(NEW, 'DeviceSeen', jsonb_build_object(
             'firstContact', true, 'onlineStatus', NEW.online_status, 'lastInformAt', NEW.last_inform_at));
+    ELSIF TG_OP = 'UPDATE' AND OLD.customer_id IS NULL AND NEW.customer_id IS NOT NULL AND NEW.last_inform_at IS NOT NULL THEN
+        PERFORM emit_device_event(NEW, 'DeviceSeen', jsonb_build_object(
+            'firstContact', true, 'joinedCustomer', true, 'onlineStatus', NEW.online_status, 'lastInformAt', NEW.last_inform_at));
     ELSIF TG_OP = 'UPDATE' AND NEW.online_status = 'ONLINE' AND OLD.online_status IN ('OFFLINE', 'UNREACHABLE') THEN
         PERFORM emit_device_event(NEW, 'DeviceSeen', jsonb_build_object(
             'firstContact', false, 'onlineStatus', NEW.online_status, 'previousStatus', OLD.online_status,
@@ -105,7 +111,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER devices_emit_events
-    AFTER INSERT OR UPDATE OF online_status, last_inform_at ON devices
+    AFTER INSERT OR UPDATE OF online_status, last_inform_at, customer_id ON devices
     FOR EACH ROW EXECUTE FUNCTION devices_emit_events();
 
 -- FirmwareChanged: the cached SoftwareVersion moved from one known value

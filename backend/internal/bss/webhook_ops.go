@@ -18,7 +18,12 @@ var ErrDeliveryNotFound = errors.New("webhook delivery not found")
 // DeliveryStatus is one delivery as its subscriber may see it. The
 // payload is left out: it is the event, which replay returns.
 type DeliveryStatus struct {
-	ID            string     `json:"id"`
+	ID string `json:"id"`
+	// EventID and EventSequence name the event this delivery carries (its
+	// envelope id and sequence); empty for JOB_COMPLETED notifications,
+	// which are not stream events.
+	EventID       string     `json:"event_id,omitempty"`
+	EventSequence *int64     `json:"event_sequence,omitempty"`
 	EventType     string     `json:"event_type"`
 	Status        string     `json:"status"` // PENDING | DELIVERED | FAILED
 	Attempts      int        `json:"attempts"`
@@ -34,7 +39,8 @@ func (r *WebhookRepository) ListDeliveries(ctx context.Context, subscriptionID, 
 		limit = 100
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, event_type, status, attempts, last_attempt_at, COALESCE(last_error, ''), created_at
+		SELECT id, COALESCE(payload->>'id', ''), (payload->>'sequence')::bigint, event_type, status, attempts, last_attempt_at,
+		       COALESCE(last_error, ''), created_at
 		  FROM webhook_deliveries
 		 WHERE subscription_id = $1 AND ($2 = '' OR status = $2)
 		 ORDER BY created_at DESC LIMIT $3`, subscriptionID, status, limit)
@@ -46,13 +52,18 @@ func (r *WebhookRepository) ListDeliveries(ctx context.Context, subscriptionID, 
 	for rows.Next() {
 		var d DeliveryStatus
 		var last sql.NullTime
-		if err := rows.Scan(&d.ID, &d.EventType, &d.Status, &d.Attempts, &last, &d.LastError, &d.CreatedAt); err != nil {
+		var seq sql.NullInt64
+		if err := rows.Scan(&d.ID, &d.EventID, &seq, &d.EventType, &d.Status, &d.Attempts, &last, &d.LastError, &d.CreatedAt); err != nil {
 			return nil, err
 		}
 		if last.Valid {
-			t := last.Time
+			t := last.Time.UTC()
 			d.LastAttemptAt = &t
 		}
+		if seq.Valid {
+			d.EventSequence = &seq.Int64
+		}
+		d.CreatedAt = d.CreatedAt.UTC()
 		out = append(out, d)
 	}
 	return out, rows.Err()

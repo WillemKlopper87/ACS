@@ -15,6 +15,7 @@ and the response `body`.
 | `tmf641-add-awaiting-device` | TMF641 add for an unseen CPE; the modify behind it stays `PENDING` |
 | `events-replay` | Replay page in the event envelope, then the empty page after it |
 | `webhook-create`, `webhook-deliveries`, `webhook-rotate-secret` | Subscription, delivery view with the last error, secret rotation |
+| `webhook-bodies` | One delivered webhook body per event type (DeviceSeen, DeviceUnreachable, FirmwareChanged, CellularStateChanged, OnboardingStateChangeEvent ON_HOLD and CONTACTED, IdentityMismatch), as sent, from real CWMP Informs to cmd/acs |
 | `tmf640-patch-monitor` | TMF640 PATCH with `X-Idempotency-Key`, its replay, the Monitor, an unknown Monitor (404) |
 | `not-found-other-account` | Another customer's account reads as 404 |
 

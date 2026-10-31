@@ -211,7 +211,8 @@ func (r *WebhookRepository) DispatchTMFEvents(ctx context.Context, since time.Ti
 		SELECT gen_random_uuid(), c.subscription_id, c.event_type,
 		       -- The integration envelope (docs/integration/09-events.md), plus
 		       -- the original TMF688 keys for subscribers that predate it.
-		       jsonb_build_object('id', c.id, 'type', c.event_type, 'occurred_at', c.event_time,
+		       jsonb_build_object('id', c.id, 'type', c.event_type,
+		         'occurred_at', to_char(c.event_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
 		         'sequence', c.seq, 'customer_id', c.customer_id, 'account_id', c.account_id,
 		         'device', CASE WHEN c.device_id IS NULL THEN NULL
 		                   ELSE jsonb_build_object('id', c.device_id, 'oui_serial', (SELECT oui_serial FROM devices WHERE id = c.device_id)) END,

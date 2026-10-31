@@ -128,6 +128,12 @@ func TestWebhookEnvelopeAndDeliveryOperations(t *testing.T) {
 	if rec.Code != http.StatusOK || len(list.Items) != 1 || list.Items[0].Attempts != 1 || !strings.Contains(list.Items[0].LastError, "network policy") {
 		t.Fatalf("deliveries = %d %s", rec.Code, rec.Body)
 	}
+	if list.Items[0].EventID == "" || list.Items[0].EventSequence == nil {
+		t.Fatalf("delivery does not name its event: %s", rec.Body)
+	}
+	if !strings.HasSuffix(payload["occurred_at"].(string), "Z") {
+		t.Fatalf("webhook occurred_at = %v, want UTC", payload["occurred_at"])
+	}
 	tokB := bindingToken(t, e.custB, false)
 	req.Header.Set("Authorization", "Bearer "+tokB)
 	rec = httptest.NewRecorder()
@@ -174,6 +180,24 @@ func TestWebhookEnvelopeAndDeliveryOperations(t *testing.T) {
 	sigs := strings.Fields(header)
 	if len(sigs) != 2 || !strings.HasPrefix(sigs[0], "v1,") || !strings.HasPrefix(sigs[1], "v1,") || sigs[0] == sigs[1] {
 		t.Fatalf("Webhook-Signature during rotation = %q, want one per secret", header)
+	}
+}
+
+// TestDeviceJoiningACustomerIsSeenByIt: a CPE that connected before any
+// customer owned it (a pre-provisioned sale binds it on first contact)
+// still gives its new customer a first-contact DeviceSeen.
+func TestDeviceJoiningACustomerIsSeenByIt(t *testing.T) {
+	e := newBindingEnv(t)
+	if _, err := e.db.ExecContext(e.ctx, `UPDATE devices SET last_inform_at = now(), online_status = 'ONLINE' WHERE oui_serial = '001122-DEV-A'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.ExecContext(e.ctx, `UPDATE devices SET customer_id = $1 WHERE oui_serial = '001122-DEV-A'`, e.custA); err != nil {
+		t.Fatal(err)
+	}
+	_, page := e.replay(t, bindingToken(t, e.custA, false), "?after=0")
+	if len(page.Events) != 1 || page.Events[0].Type != "DeviceSeen" || !strings.Contains(string(page.Events[0].Data), `"joinedCustomer":true`) ||
+		page.Events[0].OccurredAt.Location() != time.UTC {
+		t.Fatalf("A's stream = %+v", page.Events)
 	}
 }
 

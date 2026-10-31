@@ -20,6 +20,8 @@ func TestParseOUISerial(t *testing.T) {
 		"a4fc77-3TG02241-CSC25430018F": {"A4FC77", "CSC25430018F"},
 		"001122-S2":                    {"001122", "S2"},
 		"CSC25430018F":                 {"", "CSC25430018F"},
+		`A4FC77+X\+1+SN\+2`:            {"A4FC77", "SN+2"},
+		"A4FC77+SN0001":                {"A4FC77", "SN0001"},
 	} {
 		if oui, serial := bss.ParseOUISerial(in); oui != want[0] || serial != want[1] {
 			t.Errorf("ParseOUISerial(%q) = %q %q, want %q %q", in, oui, serial, want[0], want[1])

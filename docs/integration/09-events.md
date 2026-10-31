@@ -6,7 +6,8 @@ polling, and how it catches up after downtime. Recorded examples are in
 
 ## The envelope
 
-Every event has the same shape, in a webhook body and in replay:
+Every event has the same shape, in a webhook body and in replay.
+`occurred_at` is always UTC (`Z`):
 
 ```json
 {
@@ -33,7 +34,7 @@ in your own records.
 
 | Type | When | `data` |
 |---|---|---|
-| `DeviceSeen` | First contact ever, or back ONLINE from OFFLINE/UNREACHABLE | `firstContact`, `onlineStatus`, `previousStatus`, `lastInformAt`, `ouiSerial` |
+| `DeviceSeen` | First contact ever, or back ONLINE from OFFLINE/UNREACHABLE; also when a CPE that already connected joins a customer (`joinedCustomer`: a pre-provisioned CPE's first contact belonged to no customer until its sale bound it) | `firstContact`, `joinedCustomer`, `onlineStatus`, `previousStatus`, `lastInformAt`, `ouiSerial` |
 | `DeviceUnreachable` | No contact for the unreachable threshold (90 minutes by default) | `onlineStatus`, `previousStatus`, `lastInformAt`, `ouiSerial` |
 | `FirmwareChanged` | The reported software version changed (learning it the first time is not a change) | `previousVersion`, `version`, `ouiSerial` |
 | `OnboardingStateChangeEvent` | A sale moved state ([ONBOARDING.md](../ONBOARDING.md)) | `onboardingId`, `externalId`, `serialNumber`, `state`, `previousState`, `reason`, `reasonCode`, `source` |
@@ -45,7 +46,19 @@ in your own records.
 `PLMN_NOT_ALLOWED`, `SIM_UNREADABLE`, `CONFIG_FAILED` (holds and failures, which
 wait for an operator), and `WAITING_SIM_READ`, `WAITING_OWN_CREDENTIAL`,
 `WAITING_DISCOVERY`, `WAITING_CONFIG` (progress, not problems). `TTL_EXPIRED`
-will come with the sale expiry in I3.
+comes with sale expiry in I3: an expired sale will be **CANCELLED** (freeing the
+serial for a new sale), its TMF641 item FAILED.
+
+Onboarding states are `PLANNED`, `CONTACTED`, `SECURED`, `DISCOVERED`,
+`CONFIGURING`, `IN_SERVICE`, `ON_HOLD`, `FAILED`, `CANCELLED`.
+`AWAITING_DEVICE` is not an onboarding state: it is the status of the mapping
+request (202) and of the TMF641 `add` item while the sale waits.
+
+**Which account an event carries.** Device events carry the device's current
+BSS account (its active mapping), else none; onboarding events carry the
+sale's account when the sale's customer owns it. Account-scoped webhooks
+therefore receive a device's events only once it is mapped to the account;
+replay by customer receives all of them.
 
 ## Sequence and ordering
 
@@ -60,16 +73,24 @@ replay, not by counting.
 ## Webhooks
 
 Subscribe with `POST /bss/v1/webhooks` (`account_id`, `target_url`, `secret`,
-`event_types`). Each delivery is signed in the Standard Webhooks style:
-`Webhook-Id` (stable across retries; deduplicate on it), `Webhook-Timestamp`, and
-`Webhook-Signature: v1,<signature>`. A `whsec_` secret gives standard base64
-signatures.
+`event_types`). **You supply the secret** and keep custody of it; no response
+ever returns it. Only `rotate-secret` generates one, returned once. Each
+delivery is signed in the Standard Webhooks style: `Webhook-Id`,
+`Webhook-Timestamp`, `Webhook-Signature: v1,<signature>` and
+`X-Webhook-Event`. A `whsec_` secret gives standard base64 signatures.
+
+**`Webhook-Id` is the delivery id**: one delivery per event per subscription,
+stable across retries and redelivery. Deduplicate deliveries on it, and events
+on the envelope `id` (the same event reaches two subscriptions as two
+deliveries). The delivery view gives each delivery's `event_id` and
+`event_sequence`.
 
 - **Retries:** exponential backoff, 8 attempts, then the delivery is `FAILED`.
 - **Delivery view:** `GET /bss/v1/webhooks/{id}/deliveries?status=` shows status,
   attempts and the last error of each delivery.
 - **Redeliver:** `POST /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver`
-  queues a delivery again from its first attempt, with the same `Webhook-Id`.
+  queues a delivery again from its first attempt, with the same `Webhook-Id`:
+  `202 {"id": "<delivery_id>", "status": "PENDING"}`.
 - **Secret rotation:** `POST /bss/v1/webhooks/{id}/rotate-secret`
   (`overlap_seconds`, default 86400, at most 7 days) returns the new secret
   once. Until `previous_secret_valid_until`, `Webhook-Signature` carries one
@@ -88,14 +109,31 @@ caller's customer's events with `sequence > after`, oldest first:
 ```
 
 - Pass `next_after` back as `after` until `events` is empty. Store the last
-  cursor you processed.
+  cursor you processed. On an empty page `next_after` equals the `after` you
+  sent.
+- `limit` is 1 to 500; a value outside that range (or none) means 100.
 - A **customer-bound client** reads its own customer. A global client names one
   with `customer_id` (empty = events with no customer). Account-listed clients
   are refused; they use the TMF688 lists.
 - **Retention:** events are kept indefinitely today. When retention removes
-  events, `purged_through` rises, and `gap: true` means events after your cursor
-  were removed before you read them. Reconcile from current state, then
-  continue from `latest_sequence`.
+  events, `purged_through` is the highest sequence number removed, and
+  `gap: true` means `after < purged_through`. That is conservative: it is also
+  true when the removed range happened to contain only skipped numbers.
+  Reconcile from current state, then continue from `latest_sequence`.
+
+## Errors on these endpoints
+
+All errors use `{"error": "<code>", "message": "<text>"}` (problem+json comes,
+versioned, in I3).
+
+| Status | `error` | When |
+|---|---|---|
+| 400 | `ErrInvalidRequest` | Bad parameter, e.g. a negative `after` or an unknown delivery `status` |
+| 401 | `invalid_token` | No or bad bearer token |
+| 403 | `insufficient_scope` | The token lacks the scope (`WWW-Authenticate: Bearer error="insufficient_scope", scope="tmf:read"`) |
+| 403 | `ErrClientNotCustomerBound`, `ErrReplayNeedsCustomer` | A global client where only bound clients are accepted; an account-listed client asking for replay |
+| 404 | `ErrNotFound` | Unknown, or another customer's, subscription or delivery |
+| 429 | `ErrRateLimited` | Over the per-client rate (default 5 requests/s, burst 10; `ACS_BSS_RATE_LIMIT_PER_SECOND`, `ACS_BSS_RATE_LIMIT_BURST`), with `Retry-After` in seconds |
 
 A robust consumer takes webhooks for speed and replays on start-up and on a
 timer, deduplicating on the event `id`.

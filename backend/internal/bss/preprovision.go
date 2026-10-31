@@ -17,20 +17,46 @@ import (
 // connected yet. Later items in the order wait behind it.
 const ItemAwaitingDevice = "AWAITING_DEVICE"
 
-// ParseOUISerial splits a BSS device identity into the OUI and serial
-// number the CPE reports in its Inform: "OUI+ProductClass+Serial",
-// "OUI-ProductClass-Serial", "OUI-Serial", or a bare serial.
+// ParseOUISerial splits a BSS device identity into the OUI and serial number
+// the CPE reports in its Inform. The canonical form is the ACS natural key
+// (cwmp.DeviceID.NaturalKey): "OUI+ProductClass+Serial", or "OUI+Serial"
+// when the CPE reports no ProductClass, with a literal "+" or "\" inside a
+// field escaped as "\+" or "\\". "OUI-ProductClass-Serial" and
+// "OUI-Serial" (TR-069 Annex style, unescaped) and a bare serial are also
+// accepted.
 func ParseOUISerial(s string) (oui, serial string) {
 	s = strings.TrimSpace(s)
-	sep := "+"
-	if !strings.Contains(s, sep) {
-		sep = "-"
+	if strings.Contains(s, "+") {
+		parts := splitEscaped(s)
+		if len(parts) < 2 {
+			return "", s
+		}
+		return strings.ToUpper(parts[0]), parts[len(parts)-1]
 	}
-	parts := strings.Split(s, sep)
+	parts := strings.Split(s, "-")
 	if len(parts) < 2 {
 		return "", s
 	}
 	return strings.ToUpper(parts[0]), parts[len(parts)-1]
+}
+
+// splitEscaped splits a natural key on unescaped "+" and unescapes fields.
+func splitEscaped(s string) []string {
+	var parts []string
+	var cur strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '\\' && i+1 < len(s):
+			i++
+			cur.WriteByte(s[i])
+		case s[i] == '+':
+			parts = append(parts, cur.String())
+			cur.Reset()
+		default:
+			cur.WriteByte(s[i])
+		}
+	}
+	return append(parts, cur.String())
 }
 
 // CurrentMapping returns the account's current mapping of one device.

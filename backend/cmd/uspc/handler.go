@@ -480,10 +480,7 @@ func (h *handler) publishCellularStateChanged(deviceID string, field adapters.Ce
 		h.log.Warn("uspc: failed to load device for cellular state event", "device_id", deviceID, "error", err)
 		return
 	}
-	account := ""
-	if d.CustomerID != nil {
-		account = *d.CustomerID
-	}
+	account := telemetry.DeviceAccount(ctx, h.tmfEvents, d.ID)
 	changes := map[string]telemetry.CellularStateChange{path: {Old: previous, New: current}}
 	if err := telemetry.PublishCellularStateChanged(ctx, h.tmfEvents, account, deviceID, "USP", changes, time.Now().UTC()); err != nil {
 		h.log.Warn("uspc: failed to publish cellular state event", "device_id", deviceID, "field", string(field), "error", err)
@@ -619,10 +616,7 @@ func (h *handler) handleEvent(c mtp.Conn, ev *usp.Event, msgID string) {
 	if h.tmfEvents != nil && telemetry.QualifyingUSPEvent(ev.EventName) {
 		ctx, cancel := context.WithTimeout(context.Background(), dbCallTimeout)
 		if d, err := h.devicesRepo.Get(ctx, deviceID); err == nil {
-			account := ""
-			if d.CustomerID != nil {
-				account = *d.CustomerID
-			}
+			account := telemetry.DeviceAccount(ctx, h.tmfEvents, d.ID)
 			msg := ev.EventName
 			if ev.ObjPath != "" {
 				msg += " at " + ev.ObjPath

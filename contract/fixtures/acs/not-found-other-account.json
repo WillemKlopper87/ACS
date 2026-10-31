@@ -1,7 +1,7 @@
 {
   "name": "acs/not-found-other-account",
   "description": "An account this customer does not own reads as 404, never 403.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0e05248+I2, 2026-10-31. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit dd81ba9+I2-fixes, 2026-10-31. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "GET",

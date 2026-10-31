@@ -131,26 +131,28 @@ func checkSIM(o Onboarding, plan *ServicePlan, f Facts) (Decision, bool) {
 	iccid, imsi := strings.TrimSpace(f.ICCID), strings.TrimSpace(f.IMSI)
 	needICCID := o.ExpectedICCID != ""
 	needIMSI := o.ExpectedIMSI != "" || (plan != nil && len(plan.AllowedPLMNs) > 0)
-	if (needICCID && iccid == "") || (needIMSI && imsi == "") {
-		return Decision{State: StateContacted, Reason: "waiting for the SIM identifiers", Code: CodeWaitingSIMRead, ReadSIM: true}, true
-	}
-	if needICCID && iccid != strings.TrimSpace(o.ExpectedICCID) {
+	// What is known decides first: a wrong SIM holds at once, without
+	// waiting for an identifier the CPE has not reported yet.
+	if needICCID && iccid != "" && iccid != strings.TrimSpace(o.ExpectedICCID) {
 		return Decision{State: StateOnHold, Code: CodeSIMMismatch, Reason: fmt.Sprintf("SIM does not match the sale: expected ICCID %s, device reports %s",
 			parameters.MaskSubscriberIdentifier(parameters.SubscriberICCID, o.ExpectedICCID),
 			parameters.MaskSubscriberIdentifier(parameters.SubscriberICCID, iccid))}, true
 	}
-	if o.ExpectedIMSI != "" && imsi != strings.TrimSpace(o.ExpectedIMSI) {
+	if o.ExpectedIMSI != "" && imsi != "" && imsi != strings.TrimSpace(o.ExpectedIMSI) {
 		return Decision{State: StateOnHold, Code: CodeSIMMismatch, Reason: fmt.Sprintf("SIM does not match the sale: expected IMSI %s, device reports %s",
 			parameters.MaskSubscriberIdentifier(parameters.SubscriberIMSI, o.ExpectedIMSI),
 			parameters.MaskSubscriberIdentifier(parameters.SubscriberIMSI, imsi))}, true
 	}
-	if plan != nil && len(plan.AllowedPLMNs) > 0 && !plan.AllowsIMSI(imsi) {
+	if imsi != "" && plan != nil && len(plan.AllowedPLMNs) > 0 && !plan.AllowsIMSI(imsi) {
 		network := imsi
 		if len(network) > 5 {
 			network = network[:5]
 		}
 		return Decision{State: StateOnHold, Code: CodePLMNNotAllowed, Reason: fmt.Sprintf("SIM belongs to network %s; the plan allows %s",
 			network, strings.Join(plan.AllowedPLMNs, ", "))}, true
+	}
+	if (needICCID && iccid == "") || (needIMSI && imsi == "") {
+		return Decision{State: StateContacted, Reason: "waiting for the SIM identifiers", Code: CodeWaitingSIMRead, ReadSIM: true}, true
 	}
 	return Decision{}, false
 }

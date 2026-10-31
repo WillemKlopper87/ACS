@@ -19,6 +19,24 @@ type Sink interface {
 	ClearAlarm(context.Context, string, string, string) error
 }
 
+// DeviceAccount returns the BSS account a device is currently mapped to,
+// "" when it has none, for a device event's account_id. The account is a
+// BSS account id, never the ACS customer: the event's customer is
+// assigned from the device when the event is stored (migration 0090).
+func DeviceAccount(ctx context.Context, sink Sink, deviceID string) string {
+	lookup, ok := sink.(interface {
+		CurrentAccountForDevice(context.Context, string) (string, error)
+	})
+	if !ok {
+		return ""
+	}
+	account, err := lookup.CurrentAccountForDevice(ctx, deviceID)
+	if err != nil {
+		return ""
+	}
+	return account
+}
+
 type Fault struct {
 	AccountID, DeviceID, JobID, Protocol, Code, Message string
 	At                                                  time.Time

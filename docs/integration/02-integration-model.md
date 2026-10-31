@@ -138,6 +138,24 @@ enforced in the database.
   same device can later be reassigned. A device is bound to at most one
   account at a time.
 
+### 6.1 Device identity (`oui_serial`)
+
+The canonical device id on every request and response is the ACS natural
+key, built from the TR-069 `DeviceIdStruct` the CPE sends (USP agents use
+the same rule):
+
+- `OUI+ProductClass+SerialNumber`, joined by `+`, when the CPE reports a
+  ProductClass; `OUI+SerialNumber` when it reports none. The middle segment
+  is the TR-069 **ProductClass**, exactly as the CPE reports it.
+- The OUI is upper-case hex with `:`, `-` and spaces removed.
+- Any field may contain any character the CPE sends. A literal `+` or `\`
+  inside a field is escaped as `\+` or `\\`, so ids never collide (a serial
+  `SN+2` appears as `SN\+2`). Send ids exactly as the ACS returns them or as
+  you computed them with this rule.
+- For pre-provisioning, `OUI-ProductClass-Serial` and `OUI-Serial` (TR-069
+  Annex style, unescaped) are also accepted; the ACS matches the sale on OUI
+  and serial when the CPE first connects. Prefer the canonical form.
+
 ## 7. What the ACS does not know
 
 It holds `account_id` as an opaque string and the device identity. It has

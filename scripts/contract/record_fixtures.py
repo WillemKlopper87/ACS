@@ -6,17 +6,23 @@ ISP integration uses, and writes each request/response as a fixture in the
 format the bss-oss-integration harness loads (name, description,
 captured_from, exchanges[method, path, status, mutating, body]).
 
-Run it against a throwaway stack only: it creates a customer, a device, an
-OAuth client, sales and webhooks. Two steps (a device's first contact and a
-firmware change) are simulated with SQL updates of the device row and the
-parameter cache; the event triggers that fire on them are the real ones.
+Run it against a throwaway stack only: it creates a customer, devices, an
+OAuth client, sales and webhooks. With ACS_CWMP_URL set, CPEs check in to
+cmd/acs with real CWMP Informs, which drives the onboarding events. A
+first contact, a firmware change and an unreachable device are simulated
+with SQL updates of the device row and the parameter cache; the event
+triggers that fire on them are the real ones. Webhook bodies are recorded
+from webhook_deliveries, which holds the exact body sent.
 
 Environment:
   ACS_API_URL       operator API (cmd/api), e.g. http://127.0.0.1:18080
   ACS_ADMIN_TOKEN   superadmin bearer for ACS_API_URL ("" in insecure dev mode)
   ACS_BSS_URL       BSS adapter (cmd/bssadapter), e.g. http://127.0.0.1:18090
-  ACS_DB_EXEC       command that runs SQL from stdin against the stack's DB,
+  ACS_DB_EXEC       psql command that runs SQL from stdin against the stack's DB,
                     e.g. "docker exec -i acs-pg psql -U acs -d acs -v ON_ERROR_STOP=1"
+  ACS_CWMP_URL      optional: cmd/acs CWMP endpoint, e.g. http://127.0.0.1:17547/
+  ACS_CWMP_USER, ACS_CWMP_PASSWORD   its shared Digest credential; run cmd/acs
+                    with ACS_CWMP_ALLOW_SHARED_ESTABLISHED=true for the recording
   ACS_COMMIT        commit the stack was built from (recorded in captured_from)
 Usage: record_fixtures.py <output-dir>
 """
@@ -63,12 +69,18 @@ def call(base, method, path, body=None, token=None, form=None, headers=None):
         hdrs["Content-Type"] = "application/json"
     if token:
         hdrs["Authorization"] = "Bearer " + token
-    req = urllib.request.Request(base + path, data=data, method=method, headers=hdrs)
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            status, raw = resp.status, resp.read()
-    except urllib.error.HTTPError as err:
-        status, raw = err.code, err.read()
+    for attempt in range(5):
+        req = urllib.request.Request(base + path, data=data, method=method, headers=hdrs)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                status, raw = resp.status, resp.read()
+        except urllib.error.HTTPError as err:
+            status, raw = err.code, err.read()
+            # Rate limited: wait as told, as an integration must.
+            if status == 429 and attempt < 4:
+                time.sleep(float(err.headers.get("Retry-After") or 1))
+                continue
+        break
     try:
         parsed = json.loads(raw) if raw else None
     except ValueError:
@@ -78,6 +90,40 @@ def call(base, method, path, body=None, token=None, form=None, headers=None):
 
 def sql(statement):
     subprocess.run(DB_EXEC, input=statement.encode(), check=True, capture_output=True)
+
+
+def query(statement):
+    """Rows of a query as lists of fields (psql unaligned, tuples only)."""
+    out = subprocess.run(DB_EXEC + ["-t", "-A", "-F", "\t"], input=statement.encode(), check=True, capture_output=True)
+    return [line.split("\t") for line in out.stdout.decode().splitlines() if line.strip()]
+
+
+INFORM = """<?xml version="1.0" encoding="UTF-8"?>
+<soap-env:Envelope xmlns:soap-env="http://schemas.xmlsoap.org/soap/envelope/" xmlns:soap-enc="http://schemas.xmlsoap.org/soap/encoding/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:cwmp="urn:dslforum-org:cwmp-1-0">
+<soap-env:Header><cwmp:ID soap-env:mustUnderstand="1">rec-{serial}</cwmp:ID></soap-env:Header>
+<soap-env:Body><cwmp:Inform>
+<DeviceId><Manufacturer>Nokia</Manufacturer><OUI>A4FC77</OUI><ProductClass>3TG02241</ProductClass><SerialNumber>{serial}</SerialNumber></DeviceId>
+<Event soap-enc:arrayType="cwmp:EventStruct[1]"><EventStruct><EventCode>{event}</EventCode><CommandKey></CommandKey></EventStruct></Event>
+<MaxEnvelopes>1</MaxEnvelopes><CurrentTime>2026-10-31T08:00:00Z</CurrentTime><RetryCount>0</RetryCount>
+<ParameterList soap-enc:arrayType="cwmp:ParameterValueStruct[{n}]">{params}</ParameterList>
+</cwmp:Inform></soap-env:Body></soap-env:Envelope>"""
+
+
+def inform(serial, params, event="2 PERIODIC"):
+    """One CWMP Inform to cmd/acs with Digest auth; returns the HTTP status."""
+    values = "".join(f'<ParameterValueStruct><Name>{k}</Name><Value xsi:type="xsd:string">{v}</Value></ParameterValueStruct>'
+                     for k, v in params.items())
+    body = INFORM.format(serial=serial, event=event, n=len(params), params=values).encode()
+    url = os.environ["ACS_CWMP_URL"]
+    passwords = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+    passwords.add_password(None, url, os.environ["ACS_CWMP_USER"], os.environ["ACS_CWMP_PASSWORD"])
+    opener = urllib.request.build_opener(urllib.request.HTTPDigestAuthHandler(passwords), urllib.request.HTTPCookieProcessor())
+    req = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "text/xml; charset=utf-8"})
+    try:
+        with opener.open(req, timeout=30) as resp:
+            return resp.status
+    except urllib.error.HTTPError as err:
+        return err.code
 
 
 fixtures = {}
@@ -150,7 +196,7 @@ def main():
                          "secret": "whsec_" + base64.b64encode(os.urandom(24)).decode(),
                          "event_types": ["DeviceSeen", "FirmwareChanged", "OnboardingStateChangeEvent"]}, token)
     assert status in (200, 201), (status, hook)
-    record("webhook-create", "Account-scoped webhook subscription; the signing secret is returned once.",
+    record("webhook-create", "Account-scoped webhook subscription. The subscriber supplies the secret; it is never returned (rotate-secret returns a new one once).",
            [exchange("POST", "/bss/v1/webhooks", status, hook, True)])
 
     # Device events, from the real triggers on simulated state changes.
@@ -200,11 +246,55 @@ def main():
     record("not-found-other-account", "An account this customer does not own reads as 404, never 403.",
            [exchange("GET", "/tmf-api/serviceOrdering/v4/serviceOrder?accountId=someone-else.0001", status, other, False)])
 
+    if os.environ.get("ACS_CWMP_URL"):
+        record_webhook_bodies(token)
+
     for name, fixture in fixtures.items():
         with open(os.path.join(OUT, name + ".json"), "w", encoding="utf-8", newline="\n") as f:
             json.dump(fixture, f, indent=2, sort_keys=False, default=str)
             f.write("\n")
     print(f"wrote {len(fixtures)} fixtures to {OUT}")
+
+
+def record_webhook_bodies(token):
+    """Real CWMP Informs for two pre-provisioned sales and a mapped CPE, then
+    one stored webhook body per event type."""
+    body = {"account_id": "contract.0004", "oui_serial": "A4FC77+3TG02241+CONTRACT04", "service_plan": "HOME-5G", "pre_provision": True}
+    status, _ = call(BSS, "POST", "/bss/v1/mappings", body, token)
+    assert status == 202, status
+    every = ["DeviceSeen", "DeviceUnreachable", "FirmwareChanged", "CellularStateChanged", "DeviceFault", "DeviceRecovered",
+             "OnboardingStateChangeEvent", "IdentityMismatch"]
+    for account in ("contract.0001", "contract.0002", "contract.0004"):
+        status, _ = call(BSS, "POST", "/bss/v1/webhooks", {"account_id": account, "target_url": "https://203.0.113.10/acs-events",
+                                                           "secret": "whsec_" + base64.b64encode(os.urandom(24)).decode(),
+                                                           "event_types": every}, token)
+        assert status in (200, 201), status
+    # The sale for CONTRACT02 expects another ICCID: held, IdentityMismatch.
+    assert inform("CONTRACT02", {"Device.DeviceInfo.SoftwareVersion": "1.2501.00.0798",
+                                 "Device.Cellular.Interface.1.USIM.ICCID": "89270000000000009999"}, "0 BOOTSTRAP") == 200
+    # The sale for CONTRACT04 passes the SIM check and waits for its own credential.
+    assert inform("CONTRACT04", {"Device.DeviceInfo.SoftwareVersion": "1.2501.00.0798",
+                                 "Device.Cellular.Interface.1.USIM.IMSI": "655060000000013"}, "0 BOOTSTRAP") == 200
+    # The mapped CPE reports its cellular state, then goes quiet.
+    assert inform("CONTRACT01", {"Device.DeviceInfo.SoftwareVersion": "1.2601.00.0101",
+                                 "Device.Cellular.Interface.1.Status": "Up"}) == 200
+    sql("UPDATE devices SET online_status = 'UNREACHABLE' WHERE oui_serial = 'A4FC77+3TG02241+CONTRACT01';")
+
+    deadline, rows = time.time() + 60, []
+    while time.time() < deadline:
+        rows = query("""SELECT DISTINCT ON (event_type, payload->'data'->>'state') event_type, payload::text
+                          FROM webhook_deliveries WHERE payload ? 'sequence'
+                         ORDER BY event_type, payload->'data'->>'state', created_at;""")
+        if len({r[0] for r in rows}) >= 6:
+            break
+        time.sleep(5)
+    exchanges = [exchange("POST", "/acs-events (subscriber's target_url)", 0, json.loads(r[1]), False) for r in rows]
+    for x in exchanges:
+        x["note"] = ("The webhook body as sent, with headers Webhook-Id (the delivery id), Webhook-Timestamp, "
+                     "Webhook-Signature and X-Webhook-Event. status is 0: the recording target is not reachable.")
+    record("webhook-bodies", "One delivered webhook body per event type: the envelope plus the older TMF688 keys. "
+           "Onboarding events come from real CWMP Informs to cmd/acs; DeviceFault and DeviceRecovered are not produced by this "
+           "recording (see docs/integration/09-events.md for their data).", exchanges)
 
 
 if __name__ == "__main__":

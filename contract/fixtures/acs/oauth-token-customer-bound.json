@@ -1,7 +1,7 @@
 {
   "name": "acs/oauth-token-customer-bound",
   "description": "Token for a customer-bound client: customer_id names the ACS customer (ISP).",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0e05248+I2, 2026-10-31. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit dd81ba9+I2-fixes, 2026-10-31. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
@@ -13,7 +13,7 @@
         "token_type": "Bearer",
         "expires_in": 3600,
         "scope": "tmf:execute tmf:read tmf:write",
-        "customer_id": "f8594ca7-ef41-4b44-a927-3f14654b237b"
+        "customer_id": "be9bb7d4-1c8d-4ebc-aded-faf8b75efc5a"
       }
     }
   ]
