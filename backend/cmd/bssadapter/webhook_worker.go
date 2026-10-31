@@ -340,7 +340,7 @@ func (h *handler) createWebhookSubscription(w http.ResponseWriter, r *http.Reque
 		if !h.authorizeBSSFleet(w, r) {
 			return
 		}
-	} else if !h.authorizeBSSAccount(w, r, *req.AccountID) {
+	} else if !h.authorizeBSSAccount(w, r, bss.ScopeTMFWrite, *req.AccountID) {
 		return
 	}
 	// audit H-7: validate at save time too, not only at delivery.
@@ -374,7 +374,7 @@ func (h *handler) listWebhookSubscriptions(w http.ResponseWriter, r *http.Reques
 		}
 		subs, err = h.webhooks.ListSubscriptions(r.Context())
 	} else {
-		if !h.authorizeBSSAccount(w, r, accountID) {
+		if !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, accountID) {
 			return
 		}
 		subs, err = h.webhooks.ListSubscriptionsForAccount(r.Context(), accountID)
@@ -407,7 +407,7 @@ func (h *handler) deleteWebhookSubscription(w http.ResponseWriter, r *http.Reque
 		if !h.authorizeBSSFleet(w, r) {
 			return
 		}
-	} else if !h.authorizeBSSAccount(w, r, *sub.AccountID) {
+	} else if !h.authorizeBSSAccount(w, r, bss.ScopeTMFWrite, *sub.AccountID) {
 		return
 	}
 	if err := h.webhooks.DeleteSubscription(r.Context(), id); err != nil {

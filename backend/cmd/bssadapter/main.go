@@ -555,7 +555,7 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "account_id and oui_serial are required")
 		return
 	}
-	if !h.authorizeBSSAccount(w, r, req.AccountID) {
+	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFWrite, req.AccountID) {
 		return
 	}
 
@@ -636,7 +636,7 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) listMappings(w http.ResponseWriter, r *http.Request) {
 	accountID := r.PathValue("account_id")
-	if !h.authorizeBSSAccount(w, r, accountID) {
+	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, accountID) {
 		return
 	}
 	list, err := h.mappings.ListByAccount(r.Context(), accountID)
@@ -662,7 +662,7 @@ func (h *handler) listMappings(w http.ResponseWriter, r *http.Request) {
 // by CWMP discovery. It does not expose cached values or credentials.
 func (h *handler) getMappedDeviceCapabilities(w http.ResponseWriter, r *http.Request) {
 	accountID := r.PathValue("account_id")
-	if !h.authorizeBSSAccount(w, r, accountID) {
+	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, accountID) {
 		return
 	}
 	mapping, err := h.mappings.ActiveDeviceForAccount(r.Context(), accountID, roleOrDefault(r.URL.Query().Get("role")))
@@ -796,7 +796,7 @@ func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "account_id and action are required")
 		return
 	}
-	if !h.authorizeBSSAccount(w, r, req.AccountID) {
+	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, req.AccountID) {
 		return
 	}
 	mapping, err := h.mappings.ActiveDeviceForAccount(r.Context(), req.AccountID, roleOrDefault(req.Role))
@@ -946,7 +946,7 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "external_order_id, account_id, and action are required")
 		return
 	}
-	if !h.authorizeBSSAccount(w, r, req.AccountID) {
+	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFExecute, req.AccountID) {
 		return
 	}
 
@@ -1027,7 +1027,7 @@ func (h *handler) getJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
-	if order == nil || !h.authorizeBSSAccount(w, r, order.AccountID) {
+	if order == nil || !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, order.AccountID) {
 		// Report a job outside the BSS outbox exactly like an unknown job.
 		// This prevents account-scoped OAuth clients from probing ACS job IDs.
 		if order == nil {

@@ -101,10 +101,16 @@ func (h *handler) authorizeTMF(w http.ResponseWriter, r *http.Request, requiredS
 // their compatibility contract intentionally keeps the shared token and the
 // no-credential lab profile globally privileged. OAuth clients, however,
 // must not gain cross-account access merely by using an older endpoint.
-func (h *handler) authorizeBSSAccount(w http.ResponseWriter, r *http.Request, accountID string) bool {
+//
+// requiredScope (S5) applies to customer-bound clients, the model for new
+// integrations: a /bss/v1 call needs the same TMF scope as its TMF
+// counterpart (tmf:read to read, tmf:write for mappings and webhooks,
+// tmf:execute for orders). Clients that predate binding keep the legacy
+// rule, where scopes govern only the TMF APIs.
+func (h *handler) authorizeBSSAccount(w http.ResponseWriter, r *http.Request, requiredScope, accountID string) bool {
 	if h.requireCustomerBound {
 		claims, ok := h.boundPrincipal(w, r)
-		return ok && h.accountAllowed(w, r, claims, accountID)
+		return ok && h.bssScopeAllowed(w, claims, requiredScope) && h.accountAllowed(w, r, claims, accountID)
 	}
 	if h.token == "" && len(h.oauthSigningSecret) == 0 {
 		return true
@@ -127,7 +133,7 @@ func (h *handler) authorizeBSSAccount(w http.ResponseWriter, r *http.Request, ac
 		writeError(w, http.StatusUnauthorized, "invalid_token", "authentication required")
 		return false
 	}
-	return h.accountAllowed(w, r, claims, accountID)
+	return h.bssScopeAllowed(w, claims, requiredScope) && h.accountAllowed(w, r, claims, accountID)
 }
 
 // authorizeBSSFleet is the explicit escalation required for a fleet-wide
@@ -228,3 +234,19 @@ type httptestDiscard struct{}
 func (httptestDiscard) Header() http.Header         { return http.Header{} }
 func (httptestDiscard) Write(b []byte) (int, error) { return len(b), nil }
 func (httptestDiscard) WriteHeader(int)             {}
+
+// bssScopeAllowed enforces OAuth scopes on /bss/v1 for customer-bound
+// clients (S5); see authorizeBSSAccount.
+func (h *handler) bssScopeAllowed(w http.ResponseWriter, claims *auth.Claims, requiredScope string) bool {
+	if claims == nil || claims.CustomerID == "" {
+		return true
+	}
+	for _, scope := range claims.Scopes {
+		if scope == requiredScope {
+			return true
+		}
+	}
+	w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope", scope="`+requiredScope+`"`)
+	writeError(w, http.StatusForbidden, "insufficient_scope", "required OAuth scope is not granted")
+	return false
+}

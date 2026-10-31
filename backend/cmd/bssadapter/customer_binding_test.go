@@ -233,3 +233,52 @@ func TestTokenCarriesTheCustomer(t *testing.T) {
 		t.Fatal("a client both global and customer-bound was accepted")
 	}
 }
+
+func scopedToken(t *testing.T, customerID string, scopes ...string) string {
+	t.Helper()
+	now := time.Now()
+	tok, err := auth.SignJWT(bindingSecret, auth.Claims{Subject: "bss-client:scoped", Role: bssClientRole, IssuedAt: now, ExpiresAt: now.Add(time.Hour),
+		Scopes: scopes, CustomerID: customerID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+// TestBoundClientsNeedScopesOnBSSv1 is S5 for customer-bound clients: a
+// /bss/v1 call needs the scope of its TMF counterpart, and a refused write
+// claims nothing.
+func TestBoundClientsNeedScopesOnBSSv1(t *testing.T) {
+	e := newBindingEnv(t)
+	readOnly := scopedToken(t, e.custA, bss.ScopeTMFRead)
+	rec := e.call(t, e.h.createMapping, http.MethodPost, "/bss/v1/mappings", readOnly, map[string]any{"account_id": "A.5", "oui_serial": "001122-DEV-A"})
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "insufficient_scope") {
+		t.Fatalf("mapping with tmf:read only = %d %s", rec.Code, rec.Body)
+	}
+	if owner, _ := e.h.mappings.AccountOwner(e.ctx, "A.5"); owner != "" {
+		t.Fatalf("a refused write claimed the account for %q", owner)
+	}
+
+	mapper := scopedToken(t, e.custA, bss.ScopeTMFRead, bss.ScopeTMFWrite)
+	if rec := e.call(t, e.h.createMapping, http.MethodPost, "/bss/v1/mappings", mapper, map[string]any{"account_id": "A.5", "oui_serial": "001122-DEV-A"}); rec.Code != http.StatusOK {
+		t.Fatalf("mapping with tmf:write = %d %s", rec.Code, rec.Body)
+	}
+	if rec := e.call(t, e.h.createOrder, http.MethodPost, "/bss/v1/orders", mapper,
+		map[string]any{"external_order_id": "o-1", "account_id": "A.5", "action": "SUSPEND"}); rec.Code != http.StatusForbidden {
+		t.Fatalf("order without tmf:execute = %d %s", rec.Code, rec.Body)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/bss/v1/mappings/A.5", nil)
+	req.SetPathValue("account_id", "A.5")
+	req.Header.Set("Authorization", "Bearer "+readOnly)
+	rec = httptest.NewRecorder()
+	e.h.listMappings(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read with tmf:read = %d %s", rec.Code, rec.Body)
+	}
+
+	// Clients that predate binding keep the legacy rule on /bss/v1.
+	legacy := bindingToken(t, "", true)
+	if rec := e.call(t, e.h.createMapping, http.MethodPost, "/bss/v1/mappings", legacy, map[string]any{"account_id": "L.9", "oui_serial": "001122-DEV-B"}); rec.Code != http.StatusOK {
+		t.Fatalf("legacy global client = %d %s", rec.Code, rec.Body)
+	}
+}

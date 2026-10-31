@@ -33,7 +33,7 @@ func (h *handler) getReconciliation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "ErrNotFound", "no BSS order history for that device")
 		return
 	}
-	if !h.authorizeBSSAccount(w, r, accountID) {
+	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, accountID) {
 		return
 	}
 	orders, err := h.mappings.OrdersForDevice(r.Context(), deviceID, 0, accountID)

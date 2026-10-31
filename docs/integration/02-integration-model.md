@@ -196,6 +196,13 @@ when the ACS runs with `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true`.
   claimed by a bound client; it stays 404 until an operator assigns it
   (`PUT /api/v1/bss/accounts/{account_id}/customer`, superadmin). Only an
   operator can move an account between customers.
+- **Scopes apply to `/bss/v1` too.** A bound client needs the same scope
+  as the TMF counterpart of each call: `tmf:read` for reads, job status,
+  reconciliation and preflight; `tmf:write` for mappings and webhooks;
+  `tmf:execute` for orders. A missing scope is 403 `insufficient_scope`,
+  checked before an account is claimed. Grant an integration only what
+  it uses. (Clients that predate binding keep the older rule, where scopes
+  govern only the TMF APIs.)
 - **Asserting your binding.** The token response carries `customer_id`,
   and the JWT carries it as `cust`. A client cannot be both bound and
   fleet-wide; `account_ids` on a bound client narrows it further.
