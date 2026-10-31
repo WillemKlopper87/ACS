@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"acs/internal/bss"
 	"acs/internal/credentials"
 	"acs/internal/devices"
 	"acs/internal/jobs"
@@ -108,20 +109,30 @@ func (h *handler) reconcileOnboarding(ctx context.Context, device *devices.Devic
 // not what was sold, so an integration follows installation without
 // polling (cmd/bssadapter fans tmf_events out to webhooks; GET
 // /bss/v1/events replays them). The event belongs to the sale's BSS
-// account, else the device's customer. No SIM identifiers: the reason
-// carries only masked ones.
+// account, else the device's customer. A sale with a customer pins the
+// event to that customer (customerEventSink), so an account reference or
+// device of another customer cannot route it into that customer's stream.
+// No SIM identifiers: the reason carries only masked ones.
 func (h *handler) publishOnboardingEvent(ctx context.Context, o *onboarding.Onboarding, d onboarding.Decision, deviceID string) {
 	if h.tmfEvents == nil {
 		return
 	}
 	at := time.Now().UTC()
+	create := func(key, eventType string, payload json.RawMessage) error {
+		if sink, ok := h.tmfEvents.(customerEventSink); ok && o.CustomerID != nil {
+			_, err := sink.CreateCustomerEvent(ctx, *o.CustomerID, key, o.AccountRef, deviceID, eventType, payload, at)
+			return err
+		}
+		_, err := h.tmfEvents.CreateEvent(ctx, key, o.AccountRef, deviceID, "", eventType, payload, at)
+		return err
+	}
 	data := map[string]any{
 		"onboardingId": o.ID, "externalId": o.ExternalRef, "serialNumber": o.ExpectedSerial,
 		"state": d.State, "previousState": o.State, "reason": d.Reason, "reasonCode": d.Code, "source": o.Source,
 	}
 	payload, _ := json.Marshal(data)
 	key := fmt.Sprintf("onboarding-%s-%s-%s-%d", o.ID, o.State, d.State, at.UnixNano())
-	if _, err := h.tmfEvents.CreateEvent(ctx, key, o.AccountRef, deviceID, "", "OnboardingStateChangeEvent", payload, at); err != nil {
+	if err := create(key, "OnboardingStateChangeEvent", payload); err != nil {
 		h.logger.Error("failed to publish onboarding event", "err", err, "onboarding_id", o.ID)
 	}
 	switch d.Code {
@@ -130,10 +141,16 @@ func (h *handler) publishOnboardingEvent(ctx context.Context, o *onboarding.Onbo
 			"onboardingId": o.ID, "externalId": o.ExternalRef, "serialNumber": o.ExpectedSerial,
 			"reasonCode": d.Code, "reason": d.Reason,
 		})
-		if _, err := h.tmfEvents.CreateEvent(ctx, "identity-mismatch-"+key, o.AccountRef, deviceID, "", "IdentityMismatch", mismatch, at); err != nil {
+		if err := create("identity-mismatch-"+key, "IdentityMismatch", mismatch); err != nil {
 			h.logger.Error("failed to publish identity mismatch event", "err", err, "onboarding_id", o.ID)
 		}
 	}
+}
+
+// customerEventSink records an event for a known customer
+// (bss.Repository.CreateCustomerEvent).
+type customerEventSink interface {
+	CreateCustomerEvent(ctx context.Context, customerID, sourceKey, accountID, deviceID, eventType string, payload json.RawMessage, at time.Time) (*bss.EventRecord, error)
 }
 
 // reconcileOnboardingAtSessionEnd runs the reconciler for a session's

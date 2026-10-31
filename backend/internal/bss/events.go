@@ -82,3 +82,35 @@ func (r *Repository) EventsAfter(ctx context.Context, customerID string, after i
 	}
 	return page, rows.Err()
 }
+
+// CreateCustomerEvent records an event that belongs to one known customer,
+// such as a sale's onboarding progress. The account and device are attached
+// only when they belong to that customer too (or to nobody), so an account
+// reference or a device of another customer can never route the event into
+// that customer's stream or webhooks. An empty customerID falls back to
+// CreateEvent, which infers the customer.
+func (r *Repository) CreateCustomerEvent(ctx context.Context, customerID, sourceKey, accountID, deviceID, eventType string, payload json.RawMessage, at time.Time) (*EventRecord, error) {
+	if customerID == "" {
+		return r.CreateEvent(ctx, sourceKey, accountID, deviceID, "", eventType, payload, at)
+	}
+	var e EventRecord
+	err := r.db.QueryRowContext(ctx, `
+		INSERT INTO tmf_events (id, source_key, customer_id, account_id, device_id, event_type, event_time, payload)
+		SELECT gen_random_uuid(), $1::text, $2::text::uuid,
+		       CASE WHEN COALESCE((SELECT customer_id::text FROM bss_accounts WHERE account_id = NULLIF($3::text, '')), $2::text) = $2::text
+		            THEN NULLIF($3::text, '') END,
+		       CASE WHEN COALESCE((SELECT customer_id::text FROM devices WHERE id = NULLIF($4::text, '')::uuid), $2::text) = $2::text
+		            THEN NULLIF($4::text, '')::uuid END,
+		       $5::text, $6::timestamptz, $7::jsonb
+		ON CONFLICT (source_key) DO NOTHING
+		RETURNING id, source_key, COALESCE(account_id, ''), COALESCE(device_id::text, ''), '', event_type, event_time, payload,
+		          customer_id::text, seq`, sourceKey, customerID, accountID, deviceID, eventType, at, payload).
+		Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload, &e.CustomerID, &e.Seq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("create customer event: %w", err)
+	}
+	return &e, nil
+}

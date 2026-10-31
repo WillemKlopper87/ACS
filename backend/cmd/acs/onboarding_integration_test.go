@@ -203,7 +203,13 @@ func TestIntegration_OnboardingNeverMovesAnOwnedDevice(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE devices SET customer_id = $1 WHERE serial_number = 'OB0004'`, custB); err != nil {
 		t.Fatal(err)
 	}
-	o, err := h.onboarding.Create(ctx, onboarding.Onboarding{ExpectedSerial: "OB0004", CustomerID: &custA, Source: "console"})
+	// The sale also names an account that B owns: neither the account nor
+	// the device may route its events to B.
+	h.tmfEvents = bss.NewRepository(db)
+	if _, err := db.ExecContext(ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('B-ACC', $1, 'test')`, custB); err != nil {
+		t.Fatal(err)
+	}
+	o, err := h.onboarding.Create(ctx, onboarding.Onboarding{ExpectedSerial: "OB0004", CustomerID: &custA, AccountRef: "B-ACC", Source: "console"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +222,15 @@ func TestIntegration_OnboardingNeverMovesAnOwnedDevice(t *testing.T) {
 	var owner string
 	if err := db.QueryRowContext(ctx, `SELECT customer_id::text FROM devices WHERE serial_number = 'OB0004'`).Scan(&owner); err != nil || owner != custB {
 		t.Fatalf("device customer = %q, %v; want it unchanged", owner, err)
+	}
+	var toA, toB, attached int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE customer_id = $1::uuid), count(*) FILTER (WHERE customer_id = $2::uuid),
+		count(*) FILTER (WHERE account_id IS NOT NULL OR device_id IS NOT NULL)
+		FROM tmf_events WHERE payload->>'onboardingId' = $3`, custA, custB, o.ID).Scan(&toA, &toB, &attached); err != nil {
+		t.Fatal(err)
+	}
+	if toA != 2 || toB != 0 || attached != 0 {
+		t.Fatalf("sale events: to A %d, to B %d, with B's account or device %d; want 2, 0, 0", toA, toB, attached)
 	}
 
 	// The store refuses it too, whatever its caller decided.
