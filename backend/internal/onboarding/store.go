@@ -395,6 +395,31 @@ func (r *Repository) Cancel(ctx context.Context, id string) error {
 		WHERE id = $1 AND state NOT IN ('IN_SERVICE', 'CANCELLED')`, id)
 }
 
+// ExpireUncontacted cancels up to limit sales from source that no CPE has
+// contacted within ttl (CodeTTLExpired), freeing their serials for a new
+// sale, and returns them as cancelled. A sale whose CPE connected, even if
+// it is held, never expires: an operator decides.
+func (r *Repository) ExpireUncontacted(ctx context.Context, source string, ttl time.Duration, reason string, limit int) ([]Onboarding, error) {
+	rows, err := r.db.QueryContext(ctx, `UPDATE onboardings SET state = 'CANCELLED', state_code = $3, state_reason = $4, updated_at = now()
+		WHERE id IN (SELECT id FROM onboardings
+			WHERE source = $1 AND state = 'PLANNED' AND device_id IS NULL AND created_at < now() - make_interval(secs => $2::float8)
+			ORDER BY created_at LIMIT $5 FOR UPDATE SKIP LOCKED)
+		RETURNING `+onboardingColumns, source, ttl.Seconds(), CodeTTLExpired, reason, limit)
+	if err != nil {
+		return nil, fmt.Errorf("expire sales: %w", err)
+	}
+	defer rows.Close()
+	var out []Onboarding
+	for rows.Next() {
+		o, err := scanOnboarding(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *o)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) exec(ctx context.Context, query, id string) error {
 	res, err := r.db.ExecContext(ctx, query, id)
 	if err != nil {

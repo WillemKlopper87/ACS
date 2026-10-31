@@ -98,21 +98,9 @@ func (h *handler) preProvision(ctx context.Context, req preProvisionRequest) (*o
 	if req.CustomerID != "" && req.CustomerID != owner {
 		return nil, errPreProvisionCustomer
 	}
-	var plan *onboarding.ServicePlan
-	if code := strings.TrimSpace(req.ServicePlan); code != "" {
-		var p *onboarding.ServicePlan
-		if owner != "" {
-			p, err = h.onboarding.PlanForCustomer(ctx, code, owner)
-		} else {
-			p, err = h.onboarding.PlanByCode(ctx, code)
-		}
-		switch {
-		case err == nil:
-			plan = p
-		case errors.Is(err, onboarding.ErrNotFound):
-		default:
-			return nil, err
-		}
+	plan, err := h.resolvePlan(ctx, req.ServicePlan, owner)
+	if err != nil {
+		return nil, err
 	}
 	var customerID, planID *string
 	if plan != nil {
@@ -170,6 +158,28 @@ func (h *handler) preProvision(ctx context.Context, req preProvisionRequest) (*o
 	return o, nil
 }
 
+// resolvePlan finds the ACS service plan a BSS plan code means for an
+// account's owner (its own or a shared plan), or for an account with no
+// owner the shared plan with that code, else the one customer plan that
+// has it. No code, or an unknown one, is a nil plan.
+func (h *handler) resolvePlan(ctx context.Context, code, owner string) (*onboarding.ServicePlan, error) {
+	code = strings.TrimSpace(code)
+	if code == "" || h.onboarding == nil {
+		return nil, nil
+	}
+	var p *onboarding.ServicePlan
+	var err error
+	if owner != "" {
+		p, err = h.onboarding.PlanForCustomer(ctx, code, owner)
+	} else {
+		p, err = h.onboarding.PlanByCode(ctx, code)
+	}
+	if errors.Is(err, onboarding.ErrNotFound) {
+		return nil, nil
+	}
+	return p, err
+}
+
 func (h *handler) runPreProvisionSyncLoop(ctx context.Context) {
 	ticker := time.NewTicker(preProvisionSyncInterval)
 	defer ticker.Stop()
@@ -190,6 +200,7 @@ func (h *handler) syncPreProvisioned(ctx context.Context) {
 	if h.onboarding == nil {
 		return
 	}
+	h.expireSales(ctx)
 	pending, err := h.mappings.PreProvisionedNeedingSync(ctx, 100)
 	if err != nil {
 		h.logger.Error("failed to list pre-provisioned onboardings", "err", err)
@@ -263,7 +274,11 @@ func (h *handler) syncAwaitingItem(ctx context.Context, a bss.AwaitingItem) erro
 		}
 		return h.skipTMF641PendingItems(ctx, a.OrderID, a.Seq)
 	case a.State == onboarding.StateCancelled:
-		return h.finishTMF641Item(ctx, item, "FAILED", "onboarding cancelled")
+		message := "onboarding cancelled"
+		if a.Reason != "" {
+			message += ": " + a.Reason
+		}
+		return h.finishTMF641Item(ctx, item, "FAILED", message)
 	case a.State == onboarding.StateInService && a.MappingID != "":
 		if err := h.mappings.SetServiceOrderItemMapping(ctx, a.ItemID, a.MappingID); err != nil {
 			return err

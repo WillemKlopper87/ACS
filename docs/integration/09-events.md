@@ -7,13 +7,13 @@ polling, and how it catches up after downtime. Recorded examples are in
 ## The envelope
 
 Every event has the same shape, in a webhook body and in replay.
-`occurred_at` is always UTC (`Z`):
+`occurred_at` is always UTC (`Z`), as is every timestamp on `/bss/v1`:
 
 ```json
 {
   "id": "21c11827-9233-42ab-9c35-fd0896f74553",
   "type": "DeviceSeen",
-  "occurred_at": "2026-10-31T07:59:40.15917+02:00",
+  "occurred_at": "2026-10-31T05:59:40.15917Z",
   "sequence": 1,
   "customer_id": "985e6a30-89f0-43ff-b926-5c47f942db54",
   "account_id": "contract.0001",
@@ -45,9 +45,10 @@ in your own records.
 **`reasonCode`** values: `DEVICE_OTHER_CUSTOMER`, `SIM_MISMATCH`,
 `PLMN_NOT_ALLOWED`, `SIM_UNREADABLE`, `CONFIG_FAILED` (holds and failures, which
 wait for an operator), and `WAITING_SIM_READ`, `WAITING_OWN_CREDENTIAL`,
-`WAITING_DISCOVERY`, `WAITING_CONFIG` (progress, not problems). `TTL_EXPIRED`
-comes with sale expiry in I3: an expired sale will be **CANCELLED** (freeing the
-serial for a new sale), its TMF641 item FAILED.
+`WAITING_DISCOVERY`, `WAITING_CONFIG` (progress, not problems), and `TTL_EXPIRED`:
+a sale no CPE contacted within the sale TTL (`ACS_BSS_SALE_TTL`, default 30 days) is
+**CANCELLED**, freeing the serial for a new sale, and its TMF641 item FAILED. Read a
+sale's current state with `GET /bss/v1/onboardings/{onboardingId}`.
 
 Onboarding states are `PLANNED`, `CONTACTED`, `SECURED`, `DISCOVERED`,
 `CONFIGURING`, `IN_SERVICE`, `ON_HOLD`, `FAILED`, `CANCELLED`.

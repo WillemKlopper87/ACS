@@ -137,6 +137,10 @@ enforced in the database.
 - Assignment is temporal: releasing a device records when and why, and the
   same device can later be reassigned. A device is bound to at most one
   account at a time.
+- **Why** is one of `rma`, `upgrade`, `return`, `moved`, `corrected`
+  (TMF641 `unassignReason`). Another value is refused with 400 before
+  anything runs. Without one, a swap (delete then add, same role) records
+  `upgrade` and a delete records `return`.
 
 ### 6.1 Device identity (`oui_serial`)
 

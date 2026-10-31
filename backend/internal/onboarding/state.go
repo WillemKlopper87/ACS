@@ -56,6 +56,9 @@ const (
 	CodeWaitingOwnCredential = "WAITING_OWN_CREDENTIAL"
 	CodeWaitingDiscovery     = "WAITING_DISCOVERY"
 	CodeWaitingConfig        = "WAITING_CONFIG"
+	// CodeTTLExpired: a BSS sale no CPE contacted within the sale TTL was
+	// cancelled, freeing its serial.
+	CodeTTLExpired = "TTL_EXPIRED"
 )
 
 // Decision is the next state and what the gateway must do for it.

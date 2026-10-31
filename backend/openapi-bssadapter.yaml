@@ -109,7 +109,9 @@ paths:
       responses:
         "200": { description: Mapping created/updated, content: { application/json: { schema: { $ref: "#/components/schemas/Mapping" } } } }
         "202":
-          description: "pre_provision only: the device is unknown, so a sale was recorded and the mapping waits for the CPE"
+          description: "pre_provision only: the device is unknown, so a sale was recorded and the mapping waits for the CPE. Location and href point to the sale read."
+          headers:
+            Location: { schema: { type: string }, description: "/bss/v1/onboardings/{onboarding_id}" }
           content:
             application/json:
               schema:
@@ -122,6 +124,9 @@ paths:
                   status: { type: string, enum: [AWAITING_DEVICE] }
                   onboarding_id: { type: string }
                   onboarding_state: { type: string }
+                  href: { type: string, description: "The sale read, GET /bss/v1/onboardings/{onboarding_id}" }
+                  plan_matched: { type: boolean, description: "Whether service_plan names an ACS service plan. False with a PLAN_NOT_FOUND warning when a code was given that matches none." }
+                  warnings: { type: array, items: { $ref: "#/components/schemas/SaleWarning" } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { description: "ErrDeviceNotMapped — no device found for that oui_serial (and pre_provision not set)", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
         "409": { description: "ErrRoleAlreadyAssigned — the account already has an active device in that role", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
@@ -294,6 +299,18 @@ paths:
       responses:
         "204": { description: Deleted }
 
+  /bss/v1/onboardings/{id}:
+    get:
+      tags: [Mappings]
+      summary: Read a sale (a pre-provisioned onboarding) of one of the caller's accounts (tmf:read for customer-bound clients)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, description: "onboarding_id from the 202 of a pre_provision mapping, or from an OnboardingStateChangeEvent" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Sale" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { description: "Unknown, or another customer's, sale", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
   /bss/v1/events:
     get:
       tags: [Events]
@@ -456,6 +473,41 @@ components:
         service_plan: { type: string }
         status: { type: string, enum: [PENDING_ACTIVE, ACTIVE, SUSPENDED, TERMINATED] }
         role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "What the device does for this account. One active device per role per account." }
+        plan_matched: { type: boolean, description: "On create, when service_plan was given: whether it names an ACS service plan" }
+        warnings: { type: array, items: { $ref: "#/components/schemas/SaleWarning" } }
+
+    SaleWarning:
+      type: object
+      required: [code, message]
+      description: "Something the BSS should fix that does not stop the sale."
+      properties:
+        code: { type: string, enum: [PLAN_NOT_FOUND] }
+        message: { type: string }
+
+    Sale:
+      type: object
+      required: [id, href, account_id, serial_number, plan_matched, state, created_at, updated_at]
+      description: "A BSS sale and where it is. Timestamps are UTC. No SIM identifiers; reason carries only masked ones."
+      properties:
+        id: { type: string }
+        href: { type: string }
+        account_id: { type: string }
+        external_id: { type: string, description: "The TMF641 order externalId that created the sale, if any" }
+        oui: { type: string }
+        serial_number: { type: string }
+        role: { type: string }
+        service_plan: { type: string }
+        plan_matched: { type: boolean }
+        state: { type: string, enum: [PLANNED, CONTACTED, SECURED, DISCOVERED, CONFIGURING, IN_SERVICE, ON_HOLD, FAILED, CANCELLED] }
+        reason_code: { type: string, description: "As OnboardingStateChangeEvent.reasonCode, including TTL_EXPIRED" }
+        reason: { type: string }
+        device_id: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        contacted_at: { type: string, format: date-time }
+        in_service_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, description: "While PLANNED: when the sale is cancelled (TTL_EXPIRED) if no CPE has connected. ACS_BSS_SALE_TTL, default 30 days." }
+        warnings: { type: array, items: { $ref: "#/components/schemas/SaleWarning" } }
 
     Order:
       type: object

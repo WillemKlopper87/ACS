@@ -97,8 +97,8 @@ func TestWebhookEnvelopeAndDeliveryOperations(t *testing.T) {
 	}
 	acct := "A.1"
 	sub, err := e.h.webhooks.CreateSubscription(e.ctx, &acct, "http://127.0.0.1:9/hook", "old-secret-0123456789", []string{"DeviceSeen"})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || sub.CreatedAt.Location() != time.UTC {
+		t.Fatalf("subscription = %+v, %v; want created_at in UTC", sub, err)
 	}
 	e.contact(t, "DEV-A", e.custA)
 	if n, err := e.h.webhooks.DispatchTMFEvents(e.ctx, time.Now().Add(-time.Hour), 100); err != nil || n != 1 {
@@ -160,8 +160,11 @@ func TestWebhookEnvelopeAndDeliveryOperations(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+tokA)
 	rec = httptest.NewRecorder()
 	e.h.rotateWebhookSecret(rec, req)
-	var rotated struct{ Secret string }
-	if err := json.Unmarshal(rec.Body.Bytes(), &rotated); rec.Code != http.StatusOK || err != nil || rotated.Secret == "" {
+	var rotated struct {
+		Secret     string
+		ValidUntil string `json:"previous_secret_valid_until"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &rotated); rec.Code != http.StatusOK || err != nil || rotated.Secret == "" || !strings.HasSuffix(rotated.ValidUntil, "Z") {
 		t.Fatalf("rotate = %d %s", rec.Code, rec.Body)
 	}
 	due, err := e.h.webhooks.DueDeliveries(e.ctx, 10)

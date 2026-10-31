@@ -122,7 +122,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := store.Open(ctx, dsn)
+	db, err := store.OpenUTC(ctx, dsn)
 	if err != nil {
 		logger.Error("failed to connect to postgres", "err", err)
 		os.Exit(1)
@@ -167,6 +167,7 @@ func main() {
 		oauthClients:         bss.NewOAuthRepository(db),
 		oauthSigningSecret:   oauthSigningSecret,
 		requireCustomerBound: os.Getenv("ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS") == "true",
+		saleTTL:              saleTTLFromEnv(logger),
 		metrics:              metrics,
 		walledGarden:         walledGarden,
 		webhooks:             bss.NewWebhookRepository(db),
@@ -190,6 +191,7 @@ func main() {
 	mux.HandleFunc("POST /bss/v1/webhooks", metrics.InstrumentHTTP("POST /bss/v1/webhooks", h.createWebhookSubscription))
 	mux.HandleFunc("GET /bss/v1/webhooks", metrics.InstrumentHTTP("GET /bss/v1/webhooks", h.listWebhookSubscriptions))
 	mux.HandleFunc("DELETE /bss/v1/webhooks/{id}", metrics.InstrumentHTTP("DELETE /bss/v1/webhooks/{id}", h.deleteWebhookSubscription))
+	mux.HandleFunc("GET /bss/v1/onboardings/{id}", metrics.InstrumentHTTP("GET /bss/v1/onboardings/{id}", h.getSale))
 	mux.HandleFunc("GET /bss/v1/events", metrics.InstrumentHTTP("GET /bss/v1/events", h.listEvents))
 	mux.HandleFunc("GET /bss/v1/webhooks/{id}/deliveries", metrics.InstrumentHTTP("GET /bss/v1/webhooks/{id}/deliveries", h.listWebhookDeliveries))
 	mux.HandleFunc("POST /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver", metrics.InstrumentHTTP("POST /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver", h.redeliverWebhook))
@@ -433,7 +435,10 @@ type handler struct {
 	requireCustomerBound bool
 	// onboarding records pre-provisioned sales; nil keeps an unknown
 	// device an error, as before.
-	onboarding         *onboarding.Repository
+	onboarding *onboarding.Repository
+	// saleTTL cancels a pre-provisioned sale no CPE contacted in time
+	// (ACS_BSS_SALE_TTL); zero keeps sales open indefinitely.
+	saleTTL            time.Duration
 	acs                *bss.ACSClient
 	auditor            *observability.Auditor
 	token              string
@@ -536,6 +541,10 @@ type mappingResponse struct {
 	ServicePlan string `json:"service_plan,omitempty"`
 	Status      string `json:"status"`
 	Role        string `json:"role"`
+	// PlanMatched says whether service_plan names an ACS service plan;
+	// absent when no plan was given.
+	PlanMatched *bool         `json:"plan_matched,omitempty"`
+	Warnings    []saleWarning `json:"warnings,omitempty"`
 }
 
 // roleOrDefault applies the contract rule for callers that name no role:
@@ -594,9 +603,14 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 			ServicePlan: req.ServicePlan, ICCID: req.ICCID, IMSI: req.IMSI, Place: req.Place})
 		switch {
 		case ppErr == nil:
-			writeJSON(w, http.StatusAccepted, map[string]any{"account_id": req.AccountID, "oui_serial": req.OUISerial,
+			body := map[string]any{"account_id": req.AccountID, "oui_serial": req.OUISerial,
 				"service_plan": req.ServicePlan, "role": roleOrDefault(req.Role), "status": "AWAITING_DEVICE",
-				"onboarding_id": o.ID, "onboarding_state": o.State})
+				"onboarding_id": o.ID, "onboarding_state": o.State, "href": saleHref(o.ID), "plan_matched": o.ServicePlanID != nil}
+			if warnings := planWarnings(req.ServicePlan, o.ServicePlanID != nil); len(warnings) > 0 {
+				body["warnings"] = warnings
+			}
+			w.Header().Set("Location", saleHref(o.ID))
+			writeJSON(w, http.StatusAccepted, body)
 			return
 		case errors.Is(ppErr, bss.ErrInvalidRole), errors.Is(ppErr, onboarding.ErrInvalid):
 			writeError(w, http.StatusBadRequest, "ErrInvalidRequest", ppErr.Error())
@@ -635,10 +649,19 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 	}
 	h.logger.Info("mapping created", "account_id", req.AccountID, "device_id", mapping.DeviceID)
 
-	writeJSON(w, http.StatusOK, mappingResponse{
+	resp := mappingResponse{
 		AccountID: mapping.AccountID, DeviceUUID: mapping.DeviceID, OUISerial: mapping.OUISerial,
 		ServicePlan: mapping.ServicePlan, Status: mapping.Status, Role: mapping.Role,
-	})
+	}
+	if strings.TrimSpace(mapping.ServicePlan) != "" && h.onboarding != nil {
+		owner, ownerErr := h.mappings.AccountOwner(r.Context(), req.AccountID)
+		plan, planErr := h.resolvePlan(r.Context(), mapping.ServicePlan, owner)
+		if ownerErr == nil && planErr == nil {
+			matched := plan != nil
+			resp.PlanMatched, resp.Warnings = &matched, planWarnings(mapping.ServicePlan, matched)
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *handler) listMappings(w http.ResponseWriter, r *http.Request) {

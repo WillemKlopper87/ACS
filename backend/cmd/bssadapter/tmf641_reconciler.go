@@ -67,10 +67,7 @@ func (h *handler) resumeTMF641Item(ctx context.Context, work bss.ServiceOrderWor
 			}
 			return h.finishTMF641Sibling(ctx, work.Order.ID, swapAddIndex, active.ID, "COMPLETED", "")
 		}
-		reason := strings.TrimSpace(item.UnassignReason)
-		if reason == "" {
-			reason = "TMF641 service order swap"
-		}
+		reason := tmf641UnassignReason(item, true)
 		mapping, err := h.mappings.SwapDevice(ctx, req.AccountID, roleOrDefault(add.Role), add.OUISerial, reason)
 		if err != nil {
 			return h.finishTMF641Item(ctx, work.Item, "FAILED", err.Error())
@@ -182,10 +179,7 @@ func (h *handler) resumeTMF641Delete(ctx context.Context, work bss.ServiceOrderW
 			return err
 		}
 	}
-	reason := strings.TrimSpace(item.UnassignReason)
-	if reason == "" {
-		reason = "TMF641 service order"
-	}
+	reason := tmf641UnassignReason(item, false)
 	if err := h.mappings.UnassignDevice(ctx, req.AccountID, role, reason); err != nil {
 		return h.finishTMF641Item(ctx, work.Item, "FAILED", err.Error())
 	}

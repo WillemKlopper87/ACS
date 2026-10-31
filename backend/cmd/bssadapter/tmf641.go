@@ -46,6 +46,19 @@ func tmf641SwapPair(items []tmf641ItemRequest) (int, bool) {
 	return 1, true
 }
 
+// tmf641UnassignReason is the reason recorded when a delete or swap item
+// ends an assignment. Without one, a swap records an upgrade and a delete a
+// return.
+func tmf641UnassignReason(item tmf641ItemRequest, swap bool) string {
+	if reason := strings.TrimSpace(item.UnassignReason); reason != "" {
+		return reason
+	}
+	if swap {
+		return bss.ReasonUpgrade
+	}
+	return bss.ReasonReturn
+}
+
 func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 	var req tmf641OrderRequest
 	if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.ExternalID) == "" || strings.TrimSpace(req.AccountID) == "" || len(req.OrderItem) == 0 {
@@ -85,6 +98,10 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "ErrInvalidRequest", "role is required for delete items")
 			return
 		}
+		if reason := strings.TrimSpace(it.UnassignReason); reason != "" && !bss.ValidUnassignReason(reason) {
+			writeError(w, 400, "ErrInvalidRequest", "unassignReason must be one of rma, upgrade, return, moved, corrected")
+			return
+		}
 	}
 	order, err := h.mappings.CreateServiceOrder(r.Context(), req.ExternalID, req.AccountID, raw, items)
 	if err != nil {
@@ -104,10 +121,7 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 	for i, item := range req.OrderItem {
 		if isSwap && i == 0 {
 			item = req.OrderItem[swapAddIndex]
-			reason := strings.TrimSpace(req.OrderItem[0].UnassignReason)
-			if reason == "" {
-				reason = "TMF641 service order swap"
-			}
+			reason := tmf641UnassignReason(req.OrderItem[0], true)
 			mapping, execErr := h.mappings.SwapDevice(r.Context(), req.AccountID, roleOrDefault(item.Role), item.OUISerial, reason)
 			if execErr != nil {
 				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", execErr.Error())
@@ -160,10 +174,7 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 			items[i].Status = "COMPLETED"
 			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "COMPLETED", "")
 		} else if item.Action == "delete" {
-			reason := strings.TrimSpace(item.UnassignReason)
-			if reason == "" {
-				reason = "TMF641 service order"
-			}
+			reason := tmf641UnassignReason(item, false)
 			if execErr := h.mappings.UnassignDevice(r.Context(), req.AccountID, roleOrDefault(item.Role), reason); execErr != nil {
 				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", execErr.Error())
 				items[i].Status = "FAILED"

@@ -18,7 +18,9 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 //go:embed all:migrations
@@ -59,6 +61,25 @@ func Open(ctx context.Context, dsn string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}
+	return configure(ctx, db)
+}
+
+// OpenUTC is Open with every timestamptz scanned in UTC instead of the
+// process's local zone, for services whose API promises UTC timestamps
+// (cmd/bssadapter's /bss/v1). The instants are unchanged.
+func OpenUTC(ctx context.Context, dsn string) (*sql.DB, error) {
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open postgres: %w", err)
+	}
+	db := stdlib.OpenDB(*config, stdlib.OptionAfterConnect(func(_ context.Context, conn *pgx.Conn) error {
+		conn.TypeMap().RegisterType(&pgtype.Type{Name: "timestamptz", OID: pgtype.TimestamptzOID, Codec: &pgtype.TimestamptzCodec{ScanLocation: time.UTC}})
+		return nil
+	}))
+	return configure(ctx, db)
+}
+
+func configure(ctx context.Context, db *sql.DB) (*sql.DB, error) {
 	db.SetMaxOpenConns(envInt("ACS_DB_MAX_OPEN_CONNS", defaultMaxOpenConns))
 	db.SetMaxIdleConns(envInt("ACS_DB_MAX_IDLE_CONNS", defaultMaxIdleConns))
 	db.SetConnMaxLifetime(envDuration("ACS_DB_CONN_MAX_LIFETIME", defaultConnMaxLifetime))

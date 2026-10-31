@@ -115,8 +115,14 @@ item fields: `iccid`, `imsi`, and `place` (`id` = BSS premise reference, `name`,
 ```
 
 **`POST /bss/v1/mappings`** does the same with `"pre_provision": true` and answers **202**
-(`status: AWAITING_DEVICE`, `onboarding_id`). Without the flag an unknown device is
-still a 404, so existing integrations are unchanged.
+(`status: AWAITING_DEVICE`, `onboarding_id`, `href` and a `Location` header pointing to
+the sale read, `plan_matched`). Without the flag an unknown device is still a 404, so
+existing integrations are unchanged.
+
+**Sale read.** `GET /bss/v1/onboardings/{id}` (scope `tmf:read`) shows a sale of one of
+the caller's accounts: `state`, `reason_code`, `reason`, `service_plan`, `plan_matched`,
+`device_id` once the CPE connected, timestamps in UTC, and `expires_at` while PLANNED.
+Another customer's sale reads as 404. No SIM identifiers.
 
 **What happens next** (cmd/bssadapter, every 15 s):
 
@@ -125,18 +131,25 @@ still a 404, so existing integrations are unchanged.
 | PLANNED | none | `AWAITING_DEVICE`, note "waiting for the device to connect" |
 | CONTACTED … CONFIGURING, ON_HOLD, FAILED | written `PENDING_ACTIVE` on first contact | `AWAITING_DEVICE`, note = state and reason |
 | IN_SERVICE | `ACTIVE` | `COMPLETED` with the mapping; later items run |
-| CANCELLED | ended (`corrected`) | `FAILED` "onboarding cancelled" |
+| CANCELLED | ended (`corrected`) | `FAILED` "onboarding cancelled", with the reason |
 
 ON_HOLD and FAILED do not fail the order: an operator fixes the cause and uses *Retry*
 in the console. Cancelling the TMF641 order while its item awaits the device cancels the
 sale. Retrying an order is safe: the same serial and account get the same onboarding;
 another account cannot take over an open sale.
 
+**Expiry.** A sale no CPE has contacted within **`ACS_BSS_SALE_TTL`** (a Go duration,
+default `720h` = 30 days; `0` disables) is **CANCELLED** with reason code `TTL_EXPIRED`
+and an `OnboardingStateChangeEvent`; its TMF641 item FAILS and later items are skipped.
+The serial is then free for a new sale. A sale whose CPE connected never expires, even
+when held: an operator decides.
+
 **Which customer.** A BSS account is not an ACS customer. The **service plan code** ties
 the sale to one: the shared plan with that code, else the one customer plan with it (two
 customers with the same code and no shared plan is refused as ambiguous). An unknown
-code is kept on the mapping but configures nothing. A serial already in another
-customer's inventory is refused.
+code is kept on the mapping but configures nothing, and is reported: `plan_matched:
+false` and a `PLAN_NOT_FOUND` warning in the mapping response and the sale read. A
+serial already in another customer's inventory is refused.
 
 **Events.** Every state change of a sale is a TMF688 `OnboardingStateChangeEvent`
 (`onboardingId`, `externalId`, `serialNumber`, `state`, `previousState`, `reason`,
@@ -148,4 +161,4 @@ also raises `IdentityMismatch`. Follow them on a webhook or replay them; see
 
 - Strict mode (`ACS_ONBOARDING_REQUIRE_PLAN`): unclaimed CPEs kept on the bootstrap credential.
 - Bulk import of account, site and plan columns, and the `label` import bug.
-- Expiry of PLANNED records, replacement (RMA) hand-over, SIM-swap alarms after IN_SERVICE.
+- Replacement (RMA) hand-over, SIM-swap alarms after IN_SERVICE.
