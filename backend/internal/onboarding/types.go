@@ -90,6 +90,7 @@ type Onboarding struct {
 	ExternalRef     string
 	State           string
 	StateReason     string
+	StateCode       string
 	ConfigJobs      []string
 	RequestedBy     string
 	// BSSRole and BSSServicePlan are what a BSS order asked for, kept for

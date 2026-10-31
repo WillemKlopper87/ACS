@@ -1,0 +1,34 @@
+{
+  "name": "acs/webhook-deliveries",
+  "description": "Delivery view: status, attempts and the last error of each delivery.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0e05248+I2, 2026-10-31. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "GET",
+      "path": "/bss/v1/webhooks/5a883d9f-b762-4fa1-8040-5fb35051f300/deliveries",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "items": [
+          {
+            "id": "509afce4-4f4f-4526-9234-668b4ae0e2eb",
+            "event_type": "DeviceSeen",
+            "status": "PENDING",
+            "attempts": 1,
+            "last_attempt_at": "2026-10-31T08:00:59.251477+02:00",
+            "last_error": "request failed: could not reach the receiver",
+            "created_at": "2026-10-31T08:00:39.248162+02:00"
+          },
+          {
+            "id": "81f5f1d5-871f-444d-9975-96133c335cb4",
+            "event_type": "FirmwareChanged",
+            "status": "PENDING",
+            "attempts": 0,
+            "last_attempt_at": null,
+            "created_at": "2026-10-31T08:00:39.248162+02:00"
+          }
+        ]
+      }
+    }
+  ]
+}

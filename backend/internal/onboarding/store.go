@@ -242,7 +242,7 @@ func isPLMN(s string) bool {
 
 const onboardingColumns = `id, customer_id, device_id, COALESCE(expected_oui,''), expected_serial, COALESCE(expected_imei,''),
 	COALESCE(expected_iccid,''), COALESCE(expected_imsi,''), COALESCE(account_ref,''), site_id, service_plan_id, role,
-	commercial_model, source, COALESCE(external_ref,''), state, COALESCE(state_reason,''), config_jobs,
+	commercial_model, source, COALESCE(external_ref,''), state, COALESCE(state_reason,''), COALESCE(state_code,''), config_jobs,
 	COALESCE(requested_by,''), COALESCE(bss_role,''), COALESCE(bss_service_plan,''), created_at, updated_at, contacted_at, in_service_at`
 
 func scanOnboarding(row interface{ Scan(...any) error }) (*Onboarding, error) {
@@ -250,7 +250,7 @@ func scanOnboarding(row interface{ Scan(...any) error }) (*Onboarding, error) {
 	var jobs store.StringArray
 	err := row.Scan(&o.ID, &o.CustomerID, &o.DeviceID, &o.ExpectedOUI, &o.ExpectedSerial, &o.ExpectedIMEI, &o.ExpectedICCID,
 		&o.ExpectedIMSI, &o.AccountRef, &o.SiteID, &o.ServicePlanID, &o.Role, &o.CommercialModel, &o.Source, &o.ExternalRef,
-		&o.State, &o.StateReason, &jobs, &o.RequestedBy, &o.BSSRole, &o.BSSServicePlan, &o.CreatedAt, &o.UpdatedAt, &o.ContactedAt, &o.InServiceAt)
+		&o.State, &o.StateReason, &o.StateCode, &jobs, &o.RequestedBy, &o.BSSRole, &o.BSSServicePlan, &o.CreatedAt, &o.UpdatedAt, &o.ContactedAt, &o.InServiceAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -348,13 +348,13 @@ func (r *Repository) Apply(ctx context.Context, o Onboarding, d Decision, device
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx, `
-		UPDATE onboardings SET state = $3, state_reason = NULLIF($4, ''), device_id = COALESCE(device_id, NULLIF($5, '')::uuid),
+		UPDATE onboardings SET state = $3, state_reason = NULLIF($4, ''), state_code = NULLIF($8, ''), device_id = COALESCE(device_id, NULLIF($5, '')::uuid),
 			contacted_at = CASE WHEN contacted_at IS NULL AND $3 <> 'PLANNED' THEN now() ELSE contacted_at END,
 			in_service_at = CASE WHEN $3 = 'IN_SERVICE' THEN now() ELSE in_service_at END,
 			config_jobs = CASE WHEN $6 THEN COALESCE($7::text[], '{}') ELSE config_jobs END,
 			updated_at = now()
 		WHERE id = $1 AND state = $2`,
-		o.ID, o.State, d.State, d.Reason, deviceID, configJobs != nil, store.StringArray(configJobs))
+		o.ID, o.State, d.State, d.Reason, deviceID, configJobs != nil, store.StringArray(configJobs), d.Code)
 	if err != nil {
 		return false, fmt.Errorf("apply onboarding state: %w", err)
 	}
@@ -386,7 +386,7 @@ func (r *Repository) Apply(ctx context.Context, o Onboarding, d Decision, device
 // it was never bound to a device, so binding runs again), so every
 // check runs again on the next Inform.
 func (r *Repository) Retry(ctx context.Context, id string) error {
-	return r.exec(ctx, `UPDATE onboardings SET state = CASE WHEN device_id IS NULL THEN 'PLANNED' ELSE 'CONTACTED' END, state_reason = NULL, config_jobs = '{}', updated_at = now()
+	return r.exec(ctx, `UPDATE onboardings SET state = CASE WHEN device_id IS NULL THEN 'PLANNED' ELSE 'CONTACTED' END, state_reason = NULL, state_code = NULL, config_jobs = '{}', updated_at = now()
 		WHERE id = $1 AND state IN ('FAILED', 'ON_HOLD')`, id)
 }
 

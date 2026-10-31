@@ -138,10 +138,11 @@ customers with the same code and no shared plan is refused as ambiguous). An unk
 code is kept on the mapping but configures nothing. A serial already in another
 customer's inventory is refused.
 
-**Events.** Every state change of a sale with an account reference is a TMF688
-`OnboardingStateChangeEvent` (`onboardingId`, `externalId`, `serialNumber`, `state`,
-`previousState`, `reason`, `source`; no SIM identifiers). Subscribe to that event type
-on a webhook or TMF688 hub to follow installation without polling.
+**Events.** Every state change of a sale is a TMF688 `OnboardingStateChangeEvent`
+(`onboardingId`, `externalId`, `serialNumber`, `state`, `previousState`, `reason`,
+`reasonCode`, `source`; no SIM identifiers), and a SIM, network or other-customer hold
+also raises `IdentityMismatch`. Follow them on a webhook or replay them; see
+[integration/09-events.md](integration/09-events.md).
 
 ## Not built yet
 

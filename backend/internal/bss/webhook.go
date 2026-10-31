@@ -41,6 +41,8 @@ type WebhookDelivery struct {
 	SubscriptionID string
 	TargetURL      string
 	Secret         string
+	// PreviousSecret signs too while a secret rotation overlaps.
+	PreviousSecret string
 	EventType      string
 	Payload        json.RawMessage
 	Status         string
@@ -189,7 +191,7 @@ func (r *WebhookRepository) DispatchTMFEvents(ctx context.Context, since time.Ti
 	res, err := r.db.ExecContext(ctx, `
 		WITH candidates AS (
 			SELECT e.id, e.event_type, e.account_id, e.device_id, e.service_id,
-			       e.event_time, e.source_key, e.payload, s.id AS subscription_id
+			       e.event_time, e.source_key, e.payload, e.seq, e.customer_id, s.id AS subscription_id
 			FROM tmf_events e
 			JOIN webhook_subscriptions s
 			  ON (s.account_id IS NULL OR s.account_id = e.account_id)
@@ -207,7 +209,14 @@ func (r *WebhookRepository) DispatchTMFEvents(ctx context.Context, since time.Ti
 		)
 		INSERT INTO webhook_deliveries (id, subscription_id, event_type, payload)
 		SELECT gen_random_uuid(), c.subscription_id, c.event_type,
-		       jsonb_build_object('eventId', c.id, 'eventType', c.event_type,
+		       -- The integration envelope (docs/integration/09-events.md), plus
+		       -- the original TMF688 keys for subscribers that predate it.
+		       jsonb_build_object('id', c.id, 'type', c.event_type, 'occurred_at', c.event_time,
+		         'sequence', c.seq, 'customer_id', c.customer_id, 'account_id', c.account_id,
+		         'device', CASE WHEN c.device_id IS NULL THEN NULL
+		                   ELSE jsonb_build_object('id', c.device_id, 'oui_serial', (SELECT oui_serial FROM devices WHERE id = c.device_id)) END,
+		         'data', c.payload,
+		         'eventId', c.id, 'eventType', c.event_type,
 		         'eventTime', c.event_time, 'sourceKey', c.source_key,
 		         'accountId', c.account_id, 'deviceId', c.device_id,
 		         'serviceId', c.service_id, 'event', c.payload)
@@ -228,7 +237,9 @@ const maxDeliveryAttempts = 8
 // so a target that's down doesn't get hammered every poll tick.
 func (r *WebhookRepository) DueDeliveries(ctx context.Context, limit int) ([]WebhookDelivery, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT d.id, d.subscription_id, s.target_url, s.secret, d.event_type, d.payload, d.status, d.attempts, d.last_attempt_at, d.created_at
+		SELECT d.id, d.subscription_id, s.target_url, s.secret,
+		       CASE WHEN s.previous_secret_expires_at > now() THEN COALESCE(s.previous_secret, '') ELSE '' END,
+		       d.event_type, d.payload, d.status, d.attempts, d.last_attempt_at, d.created_at
 		FROM webhook_deliveries d
 		JOIN webhook_subscriptions s ON s.id = d.subscription_id
 		WHERE d.status = 'PENDING'
@@ -245,7 +256,7 @@ func (r *WebhookRepository) DueDeliveries(ctx context.Context, limit int) ([]Web
 	for rows.Next() {
 		var d WebhookDelivery
 		var lastAttempt sql.NullTime
-		if err := rows.Scan(&d.ID, &d.SubscriptionID, &d.TargetURL, &d.Secret, &d.EventType, &d.Payload, &d.Status, &d.Attempts, &lastAttempt, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.SubscriptionID, &d.TargetURL, &d.Secret, &d.PreviousSecret, &d.EventType, &d.Payload, &d.Status, &d.Attempts, &lastAttempt, &d.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan webhook delivery: %w", err)
 		}
 		if lastAttempt.Valid {
@@ -269,12 +280,12 @@ func (r *WebhookRepository) MarkDelivered(ctx context.Context, id string) error 
 // PENDING (to retry) unless this attempt exhausted maxDeliveryAttempts,
 // in which case it's left FAILED for an operator to investigate rather
 // than retried forever.
-func (r *WebhookRepository) MarkAttemptFailed(ctx context.Context, id string) error {
+func (r *WebhookRepository) MarkAttemptFailed(ctx context.Context, id, reason string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE webhook_deliveries
-		SET attempts = attempts + 1, last_attempt_at = now(),
+		SET attempts = attempts + 1, last_attempt_at = now(), last_error = NULLIF($3, ''),
 		    status = CASE WHEN attempts + 1 >= $2 THEN 'FAILED' ELSE 'PENDING' END
-		WHERE id = $1`, id, maxDeliveryAttempts)
+		WHERE id = $1`, id, maxDeliveryAttempts, reason)
 	if err != nil {
 		return fmt.Errorf("mark webhook delivery attempt failed: %w", err)
 	}

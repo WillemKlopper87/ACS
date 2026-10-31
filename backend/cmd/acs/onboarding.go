@@ -68,7 +68,7 @@ func (h *handler) reconcileOnboarding(ctx context.Context, device *devices.Devic
 	if o.State == onboarding.StatePlanned && device.CustomerID != nil && o.CustomerID != nil && *device.CustomerID != *o.CustomerID {
 		// Apply refuses this too; holding says why instead of retrying on
 		// every Inform. The device is not bound to a sale it may not join.
-		d = onboarding.Decision{State: onboarding.StateOnHold, Reason: "the device already belongs to another customer"}
+		d = onboarding.Decision{State: onboarding.StateOnHold, Reason: "the device already belongs to another customer", Code: onboarding.CodeDeviceOtherCustomer}
 		bindTo = ""
 	}
 	creator := "onboarding:" + o.ID
@@ -78,7 +78,7 @@ func (h *handler) reconcileOnboarding(ctx context.Context, device *devices.Devic
 	var configJobs []string
 	if d.Configure {
 		if configJobs, err = h.queueOnboardingConfiguration(ctx, device.ID, creator, plan, names, cache); err != nil {
-			d = onboarding.Decision{State: onboarding.StateFailed, Reason: "configuration could not be queued: " + err.Error()}
+			d = onboarding.Decision{State: onboarding.StateFailed, Reason: "configuration could not be queued: " + err.Error(), Code: onboarding.CodeConfigFailed}
 		}
 	}
 	if d.State == o.State && d.Reason == o.StateReason && configJobs == nil {
@@ -103,22 +103,36 @@ func (h *handler) reconcileOnboarding(ctx context.Context, device *devices.Devic
 	return queued
 }
 
-// publishOnboardingEvent records a TMF688 OnboardingStateChangeEvent for a
-// sale with a BSS account, so a BSS subscribed to it sees installation
-// progress without polling (cmd/bssadapter fans tmf_events out to webhook
-// subscriptions). No SIM identifiers: the reason carries only masked ones.
+// publishOnboardingEvent records a TMF688 OnboardingStateChangeEvent for
+// every state change, and an IdentityMismatch event when the CPE or SIM is
+// not what was sold, so an integration follows installation without
+// polling (cmd/bssadapter fans tmf_events out to webhooks; GET
+// /bss/v1/events replays them). The event belongs to the sale's BSS
+// account, else the device's customer. No SIM identifiers: the reason
+// carries only masked ones.
 func (h *handler) publishOnboardingEvent(ctx context.Context, o *onboarding.Onboarding, d onboarding.Decision, deviceID string) {
-	if h.tmfEvents == nil || o.AccountRef == "" {
+	if h.tmfEvents == nil {
 		return
 	}
 	at := time.Now().UTC()
-	payload, _ := json.Marshal(map[string]any{
+	data := map[string]any{
 		"onboardingId": o.ID, "externalId": o.ExternalRef, "serialNumber": o.ExpectedSerial,
-		"state": d.State, "previousState": o.State, "reason": d.Reason, "source": o.Source,
-	})
+		"state": d.State, "previousState": o.State, "reason": d.Reason, "reasonCode": d.Code, "source": o.Source,
+	}
+	payload, _ := json.Marshal(data)
 	key := fmt.Sprintf("onboarding-%s-%s-%s-%d", o.ID, o.State, d.State, at.UnixNano())
 	if _, err := h.tmfEvents.CreateEvent(ctx, key, o.AccountRef, deviceID, "", "OnboardingStateChangeEvent", payload, at); err != nil {
 		h.logger.Error("failed to publish onboarding event", "err", err, "onboarding_id", o.ID)
+	}
+	switch d.Code {
+	case onboarding.CodeSIMMismatch, onboarding.CodePLMNNotAllowed, onboarding.CodeDeviceOtherCustomer:
+		mismatch, _ := json.Marshal(map[string]any{
+			"onboardingId": o.ID, "externalId": o.ExternalRef, "serialNumber": o.ExpectedSerial,
+			"reasonCode": d.Code, "reason": d.Reason,
+		})
+		if _, err := h.tmfEvents.CreateEvent(ctx, "identity-mismatch-"+key, o.AccountRef, deviceID, "", "IdentityMismatch", mismatch, at); err != nil {
+			h.logger.Error("failed to publish identity mismatch event", "err", err, "onboarding_id", o.ID)
+		}
 	}
 }
 
@@ -160,7 +174,7 @@ func (h *handler) readSIMForOnboarding(ctx context.Context, deviceID, creator st
 	paths := onboarding.SIMReadPaths(names)
 	if len(names) > 0 {
 		if _, hasSIM := names[paths[0]]; !hasSIM {
-			d.Reason = "the device reports no SIM identifiers to check against the sale"
+			d.Reason, d.Code = "the device reports no SIM identifiers to check against the sale", onboarding.CodeSIMUnreadable
 			return
 		}
 	}

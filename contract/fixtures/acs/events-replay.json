@@ -1,0 +1,69 @@
+{
+  "name": "acs/events-replay",
+  "description": "Replay of the customer's event stream: envelope, per-customer sequence, next_after cursor, then an empty page.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0e05248+I2, 2026-10-31. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "GET",
+      "path": "/bss/v1/events?after=0",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "events": [
+          {
+            "id": "e8edc6fb-496a-4458-8fd3-39b2cc2edc5a",
+            "type": "DeviceSeen",
+            "occurred_at": "2026-10-31T08:00:39.182939+02:00",
+            "sequence": 1,
+            "customer_id": "f8594ca7-ef41-4b44-a927-3f14654b237b",
+            "account_id": "contract.0001",
+            "device": {
+              "id": "2916df6c-3d60-4df7-bb7a-90cc94dacd5c",
+              "oui_serial": "A4FC77+3TG02241+CONTRACT01"
+            },
+            "data": {
+              "ouiSerial": "A4FC77+3TG02241+CONTRACT01",
+              "firstContact": true,
+              "lastInformAt": "2026-10-31T06:00:39.182939+00:00",
+              "onlineStatus": "ONLINE"
+            }
+          },
+          {
+            "id": "47fc16c2-5a32-4a43-a517-8674f147b347",
+            "type": "FirmwareChanged",
+            "occurred_at": "2026-10-31T08:00:39.191238+02:00",
+            "sequence": 2,
+            "customer_id": "f8594ca7-ef41-4b44-a927-3f14654b237b",
+            "account_id": "contract.0001",
+            "device": {
+              "id": "2916df6c-3d60-4df7-bb7a-90cc94dacd5c",
+              "oui_serial": "A4FC77+3TG02241+CONTRACT01"
+            },
+            "data": {
+              "version": "1.2601.00.0101",
+              "ouiSerial": "A4FC77+3TG02241+CONTRACT01",
+              "previousVersion": "1.2501.00.0798"
+            }
+          }
+        ],
+        "next_after": 2,
+        "latest_sequence": 2,
+        "purged_through": 0,
+        "gap": false
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/events?after=2",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "events": [],
+        "next_after": 2,
+        "latest_sequence": 2,
+        "purged_through": 0,
+        "gap": false
+      }
+    }
+  ]
+}

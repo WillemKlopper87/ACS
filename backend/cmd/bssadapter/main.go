@@ -190,6 +190,10 @@ func main() {
 	mux.HandleFunc("POST /bss/v1/webhooks", metrics.InstrumentHTTP("POST /bss/v1/webhooks", h.createWebhookSubscription))
 	mux.HandleFunc("GET /bss/v1/webhooks", metrics.InstrumentHTTP("GET /bss/v1/webhooks", h.listWebhookSubscriptions))
 	mux.HandleFunc("DELETE /bss/v1/webhooks/{id}", metrics.InstrumentHTTP("DELETE /bss/v1/webhooks/{id}", h.deleteWebhookSubscription))
+	mux.HandleFunc("GET /bss/v1/events", metrics.InstrumentHTTP("GET /bss/v1/events", h.listEvents))
+	mux.HandleFunc("GET /bss/v1/webhooks/{id}/deliveries", metrics.InstrumentHTTP("GET /bss/v1/webhooks/{id}/deliveries", h.listWebhookDeliveries))
+	mux.HandleFunc("POST /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver", metrics.InstrumentHTTP("POST /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver", h.redeliverWebhook))
+	mux.HandleFunc("POST /bss/v1/webhooks/{id}/rotate-secret", metrics.InstrumentHTTP("POST /bss/v1/webhooks/{id}/rotate-secret", h.rotateWebhookSecret))
 	mux.HandleFunc("GET /tmf-api/serviceInventoryManagement/v4/service", metrics.InstrumentHTTP("GET /tmf-api/serviceInventoryManagement/v4/service", h.listTMF638Services))
 	mux.HandleFunc("GET /tmf-api/serviceInventoryManagement/v4/service/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceInventoryManagement/v4/service/{id}", h.getTMF638Service))
 	// TMF640 uses the same service projection and order engine as the legacy

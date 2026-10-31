@@ -21,6 +21,10 @@ type EventRecord struct {
 	ID, SourceKey, AccountID, DeviceID, ServiceID, EventType string
 	EventTime                                                time.Time
 	Payload                                                  json.RawMessage
+	// CustomerID and Seq are assigned on insert (migration 0090): the ACS
+	// customer the event belongs to and its per-customer sequence number.
+	CustomerID string
+	Seq        int64
 }
 type ServiceProblemRecord struct {
 	ID, ExternalID, AccountID, ServiceID, Status, Priority, ProblemType, Description string
@@ -36,7 +40,7 @@ type ServiceProblemRecord struct {
 func (r *Repository) CreateEvent(ctx context.Context, sourceKey, accountID, deviceID, serviceID, eventType string, payload json.RawMessage, at time.Time) (*EventRecord, error) {
 	id := uuid.New().String()
 	var e EventRecord
-	err := r.db.QueryRowContext(ctx, `INSERT INTO tmf_events (id,source_key,account_id,device_id,service_id,event_type,event_time,payload) VALUES ($1,$2,NULLIF($3,''),NULLIF($4,'')::uuid,NULLIF($5,'')::uuid,$6,$7,$8) ON CONFLICT (source_key) DO NOTHING RETURNING id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),event_type,event_time,payload`, id, sourceKey, accountID, deviceID, serviceID, eventType, at, payload).Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload)
+	err := r.db.QueryRowContext(ctx, `INSERT INTO tmf_events (id,source_key,account_id,device_id,service_id,event_type,event_time,payload) VALUES ($1,$2,NULLIF($3,''),NULLIF($4,'')::uuid,NULLIF($5,'')::uuid,$6,$7,$8) ON CONFLICT (source_key) DO NOTHING RETURNING id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),event_type,event_time,payload,COALESCE(customer_id::text,''),seq`, id, sourceKey, accountID, deviceID, serviceID, eventType, at, payload).Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload, &e.CustomerID, &e.Seq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

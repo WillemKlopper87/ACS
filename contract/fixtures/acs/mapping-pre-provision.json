@@ -1,0 +1,35 @@
+{
+  "name": "acs/mapping-pre-provision",
+  "description": "pre_provision for a CPE the ACS has not seen: 202, a sale waits for the device.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0e05248+I2, 2026-10-31. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/bss/v1/mappings",
+      "status": 202,
+      "mutating": true,
+      "body": {
+        "account_id": "contract.0002",
+        "onboarding_id": "c6c85e73-4b3a-40c8-8d6b-db138372c06d",
+        "onboarding_state": "PLANNED",
+        "oui_serial": "A4FC77+3TG02241+CONTRACT02",
+        "role": "gateway",
+        "service_plan": "HOME-5G",
+        "status": "AWAITING_DEVICE"
+      },
+      "request": {
+        "account_id": "contract.0002",
+        "oui_serial": "A4FC77+3TG02241+CONTRACT02",
+        "service_plan": "HOME-5G",
+        "pre_provision": true,
+        "iccid": "***REDACTED***",
+        "place": {
+          "id": "PREM-CONTRACT-1",
+          "name": "14 Oak Ave",
+          "city": "Embalenhle",
+          "country": "ZA"
+        }
+      }
+    }
+  ]
+}

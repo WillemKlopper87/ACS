@@ -172,8 +172,15 @@ func TestIntegration_OnboardingHoldsAForeignSIM(t *testing.T) {
 		WHERE event_type = 'OnboardingStateChangeEvent' AND account_id = 'ACC-2'`).Scan(&events, &last); err != nil {
 		t.Fatal(err)
 	}
-	if events != 2 || !strings.Contains(last, "65510") || strings.Contains(last, "655100000000013") {
+	if events != 2 || !strings.Contains(last, "65510") || strings.Contains(last, "655100000000013") || !strings.Contains(last, `"reasonCode": "PLMN_NOT_ALLOWED"`) {
 		t.Fatalf("events = %d, on hold = %s", events, last)
+	}
+	var mismatch string
+	if err := db.QueryRowContext(ctx, `SELECT payload->>'reasonCode' FROM tmf_events WHERE event_type = 'IdentityMismatch' AND account_id = 'ACC-2'`).Scan(&mismatch); err != nil || mismatch != "PLMN_NOT_ALLOWED" {
+		t.Fatalf("IdentityMismatch = %q, %v", mismatch, err)
+	}
+	if got, _ = h.onboarding.Get(ctx, o.ID); got.StateCode != "PLMN_NOT_ALLOWED" {
+		t.Fatalf("state_code = %q", got.StateCode)
 	}
 }
 

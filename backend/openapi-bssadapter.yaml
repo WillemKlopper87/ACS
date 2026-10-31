@@ -33,6 +33,8 @@ security:
   - oauth2ClientCredentials: []
 
 tags:
+  - name: Events
+    description: Event replay and the integration event envelope
   - name: Auth
     description: OAuth2 client-credentials token issuance (build plan §9, supersedes the legacy shared token)
   - name: Mappings
@@ -292,6 +294,97 @@ paths:
       responses:
         "204": { description: Deleted }
 
+  /bss/v1/events:
+    get:
+      tags: [Events]
+      summary: Replay the caller's events after a cursor (tmf:read for customer-bound clients)
+      description: |
+        Events of the caller's customer with sequence > after, oldest first, in the same envelope as webhooks
+        (docs/integration/09-events.md). A customer-bound client reads its own customer; a global client names one
+        with customer_id (empty = events that belong to no customer); account-listed clients are refused. Page by
+        passing next_after back as after. Sequence numbers increase strictly per customer but may skip a number; a
+        skipped number is never a lost event. gap=true means events after the cursor were removed by retention.
+      parameters:
+        - { name: after, in: query, required: false, schema: { type: integer, format: int64, minimum: 0, default: 0 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: customer_id, in: query, required: false, schema: { type: string }, description: "Global clients only" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, next_after, latest_sequence, purged_through, gap]
+                properties:
+                  events: { type: array, items: { $ref: "#/components/schemas/EventEnvelope" } }
+                  next_after: { type: integer, format: int64 }
+                  latest_sequence: { type: integer, format: int64 }
+                  purged_through: { type: integer, format: int64 }
+                  gap: { type: boolean }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { description: "insufficient_scope, ErrClientNotCustomerBound, or ErrReplayNeedsCustomer (account-listed client)" }
+
+  /bss/v1/webhooks/{id}/deliveries:
+    get:
+      tags: [Webhooks]
+      summary: The subscription's deliveries, newest first, with status, attempts and the last error (tmf:read)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [PENDING, DELIVERED, FAILED] } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/WebhookDelivery" } }
+        "404": { description: No such subscription for this caller }
+
+  /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver:
+    post:
+      tags: [Webhooks]
+      summary: Queue a delivery again from its first attempt, with the same Webhook-Id (tmf:write)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: delivery_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "202": { description: Queued }
+        "404": { description: No such subscription or delivery for this caller }
+
+  /bss/v1/webhooks/{id}/rotate-secret:
+    post:
+      tags: [Webhooks]
+      summary: Replace the signing secret; both secrets sign until the overlap ends (tmf:write)
+      description: |
+        The new secret is returned once. Until previous_secret_valid_until, Webhook-Signature carries one signature per
+        secret ("v1,<new> v1,<previous>"); verify by accepting if any signature matches.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                overlap_seconds: { type: integer, minimum: 0, maximum: 604800, default: 86400 }
+      responses:
+        "200":
+          description: Rotated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  secret: { type: string }
+                  previous_secret_valid_until: { type: string, format: date-time }
+        "404": { description: No such subscription for this caller }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -318,6 +411,36 @@ components:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
 
   schemas:
+    EventEnvelope:
+      type: object
+      required: [id, type, occurred_at, sequence, data]
+      description: "Every integration event, in webhooks and replay. Webhook bodies also keep the older TMF688 keys (eventId, eventType, eventTime, sourceKey, accountId, deviceId, serviceId, event)."
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          description: "DeviceSeen, DeviceUnreachable, FirmwareChanged, DeviceFault, DeviceRecovered, CellularStateChanged, OnboardingStateChangeEvent, IdentityMismatch, and events posted to TMF688"
+        occurred_at: { type: string, format: date-time }
+        sequence: { type: integer, format: int64, description: "Strictly increasing per customer" }
+        customer_id: { type: string, nullable: true }
+        account_id: { type: string, nullable: true }
+        device:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            oui_serial: { type: string }
+        data: { type: object, description: "Event-specific; never secrets or full SIM identifiers" }
+    WebhookDelivery:
+      type: object
+      properties:
+        id: { type: string, description: "The Webhook-Id header of every attempt" }
+        event_type: { type: string }
+        status: { type: string, enum: [PENDING, DELIVERED, FAILED] }
+        attempts: { type: integer }
+        last_attempt_at: { type: string, format: date-time, nullable: true }
+        last_error: { type: string }
+        created_at: { type: string, format: date-time }
     ErrorEnvelope:
       type: object
       properties:
