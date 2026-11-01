@@ -43,6 +43,23 @@ type DeviceReconciliation struct {
 // device, not a real signal.
 var secretLeafMarkers = []string{"password", "passphrase", "presharedkey", "secret"}
 
+// SecretValueRedacted stands in for a secret value in a response; it
+// matches internal/parameters.SecretRedacted.
+const SecretValueRedacted = "***REDACTED***"
+
+// RedactSecretWrites returns writes with every secret path's value
+// replaced, for responses that echo translated writes (preflight).
+func RedactSecretWrites(writes []ParameterWrite) []ParameterWrite {
+	out := make([]ParameterWrite, len(writes))
+	for i, w := range writes {
+		if isSecretPath(w.Name) && w.Value != "" {
+			w.Value = SecretValueRedacted
+		}
+		out[i] = w
+	}
+	return out
+}
+
 func isSecretPath(path string) bool {
 	lower := strings.ToLower(path)
 	for _, marker := range secretLeafMarkers {
@@ -84,6 +101,11 @@ func ComputeReconciliation(deviceID string, orders []OrderRecord, confirmed map[
 			field := ReconciliationField{
 				Path: p.Name, IntendedValue: p.Value,
 				ExternalOrderID: order.ExternalOrderID, OrderedAt: order.CreatedAt,
+			}
+			if isSecretPath(p.Name) {
+				// Write-only: an order's passphrase (a plain wifi_password,
+				// stored with the order) is never read back out.
+				field.IntendedValue = SecretValueRedacted
 			}
 			switch {
 			case !confirmed[order.CommandKey]:

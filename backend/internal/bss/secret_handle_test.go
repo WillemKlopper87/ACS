@@ -3,6 +3,7 @@ package bss
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"acs/internal/devices"
 )
@@ -34,5 +35,33 @@ func TestTranslateModifyWifiNetworksSecretHandle(t *testing.T) {
 	}
 	if got := SecretHandles(params); len(got) != 1 || got[0] != "sh_abc" {
 		t.Fatalf("SecretHandles = %v, want one", got)
+	}
+}
+
+func TestReconciliationNeverReturnsASecret(t *testing.T) {
+	const path = "Device.WiFi.AccessPoint.1.Security.KeyPassphrase"
+	orders := []OrderRecord{{ExternalOrderID: "o1", CommandKey: "ck", Parameters: []ParameterWrite{{Name: path, Value: "plain-passphrase"}}}}
+	for _, confirmed := range []bool{true, false} {
+		got := ComputeReconciliation("dev", orders, map[string]bool{"ck": confirmed}, map[string]CachedParameter{path: {Value: "plain-passphrase"}}, time.Now())
+		if f := got.Fields[0]; f.IntendedValue != SecretValueRedacted || f.ActualValue != "" {
+			t.Fatalf("confirmed=%v: field %+v exposes the passphrase", confirmed, f)
+		}
+	}
+}
+
+func TestRedactSecretWrites(t *testing.T) {
+	in := []ParameterWrite{{Name: "Device.WiFi.SSID.1.SSID", Value: "Home"}, {Name: "X.KeyPassphrase", Value: "secret-value"}, {Name: "Y.KeyPassphrase", SecretHandle: "sh_x"}}
+	out := RedactSecretWrites(in)
+	if out[0].Value != "Home" || out[1].Value != SecretValueRedacted || out[2].Value != "" || out[2].SecretHandle != "sh_x" || in[1].Value != "secret-value" {
+		t.Fatalf("redacted = %+v (input %+v)", out, in)
+	}
+}
+
+func TestUTCTimestamp(t *testing.T) {
+	if got := utcTimestamp("2026-11-01T20:26:12+02:00"); got != "2026-11-01T18:26:12Z" {
+		t.Fatalf("got %q", got)
+	}
+	if got := utcTimestamp("not a time"); got != "not a time" {
+		t.Fatalf("got %q", got)
 	}
 }

@@ -214,7 +214,24 @@ func (c *ACSClient) GetJobStatus(ctx context.Context, commandKey string) (*JobSt
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("decode ACS response: %w", err)
 	}
+	// The internal API renders the server's local offset; the BSS contract
+	// is UTC throughout.
+	out.CreatedAt, out.UpdatedAt = utcTimestamp(out.CreatedAt), utcTimestamp(out.UpdatedAt)
+	if out.CompletedAt != nil {
+		s := utcTimestamp(*out.CompletedAt)
+		out.CompletedAt = &s
+	}
 	return &out, nil
+}
+
+// utcTimestamp rewrites an RFC 3339 timestamp in UTC ("Z"); anything else
+// is returned unchanged.
+func utcTimestamp(s string) string {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return s
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // GetParameters calls GET /api/v1/devices/{id}/parameters?paths=<comma-

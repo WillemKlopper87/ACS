@@ -41,7 +41,7 @@ import urllib.request
 
 # SIM identifiers in request examples are synthetic, but fixtures travel:
 # they are redacted like secrets.
-SECRET_KEYS = {"access_token", "client_secret", "secret", "iccid", "imsi", "value", "wifi_password"}
+SECRET_KEYS = {"access_token", "client_secret", "secret", "iccid", "imsi", "wifi_password"}
 REDACTED = "***REDACTED***"
 
 API = os.environ["ACS_API_URL"].rstrip("/")
@@ -389,6 +389,7 @@ def main():
         record_secret_handles(token)
 
     for name, fixture in fixtures.items():
+        assert "Contract-wifi-" not in json.dumps(fixture), f"a passphrase is in {name}"
         with open(os.path.join(OUT, name + ".json"), "w", encoding="utf-8", newline="\n") as f:
             json.dump(fixture, f, indent=2, sort_keys=False, default=str)
             f.write("\n")
@@ -575,7 +576,7 @@ def record_secret_handles(token):
 
     status, handle = call(BSS, "POST", "/bss/v1/secrets", {"value": passphrase}, token)
     assert status == 201, (status, handle)
-    exchanges.append(exchange("POST", "/bss/v1/secrets", status, handle, True, {"value": passphrase}, dict(LAST_HEADERS)))
+    exchanges.append(exchange("POST", "/bss/v1/secrets", status, handle, True, {"value": REDACTED}, dict(LAST_HEADERS)))
     params = {"wifi_password_handle": handle["handle"]}
     pre = {"account_id": account, "action": "MODIFY_WIFI", "parameters": params}
     status, resp = call(BSS, "POST", "/bss/v1/actions/preflight", pre, token)
@@ -601,12 +602,16 @@ def record_secret_handles(token):
         cwmp_session("CONTRACT13", igd, False, values)
     exchanges.append(exchange("GET", f"/bss/v1/jobs/{placed['command_key']}", status, job, False))
     status, resp = call(BSS, "DELETE", f"/bss/v1/secrets/{handle['handle']}", None, token)
-    exchanges.append(exchange("DELETE", "/bss/v1/secrets/{handle} (already used)", status, resp, False))
+    exchanges.append(exchange("DELETE", f"/bss/v1/secrets/{handle['handle']}", status, resp, False))
+    exchanges[-1]["note"] = "The handle was already used, so it is gone."
     record("secret-handle-order", "A Wi-Fi passphrase as a sealed handle: POST /bss/v1/secrets (the value is redacted here; the "
            "recording stack is plain HTTP on localhost with ACS_BSS_SECRETS_BEHIND_TLS_PROXY=true, production takes it over TLS "
            "only), a preflight that checks it, the order that claims it, a second order naming it (400 ErrSecretHandleInvalid), "
            "the job after the CPE session in which the ACS opened the handle and sent the value, and a delete of the used "
            "handle (404). The value is in no order, job, event or log.", exchanges)
+
+    record_secret_handle_tmf(token, account, passphrase)
+    record_secret_handle_errors(token, passphrase)
 
     status, late = call(BSS, "POST", "/bss/v1/secrets", {"value": passphrase}, token)
     assert status == 201, status
@@ -622,6 +627,59 @@ def record_secret_handles(token):
            "at dispatch the job FAILS with SECRET_HANDLE_UNAVAILABLE and nothing is written. Store the secret again and send "
            "a new order.", [exchange("POST", "/bss/v1/orders", 202, placed, True, order),
                             exchange("GET", f"/bss/v1/jobs/{placed['command_key']}", status, job, False)])
+
+
+def record_secret_handle_tmf(token, account, passphrase):
+    """The handle in a TMF641 modify item and a TMF640 PATCH characteristic."""
+    exchanges = []
+    status, h1 = call(BSS, "POST", "/bss/v1/secrets", {"value": passphrase}, token)
+    assert status == 201, status
+    order = {"externalId": "SO-CONTRACT-SECRET", "accountId": account, "orderItem": [
+        {"id": "1", "action": "modify", "role": "gateway", "parameters": {"wifi_password_handle": h1["handle"]}}]}
+    path = "/tmf-api/serviceOrdering/v4/serviceOrder"
+    status, resp = call(BSS, "POST", path, order, token)
+    exchanges.append(exchange("POST", path, status, resp, True, order))
+    reuse = dict(order, externalId="SO-CONTRACT-SECRET-2")
+    status, resp = call(BSS, "POST", path, reuse, token)
+    exchanges.append(exchange("POST", path, status, resp, False, reuse))
+
+    status, h2 = call(BSS, "POST", "/bss/v1/secrets", {"value": passphrase}, token)
+    assert status == 201, status
+    service = query(f"SELECT id FROM account_device_mappings WHERE account_id = '{account}' AND unassigned_at IS NULL;")[0][0]
+    patch = {"serviceCharacteristic": [{"name": "WiFiPasswordHandle", "value": h2["handle"]}]}
+    spath = f"/tmf-api/serviceActivationAndConfiguration/v4/service/{service}"
+    key = {"X-Idempotency-Key": "PATCH-CONTRACT-SECRET"}
+    status, resp = call(BSS, "PATCH", spath, patch, token, headers=key)
+    exchanges.append(exchange("PATCH", spath, status, resp, True, patch, dict(LAST_HEADERS), key))
+    record("secret-handle-tmf", "A sealed handle in a TMF641 modify item (the item is DISPATCHED; a second order naming the "
+           "same handle FAILS that item with the ErrSecretHandleInvalid note) and as the WiFiPasswordHandle characteristic "
+           "of a TMF640 PATCH (202 Monitor).", exchanges)
+
+
+def record_secret_handle_errors(token, passphrase):
+    """Refusals of POST /bss/v1/secrets. ErrTLSRequired and
+    ErrSecretStoreDisabled need adapters started without the TLS-proxy
+    flag (ACS_BSS_PLAIN_URL) and without a key (ACS_BSS_KEYLESS_URL)."""
+    exchanges = []
+    body = {"value": passphrase, "ttl_seconds": 30}
+    status, resp = call(BSS, "POST", "/bss/v1/secrets", body, token)
+    exchanges.append(exchange("POST", "/bss/v1/secrets", status, resp, False, {"value": REDACTED, "ttl_seconds": 30}))
+    status, created = call(API, "POST", "/api/v1/bss/oauth-clients",
+                           {"name": "contract-account-listed", "scopes": ["tmf:read", "tmf:write"], "account_ids": ["contract.0013"]}, ADMIN)
+    assert status in (200, 201), (status, created)
+    status, tok = call(BSS, "POST", "/bss/v1/oauth/token", form={"grant_type": "client_credentials",
+                       "client_id": created["client"]["client_id"], "client_secret": created["client_secret"]})
+    status, resp = call(BSS, "POST", "/bss/v1/secrets", {"value": passphrase}, tok["access_token"])
+    exchanges.append(exchange("POST", "/bss/v1/secrets (account-listed client)", status, resp, False, {"value": REDACTED}))
+    for env, label in (("ACS_BSS_PLAIN_URL", "plain HTTP, no TLS proxy"), ("ACS_BSS_KEYLESS_URL", "no ACS_BSS_SECRET_KEY")):
+        base = os.environ.get(env)
+        if not base:
+            continue
+        status, resp = call(base.rstrip("/"), "POST", "/bss/v1/secrets", {"value": passphrase}, token)
+        exchanges.append(exchange("POST", f"/bss/v1/secrets ({label})", status, resp, False, {"value": REDACTED}))
+    record("secret-handle-errors", "POST /bss/v1/secrets refused: ttl_seconds out of range (400 ErrInvalidRequest), an "
+           "account-listed client (403 ErrClientNotCustomerBound), plain HTTP (403 ErrTLSRequired) and an ACS with no "
+           "key (503 ErrSecretStoreDisabled), the last two from adapters started that way.", exchanges)
 
 
 if __name__ == "__main__":

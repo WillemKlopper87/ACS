@@ -887,7 +887,7 @@ func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, actionPreflightResponse{AccountID: req.AccountID, DeviceID: mapping.DeviceID, Action: req.Action, Parameters: params})
+	writeJSON(w, http.StatusOK, actionPreflightResponse{AccountID: req.AccountID, DeviceID: mapping.DeviceID, Action: req.Action, Parameters: bss.RedactSecretWrites(params)})
 }
 
 // dispatchOrder runs the outbox's write-ahead-then-dispatch sequence

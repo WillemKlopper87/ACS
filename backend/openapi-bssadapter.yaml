@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: ACS BSS/CRM Integration Adapter API
-  version: "1.1.0"
+  version: "1.1.1"
   description: >-
     The external-facing REST API served by cmd/bssadapter (build plan §5,
     bss-integration-guide.md). This is the boundary an external BSS/CRM
@@ -406,7 +406,10 @@ paths:
         The order claims it for its device; the ACS opens and deletes it when it sends the write to the CPE. A handle
         is owned by the caller's customer (global clients: by global clients) and is useless to anyone else. It
         expires after ttl_seconds (default and maximum: ACS_BSS_SECRET_TTL, 15 minutes unless configured); an
-        expired handle is deleted. A job that is dispatched again (a retry) or that waits past expiry fails with
+        expired handle is deleted. ttl_seconds outside 60..ACS_BSS_SECRET_TTL, an empty value or one over 256 bytes is
+        400 ErrInvalidRequest. Checks run in this order: authentication and scope (401/403), TLS (403 ErrTLSRequired),
+        client kind (403 ErrClientNotCustomerBound), key configured (503 ErrSecretStoreDisabled), body (400).
+        A job that is dispatched again (a retry) or that waits past expiry fails with
         SECRET_HANDLE_UNAVAILABLE: store the secret again and send a new order. Accepted only over TLS. Not
         idempotent: a retried POST makes another handle and the unused one expires.
       requestBody:
@@ -644,8 +647,11 @@ components:
       type: object
       properties:
         order_tracking_id: { type: string }
-        command_key: { type: string }
-        status: { type: string }
+        command_key: { type: string, description: "Empty while PENDING_DISPATCH or DEAD_LETTERED" }
+        status:
+          type: string
+          enum: [QUEUED, PENDING_DISPATCH, DEAD_LETTERED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, AWAITING_DIAGNOSTICS_COMPLETE, SUCCESS, FAILED, TIMEOUT]
+          description: "QUEUED on a new order. A retried order reports PENDING_DISPATCH or DEAD_LETTERED until it reaches the ACS (outbox), then its job's status (JobStatus)."
         timestamp: { type: string, format: date-time }
 
     ParameterWrite:
@@ -653,8 +659,9 @@ components:
       required: [name, value]
       properties:
         name: { type: string, description: "Resolved device data-model path" }
-        value: { type: string }
+        value: { type: string, description: "***REDACTED*** for a secret path (a passphrase); empty for a write that names a secret_handle" }
         type: { type: string, example: string }
+        secret_handle: { type: string, description: "The sealed handle (POST /bss/v1/secrets) this write will be sent with" }
 
     JobStatus:
       type: object
@@ -682,7 +689,7 @@ components:
       type: object
       properties:
         path: { type: string, description: "Resolved device data-model path the order wrote" }
-        intended_value: { type: string, description: "The value the most recent order for this path sent" }
+        intended_value: { type: string, description: "The value the most recent order for this path sent; ***REDACTED*** for a secret path (status unverifiable), whether it was sent as a value or a handle" }
         actual_value: { type: string, description: "The device's currently cached value — omitted when status is unconfirmed or unverifiable" }
         actual_updated_at: { type: string, format: date-time }
         status: { type: string, enum: [match, drift, unknown, unconfirmed, unverifiable] }

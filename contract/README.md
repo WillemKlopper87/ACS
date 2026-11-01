@@ -26,6 +26,8 @@ and the response `body`.
 | `sale-ttl-expired` | A sale expired by the TTL: CANCELLED/TTL_EXPIRED, its TMF641 add FAILED, the event |
 | `idempotency-key-in-flight` | A retry while the first request runs: 409 `ErrIdempotencyKeyInFlight` with `Retry-After` |
 | `secret-handle-order` | A Wi-Fi passphrase as a sealed handle: stored, preflighted, claimed by an order, refused on reuse, opened when the CPE is written |
+| `secret-handle-tmf` | A handle in a TMF641 modify item (reuse FAILS the item) and a TMF640 `WiFiPasswordHandle` PATCH |
+| `secret-handle-errors` | `POST /bss/v1/secrets` refused: TTL out of range, account-listed client, plain HTTP, no key |
 | `secret-handle-expired` | A handle that expired while its job waited: the job FAILS with `SECRET_HANDLE_UNAVAILABLE` |
 | `errors` | Problem bodies for 400, 403 `insufficient_scope` (with `WWW-Authenticate`), 401 and 429 (with `Retry-After`) |
 | `tmf641-add-awaiting-device` | TMF641 add for an unseen CPE; the modify behind it stays `PENDING` |
