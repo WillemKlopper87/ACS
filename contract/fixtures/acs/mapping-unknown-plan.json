@@ -1,7 +1,7 @@
 {
   "name": "acs/mapping-unknown-plan",
   "description": "A plan code that matches no ACS plan: accepted, with plan_matched false and a PLAN_NOT_FOUND warning.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
@@ -10,8 +10,8 @@
       "mutating": true,
       "body": {
         "account_id": "contract.0006",
-        "href": "/bss/v1/onboardings/63818baf-c53f-4f4f-84e9-c02feeca4e48",
-        "onboarding_id": "63818baf-c53f-4f4f-84e9-c02feeca4e48",
+        "href": "/bss/v1/onboardings/f829544e-c466-49bb-94b5-a97d97077706",
+        "onboarding_id": "f829544e-c466-49bb-94b5-a97d97077706",
         "onboarding_state": "PLANNED",
         "oui_serial": "A4FC77+3TG02241+CONTRACT06",
         "plan_matched": false,
@@ -32,7 +32,7 @@
         "pre_provision": true
       },
       "headers": {
-        "Location": "/bss/v1/onboardings/63818baf-c53f-4f4f-84e9-c02feeca4e48",
+        "Location": "/bss/v1/onboardings/f829544e-c466-49bb-94b5-a97d97077706",
         "Content-Type": "application/json"
       }
     }

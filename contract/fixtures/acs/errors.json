@@ -1,7 +1,7 @@
 {
   "name": "acs/errors",
   "description": "Problem bodies: 400 (a mapping without oui_serial), 403 insufficient_scope (a tmf:read client writing, with WWW-Authenticate), 401 (a bad token), 429 (over the rate, with Retry-After).",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",

@@ -1,7 +1,7 @@
 {
   "name": "acs/tmf641-repeat-external-id",
   "description": "The same externalId again: the identical order answers 200 with the order as it is (Idempotent-Replayed, nothing done again); another order under it is 409 ErrIdempotencyKeyReused.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
@@ -10,12 +10,12 @@
       "mutating": false,
       "body": {
         "externalId": "SO-CONTRACT-DEL-1",
-        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/a5895d96-0aa0-41b9-b257-161b8b44ec26",
-        "id": "a5895d96-0aa0-41b9-b257-161b8b44ec26",
-        "orderDate": "2026-11-01T16:18:01.81245Z",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/45adfc7f-b909-4916-88f9-f8090e55000b",
+        "id": "45adfc7f-b909-4916-88f9-f8090e55000b",
+        "orderDate": "2026-11-01T18:24:56.098195Z",
         "orderItem": [
           {
-            "id": "56b01eb1-cb1b-4aa2-bce7-da4e42ffb54f",
+            "id": "852352f3-8f7a-4f97-9163-20e22e42d871",
             "action": "delete",
             "state": "COMPLETED",
             "role": "gateway"

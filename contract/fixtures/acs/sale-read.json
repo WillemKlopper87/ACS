@@ -1,16 +1,16 @@
 {
   "name": "acs/sale-read",
   "description": "The sale read (GET href from the 202): state, reason_code, plan_matched, expires_at while PLANNED, UTC timestamps; then an unknown sale as a problem (404, Accept: application/problem+json).",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "GET",
-      "path": "/bss/v1/onboardings/b535b445-1dd9-49ed-bbe6-b5b835e28586",
+      "path": "/bss/v1/onboardings/f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
       "status": 200,
       "mutating": false,
       "body": {
-        "id": "b535b445-1dd9-49ed-bbe6-b5b835e28586",
-        "href": "/bss/v1/onboardings/b535b445-1dd9-49ed-bbe6-b5b835e28586",
+        "id": "f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
+        "href": "/bss/v1/onboardings/f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
         "account_id": "contract.0002",
         "oui": "A4FC77",
         "serial_number": "CONTRACT02",
@@ -18,9 +18,9 @@
         "service_plan": "HOME-5G",
         "plan_matched": true,
         "state": "PLANNED",
-        "created_at": "2026-11-01T16:18:01.572102Z",
-        "updated_at": "2026-11-01T16:18:01.572102Z",
-        "expires_at": "2026-12-01T16:18:01.572102Z"
+        "created_at": "2026-11-01T18:24:55.853335Z",
+        "updated_at": "2026-11-01T18:24:55.853335Z",
+        "expires_at": "2026-12-01T18:24:55.853335Z"
       }
     },
     {

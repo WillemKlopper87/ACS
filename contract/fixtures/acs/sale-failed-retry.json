@@ -1,16 +1,16 @@
 {
   "name": "acs/sale-failed-retry",
   "description": "A FAILED sale (CONFIG_FAILED; the state is set in the database as the reconciler records it) read, then retried by the BSS: back to PLANNED, as its CPE has not connected.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "GET",
-      "path": "/bss/v1/onboardings/30a87f38-f589-4c74-b426-2b68eefea7ad",
+      "path": "/bss/v1/onboardings/bfa23d38-7447-490b-a6ee-3f8bbddfd5f1",
       "status": 200,
       "mutating": false,
       "body": {
-        "id": "30a87f38-f589-4c74-b426-2b68eefea7ad",
-        "href": "/bss/v1/onboardings/30a87f38-f589-4c74-b426-2b68eefea7ad",
+        "id": "bfa23d38-7447-490b-a6ee-3f8bbddfd5f1",
+        "href": "/bss/v1/onboardings/bfa23d38-7447-490b-a6ee-3f8bbddfd5f1",
         "account_id": "contract.0009",
         "oui": "A4FC77",
         "serial_number": "CONTRACT09",
@@ -20,18 +20,18 @@
         "state": "FAILED",
         "reason_code": "CONFIG_FAILED",
         "reason": "configuration failed: 9007 Invalid parameter value",
-        "created_at": "2026-11-01T16:18:35.71549Z",
-        "updated_at": "2026-11-01T16:18:35.71549Z"
+        "created_at": "2026-11-01T18:25:24.108767Z",
+        "updated_at": "2026-11-01T18:25:24.108767Z"
       }
     },
     {
       "method": "POST",
-      "path": "/bss/v1/onboardings/30a87f38-f589-4c74-b426-2b68eefea7ad/retry",
+      "path": "/bss/v1/onboardings/bfa23d38-7447-490b-a6ee-3f8bbddfd5f1/retry",
       "status": 200,
       "mutating": true,
       "body": {
-        "id": "30a87f38-f589-4c74-b426-2b68eefea7ad",
-        "href": "/bss/v1/onboardings/30a87f38-f589-4c74-b426-2b68eefea7ad",
+        "id": "bfa23d38-7447-490b-a6ee-3f8bbddfd5f1",
+        "href": "/bss/v1/onboardings/bfa23d38-7447-490b-a6ee-3f8bbddfd5f1",
         "account_id": "contract.0009",
         "oui": "A4FC77",
         "serial_number": "CONTRACT09",
@@ -39,9 +39,9 @@
         "service_plan": "HOME-5G",
         "plan_matched": true,
         "state": "PLANNED",
-        "created_at": "2026-11-01T16:18:35.71549Z",
-        "updated_at": "2026-11-01T16:18:35.910059Z",
-        "expires_at": "2026-12-01T16:18:35.910059Z"
+        "created_at": "2026-11-01T18:25:24.108767Z",
+        "updated_at": "2026-11-01T18:25:25.313425Z",
+        "expires_at": "2026-12-01T18:25:25.313425Z"
       }
     }
   ]

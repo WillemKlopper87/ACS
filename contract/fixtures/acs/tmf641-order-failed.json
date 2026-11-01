@@ -1,7 +1,7 @@
 {
   "name": "acs/tmf641-order-failed",
   "description": "A delete naming a device that is not the one in the role: the item FAILS and nothing is ended (the order state is failed). TMF641 order states are acknowledged (work outstanding; see tmf641-add-awaiting-device), completed, failed, partial and cancelled; there is no inProgress.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
@@ -10,12 +10,12 @@
       "mutating": true,
       "body": {
         "externalId": "SO-CONTRACT-STALE",
-        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/2fbac9a8-fe5f-499c-b3c6-cb116622b2dd",
-        "id": "2fbac9a8-fe5f-499c-b3c6-cb116622b2dd",
-        "orderDate": "2026-11-01T16:18:34.686868Z",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/8023e0d5-f8f3-4437-b319-a3a35a1017b7",
+        "id": "8023e0d5-f8f3-4437-b319-a3a35a1017b7",
+        "orderDate": "2026-11-01T18:25:24.080287Z",
         "orderItem": [
           {
-            "id": "ca156509-fc2d-445d-bd98-9cb90e42c100",
+            "id": "974d10b1-2e94-4e48-8376-4462b8091717",
             "action": "delete",
             "state": "FAILED",
             "role": "gateway"

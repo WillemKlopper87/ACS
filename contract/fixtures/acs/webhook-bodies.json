@@ -1,7 +1,7 @@
 {
   "name": "acs/webhook-bodies",
   "description": "One delivered webhook body per event type: the envelope plus the older TMF688 keys. All come from real CWMP sessions with cmd/acs: Informs drive the onboarding events, a parameter write the CPE refuses with fault 9007 raises DeviceFault, and the next write it accepts clears it (DeviceRecovered).",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
@@ -9,7 +9,7 @@
       "status": 0,
       "mutating": false,
       "body": {
-        "id": "e7881719-8c75-435d-a8e9-fbfb75eefab1",
+        "id": "52e510cd-3a1e-4d9e-b188-3e4fa85b9c90",
         "data": {
           "changes": {
             "Device.Cellular.Interface.1.Status": {
@@ -30,20 +30,20 @@
           "protocol": "CWMP"
         },
         "device": {
-          "id": "661ccfc8-bc69-46a5-83b1-e2dc39816a5c",
+          "id": "a3fa4658-d50a-411d-902d-61324c301a7a",
           "oui_serial": "A4FC77+3TG02241+CONTRACT01"
         },
-        "eventId": "e7881719-8c75-435d-a8e9-fbfb75eefab1",
-        "deviceId": "661ccfc8-bc69-46a5-83b1-e2dc39816a5c",
+        "eventId": "52e510cd-3a1e-4d9e-b188-3e4fa85b9c90",
+        "deviceId": "a3fa4658-d50a-411d-902d-61324c301a7a",
         "sequence": 10,
         "accountId": "contract.0001",
-        "eventTime": "2026-11-01T16:18:58.817018+00:00",
+        "eventTime": "2026-11-01T18:26:00.271834+00:00",
         "eventType": "CellularStateChanged",
         "serviceId": null,
-        "sourceKey": "acs-fault-d1de1b8af36429e35a31955742e58834fb643910f03bdcb66105cb6a8479018d",
+        "sourceKey": "acs-fault-47f20c537a2e309daaae2a47b193e91d1051c405cd80cf87c216a111ab6a6e43",
         "account_id": "contract.0001",
-        "customer_id": "67626a97-f5b6-47c5-b9d1-7168b868c5ec",
-        "occurred_at": "2026-11-01T16:18:58.817018Z"
+        "customer_id": "66480260-ae23-4e67-b8fe-6b5ffca6c5e5",
+        "occurred_at": "2026-11-01T18:26:00.271834Z"
       },
       "note": "The webhook body as sent, with headers Webhook-Id (the delivery id), Webhook-Timestamp, Webhook-Signature and X-Webhook-Event. status is 0: the recording target is not reachable."
     },
@@ -53,35 +53,35 @@
       "status": 0,
       "mutating": false,
       "body": {
-        "id": "824891a9-395e-4657-940e-508d794490f3",
+        "id": "e274d68d-61aa-4891-813d-960dc9c4f68d",
         "data": {
-          "jobId": "d78e3e03-4b4c-4777-96a0-25e8e2f3ddbe",
+          "jobId": "4fe27b83-a086-4307-8ad6-80731aa90a3e",
           "message": "Invalid parameter value",
           "protocol": "CWMP",
           "faultCode": "9007"
         },
         "type": "DeviceFault",
         "event": {
-          "jobId": "d78e3e03-4b4c-4777-96a0-25e8e2f3ddbe",
+          "jobId": "4fe27b83-a086-4307-8ad6-80731aa90a3e",
           "message": "Invalid parameter value",
           "protocol": "CWMP",
           "faultCode": "9007"
         },
         "device": {
-          "id": "661ccfc8-bc69-46a5-83b1-e2dc39816a5c",
+          "id": "a3fa4658-d50a-411d-902d-61324c301a7a",
           "oui_serial": "A4FC77+3TG02241+CONTRACT01"
         },
-        "eventId": "824891a9-395e-4657-940e-508d794490f3",
-        "deviceId": "661ccfc8-bc69-46a5-83b1-e2dc39816a5c",
+        "eventId": "e274d68d-61aa-4891-813d-960dc9c4f68d",
+        "deviceId": "a3fa4658-d50a-411d-902d-61324c301a7a",
         "sequence": 12,
         "accountId": "contract.0001",
-        "eventTime": "2026-11-01T16:18:59.126343+00:00",
+        "eventTime": "2026-11-01T18:26:00.566905+00:00",
         "eventType": "DeviceFault",
         "serviceId": null,
-        "sourceKey": "acs-fault-886c1689ac2e1e57b097d96341e4e42444f52deed3f6ddb8d02643c52ac5a9b2",
+        "sourceKey": "acs-fault-6df1834c926ff806ed5cb11918c27ea9326e344ba9e0653d58a99b427cccd680",
         "account_id": "contract.0001",
-        "customer_id": "67626a97-f5b6-47c5-b9d1-7168b868c5ec",
-        "occurred_at": "2026-11-01T16:18:59.126343Z"
+        "customer_id": "66480260-ae23-4e67-b8fe-6b5ffca6c5e5",
+        "occurred_at": "2026-11-01T18:26:00.566905Z"
       },
       "note": "The webhook body as sent, with headers Webhook-Id (the delivery id), Webhook-Timestamp, Webhook-Signature and X-Webhook-Event. status is 0: the recording target is not reachable."
     },
@@ -91,35 +91,35 @@
       "status": 0,
       "mutating": false,
       "body": {
-        "id": "35640429-1f9d-4d39-84bd-a576e5005d16",
+        "id": "eb676a1e-c503-4979-ad6c-8e809ca155d8",
         "data": {
           "protocol": "CWMP",
           "faultCode": "9007",
-          "recoveredAt": "2026-11-01T16:18:59.2111288Z",
-          "conditionKey": "acs-condition-862459c893fb930b201d849f39f309173daa2101629cc475bb4387a4c4b5a926"
+          "recoveredAt": "2026-11-01T18:26:00.612878Z",
+          "conditionKey": "acs-condition-a1212d67eccfff8d154387ddfa652ee8de1de26be93cae121351e6094298cea9"
         },
         "type": "DeviceRecovered",
         "event": {
           "protocol": "CWMP",
           "faultCode": "9007",
-          "recoveredAt": "2026-11-01T16:18:59.2111288Z",
-          "conditionKey": "acs-condition-862459c893fb930b201d849f39f309173daa2101629cc475bb4387a4c4b5a926"
+          "recoveredAt": "2026-11-01T18:26:00.612878Z",
+          "conditionKey": "acs-condition-a1212d67eccfff8d154387ddfa652ee8de1de26be93cae121351e6094298cea9"
         },
         "device": {
-          "id": "661ccfc8-bc69-46a5-83b1-e2dc39816a5c",
+          "id": "a3fa4658-d50a-411d-902d-61324c301a7a",
           "oui_serial": "A4FC77+3TG02241+CONTRACT01"
         },
-        "eventId": "35640429-1f9d-4d39-84bd-a576e5005d16",
-        "deviceId": "661ccfc8-bc69-46a5-83b1-e2dc39816a5c",
+        "eventId": "eb676a1e-c503-4979-ad6c-8e809ca155d8",
+        "deviceId": "a3fa4658-d50a-411d-902d-61324c301a7a",
         "sequence": 13,
         "accountId": "contract.0001",
-        "eventTime": "2026-11-01T16:18:59.211128+00:00",
+        "eventTime": "2026-11-01T18:26:00.612878+00:00",
         "eventType": "DeviceRecovered",
         "serviceId": null,
-        "sourceKey": "acs-fault-3f842f19f9e9797aabd912ee706a4d7ebfaf47bb6880a958e3b342616b63c5ce",
+        "sourceKey": "acs-fault-bf9589d67ffcd3389a9acdf405b609334abec3f9b4ba3b2746725fc56cd7f5b7",
         "account_id": "contract.0001",
-        "customer_id": "67626a97-f5b6-47c5-b9d1-7168b868c5ec",
-        "occurred_at": "2026-11-01T16:18:59.211128Z"
+        "customer_id": "66480260-ae23-4e67-b8fe-6b5ffca6c5e5",
+        "occurred_at": "2026-11-01T18:26:00.612878Z"
       },
       "note": "The webhook body as sent, with headers Webhook-Id (the delivery id), Webhook-Timestamp, Webhook-Signature and X-Webhook-Event. status is 0: the recording target is not reachable."
     },
@@ -129,35 +129,35 @@
       "status": 0,
       "mutating": false,
       "body": {
-        "id": "bb922c87-7d27-4a20-bfb8-55ab29f85648",
+        "id": "3fd0ad65-fb71-449d-b035-40035ae05a2b",
         "data": {
           "ouiSerial": "A4FC77+3TG02241+CONTRACT01",
           "firstContact": true,
-          "lastInformAt": "2026-11-01T16:18:04.145921+00:00",
+          "lastInformAt": "2026-11-01T18:24:58.469907+00:00",
           "onlineStatus": "ONLINE"
         },
         "type": "DeviceSeen",
         "event": {
           "ouiSerial": "A4FC77+3TG02241+CONTRACT01",
           "firstContact": true,
-          "lastInformAt": "2026-11-01T16:18:04.145921+00:00",
+          "lastInformAt": "2026-11-01T18:24:58.469907+00:00",
           "onlineStatus": "ONLINE"
         },
         "device": {
-          "id": "661ccfc8-bc69-46a5-83b1-e2dc39816a5c",
+          "id": "a3fa4658-d50a-411d-902d-61324c301a7a",
           "oui_serial": "A4FC77+3TG02241+CONTRACT01"
         },
-        "eventId": "bb922c87-7d27-4a20-bfb8-55ab29f85648",
-        "deviceId": "661ccfc8-bc69-46a5-83b1-e2dc39816a5c",
+        "eventId": "3fd0ad65-fb71-449d-b035-40035ae05a2b",
+        "deviceId": "a3fa4658-d50a-411d-902d-61324c301a7a",
         "sequence": 1,
         "accountId": "contract.0001",
-        "eventTime": "2026-11-01T16:18:04.145921+00:00",
+        "eventTime": "2026-11-01T18:24:58.469907+00:00",
         "eventType": "DeviceSeen",
         "serviceId": null,
-        "sourceKey": "device-deviceseen-661ccfc8-bc69-46a5-83b1-e2dc39816a5c-1793549884151571",
+        "sourceKey": "device-deviceseen-a3fa4658-d50a-411d-902d-61324c301a7a-1793557498475486",
         "account_id": "contract.0001",
-        "customer_id": "67626a97-f5b6-47c5-b9d1-7168b868c5ec",
-        "occurred_at": "2026-11-01T16:18:04.145921Z"
+        "customer_id": "66480260-ae23-4e67-b8fe-6b5ffca6c5e5",
+        "occurred_at": "2026-11-01T18:24:58.469907Z"
       },
       "note": "The webhook body as sent, with headers Webhook-Id (the delivery id), Webhook-Timestamp, Webhook-Signature and X-Webhook-Event. status is 0: the recording target is not reachable."
     },
@@ -167,35 +167,35 @@
       "status": 0,
       "mutating": false,
       "body": {
-        "id": "bbc42fe2-4beb-482f-acb7-fe8b1a74f818",
+        "id": "f2b64f4b-f435-467f-af7d-f5eb83060b58",
         "data": {
           "ouiSerial": "A4FC77+3TG02241+CONTRACT01",
-          "lastInformAt": "2026-11-01T16:18:59.170032+00:00",
+          "lastInformAt": "2026-11-01T18:26:00.582283+00:00",
           "onlineStatus": "UNREACHABLE",
           "previousStatus": "ONLINE"
         },
         "type": "DeviceUnreachable",
         "event": {
           "ouiSerial": "A4FC77+3TG02241+CONTRACT01",
-          "lastInformAt": "2026-11-01T16:18:59.170032+00:00",
+          "lastInformAt": "2026-11-01T18:26:00.582283+00:00",
           "onlineStatus": "UNREACHABLE",
           "previousStatus": "ONLINE"
         },
         "device": {
-          "id": "661ccfc8-bc69-46a5-83b1-e2dc39816a5c",
+          "id": "a3fa4658-d50a-411d-902d-61324c301a7a",
           "oui_serial": "A4FC77+3TG02241+CONTRACT01"
         },
-        "eventId": "bbc42fe2-4beb-482f-acb7-fe8b1a74f818",
-        "deviceId": "661ccfc8-bc69-46a5-83b1-e2dc39816a5c",
+        "eventId": "f2b64f4b-f435-467f-af7d-f5eb83060b58",
+        "deviceId": "a3fa4658-d50a-411d-902d-61324c301a7a",
         "sequence": 14,
         "accountId": "contract.0001",
-        "eventTime": "2026-11-01T16:18:59.338214+00:00",
+        "eventTime": "2026-11-01T18:26:00.731676+00:00",
         "eventType": "DeviceUnreachable",
         "serviceId": null,
-        "sourceKey": "device-deviceunreachable-661ccfc8-bc69-46a5-83b1-e2dc39816a5c-1793549939344637",
+        "sourceKey": "device-deviceunreachable-a3fa4658-d50a-411d-902d-61324c301a7a-1793557560736932",
         "account_id": "contract.0001",
-        "customer_id": "67626a97-f5b6-47c5-b9d1-7168b868c5ec",
-        "occurred_at": "2026-11-01T16:18:59.338214Z"
+        "customer_id": "66480260-ae23-4e67-b8fe-6b5ffca6c5e5",
+        "occurred_at": "2026-11-01T18:26:00.731676Z"
       },
       "note": "The webhook body as sent, with headers Webhook-Id (the delivery id), Webhook-Timestamp, Webhook-Signature and X-Webhook-Event. status is 0: the recording target is not reachable."
     },
@@ -205,7 +205,7 @@
       "status": 0,
       "mutating": false,
       "body": {
-        "id": "0e4e6dfb-3c02-43e8-ba1b-8ee7fda465ee",
+        "id": "b674e7b7-896e-4690-9fe8-1c851e390309",
         "data": {
           "version": "1.2601.00.0101",
           "ouiSerial": "A4FC77+3TG02241+CONTRACT01",
@@ -218,20 +218,20 @@
           "previousVersion": "1.2501.00.0798"
         },
         "device": {
-          "id": "661ccfc8-bc69-46a5-83b1-e2dc39816a5c",
+          "id": "a3fa4658-d50a-411d-902d-61324c301a7a",
           "oui_serial": "A4FC77+3TG02241+CONTRACT01"
         },
-        "eventId": "0e4e6dfb-3c02-43e8-ba1b-8ee7fda465ee",
-        "deviceId": "661ccfc8-bc69-46a5-83b1-e2dc39816a5c",
+        "eventId": "b674e7b7-896e-4690-9fe8-1c851e390309",
+        "deviceId": "a3fa4658-d50a-411d-902d-61324c301a7a",
         "sequence": 2,
         "accountId": "contract.0001",
-        "eventTime": "2026-11-01T16:18:04.155053+00:00",
+        "eventTime": "2026-11-01T18:24:58.478551+00:00",
         "eventType": "FirmwareChanged",
         "serviceId": null,
-        "sourceKey": "device-firmwarechanged-661ccfc8-bc69-46a5-83b1-e2dc39816a5c-1793549884156103",
+        "sourceKey": "device-firmwarechanged-a3fa4658-d50a-411d-902d-61324c301a7a-1793557498479421",
         "account_id": "contract.0001",
-        "customer_id": "67626a97-f5b6-47c5-b9d1-7168b868c5ec",
-        "occurred_at": "2026-11-01T16:18:04.155053Z"
+        "customer_id": "66480260-ae23-4e67-b8fe-6b5ffca6c5e5",
+        "occurred_at": "2026-11-01T18:24:58.478551Z"
       },
       "note": "The webhook body as sent, with headers Webhook-Id (the delivery id), Webhook-Timestamp, Webhook-Signature and X-Webhook-Event. status is 0: the recording target is not reachable."
     },
@@ -241,12 +241,12 @@
       "status": 0,
       "mutating": false,
       "body": {
-        "id": "d8f878ca-289c-40d0-8b2d-6a5edbba159b",
+        "id": "a9731b5f-45b1-4ca5-bd61-ee6f1399441b",
         "data": {
           "reason": "SIM does not match the sale: expected ICCID 89\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20221234, device reports 89\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20229999",
           "externalId": "",
           "reasonCode": "SIM_MISMATCH",
-          "onboardingId": "b535b445-1dd9-49ed-bbe6-b5b835e28586",
+          "onboardingId": "f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
           "serialNumber": "CONTRACT02"
         },
         "type": "IdentityMismatch",
@@ -254,24 +254,24 @@
           "reason": "SIM does not match the sale: expected ICCID 89\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20221234, device reports 89\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20229999",
           "externalId": "",
           "reasonCode": "SIM_MISMATCH",
-          "onboardingId": "b535b445-1dd9-49ed-bbe6-b5b835e28586",
+          "onboardingId": "f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
           "serialNumber": "CONTRACT02"
         },
         "device": {
-          "id": "33c91c1e-78ad-42d6-bc31-785201eec21e",
+          "id": "5891da44-3215-4c2b-b685-909ce3d63748",
           "oui_serial": "A4FC77+3TG02241+CONTRACT02"
         },
-        "eventId": "d8f878ca-289c-40d0-8b2d-6a5edbba159b",
-        "deviceId": "33c91c1e-78ad-42d6-bc31-785201eec21e",
+        "eventId": "a9731b5f-45b1-4ca5-bd61-ee6f1399441b",
+        "deviceId": "5891da44-3215-4c2b-b685-909ce3d63748",
         "sequence": 7,
         "accountId": "contract.0002",
-        "eventTime": "2026-11-01T16:18:58.733258+00:00",
+        "eventTime": "2026-11-01T18:26:00.20169+00:00",
         "eventType": "IdentityMismatch",
         "serviceId": null,
-        "sourceKey": "identity-mismatch-onboarding-b535b445-1dd9-49ed-bbe6-b5b835e28586-PLANNED-ON_HOLD-1793549938733258900",
+        "sourceKey": "identity-mismatch-onboarding-f38940f6-dbe3-47f2-b7b5-516d915bc7b2-PLANNED-ON_HOLD-1793557560201690600",
         "account_id": "contract.0002",
-        "customer_id": "67626a97-f5b6-47c5-b9d1-7168b868c5ec",
-        "occurred_at": "2026-11-01T16:18:58.733258Z"
+        "customer_id": "66480260-ae23-4e67-b8fe-6b5ffca6c5e5",
+        "occurred_at": "2026-11-01T18:26:00.201690Z"
       },
       "note": "The webhook body as sent, with headers Webhook-Id (the delivery id), Webhook-Timestamp, Webhook-Signature and X-Webhook-Event. status is 0: the recording target is not reachable."
     },
@@ -281,14 +281,14 @@
       "status": 0,
       "mutating": false,
       "body": {
-        "id": "dfa8dfb4-d5aa-49df-946c-544062d4768d",
+        "id": "89897877-a118-4d7f-8b91-6be78e797fa9",
         "data": {
           "state": "CANCELLED",
           "reason": "",
           "source": "bss",
           "externalId": "",
           "reasonCode": "",
-          "onboardingId": "b535b445-1dd9-49ed-bbe6-b5b835e28586",
+          "onboardingId": "f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
           "serialNumber": "CONTRACT02",
           "previousState": "CONTACTED"
         },
@@ -299,25 +299,25 @@
           "source": "bss",
           "externalId": "",
           "reasonCode": "",
-          "onboardingId": "b535b445-1dd9-49ed-bbe6-b5b835e28586",
+          "onboardingId": "f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
           "serialNumber": "CONTRACT02",
           "previousState": "CONTACTED"
         },
         "device": {
-          "id": "33c91c1e-78ad-42d6-bc31-785201eec21e",
+          "id": "5891da44-3215-4c2b-b685-909ce3d63748",
           "oui_serial": "A4FC77+3TG02241+CONTRACT02"
         },
-        "eventId": "dfa8dfb4-d5aa-49df-946c-544062d4768d",
-        "deviceId": "33c91c1e-78ad-42d6-bc31-785201eec21e",
+        "eventId": "89897877-a118-4d7f-8b91-6be78e797fa9",
+        "deviceId": "5891da44-3215-4c2b-b685-909ce3d63748",
         "sequence": 16,
         "accountId": "contract.0002",
-        "eventTime": "2026-11-01T16:18:59.703077+00:00",
+        "eventTime": "2026-11-01T18:26:01.059099+00:00",
         "eventType": "OnboardingStateChangeEvent",
         "serviceId": null,
-        "sourceKey": "onboarding-b535b445-1dd9-49ed-bbe6-b5b835e28586-CONTACTED-CANCELLED-1793549939703077700",
+        "sourceKey": "onboarding-f38940f6-dbe3-47f2-b7b5-516d915bc7b2-CONTACTED-CANCELLED-1793557561059099300",
         "account_id": "contract.0002",
-        "customer_id": "67626a97-f5b6-47c5-b9d1-7168b868c5ec",
-        "occurred_at": "2026-11-01T16:18:59.703077Z"
+        "customer_id": "66480260-ae23-4e67-b8fe-6b5ffca6c5e5",
+        "occurred_at": "2026-11-01T18:26:01.059099Z"
       },
       "note": "The webhook body as sent, with headers Webhook-Id (the delivery id), Webhook-Timestamp, Webhook-Signature and X-Webhook-Event. status is 0: the recording target is not reachable."
     },
@@ -327,14 +327,14 @@
       "status": 0,
       "mutating": false,
       "body": {
-        "id": "e66747da-f2b9-4f04-a962-ddf344a32707",
+        "id": "747a9118-4ec0-4466-b754-715b554245ee",
         "data": {
           "state": "CONTACTED",
           "reason": "waiting for the device to authenticate with its own credential",
           "source": "bss",
           "externalId": "",
           "reasonCode": "WAITING_OWN_CREDENTIAL",
-          "onboardingId": "f0ec4df9-4758-44c6-9ebe-47d9e3b9897b",
+          "onboardingId": "e69d0942-c337-44f9-af8a-cb8b9631b471",
           "serialNumber": "CONTRACT04",
           "previousState": "PLANNED"
         },
@@ -345,25 +345,25 @@
           "source": "bss",
           "externalId": "",
           "reasonCode": "WAITING_OWN_CREDENTIAL",
-          "onboardingId": "f0ec4df9-4758-44c6-9ebe-47d9e3b9897b",
+          "onboardingId": "e69d0942-c337-44f9-af8a-cb8b9631b471",
           "serialNumber": "CONTRACT04",
           "previousState": "PLANNED"
         },
         "device": {
-          "id": "43768b38-bdd6-4d47-9f0c-94550181c89f",
+          "id": "8e48a185-715b-40fa-92d7-0cb2dcad234e",
           "oui_serial": "A4FC77+3TG02241+CONTRACT04"
         },
-        "eventId": "e66747da-f2b9-4f04-a962-ddf344a32707",
-        "deviceId": "43768b38-bdd6-4d47-9f0c-94550181c89f",
+        "eventId": "747a9118-4ec0-4466-b754-715b554245ee",
+        "deviceId": "8e48a185-715b-40fa-92d7-0cb2dcad234e",
         "sequence": 9,
         "accountId": "contract.0004",
-        "eventTime": "2026-11-01T16:18:58.784509+00:00",
+        "eventTime": "2026-11-01T18:26:00.249231+00:00",
         "eventType": "OnboardingStateChangeEvent",
         "serviceId": null,
-        "sourceKey": "onboarding-f0ec4df9-4758-44c6-9ebe-47d9e3b9897b-PLANNED-CONTACTED-1793549938784509600",
+        "sourceKey": "onboarding-e69d0942-c337-44f9-af8a-cb8b9631b471-PLANNED-CONTACTED-1793557560249231100",
         "account_id": "contract.0004",
-        "customer_id": "67626a97-f5b6-47c5-b9d1-7168b868c5ec",
-        "occurred_at": "2026-11-01T16:18:58.784509Z"
+        "customer_id": "66480260-ae23-4e67-b8fe-6b5ffca6c5e5",
+        "occurred_at": "2026-11-01T18:26:00.249231Z"
       },
       "note": "The webhook body as sent, with headers Webhook-Id (the delivery id), Webhook-Timestamp, Webhook-Signature and X-Webhook-Event. status is 0: the recording target is not reachable."
     },
@@ -373,14 +373,14 @@
       "status": 0,
       "mutating": false,
       "body": {
-        "id": "c8a93e72-320d-4e0a-a64f-8f32aef4ad3e",
+        "id": "3d3b1018-faf6-49d4-80d1-168f328145d5",
         "data": {
           "state": "ON_HOLD",
           "reason": "SIM does not match the sale: expected ICCID 89\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20221234, device reports 89\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u20229999",
           "source": "bss",
           "externalId": "",
           "reasonCode": "SIM_MISMATCH",
-          "onboardingId": "b535b445-1dd9-49ed-bbe6-b5b835e28586",
+          "onboardingId": "f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
           "serialNumber": "CONTRACT02",
           "previousState": "PLANNED"
         },
@@ -391,25 +391,25 @@
           "source": "bss",
           "externalId": "",
           "reasonCode": "SIM_MISMATCH",
-          "onboardingId": "b535b445-1dd9-49ed-bbe6-b5b835e28586",
+          "onboardingId": "f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
           "serialNumber": "CONTRACT02",
           "previousState": "PLANNED"
         },
         "device": {
-          "id": "33c91c1e-78ad-42d6-bc31-785201eec21e",
+          "id": "5891da44-3215-4c2b-b685-909ce3d63748",
           "oui_serial": "A4FC77+3TG02241+CONTRACT02"
         },
-        "eventId": "c8a93e72-320d-4e0a-a64f-8f32aef4ad3e",
-        "deviceId": "33c91c1e-78ad-42d6-bc31-785201eec21e",
+        "eventId": "3d3b1018-faf6-49d4-80d1-168f328145d5",
+        "deviceId": "5891da44-3215-4c2b-b685-909ce3d63748",
         "sequence": 6,
         "accountId": "contract.0002",
-        "eventTime": "2026-11-01T16:18:58.733258+00:00",
+        "eventTime": "2026-11-01T18:26:00.20169+00:00",
         "eventType": "OnboardingStateChangeEvent",
         "serviceId": null,
-        "sourceKey": "onboarding-b535b445-1dd9-49ed-bbe6-b5b835e28586-PLANNED-ON_HOLD-1793549938733258900",
+        "sourceKey": "onboarding-f38940f6-dbe3-47f2-b7b5-516d915bc7b2-PLANNED-ON_HOLD-1793557560201690600",
         "account_id": "contract.0002",
-        "customer_id": "67626a97-f5b6-47c5-b9d1-7168b868c5ec",
-        "occurred_at": "2026-11-01T16:18:58.733258Z"
+        "customer_id": "66480260-ae23-4e67-b8fe-6b5ffca6c5e5",
+        "occurred_at": "2026-11-01T18:26:00.201690Z"
       },
       "note": "The webhook body as sent, with headers Webhook-Id (the delivery id), Webhook-Timestamp, Webhook-Signature and X-Webhook-Event. status is 0: the recording target is not reachable."
     }

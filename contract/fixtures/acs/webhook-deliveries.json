@@ -1,35 +1,35 @@
 {
   "name": "acs/webhook-deliveries",
   "description": "Delivery view: status, attempts and the last error of each delivery.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "GET",
-      "path": "/bss/v1/webhooks/a864a931-68c6-4cc0-a9fe-3c70bc10a334/deliveries",
+      "path": "/bss/v1/webhooks/4d20a778-c035-4db8-b087-0639cc900bc0/deliveries",
       "status": 200,
       "mutating": false,
       "body": {
         "items": [
           {
-            "id": "0cea502a-069a-4695-a98f-963d1fc964ca",
-            "event_id": "bb922c87-7d27-4a20-bfb8-55ab29f85648",
+            "id": "431be1d1-4ef8-4990-b8d6-c49962c83ce7",
+            "event_id": "3fd0ad65-fb71-449d-b035-40035ae05a2b",
             "event_sequence": 1,
             "event_type": "DeviceSeen",
             "status": "PENDING",
             "attempts": 1,
-            "last_attempt_at": "2026-11-01T16:18:31.4346Z",
+            "last_attempt_at": "2026-11-01T18:25:20.41729Z",
             "last_error": "request failed: could not reach the receiver",
-            "created_at": "2026-11-01T16:18:11.4306Z"
+            "created_at": "2026-11-01T18:25:00.412721Z"
           },
           {
-            "id": "a091f1da-dcad-4e81-906f-98da08389b5a",
-            "event_id": "0e4e6dfb-3c02-43e8-ba1b-8ee7fda465ee",
+            "id": "ec201d43-9a14-487f-a54d-85dedb57d0af",
+            "event_id": "b674e7b7-896e-4690-9fe8-1c851e390309",
             "event_sequence": 2,
             "event_type": "FirmwareChanged",
             "status": "PENDING",
             "attempts": 0,
             "last_attempt_at": null,
-            "created_at": "2026-11-01T16:18:11.4306Z"
+            "created_at": "2026-11-01T18:25:00.412721Z"
           }
         ]
       }

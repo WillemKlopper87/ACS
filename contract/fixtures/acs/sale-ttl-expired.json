@@ -1,16 +1,16 @@
 {
   "name": "acs/sale-ttl-expired",
   "description": "A sale no CPE contacted within the sale TTL (aged in the database; the adapter's own sync expired it): CANCELLED with TTL_EXPIRED, its TMF641 add FAILED, and the OnboardingStateChangeEvent as replayed.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "GET",
-      "path": "/bss/v1/onboardings/24ffdfde-9ccd-4f9d-84e8-ba1c185ec2de",
+      "path": "/bss/v1/onboardings/33204b18-41e9-47ce-82a1-d10bf656302b",
       "status": 200,
       "mutating": false,
       "body": {
-        "id": "24ffdfde-9ccd-4f9d-84e8-ba1c185ec2de",
-        "href": "/bss/v1/onboardings/24ffdfde-9ccd-4f9d-84e8-ba1c185ec2de",
+        "id": "33204b18-41e9-47ce-82a1-d10bf656302b",
+        "href": "/bss/v1/onboardings/33204b18-41e9-47ce-82a1-d10bf656302b",
         "account_id": "contract.0010",
         "external_id": "SO-CONTRACT-TTL",
         "oui": "A4FC77",
@@ -21,8 +21,8 @@
         "state": "CANCELLED",
         "reason_code": "TTL_EXPIRED",
         "reason": "no device contact within 720h0m0s of the sale",
-        "created_at": "2026-10-01T16:18:36.197453Z",
-        "updated_at": "2026-11-01T16:18:36.420701Z"
+        "created_at": "2026-10-01T18:25:25.616349Z",
+        "updated_at": "2026-11-01T18:25:40.408772Z"
       }
     },
     {
@@ -32,12 +32,12 @@
       "mutating": false,
       "body": {
         "externalId": "SO-CONTRACT-TTL",
-        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/e0491a1c-9490-42f5-b918-79ac59ca1266",
-        "id": "e0491a1c-9490-42f5-b918-79ac59ca1266",
-        "orderDate": "2026-11-01T16:18:35.917936Z",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/89931aea-8d59-430c-a847-9a69563a611e",
+        "id": "89931aea-8d59-430c-a847-9a69563a611e",
+        "orderDate": "2026-11-01T18:25:25.323254Z",
         "orderItem": [
           {
-            "id": "505e2f8d-9457-43cf-b8f9-6d750eb2b053",
+            "id": "5791b3e4-c186-436b-a4cf-7c70c8e95bb4",
             "action": "add",
             "state": "FAILED",
             "role": "gateway"
@@ -58,11 +58,11 @@
       "status": 200,
       "mutating": false,
       "body": {
-        "id": "39c23b88-03ad-48aa-a9dc-70d4b41ad3cd",
+        "id": "3ba14f3a-4b99-4017-8e46-34e245a87058",
         "type": "OnboardingStateChangeEvent",
-        "occurred_at": "2026-11-01T16:18:36.423859Z",
+        "occurred_at": "2026-11-01T18:25:40.414156Z",
         "sequence": 4,
-        "customer_id": "67626a97-f5b6-47c5-b9d1-7168b868c5ec",
+        "customer_id": "66480260-ae23-4e67-b8fe-6b5ffca6c5e5",
         "account_id": "contract.0010",
         "device": null,
         "data": {
@@ -71,7 +71,7 @@
           "source": "bss",
           "externalId": "SO-CONTRACT-TTL",
           "reasonCode": "TTL_EXPIRED",
-          "onboardingId": "24ffdfde-9ccd-4f9d-84e8-ba1c185ec2de",
+          "onboardingId": "33204b18-41e9-47ce-82a1-d10bf656302b",
           "serialNumber": "CONTRACT10",
           "previousState": "PLANNED"
         }

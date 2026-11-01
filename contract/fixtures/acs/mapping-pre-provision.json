@@ -1,7 +1,7 @@
 {
   "name": "acs/mapping-pre-provision",
   "description": "pre_provision for a CPE the ACS has not seen: 202, a sale waits for the device. href and Location point to the sale read; plan_matched says the plan code names an ACS plan.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
@@ -10,8 +10,8 @@
       "mutating": true,
       "body": {
         "account_id": "contract.0002",
-        "href": "/bss/v1/onboardings/b535b445-1dd9-49ed-bbe6-b5b835e28586",
-        "onboarding_id": "b535b445-1dd9-49ed-bbe6-b5b835e28586",
+        "href": "/bss/v1/onboardings/f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
+        "onboarding_id": "f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
         "onboarding_state": "PLANNED",
         "oui_serial": "A4FC77+3TG02241+CONTRACT02",
         "plan_matched": true,
@@ -36,7 +36,7 @@
         "Idempotency-Key": "sale-contract-0002"
       },
       "headers": {
-        "Location": "/bss/v1/onboardings/b535b445-1dd9-49ed-bbe6-b5b835e28586",
+        "Location": "/bss/v1/onboardings/f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
         "Content-Type": "application/json"
       }
     }

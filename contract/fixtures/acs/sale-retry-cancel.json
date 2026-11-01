@@ -1,16 +1,16 @@
 {
   "name": "acs/sale-retry-cancel",
   "description": "A held sale (was ON_HOLD, SIM mismatch) retried by the BSS, then cancelled; cancelling it again is 409 ErrSaleWrongState.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
-      "path": "/bss/v1/onboardings/b535b445-1dd9-49ed-bbe6-b5b835e28586/retry",
+      "path": "/bss/v1/onboardings/f38940f6-dbe3-47f2-b7b5-516d915bc7b2/retry",
       "status": 200,
       "mutating": true,
       "body": {
-        "id": "b535b445-1dd9-49ed-bbe6-b5b835e28586",
-        "href": "/bss/v1/onboardings/b535b445-1dd9-49ed-bbe6-b5b835e28586",
+        "id": "f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
+        "href": "/bss/v1/onboardings/f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
         "account_id": "contract.0002",
         "oui": "A4FC77",
         "serial_number": "CONTRACT02",
@@ -18,20 +18,20 @@
         "service_plan": "HOME-5G",
         "plan_matched": true,
         "state": "CONTACTED",
-        "device_id": "33c91c1e-78ad-42d6-bc31-785201eec21e",
-        "created_at": "2026-11-01T16:18:01.572102Z",
-        "updated_at": "2026-11-01T16:18:59.68805Z",
-        "contacted_at": "2026-11-01T16:18:58.72486Z"
+        "device_id": "5891da44-3215-4c2b-b685-909ce3d63748",
+        "created_at": "2026-11-01T18:24:55.853335Z",
+        "updated_at": "2026-11-01T18:26:01.047525Z",
+        "contacted_at": "2026-11-01T18:26:00.195287Z"
       }
     },
     {
       "method": "POST",
-      "path": "/bss/v1/onboardings/b535b445-1dd9-49ed-bbe6-b5b835e28586/cancel",
+      "path": "/bss/v1/onboardings/f38940f6-dbe3-47f2-b7b5-516d915bc7b2/cancel",
       "status": 200,
       "mutating": true,
       "body": {
-        "id": "b535b445-1dd9-49ed-bbe6-b5b835e28586",
-        "href": "/bss/v1/onboardings/b535b445-1dd9-49ed-bbe6-b5b835e28586",
+        "id": "f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
+        "href": "/bss/v1/onboardings/f38940f6-dbe3-47f2-b7b5-516d915bc7b2",
         "account_id": "contract.0002",
         "oui": "A4FC77",
         "serial_number": "CONTRACT02",
@@ -39,15 +39,15 @@
         "service_plan": "HOME-5G",
         "plan_matched": true,
         "state": "CANCELLED",
-        "device_id": "33c91c1e-78ad-42d6-bc31-785201eec21e",
-        "created_at": "2026-11-01T16:18:01.572102Z",
-        "updated_at": "2026-11-01T16:18:59.700371Z",
-        "contacted_at": "2026-11-01T16:18:58.72486Z"
+        "device_id": "5891da44-3215-4c2b-b685-909ce3d63748",
+        "created_at": "2026-11-01T18:24:55.853335Z",
+        "updated_at": "2026-11-01T18:26:01.056875Z",
+        "contacted_at": "2026-11-01T18:26:00.195287Z"
       }
     },
     {
       "method": "POST",
-      "path": "/bss/v1/onboardings/b535b445-1dd9-49ed-bbe6-b5b835e28586/cancel",
+      "path": "/bss/v1/onboardings/f38940f6-dbe3-47f2-b7b5-516d915bc7b2/cancel",
       "status": 409,
       "mutating": false,
       "body": {
