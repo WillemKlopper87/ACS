@@ -1,0 +1,88 @@
+{
+  "name": "acs/errors",
+  "description": "Problem bodies: 400 (a mapping without oui_serial), 403 insufficient_scope (a tmf:read client writing, with WWW-Authenticate), 401 (a bad token), 429 (over the rate, with Retry-After).",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/bss/v1/mappings",
+      "status": 400,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrInvalidRequest",
+        "title": "Invalid request",
+        "status": 400,
+        "detail": "account_id and oui_serial are required",
+        "code": "ErrInvalidRequest",
+        "error": "ErrInvalidRequest",
+        "message": "account_id and oui_serial are required"
+      },
+      "request": {
+        "account_id": "contract.0012"
+      },
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/bss/v1/mappings",
+      "status": 403,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:insufficient_scope",
+        "title": "Insufficient scope",
+        "status": 403,
+        "detail": "required OAuth scope is not granted",
+        "code": "insufficient_scope",
+        "error": "insufficient_scope",
+        "message": "required OAuth scope is not granted"
+      },
+      "request": {
+        "account_id": "contract.0001",
+        "oui_serial": "A4FC77+3TG02241+CONTRACT01"
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "WWW-Authenticate": "Bearer error=\"insufficient_scope\", scope=\"tmf:write\""
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/events",
+      "status": 401,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrUnauthorized",
+        "title": "Unauthorized",
+        "status": 401,
+        "detail": "missing or invalid Authorization header",
+        "code": "ErrUnauthorized",
+        "error": "ErrUnauthorized",
+        "message": "missing or invalid Authorization header"
+      },
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/devices?limit=1",
+      "status": 429,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrRateLimited",
+        "title": "Rate limited",
+        "status": 429,
+        "detail": "rate limit exceeded, slow down",
+        "code": "ErrRateLimited",
+        "error": "ErrRateLimited",
+        "message": "rate limit exceeded, slow down"
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "Retry-After": "1"
+      }
+    }
+  ]
+}

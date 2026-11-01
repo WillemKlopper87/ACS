@@ -1,7 +1,7 @@
 {
   "name": "acs/webhook-create",
   "description": "Account-scoped webhook subscription. The subscriber supplies the secret; it is never returned (rotate-secret returns a new one once).",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c2f68af, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
@@ -9,7 +9,7 @@
       "status": 201,
       "mutating": true,
       "body": {
-        "id": "7f2fdd95-a956-4fb5-8d42-4f81dde3d407",
+        "id": "a864a931-68c6-4cc0-a9fe-3c70bc10a334",
         "account_id": "contract.0001",
         "target_url": "https://203.0.113.10/acs-events",
         "event_types": [
@@ -17,7 +17,7 @@
           "FirmwareChanged",
           "OnboardingStateChangeEvent"
         ],
-        "created_at": "2026-11-01T15:25:08Z"
+        "created_at": "2026-11-01T16:18:04Z"
       }
     }
   ]

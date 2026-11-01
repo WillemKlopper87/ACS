@@ -1,0 +1,81 @@
+{
+  "name": "acs/sale-ttl-expired",
+  "description": "A sale no CPE contacted within the sale TTL (aged in the database; the adapter's own sync expired it): CANCELLED with TTL_EXPIRED, its TMF641 add FAILED, and the OnboardingStateChangeEvent as replayed.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "GET",
+      "path": "/bss/v1/onboardings/24ffdfde-9ccd-4f9d-84e8-ba1c185ec2de",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "id": "24ffdfde-9ccd-4f9d-84e8-ba1c185ec2de",
+        "href": "/bss/v1/onboardings/24ffdfde-9ccd-4f9d-84e8-ba1c185ec2de",
+        "account_id": "contract.0010",
+        "external_id": "SO-CONTRACT-TTL",
+        "oui": "A4FC77",
+        "serial_number": "CONTRACT10",
+        "role": "gateway",
+        "service_plan": "HOME-5G",
+        "plan_matched": true,
+        "state": "CANCELLED",
+        "reason_code": "TTL_EXPIRED",
+        "reason": "no device contact within 720h0m0s of the sale",
+        "created_at": "2026-10-01T16:18:36.197453Z",
+        "updated_at": "2026-11-01T16:18:36.420701Z"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/tmf-api/serviceOrdering/v4/serviceOrder/SO-CONTRACT-TTL",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "externalId": "SO-CONTRACT-TTL",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/e0491a1c-9490-42f5-b918-79ac59ca1266",
+        "id": "e0491a1c-9490-42f5-b918-79ac59ca1266",
+        "orderDate": "2026-11-01T16:18:35.917936Z",
+        "orderItem": [
+          {
+            "id": "505e2f8d-9457-43cf-b8f9-6d750eb2b053",
+            "action": "add",
+            "state": "FAILED",
+            "role": "gateway"
+          }
+        ],
+        "relatedParty": [
+          {
+            "id": "contract.0010",
+            "role": "customer"
+          }
+        ],
+        "state": "failed"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/events (the TTL_EXPIRED event)",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "id": "39c23b88-03ad-48aa-a9dc-70d4b41ad3cd",
+        "type": "OnboardingStateChangeEvent",
+        "occurred_at": "2026-11-01T16:18:36.423859Z",
+        "sequence": 4,
+        "customer_id": "67626a97-f5b6-47c5-b9d1-7168b868c5ec",
+        "account_id": "contract.0010",
+        "device": null,
+        "data": {
+          "state": "CANCELLED",
+          "reason": "no device contact within 720h0m0s of the sale",
+          "source": "bss",
+          "externalId": "SO-CONTRACT-TTL",
+          "reasonCode": "TTL_EXPIRED",
+          "onboardingId": "24ffdfde-9ccd-4f9d-84e8-ba1c185ec2de",
+          "serialNumber": "CONTRACT10",
+          "previousState": "PLANNED"
+        }
+      }
+    }
+  ]
+}

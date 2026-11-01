@@ -1,0 +1,60 @@
+{
+  "name": "acs/tmf641-order-partial",
+  "description": "A delete that completes (ouiSerial in the Annex form matches), then a modify of the role it emptied, which fails: the order is partial. Items after a failed one are SKIPPED and do not make an order partial.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 93ee7b2, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/tmf-api/serviceOrdering/v4/serviceOrder",
+      "status": 201,
+      "mutating": true,
+      "body": {
+        "externalId": "SO-CONTRACT-PARTIAL",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/c74cfd17-90dd-4d89-a442-1a3fcfe3889a",
+        "id": "c74cfd17-90dd-4d89-a442-1a3fcfe3889a",
+        "orderDate": "2026-11-01T16:18:34.693596Z",
+        "orderItem": [
+          {
+            "id": "f06b425a-5a6c-489a-bb58-a5236fb1bda2",
+            "action": "delete",
+            "state": "COMPLETED",
+            "role": "gateway"
+          },
+          {
+            "id": "1b7c3d44-8b68-482d-8cb1-3b5c7d017b28",
+            "action": "modify",
+            "state": "FAILED",
+            "role": "gateway"
+          }
+        ],
+        "relatedParty": [
+          {
+            "id": "contract.0008",
+            "role": "customer"
+          }
+        ],
+        "state": "partial"
+      },
+      "request": {
+        "externalId": "SO-CONTRACT-PARTIAL",
+        "accountId": "contract.0008",
+        "orderItem": [
+          {
+            "id": "1",
+            "action": "delete",
+            "role": "gateway",
+            "ouiSerial": "A4FC77-CONTRACT08"
+          },
+          {
+            "id": "2",
+            "action": "modify",
+            "role": "gateway",
+            "parameters": {
+              "wifi_ssid": "Gone"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
