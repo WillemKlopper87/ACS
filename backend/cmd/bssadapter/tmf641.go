@@ -2,13 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"acs/internal/bss"
+	"acs/internal/onboarding"
 	"acs/internal/tmf"
 )
 
@@ -45,6 +48,78 @@ func tmf641SwapPair(items []tmf641ItemRequest) (int, bool) {
 		return 0, false
 	}
 	return 1, true
+}
+
+// tmf641Delete ends the device in a delete item's role and closes the
+// account's open sale in that role (a pre-provisioned CPE that never got
+// to service). A role with no device is already what the delete asks for.
+// An ouiSerial that names another device than the one in the role fails
+// the item and ends nothing: the BSS's view is stale. expected, when set,
+// is the mapping a resumed item recorded; another device in the role
+// since then fails it the same way.
+func (h *handler) tmf641Delete(ctx context.Context, req tmf641OrderRequest, item tmf641ItemRequest, expected *bss.AccountDeviceMapping) error {
+	role := roleOrDefault(item.Role)
+	active, err := h.mappings.ActiveDeviceForAccount(ctx, req.AccountID, role)
+	switch {
+	case errors.Is(err, bss.ErrNoDeviceForRole):
+		active = nil
+	case err != nil:
+		return err
+	}
+	if active != nil {
+		if expected != nil && active.ID != expected.ID {
+			return errors.New("device assignment changed before delete recovery")
+		}
+		if want := strings.TrimSpace(item.OUISerial); want != "" && !sameDevice(active.OUISerial, want) {
+			return fmt.Errorf("the %s of account %s is %s, not %s; nothing was ended", role, req.AccountID, active.OUISerial, want)
+		}
+		if err := h.mappings.UnassignDevice(ctx, req.AccountID, role, tmf641UnassignReason(item, false)); err != nil && !errors.Is(err, bss.ErrNoDeviceForRole) {
+			return err
+		}
+	}
+	return h.cancelOpenSales(ctx, req, item, role)
+}
+
+// cancelOpenSales cancels the account's open BSS sales in role (only the
+// one for ouiSerial when the item names it), with an event each.
+func (h *handler) cancelOpenSales(ctx context.Context, req tmf641OrderRequest, item tmf641ItemRequest, role string) error {
+	if h.onboarding == nil {
+		return nil
+	}
+	sales, err := h.onboarding.OpenBSSSales(ctx, req.AccountID, role)
+	if err != nil {
+		return err
+	}
+	for _, o := range sales {
+		if want := strings.TrimSpace(item.OUISerial); want != "" && !sameDevice(o.ExpectedOUI+"+"+o.ExpectedSerial, want) {
+			continue
+		}
+		reason := "deleted by service order " + req.ExternalID
+		if err := h.onboarding.CancelWithReason(ctx, o.ID, reason); errors.Is(err, onboarding.ErrNotFound) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := h.auditor.Record(ctx, "bss:"+req.AccountID, "", "OnboardingCancelled", map[string]any{
+			"onboarding_id": o.ID, "account_id": req.AccountID, "from": o.State, "to": onboarding.StateCancelled, "external_id": req.ExternalID,
+		}); err != nil {
+			h.logger.Error("failed to write audit record", "err", err)
+		}
+		after, err := h.onboarding.Get(ctx, o.ID)
+		if err != nil {
+			return err
+		}
+		h.publishSaleChange(ctx, after, o.State)
+	}
+	return nil
+}
+
+// sameDevice compares two device ids by OUI and serial, so the canonical
+// form and the TR-069 Annex form (with or without ProductClass) match.
+func sameDevice(a, b string) bool {
+	ouiA, serialA := bss.ParseOUISerial(a)
+	ouiB, serialB := bss.ParseOUISerial(b)
+	return serialA != "" && serialA == serialB && strings.EqualFold(ouiA, ouiB)
 }
 
 // tmf641UnassignReason is the reason recorded when a delete or swap item
@@ -195,10 +270,7 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 			items[i].Status = "COMPLETED"
 			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "COMPLETED", "")
 		} else if item.Action == "delete" {
-			reason := tmf641UnassignReason(item, false)
-			// Nothing in the role is what the delete asks for: done, as
-			// the reconciler's recovery path also decides.
-			if execErr := h.mappings.UnassignDevice(r.Context(), req.AccountID, roleOrDefault(item.Role), reason); execErr != nil && !errors.Is(execErr, bss.ErrNoDeviceForRole) {
+			if execErr := h.tmf641Delete(r.Context(), req, item, nil); execErr != nil {
 				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", execErr.Error())
 				items[i].Status = "FAILED"
 				for j := i + 1; j < len(items); j++ {

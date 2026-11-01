@@ -20,6 +20,12 @@ and the response `body`.
 | `tmf641-delete-order` | TMF641 delete without `unassignReason`: completed |
 | `tmf641-repeat-external-id` | The same `externalId` again: the same order replays (200), another order is 409 |
 | `tmf641-delete-unmapped` | A delete of a role with no device: completed |
+| `tmf641-order-failed` | A delete naming another device than the one in the role: failed, nothing ended |
+| `tmf641-order-partial` | A completed delete, then a failed modify: partial |
+| `sale-failed-retry` | A FAILED sale (CONFIG_FAILED) read, then retried by the BSS |
+| `sale-ttl-expired` | A sale expired by the TTL: CANCELLED/TTL_EXPIRED, its TMF641 add FAILED, the event |
+| `idempotency-key-in-flight` | A retry while the first request runs: 409 `ErrIdempotencyKeyInFlight` with `Retry-After` |
+| `errors` | Problem bodies for 400, 403 `insufficient_scope` (with `WWW-Authenticate`), 401 and 429 (with `Retry-After`) |
 | `tmf641-add-awaiting-device` | TMF641 add for an unseen CPE; the modify behind it stays `PENDING` |
 | `events-replay` | Replay page in the event envelope, then the empty page after it |
 | `webhook-create`, `webhook-deliveries`, `webhook-rotate-secret` | Subscription, delivery view with the last error, secret rotation |
@@ -35,7 +41,7 @@ and the request headers that matter (`request_headers`). Errors are RFC 9457
 problems that keep the older `error`/`message` keys.
 
 **Versioned.** The contract is tagged `bss-contract-v<major>.<minor>.<patch>`
-(first: `bss-contract-v1.0.0`). Within a major version, changes only add
+(`bss-contract-v1.0.0`, `v1.0.1`). A tag never moves. Within a major version, changes only add
 (fields, endpoints, codes in a new problem version); a removal or a changed
 meaning bumps the major version. Pin integration tests to a tag. Re-record
 with [`scripts/contract/record_fixtures.py`](../scripts/contract/record_fixtures.py)

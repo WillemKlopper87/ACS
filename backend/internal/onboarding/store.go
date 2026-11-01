@@ -390,6 +390,47 @@ func (r *Repository) Retry(ctx context.Context, id string) error {
 		WHERE id = $1 AND state IN ('FAILED', 'ON_HOLD')`, id)
 }
 
+// OpenBSSSales returns the open (not IN_SERVICE or CANCELLED) BSS sales of
+// an account in a role.
+func (r *Repository) OpenBSSSales(ctx context.Context, accountRef, role string) ([]Onboarding, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+onboardingColumns+` FROM onboardings
+		WHERE source = 'bss' AND account_ref = $1 AND bss_role = $2 AND state NOT IN ('IN_SERVICE', 'CANCELLED')
+		ORDER BY created_at`, accountRef, role)
+	if err != nil {
+		return nil, fmt.Errorf("open BSS sales: %w", err)
+	}
+	defer rows.Close()
+	var out []Onboarding
+	for rows.Next() {
+		o, err := scanOnboarding(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *o)
+	}
+	return out, rows.Err()
+}
+
+// CancelWithReason cancels an open onboarding and says why.
+func (r *Repository) CancelWithReason(ctx context.Context, id, reason string) error {
+	return r.exec2(ctx, `UPDATE onboardings SET state = 'CANCELLED', state_code = NULL, state_reason = $2, updated_at = now()
+		WHERE id = $1 AND state NOT IN ('IN_SERVICE', 'CANCELLED')`, id, reason)
+}
+
+func (r *Repository) exec2(ctx context.Context, query, id, arg string) error {
+	res, err := r.db.ExecContext(ctx, query, id, arg)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		if err != nil {
+			return err
+		}
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (r *Repository) Cancel(ctx context.Context, id string) error {
 	return r.exec(ctx, `UPDATE onboardings SET state = 'CANCELLED', updated_at = now()
 		WHERE id = $1 AND state NOT IN ('IN_SERVICE', 'CANCELLED')`, id)

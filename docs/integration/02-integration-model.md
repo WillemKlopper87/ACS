@@ -54,6 +54,7 @@ Resubmitting an identical order returns the **original** job with its
 | Connection dropped mid-request | **Resend the identical order.** |
 | `5xx` from the ACS | Back off, then resend the identical order. |
 | Genuinely a new change | New `external_order_id`. |
+| Your key, another tenant's account | `404 ErrNotFound`: a key never confirms that another tenant used it. |
 | Retrying a *failed* order after fixing the cause | New `external_order_id` — the original is terminal. |
 
 **The anti-pattern that causes real incidents:** appending a suffix or a
@@ -86,7 +87,7 @@ rather than compounding.
 | Status | Code | Class | Your action |
 |---|---|---|---|
 | `400` | `ErrInvalidRequest` | Permanent | Fix the request. Never retry unchanged. |
-| `401` | `ErrUnauthorized` | Permanent | Refresh the token once; if it recurs, stop and alert. |
+| `401` | `ErrUnauthorized` or `invalid_token` | Permanent | Refresh the token once; if it recurs, stop and alert. Which code depends on where the token is checked (a missing or malformed header, a revoked client: `ErrUnauthorized`; a token checked by `/bss/v1` or TMF: `invalid_token`): switch on the status. |
 | `404` | `ErrDeviceNotMapped` | Permanent | The device is unknown or the account has no active mapping. |
 | `404` | `ErrJobNotFound` | Permanent | Wrong `command_key`. |
 | `409` | `ErrRoleAlreadyAssigned` | Needs a decision | The role is occupied. Unassign or swap — do not retry. |
@@ -164,6 +165,13 @@ enforced in the database.
   (TMF641 `unassignReason`). Another value is refused with 400 before
   anything runs. Without one, a swap (delete then add, same role) records
   `upgrade` and a delete records `return`.
+- **A TMF641 delete** names the role, and may name the device
+  (`ouiSerial`, either id form). With `ouiSerial`, the item **fails and
+  ends nothing** when another device holds the role: send it, so a stale
+  view cannot end the wrong CPE. A role with no device is already deleted:
+  the item completes. A delete also cancels the account's open sale in the
+  role (a pre-provisioned CPE not yet in service; only the one for
+  `ouiSerial` when given), with an `OnboardingStateChangeEvent`.
 
 ### 6.1 Device identity (`oui_serial`)
 

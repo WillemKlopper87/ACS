@@ -153,34 +153,25 @@ func (h *handler) resumeTMF641Item(ctx context.Context, work bss.ServiceOrderWor
 }
 
 func (h *handler) resumeTMF641Delete(ctx context.Context, work bss.ServiceOrderWork, req tmf641OrderRequest, item tmf641ItemRequest, role string) error {
-	var mapping *bss.AccountDeviceMapping
-	var err error
+	var expected *bss.AccountDeviceMapping
 	if work.Item.MappingID != "" {
-		mapping, err = h.mappings.GetMappingByID(ctx, work.Item.MappingID)
+		mapping, err := h.mappings.GetMappingByID(ctx, work.Item.MappingID)
 		if err != nil {
 			return err
 		}
 		if mapping.UnassignedAt != nil {
+			if err := h.cancelOpenSales(ctx, req, item, role); err != nil {
+				return err
+			}
 			return h.finishTMF641Item(ctx, work.Item, "COMPLETED", "")
 		}
-		active, activeErr := h.mappings.ActiveDeviceForAccount(ctx, req.AccountID, role)
-		if activeErr != nil || active.ID != mapping.ID {
-			return h.finishTMF641Item(ctx, work.Item, "FAILED", "device assignment changed before delete recovery")
-		}
-	} else {
-		mapping, err = h.mappings.ActiveDeviceForAccount(ctx, req.AccountID, role)
-		if errors.Is(err, bss.ErrNoDeviceForRole) {
-			return h.finishTMF641Item(ctx, work.Item, "COMPLETED", "")
-		}
-		if err != nil {
-			return h.finishTMF641Item(ctx, work.Item, "FAILED", err.Error())
-		}
-		if err := h.mappings.SetServiceOrderItemMapping(ctx, work.Item.ID, mapping.ID); err != nil {
+		expected = mapping
+	} else if active, err := h.mappings.ActiveDeviceForAccount(ctx, req.AccountID, role); err == nil {
+		if err := h.mappings.SetServiceOrderItemMapping(ctx, work.Item.ID, active.ID); err != nil {
 			return err
 		}
 	}
-	reason := tmf641UnassignReason(item, false)
-	if err := h.mappings.UnassignDevice(ctx, req.AccountID, role, reason); err != nil {
+	if err := h.tmf641Delete(ctx, req, item, expected); err != nil {
 		return h.finishTMF641Item(ctx, work.Item, "FAILED", err.Error())
 	}
 	return h.finishTMF641Item(ctx, work.Item, "COMPLETED", "")

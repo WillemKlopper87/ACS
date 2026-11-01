@@ -26,6 +26,14 @@ Webhook bodies also keep the older TMF688 keys (`eventId`, `eventType`,
 `eventTime`, `sourceKey`, `accountId`, `deviceId`, `serviceId`, `event`) so
 subscribers that predate the envelope keep working.
 
+`customer_id`, `account_id` and `device` can be **null**: `customer_id` for an
+event of a device that belongs to no customer (a customer-bound client never
+sees those), `account_id` for a device event of an unmapped device, `device`
+for an onboarding event of a sale no CPE has contacted (an expiry, a BSS
+retry or cancel). Timestamps the adapter writes end in `Z`; timestamps
+inside `data` that come from the database read `+00:00`. Both are UTC: parse
+RFC 3339.
+
 `data` never carries secrets or full SIM identifiers. Do not trust
 `customer_id` or `account_id` in a payload for authorization; look them up
 in your own records.
@@ -132,7 +140,7 @@ keep the older `error` and `message` keys; see
 | Status | `error` | When |
 |---|---|---|
 | 400 | `ErrInvalidRequest` | Bad parameter, e.g. a negative `after` or an unknown delivery `status` |
-| 401 | `invalid_token` | No or bad bearer token |
+| 401 | `invalid_token`, `ErrUnauthorized` | No or bad bearer token (switch on the status; see 02 §3) |
 | 403 | `insufficient_scope` | The token lacks the scope (`WWW-Authenticate: Bearer error="insufficient_scope", scope="tmf:read"`) |
 | 403 | `ErrClientNotCustomerBound`, `ErrReplayNeedsCustomer` | A global client where only bound clients are accepted; an account-listed client asking for replay |
 | 404 | `ErrNotFound` | Unknown, or another customer's, subscription or delivery |

@@ -132,7 +132,13 @@ with the sale, emit an `OnboardingStateChangeEvent`, and give `409 ErrSaleWrongS
 when the state does not allow it.
 
 **Devices.** `GET /bss/v1/devices?limit=&cursor=` lists the customer's devices with their
-current account, role, mapping status and reachability, in pages (`next_cursor`).
+current account, role, mapping status and reachability, in pages (`next_cursor`). `limit` is
+1 to 500; a value outside that range (or none) means 100. A cursor that is not one the ACS
+gave is `400 ErrInvalidRequest`.
+
+**Ending a sale with TMF641.** A `delete` for the account and role cancels a sale that is not
+in service yet (reason "deleted by service order …"); the `add` that waits for its CPE then
+FAILS. A sale held with no CPE contact does not expire: only PLANNED sales do.
 
 **What happens next** (cmd/bssadapter, every 15 s):
 

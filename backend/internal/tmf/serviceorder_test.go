@@ -14,6 +14,8 @@ func TestServiceOrderState(t *testing.T) {
 		{"completed", false, []string{"COMPLETED", "SKIPPED"}, "completed"},
 		{"failed", false, []string{"FAILED"}, "failed"},
 		{"partial", false, []string{"COMPLETED", "FAILED"}, "partial"},
+		{"failed first, rest skipped", false, []string{"FAILED", "SKIPPED"}, "failed"},
+		{"partial with skipped", false, []string{"COMPLETED", "FAILED", "SKIPPED"}, "partial"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

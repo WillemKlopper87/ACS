@@ -51,7 +51,7 @@ DB_EXEC = shlex.split(os.environ["ACS_DB_EXEC"])
 COMMIT = os.environ.get("ACS_COMMIT", "unknown")
 OUT = sys.argv[1]
 # Response headers an integration acts on, kept in the exchange.
-KEPT_HEADERS = ("Location", "Idempotent-Replayed", "Content-Type", "Retry-After")
+KEPT_HEADERS = ("Location", "Idempotent-Replayed", "Content-Type", "Retry-After", "WWW-Authenticate")
 LAST_HEADERS = {}
 
 
@@ -63,7 +63,7 @@ def redact(value):
     return value
 
 
-def call(base, method, path, body=None, token=None, form=None, headers=None):
+def call(base, method, path, body=None, token=None, form=None, headers=None, retry=True):
     data, hdrs = None, dict(headers or {})
     if form is not None:
         data = urllib.parse.urlencode(form).encode()
@@ -83,7 +83,7 @@ def call(base, method, path, body=None, token=None, form=None, headers=None):
         LAST_HEADERS.clear()
         LAST_HEADERS.update({k: got[k] for k in KEPT_HEADERS if got.get(k)})
         # Rate limited: wait as told, as an integration must.
-        if status == 429 and attempt < 4:
+        if status == 429 and retry and attempt < 4:
             time.sleep(float(got.get("Retry-After") or 1))
             continue
         break
@@ -382,6 +382,8 @@ def main():
     record("not-found-other-account", "An account this customer does not own reads as 404, never 403.",
            [exchange("GET", "/tmf-api/serviceOrdering/v4/serviceOrder?accountId=someone-else.0001", status, other, False)])
 
+    record_edges(token, cust)
+
     if os.environ.get("ACS_CWMP_URL"):
         record_webhook_bodies(token)
 
@@ -390,6 +392,109 @@ def main():
             json.dump(fixture, f, indent=2, sort_keys=False, default=str)
             f.write("\n")
     print(f"wrote {len(fixtures)} fixtures to {OUT}")
+
+
+def map_device(token, n):
+    serial = f"CONTRACT{n:02d}"
+    sql(f"""INSERT INTO devices (id, oui_serial, oui, product_class, serial_number, manufacturer, data_model_root, online_status)
+            VALUES (gen_random_uuid(), 'A4FC77+3TG02241+{serial}', 'A4FC77', '3TG02241', '{serial}', 'Nokia', 'DEVICE2', 'OFFLINE');""")
+    status, _ = call(BSS, "POST", "/bss/v1/mappings", {"account_id": f"contract.00{n:02d}", "oui_serial": f"A4FC77+3TG02241+{serial}",
+                                                      "service_plan": "HOME-5G"}, token)
+    assert status == 200, status
+
+
+def record_edges(token, cust):
+    """Order outcomes, sale failure and expiry, and the error bodies."""
+    path = "/tmf-api/serviceOrdering/v4/serviceOrder"
+
+    map_device(token, 8)
+    stale = {"externalId": "SO-CONTRACT-STALE", "accountId": "contract.0008", "orderItem": [
+        {"id": "1", "action": "delete", "role": "gateway", "ouiSerial": "A4FC77+3TG02241+CONTRACT99", "unassignReason": "return"}]}
+    status, failed = call(BSS, "POST", path, stale, token)
+    record("tmf641-order-failed", "A delete naming a device that is not the one in the role: the item FAILS and nothing is "
+           "ended (the order state is failed). TMF641 order states are acknowledged (work outstanding; see "
+           "tmf641-add-awaiting-device), completed, failed, partial and cancelled; there is no inProgress.",
+           [exchange("POST", path, status, failed, True, stale)])
+    mixed = {"externalId": "SO-CONTRACT-PARTIAL", "accountId": "contract.0008", "orderItem": [
+        {"id": "1", "action": "delete", "role": "gateway", "ouiSerial": "A4FC77-CONTRACT08"},
+        {"id": "2", "action": "modify", "role": "gateway", "parameters": {"wifi_ssid": "Gone"}}]}
+    status, partial = call(BSS, "POST", path, mixed, token)
+    record("tmf641-order-partial", "A delete that completes (ouiSerial in the Annex form matches), then a modify of the role it "
+           "emptied, which fails: the order is partial. Items after a failed one are SKIPPED and do not make an order partial.",
+           [exchange("POST", path, status, partial, True, mixed)])
+
+    body = {"account_id": "contract.0009", "oui_serial": "A4FC77+3TG02241+CONTRACT09", "service_plan": "HOME-5G", "pre_provision": True}
+    status, sale = call(BSS, "POST", "/bss/v1/mappings", body, token)
+    assert status == 202, status
+    # FAILED comes from configuration jobs a CPE refuses; set here in the
+    # database, as the reconciler records it.
+    sql(f"""UPDATE onboardings SET state = 'FAILED', state_code = 'CONFIG_FAILED',
+              state_reason = 'configuration failed: 9007 Invalid parameter value' WHERE id = '{sale['onboarding_id']}';""")
+    status, failed_sale = call(BSS, "GET", sale["href"], token=token)
+    status2, retried = call(BSS, "POST", sale["href"] + "/retry", None, token)
+    record("sale-failed-retry", "A FAILED sale (CONFIG_FAILED; the state is set in the database as the reconciler records it) "
+           "read, then retried by the BSS: back to PLANNED, as its CPE has not connected.",
+           [exchange("GET", sale["href"], status, failed_sale, False),
+            exchange("POST", sale["href"] + "/retry", status2, retried, True)])
+
+    order = {"externalId": "SO-CONTRACT-TTL", "accountId": "contract.0010", "orderItem": [
+        {"id": "1", "action": "add", "role": "gateway", "ouiSerial": "A4FC77+3TG02241+CONTRACT10", "servicePlan": "HOME-5G"}]}
+    status, _ = call(BSS, "POST", path, order, token)
+    assert status == 201, status
+    ttl_sale = query("SELECT id FROM onboardings WHERE expected_serial = 'CONTRACT10';")[0][0]
+    # Age the sale past the TTL; the adapter's sync loop expires it.
+    sql(f"UPDATE onboardings SET created_at = now() - interval '31 days', updated_at = now() - interval '31 days' WHERE id = '{ttl_sale}';")
+    deadline, expired = time.time() + 60, None
+    while time.time() < deadline:
+        status, expired = call(BSS, "GET", f"/bss/v1/onboardings/{ttl_sale}", token=token)
+        if expired.get("reason_code") == "TTL_EXPIRED":
+            break
+        time.sleep(3)
+    time.sleep(16)  # one more sync pass fails the waiting item
+    status2, ttl_order = call(BSS, "GET", path + "/SO-CONTRACT-TTL", token=token)
+    status3, page = call(BSS, "GET", "/bss/v1/events?after=0&limit=500", token=token)
+    event = next(e for e in page["events"] if e.get("data", {}).get("reasonCode") == "TTL_EXPIRED")
+    record("sale-ttl-expired", "A sale no CPE contacted within the sale TTL (aged in the database; the adapter's own sync expired "
+           "it): CANCELLED with TTL_EXPIRED, its TMF641 add FAILED, and the OnboardingStateChangeEvent as replayed.",
+           [exchange("GET", f"/bss/v1/onboardings/{ttl_sale}", status, expired, False),
+            exchange("GET", path + "/SO-CONTRACT-TTL", status2, ttl_order, False),
+            exchange("GET", "/bss/v1/events (the TTL_EXPIRED event)", status3, event, False)])
+
+    key = {"Idempotency-Key": "inflight-contract-0011"}
+    body = {"account_id": "contract.0011", "oui_serial": "A4FC77+3TG02241+CONTRACT11", "pre_provision": True}
+    status, _ = call(BSS, "POST", "/bss/v1/mappings", body, token, headers=key)
+    assert status == 202, status
+    # The first request still running is a window of milliseconds; the key
+    # is put back in that state in the database to record the answer.
+    sql("UPDATE bss_idempotency_keys SET status = NULL, response = NULL, completed_at = NULL WHERE key = 'inflight-contract-0011';")
+    status, busy = call(BSS, "POST", "/bss/v1/mappings", body, token, headers=key)
+    record("idempotency-key-in-flight", "A retry while the first request with the key is still running (that state is set in the "
+           "database): 409 ErrIdempotencyKeyInFlight with Retry-After.",
+           [exchange("POST", "/bss/v1/mappings", status, busy, False, body, dict(LAST_HEADERS), key)])
+
+    errors = []
+    bad = {"account_id": "contract.0012"}
+    status, resp = call(BSS, "POST", "/bss/v1/mappings", bad, token)
+    errors.append(exchange("POST", "/bss/v1/mappings", status, resp, False, bad, dict(LAST_HEADERS)))
+    status, created = call(API, "POST", "/api/v1/bss/oauth-clients",
+                           {"name": "contract-isp-readonly", "scopes": ["tmf:read"], "customer_id": cust}, ADMIN)
+    assert status in (200, 201), (status, created)
+    status, tok = call(BSS, "POST", "/bss/v1/oauth/token", form={"grant_type": "client_credentials",
+                       "client_id": created["client"]["client_id"], "client_secret": created["client_secret"]})
+    reader = tok["access_token"]
+    write = {"account_id": "contract.0001", "oui_serial": "A4FC77+3TG02241+CONTRACT01"}
+    status, resp = call(BSS, "POST", "/bss/v1/mappings", write, reader)
+    errors.append(exchange("POST", "/bss/v1/mappings", status, resp, False, write, dict(LAST_HEADERS)))
+    status, resp = call(BSS, "GET", "/bss/v1/events", token="not-a-token")
+    errors.append(exchange("GET", "/bss/v1/events", status, resp, False, headers=dict(LAST_HEADERS)))
+    for _ in range(40):
+        status, resp = call(BSS, "GET", "/bss/v1/devices?limit=1", token=token, retry=False)
+        if status == 429:
+            errors.append(exchange("GET", "/bss/v1/devices?limit=1", status, resp, False, headers=dict(LAST_HEADERS)))
+            break
+    time.sleep(3)
+    record("errors", "Problem bodies: 400 (a mapping without oui_serial), 403 insufficient_scope (a tmf:read client writing, "
+           "with WWW-Authenticate), 401 (a bad token), 429 (over the rate, with Retry-After).", errors)
 
 
 def record_webhook_bodies(token):

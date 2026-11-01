@@ -273,7 +273,7 @@ paths:
   /bss/v1/webhooks:
     post:
       tags: [Webhooks]
-      summary: Subscribe to JOB_COMPLETED push notifications instead of polling Workflow C
+      summary: Subscribe to events (JOB_COMPLETED and the stream events of docs/integration/09-events.md) instead of polling
       requestBody:
         required: true
         content:
@@ -285,7 +285,7 @@ paths:
                 account_id: { type: string, nullable: true, description: "Required for account-scoped OAuth clients. Omit only with a globally-authorized client or the deprecated shared token." }
                 target_url: { type: string }
                 secret: { type: string, description: "HMAC-SHA256 signing secret — deliveries carry Webhook-Id, Webhook-Timestamp, and Webhook-Signature: v1,<mac> over '<Webhook-Id>.<Webhook-Timestamp>.<raw body>'. A whsec_<base64> secret (real Standard Webhooks format) gets base64-decoded key material and a base64-encoded <mac>, fully wire-compatible with an off-the-shelf Standard Webhooks verifier; any other secret keeps the legacy raw-key, hex-encoded scheme." }
-                event_types: { type: array, items: { type: string, enum: [JOB_COMPLETED, DeviceFault, DeviceRecovered, CellularStateChanged] } }
+                event_types: { type: array, items: { type: string, enum: [JOB_COMPLETED, DeviceSeen, DeviceUnreachable, FirmwareChanged, CellularStateChanged, DeviceFault, DeviceRecovered, OnboardingStateChangeEvent, IdentityMismatch] }, description: "Not validated: an unknown type is stored and never matches, so check the spelling." }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/WebhookSubscription" } } } }
     get:
@@ -505,6 +505,8 @@ components:
       type: object
       properties:
         id: { type: string, description: "The Webhook-Id header of every attempt" }
+        event_id: { type: string, description: "The envelope id of the event delivered; absent for JOB_COMPLETED" }
+        event_sequence: { type: integer, format: int64, description: "The event's sequence in its customer's stream; absent for JOB_COMPLETED" }
         event_type: { type: string }
         status: { type: string, enum: [PENDING, DELIVERED, FAILED] }
         attempts: { type: integer }
