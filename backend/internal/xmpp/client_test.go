@@ -17,6 +17,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -34,7 +35,7 @@ type fakeServer struct {
 	t        *testing.T
 	ln       net.Listener
 	tlsCfg   *tls.Config
-	noTLS    bool
+	noTLS    atomic.Bool       // set by a test while serve runs
 	users    map[string]string // localpart -> password
 	mu       sync.Mutex
 	conns    []net.Conn
@@ -115,7 +116,7 @@ func (s *fakeServer) openStream(conn net.Conn, features string) *xml.Decoder {
 func (s *fakeServer) handle(raw net.Conn) {
 	defer raw.Close()
 	var conn net.Conn = raw
-	if s.noTLS {
+	if s.noTLS.Load() {
 		s.openStream(conn, `<mechanisms xmlns='`+nsSASL+`'><mechanism>PLAIN</mechanism></mechanisms>`)
 		io.Copy(io.Discard, conn)
 		return
@@ -366,7 +367,7 @@ func TestClientRejectsBadPasswordAndPlaintextServers(t *testing.T) {
 	}
 
 	plain, _ := newFakeServer(t)
-	plain.noTLS = true
+	plain.noTLS.Store(true)
 	c2, _ := New(Config{Addr: plain.ln.Addr().String(), Domain: testDomain, Username: "acs", Password: "acs-password"})
 	if _, err := c2.connect(context.Background()); err == nil || !strings.Contains(err.Error(), "STARTTLS") {
 		t.Fatalf("plaintext server: err = %v, want STARTTLS refusal", err)

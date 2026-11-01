@@ -1,0 +1,20 @@
+# gitleaks configuration for the secrets-scan CI job: the default rules,
+# plus an allowlist for JSON keys whose values are identifiers, not
+# secrets. generic-api-key matches any high-entropy value under a key that
+# ends in "key" or contains "secret", which these do:
+#   sourceKey, conditionKey   event and alarm dedup keys (TMF688/642)
+#   secret_handle,
+#   wifi_password_handle      sealed secret handles (I4): a reference to a
+#                             secret the ACS holds, never the secret itself
+# The match is on the key, so a real secret under any other key, in the
+# fixtures or anywhere else, is still reported.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Non-secret identifiers in event payloads and secret-handle references"
+regexTarget = "line"
+regexes = [
+  '''"(sourceKey|conditionKey|secret_handle|wifi_password_handle)"\s*:\s*"[^"]*"''',
+]
