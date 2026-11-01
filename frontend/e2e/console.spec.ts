@@ -95,7 +95,7 @@ test("wrong password shows the API error, right password reaches the console", a
 
   await page.getByLabel("Password").fill("right-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("button", { name: "Device Fleet", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Inventory", exact: true })).toBeVisible();
   await expect(page.getByText("001349-NR7101-S1")).toBeVisible();
 });
 
