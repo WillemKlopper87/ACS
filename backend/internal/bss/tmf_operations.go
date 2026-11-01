@@ -173,6 +173,37 @@ func (r *Repository) ClearAlarm(ctx context.Context, accountID, deviceID, source
 	return nil
 }
 
+// RecoveredFault is a DeviceFault alarm RecoverDeviceFaults cleared.
+type RecoveredFault struct {
+	AccountID, Code, ConditionKey string
+}
+
+// RecoverDeviceFaults clears a device's raised or acknowledged DeviceFault
+// alarms from protocol whose failing job was of jobType, and returns the
+// ones it cleared: a later job of that type succeeding shows the condition
+// is gone. Clearing and returning in one statement means each alarm
+// recovers once, however many jobs succeed.
+func (r *Repository) RecoverDeviceFaults(ctx context.Context, deviceID, protocol, jobType string) ([]RecoveredFault, error) {
+	rows, err := r.db.QueryContext(ctx, `UPDATE tmf_alarms a SET state = 'cleared', cleared_at = now()
+		  FROM jobs j
+		 WHERE a.device_id = $1::uuid AND a.alarm_type = 'DeviceFault' AND a.state IN ('raised', 'acknowledged')
+		   AND a.details->>'protocol' = $2 AND j.id::text = a.details->>'jobId' AND j.type = $3
+		RETURNING COALESCE(a.account_id, ''), COALESCE(a.probable_cause, ''), a.source_key`, deviceID, protocol, jobType)
+	if err != nil {
+		return nil, fmt.Errorf("recover device faults: %w", err)
+	}
+	defer rows.Close()
+	var out []RecoveredFault
+	for rows.Next() {
+		var f RecoveredFault
+		if err := rows.Scan(&f.AccountID, &f.Code, &f.ConditionKey); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) CreateServiceProblem(ctx context.Context, externalID, accountID, serviceID, problemType, description, priority, alarmID string) (*ServiceProblemRecord, error) {
 	return r.CreateServiceProblemRich(ctx, externalID, accountID, serviceID, problemType, description, priority, alarmID, nil, nil, "", "", "")
 }

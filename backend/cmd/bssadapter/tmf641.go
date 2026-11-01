@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -59,6 +60,19 @@ func tmf641UnassignReason(item tmf641ItemRequest, swap bool) string {
 	return bss.ReasonReturn
 }
 
+// sameTMF641Order compares a stored order with a new request after both
+// pass through the request type, so key order and fields the ACS ignores
+// do not count as a difference.
+func sameTMF641Order(stored json.RawMessage, req tmf641OrderRequest) bool {
+	var prev tmf641OrderRequest
+	if json.Unmarshal(stored, &prev) != nil {
+		return false
+	}
+	a, _ := json.Marshal(prev)
+	b, _ := json.Marshal(req)
+	return bytes.Equal(a, b)
+}
+
 func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 	var req tmf641OrderRequest
 	if json.NewDecoder(r.Body).Decode(&req) != nil || strings.TrimSpace(req.ExternalID) == "" || strings.TrimSpace(req.AccountID) == "" || len(req.OrderItem) == 0 {
@@ -78,7 +92,14 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 404, "ErrNotFound", "no such service order")
 			return
 		}
+		// The same externalId with another order is a client bug, not a
+		// replay: answering with the first order would hide it.
+		if !sameTMF641Order(existing.RawRequest, req) {
+			writeError(w, http.StatusConflict, "ErrIdempotencyKeyReused", "this externalId was already used for a different order")
+			return
+		}
 		items, _ := h.mappings.ServiceOrderItems(r.Context(), existing.ID)
+		w.Header().Set("Idempotent-Replayed", "true")
 		writeJSON(w, 200, tmf641OrderResponse(existing, items))
 		return
 	}
@@ -175,7 +196,9 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 			_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "COMPLETED", "")
 		} else if item.Action == "delete" {
 			reason := tmf641UnassignReason(item, false)
-			if execErr := h.mappings.UnassignDevice(r.Context(), req.AccountID, roleOrDefault(item.Role), reason); execErr != nil {
+			// Nothing in the role is what the delete asks for: done, as
+			// the reconciler's recovery path also decides.
+			if execErr := h.mappings.UnassignDevice(r.Context(), req.AccountID, roleOrDefault(item.Role), reason); execErr != nil && !errors.Is(execErr, bss.ErrNoDeviceForRole) {
 				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", execErr.Error())
 				items[i].Status = "FAILED"
 				for j := i + 1; j < len(items); j++ {

@@ -94,7 +94,7 @@ func (h *handler) saleResponse(o *onboarding.Onboarding) saleResponse {
 		Warnings: planWarnings(o.BSSServicePlan, o.ServicePlanID != nil),
 	}
 	if o.State == onboarding.StatePlanned && o.DeviceID == nil && o.Source == "bss" && h.saleTTL > 0 {
-		s.ExpiresAt = utc(ptr(o.CreatedAt.Add(h.saleTTL)))
+		s.ExpiresAt = utc(ptr(o.UpdatedAt.Add(h.saleTTL)))
 	}
 	return s
 }
@@ -142,7 +142,6 @@ func (h *handler) expireSales(ctx context.Context) {
 		h.logger.Error("failed to expire sales", "err", err)
 		return
 	}
-	at := time.Now().UTC()
 	for _, o := range expired {
 		h.logger.Info("sale expired", "onboarding_id", o.ID, "account_id", o.AccountRef)
 		if err := h.auditor.Record(ctx, "bss:"+o.AccountRef, "", "OnboardingExpired", map[string]any{
@@ -150,18 +149,91 @@ func (h *handler) expireSales(ctx context.Context) {
 		}); err != nil {
 			h.logger.Error("failed to write audit record", "err", err)
 		}
-		payload, _ := json.Marshal(map[string]any{
-			"onboardingId": o.ID, "externalId": o.ExternalRef, "serialNumber": o.ExpectedSerial,
-			"state": onboarding.StateCancelled, "previousState": onboarding.StatePlanned,
-			"reason": o.StateReason, "reasonCode": onboarding.CodeTTLExpired, "source": o.Source,
-		})
-		key := fmt.Sprintf("onboarding-%s-%s-%s-%d", o.ID, onboarding.StatePlanned, onboarding.StateCancelled, at.UnixNano())
-		customer := ""
-		if o.CustomerID != nil {
-			customer = *o.CustomerID
-		}
-		if _, err := h.mappings.CreateCustomerEvent(ctx, customer, key, o.AccountRef, "", "OnboardingStateChangeEvent", payload, at); err != nil {
-			h.logger.Error("failed to publish onboarding event", "err", err, "onboarding_id", o.ID)
-		}
+		h.publishSaleChange(ctx, &o, onboarding.StatePlanned)
 	}
+}
+
+// publishSaleChange records the OnboardingStateChangeEvent for a change
+// made here (cmd/acs publishes the reconciler's), in the sale's customer's
+// stream. o is the sale after the change.
+func (h *handler) publishSaleChange(ctx context.Context, o *onboarding.Onboarding, previous string) {
+	at := time.Now().UTC()
+	payload, _ := json.Marshal(map[string]any{
+		"onboardingId": o.ID, "externalId": o.ExternalRef, "serialNumber": o.ExpectedSerial,
+		"state": o.State, "previousState": previous, "reason": o.StateReason, "reasonCode": o.StateCode, "source": o.Source,
+	})
+	key := fmt.Sprintf("onboarding-%s-%s-%s-%d", o.ID, previous, o.State, at.UnixNano())
+	customer, device := "", ""
+	if o.CustomerID != nil {
+		customer = *o.CustomerID
+	}
+	if o.DeviceID != nil {
+		device = *o.DeviceID
+	}
+	if _, err := h.mappings.CreateCustomerEvent(ctx, customer, key, o.AccountRef, device, "OnboardingStateChangeEvent", payload, at); err != nil {
+		h.logger.Error("failed to publish onboarding event", "err", err, "onboarding_id", o.ID)
+	}
+}
+
+// retrySale is POST /bss/v1/onboardings/{id}/retry: a held or failed sale
+// of one of the caller's accounts starts again (PLANNED, or CONTACTED once
+// its CPE connected) after the BSS fixed the cause, e.g. sold the SIM the
+// CPE reports. The reconciler re-checks everything on the next Inform, so a
+// retry that fixed nothing holds again.
+func (h *handler) retrySale(w http.ResponseWriter, r *http.Request) {
+	h.changeSale(w, r, "OnboardingRetried", func(ctx context.Context, id string) error { return h.onboarding.Retry(ctx, id) },
+		"only an ON_HOLD or FAILED sale can be retried")
+}
+
+// cancelSale is POST /bss/v1/onboardings/{id}/cancel: the sale is
+// CANCELLED (its serial free for a new sale, an account mapping it wrote
+// ended, a TMF641 item waiting for it FAILED). A sale in service is ended
+// with a TMF641 delete instead.
+func (h *handler) cancelSale(w http.ResponseWriter, r *http.Request) {
+	h.changeSale(w, r, "OnboardingCancelled", func(ctx context.Context, id string) error { return h.onboarding.Cancel(ctx, id) },
+		"an IN_SERVICE or CANCELLED sale cannot be cancelled")
+}
+
+func (h *handler) changeSale(w http.ResponseWriter, r *http.Request, action string, change func(context.Context, string) error, refusal string) {
+	id := r.PathValue("id")
+	var o *onboarding.Onboarding
+	var err error
+	if h.onboarding != nil {
+		o, err = h.onboarding.Get(r.Context(), id)
+	}
+	if err != nil && !errors.Is(err, onboarding.ErrNotFound) {
+		h.logger.Error("failed to load sale", "err", err)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+	if o == nil || o.AccountRef == "" {
+		if h.authorizeBSSAccount(w, r, bss.ScopeTMFExecute, "") {
+			writeError(w, http.StatusNotFound, "ErrNotFound", "resource not found")
+		}
+		return
+	}
+	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFExecute, o.AccountRef) {
+		return
+	}
+	if err := change(r.Context(), o.ID); errors.Is(err, onboarding.ErrNotFound) {
+		writeError(w, http.StatusConflict, "ErrSaleWrongState", refusal+"; it is "+o.State)
+		return
+	} else if err != nil {
+		h.logger.Error("failed to change sale", "err", err, "onboarding_id", o.ID)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+	after, err := h.onboarding.Get(r.Context(), o.ID)
+	if err != nil {
+		h.logger.Error("failed to reload sale", "err", err, "onboarding_id", o.ID)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return
+	}
+	if err := h.auditor.Record(r.Context(), "bss:"+o.AccountRef, "", action, map[string]any{
+		"onboarding_id": o.ID, "account_id": o.AccountRef, "from": o.State, "to": after.State,
+	}); err != nil {
+		h.logger.Error("failed to write audit record", "err", err)
+	}
+	h.publishSaleChange(r.Context(), after, o.State)
+	writeJSON(w, http.StatusOK, h.saleResponse(after))
 }

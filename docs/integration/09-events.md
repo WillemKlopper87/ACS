@@ -39,7 +39,8 @@ in your own records.
 | `FirmwareChanged` | The reported software version changed (learning it the first time is not a change) | `previousVersion`, `version`, `ouiSerial` |
 | `OnboardingStateChangeEvent` | A sale moved state ([ONBOARDING.md](../ONBOARDING.md)) | `onboardingId`, `externalId`, `serialNumber`, `state`, `previousState`, `reason`, `reasonCode`, `source` |
 | `IdentityMismatch` | The CPE or SIM is not what was sold | `onboardingId`, `externalId`, `serialNumber`, `reasonCode`, `reason` (masked identifiers) |
-| `DeviceFault`, `DeviceRecovered` | A device fault was raised or cleared | `protocol`, `faultCode`, `message` / `recoveredAt` |
+| `DeviceFault` | The CPE answered a job with a fault (an alarm is raised for the condition) | `protocol`, `jobId`, `faultCode`, `message` |
+| `DeviceRecovered` | A later job of the same type on that CPE succeeded, clearing the alarm; once per alarm | `protocol`, `faultCode`, `conditionKey`, `recoveredAt` |
 | `CellularStateChanged` | Registration, operator, cell, RAT, SIM status or APN changed | `protocol`, `changes` |
 
 **`reasonCode`** values: `DEVICE_OTHER_CUSTOMER`, `SIM_MISMATCH`,
@@ -124,8 +125,9 @@ caller's customer's events with `sequence > after`, oldest first:
 
 ## Errors on these endpoints
 
-All errors use `{"error": "<code>", "message": "<text>"}` (problem+json comes,
-versioned, in I3).
+Errors are RFC 9457 problems (`type`, `title`, `status`, `detail`, `code`) that
+keep the older `error` and `message` keys; see
+[02-integration-model.md §3](02-integration-model.md#3-error-classes--what-to-retry-and-what-not-to).
 
 | Status | `error` | When |
 |---|---|---|

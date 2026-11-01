@@ -192,6 +192,9 @@ func main() {
 	mux.HandleFunc("GET /bss/v1/webhooks", metrics.InstrumentHTTP("GET /bss/v1/webhooks", h.listWebhookSubscriptions))
 	mux.HandleFunc("DELETE /bss/v1/webhooks/{id}", metrics.InstrumentHTTP("DELETE /bss/v1/webhooks/{id}", h.deleteWebhookSubscription))
 	mux.HandleFunc("GET /bss/v1/onboardings/{id}", metrics.InstrumentHTTP("GET /bss/v1/onboardings/{id}", h.getSale))
+	mux.HandleFunc("POST /bss/v1/onboardings/{id}/retry", metrics.InstrumentHTTP("POST /bss/v1/onboardings/{id}/retry", h.retrySale))
+	mux.HandleFunc("POST /bss/v1/onboardings/{id}/cancel", metrics.InstrumentHTTP("POST /bss/v1/onboardings/{id}/cancel", h.cancelSale))
+	mux.HandleFunc("GET /bss/v1/devices", metrics.InstrumentHTTP("GET /bss/v1/devices", h.listCustomerDevices))
 	mux.HandleFunc("GET /bss/v1/events", metrics.InstrumentHTTP("GET /bss/v1/events", h.listEvents))
 	mux.HandleFunc("GET /bss/v1/webhooks/{id}/deliveries", metrics.InstrumentHTTP("GET /bss/v1/webhooks/{id}/deliveries", h.listWebhookDeliveries))
 	mux.HandleFunc("POST /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver", metrics.InstrumentHTTP("POST /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver", h.redeliverWebhook))
@@ -245,7 +248,7 @@ func main() {
 		// missing token is rejected (401) without ever touching the rate
 		// limiter — otherwise an attacker could spray distinct bogus
 		// tokens to dodge a per-token bucket entirely.
-		Handler:           withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(mux))),
+		Handler:           withProblemMediaType(withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(mux)))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second, // every BSS route is a small JSON exchange
 		WriteTimeout:      60 * time.Second,
@@ -498,16 +501,10 @@ func (h *handler) clientRevoked(ctx context.Context, clientID string) bool {
 	return revoked
 }
 
-// errorEnvelope matches the BSS integration guide §4 error shape.
-type errorEnvelope struct {
-	Error   string `json:"error"`
-	Message string `json:"message"`
-}
-
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(errorEnvelope{Error: code, Message: message})
+	_ = json.NewEncoder(w).Encode(newProblem(status, code, message))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -574,7 +571,12 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFWrite, req.AccountID) {
 		return
 	}
+	h.idempotent(w, r, req.AccountID, "mapping.create", req, func(w http.ResponseWriter) { h.createMappingAuthorized(w, r, req) })
+}
 
+// createMappingAuthorized is createMapping once the request is valid and
+// the caller may write the account.
+func (h *handler) createMappingAuthorized(w http.ResponseWriter, r *http.Request, req createMappingRequest) {
 	// Resolve and validate device_uuid *before* writing anything. Doing
 	// this after AssignDevice used to commit the row, then reject the
 	// caller with a 400 that left the role slot wedged — their corrected

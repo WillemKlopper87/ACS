@@ -107,7 +107,7 @@ func TestSaleExpiresWithoutDeviceContact(t *testing.T) {
 	if again, _ := h.onboarding.Get(ctx, o.ID); again.State != onboarding.StatePlanned {
 		t.Fatalf("a fresh sale expired: %s", again.State)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE onboardings SET created_at = now() - interval '2 hours' WHERE id = $1`, o.ID); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE onboardings SET created_at = now() - interval '2 hours', updated_at = now() - interval '2 hours' WHERE id = $1`, o.ID); err != nil {
 		t.Fatal(err)
 	}
 	h.syncPreProvisioned(ctx)

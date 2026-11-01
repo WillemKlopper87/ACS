@@ -124,6 +124,16 @@ the caller's accounts: `state`, `reason_code`, `reason`, `service_plan`, `plan_m
 `device_id` once the CPE connected, timestamps in UTC, and `expires_at` while PLANNED.
 Another customer's sale reads as 404. No SIM identifiers.
 
+**Retry and cancel from the BSS.** `POST /bss/v1/onboardings/{id}/retry` (scope
+`tmf:execute`) starts an ON_HOLD or FAILED sale again once the BSS fixed the cause (for
+example sold the SIM the CPE reports); the ACS re-checks on the CPE's next contact.
+`POST /bss/v1/onboardings/{id}/cancel` cancels a sale that is not in service. Both answer
+with the sale, emit an `OnboardingStateChangeEvent`, and give `409 ErrSaleWrongState`
+when the state does not allow it.
+
+**Devices.** `GET /bss/v1/devices?limit=&cursor=` lists the customer's devices with their
+current account, role, mapping status and reachability, in pages (`next_cursor`).
+
 **What happens next** (cmd/bssadapter, every 15 s):
 
 | Onboarding | Account mapping | Order item |
@@ -138,8 +148,8 @@ in the console. Cancelling the TMF641 order while its item awaits the device can
 sale. Retrying an order is safe: the same serial and account get the same onboarding;
 another account cannot take over an open sale.
 
-**Expiry.** A sale no CPE has contacted within **`ACS_BSS_SALE_TTL`** (a Go duration,
-default `720h` = 30 days; `0` disables) is **CANCELLED** with reason code `TTL_EXPIRED`
+**Expiry.** A sale no CPE has contacted within **`ACS_BSS_SALE_TTL`** of its last change
+(a Go duration, default `720h` = 30 days; `0` disables) is **CANCELLED** with reason code `TTL_EXPIRED`
 and an `OnboardingStateChangeEvent`; its TMF641 item FAILS and later items are skipped.
 The serial is then free for a new sale. A sale whose CPE connected never expires, even
 when held: an operator decides.

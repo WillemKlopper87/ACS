@@ -61,6 +61,21 @@ timestamp to retry (`ORD-123-retry-2`). That is a *new* order, and it will
 dispatch a *second* change to the device. Retry means byte-identical
 resubmission.
 
+**The other writes have keys too:**
+
+| Write | Idempotency key | Same key, different request |
+|---|---|---|
+| TMF641 service order | `externalId` | `409 ErrIdempotencyKeyReused` |
+| TMF640 `PATCH /service/{id}` | `X-Idempotency-Key` header (required) | `409 ErrIdempotencyKeyReused` |
+| `POST /bss/v1/mappings` (incl. `pre_provision`) | `Idempotency-Key` header (optional; per account; kept 24 h) | `409 ErrIdempotencyKeyReused` |
+
+A replay answers with the first response and `Idempotent-Replayed: true`
+(TMF641 answers `200` with the order as it is now). With `Idempotency-Key`,
+a retry that arrives while the first request still runs gets
+`409 ErrIdempotencyKeyInFlight` with `Retry-After`; a `5xx` is not kept, so
+its retry runs again. Without the key a repeated mapping gets
+`409 ErrRoleAlreadyAssigned`, so send one.
+
 Order intent is recorded durably **before** dispatch is attempted, and a
 background reconciler retries failed dispatches with exponential backoff,
 dead-lettering after repeated failure. Your retry and ours cooperate
@@ -75,18 +90,26 @@ rather than compounding.
 | `404` | `ErrDeviceNotMapped` | Permanent | The device is unknown or the account has no active mapping. |
 | `404` | `ErrJobNotFound` | Permanent | Wrong `command_key`. |
 | `409` | `ErrRoleAlreadyAssigned` | Needs a decision | The role is occupied. Unassign or swap — do not retry. |
+| `409` | `ErrIdempotencyKeyReused` | Permanent | A key reused for a different request. A bug on the caller's side. |
+| `409` | `ErrIdempotencyKeyInFlight` | **Retryable** | The first request with the key still runs; retry after `Retry-After`. |
+| `409` | `ErrSaleWrongState` | Permanent | The sale's state does not allow the retry or cancel. Read the sale. |
 | `429` | — | **Retryable** | Back off and retry. **Not** an auth problem. |
 | `502` | `ErrACSUnreachable` | **Retryable** | Internal ACS engine unavailable. Back off and retry. |
 | `500` | `ErrInternal` | **Retryable**, and report it | Back off, retry, and tell us. |
 
-Every error body has the same shape:
+Every error is an RFC 9457 problem that keeps the older keys:
 
 ```json
-{ "error": "ErrInvalidRequest", "message": "human-readable detail" }
+{ "type": "urn:acs:problem:v1:ErrInvalidRequest", "title": "Invalid request", "status": 400,
+  "detail": "human-readable detail", "code": "ErrInvalidRequest",
+  "error": "ErrInvalidRequest", "message": "human-readable detail" }
 ```
 
-Switch on `error`, not on `message` — messages are for humans and may be
-reworded.
+Send `Accept: application/problem+json` to get that media type; otherwise
+it is `application/json`. Switch on `code` (= `error`), not on `detail` —
+details are for humans and may be reworded. The codes are a closed list
+(`ProblemCode` in `openapi-bssadapter.yaml`); a new code comes only with a
+new problem version (`v1` in `type`).
 
 **Blanket retry-everything is wrong here.** Retrying a `400` hides a real
 defect behind noise; retrying a `409` will never succeed. Classify first.

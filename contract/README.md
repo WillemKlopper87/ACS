@@ -11,17 +11,28 @@ and the response `body`.
 |---|---|
 | `oauth-token-customer-bound` | Token response of a customer-bound client (`customer_id`) |
 | `mapping-create` | First write to a new account; the account and device join the caller's customer |
-| `mapping-pre-provision` | `pre_provision` for an unseen CPE: 202, `AWAITING_DEVICE` |
+| `mapping-pre-provision` | `pre_provision` for an unseen CPE: 202, `AWAITING_DEVICE`, `href` and `Location` to the sale read, `plan_matched` |
+| `mapping-idempotency-key` | `Idempotency-Key` on a mapping: first answer, replay (`Idempotent-Replayed`), same key with another body (409) |
+| `mapping-unknown-plan` | A plan code the ACS does not know: `plan_matched: false` and a `PLAN_NOT_FOUND` warning |
+| `sale-read` | `GET /bss/v1/onboardings/{id}`, then an unknown sale as a problem (`application/problem+json`) |
+| `sale-retry-cancel` | A held sale retried by the BSS, cancelled, and cancelled again (409 `ErrSaleWrongState`) |
+| `devices-page` | `GET /bss/v1/devices` in pages with `next_cursor` |
+| `tmf641-delete-order` | TMF641 delete without `unassignReason`: completed |
+| `tmf641-repeat-external-id` | The same `externalId` again: the same order replays (200), another order is 409 |
+| `tmf641-delete-unmapped` | A delete of a role with no device: completed |
 | `tmf641-add-awaiting-device` | TMF641 add for an unseen CPE; the modify behind it stays `PENDING` |
 | `events-replay` | Replay page in the event envelope, then the empty page after it |
 | `webhook-create`, `webhook-deliveries`, `webhook-rotate-secret` | Subscription, delivery view with the last error, secret rotation |
-| `webhook-bodies` | One delivered webhook body per event type (DeviceSeen, DeviceUnreachable, FirmwareChanged, CellularStateChanged, OnboardingStateChangeEvent ON_HOLD and CONTACTED, IdentityMismatch), as sent, from real CWMP Informs to cmd/acs |
+| `webhook-bodies` | One delivered webhook body per event type (DeviceSeen, DeviceUnreachable, FirmwareChanged, CellularStateChanged, DeviceFault, DeviceRecovered, OnboardingStateChangeEvent, IdentityMismatch), as sent, from real CWMP sessions with cmd/acs |
 | `tmf640-patch-monitor` | TMF640 PATCH with `X-Idempotency-Key`, its replay, the Monitor, an unknown Monitor (404) |
 | `not-found-other-account` | Another customer's account reads as 404 |
 
 Secrets, tokens and SIM identifiers are redacted. Ids, timestamps and sequence
 numbers are real values from the recording; compare shapes and states, not
-these values.
+these values. Exchanges keep the response headers an integration acts on
+(`headers`: `Location`, `Idempotent-Replayed`, `Content-Type`, `Retry-After`)
+and the request headers that matter (`request_headers`). Errors are RFC 9457
+problems that keep the older `error`/`message` keys.
 
 **Not yet a versioned contract.** These fixtures follow the branch they were
 recorded on and change with it until the contract is tagged. Re-record with

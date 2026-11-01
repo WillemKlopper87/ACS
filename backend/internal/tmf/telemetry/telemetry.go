@@ -93,6 +93,35 @@ func PublishRecovery(ctx context.Context, sink Sink, accountID, deviceID, protoc
 	return sink.ClearAlarm(ctx, accountID, deviceID, ConditionKey(protocol, deviceID, code))
 }
 
+// faultRecoverer clears a device's fault alarms (bss.Repository).
+type faultRecoverer interface {
+	RecoverDeviceFaults(ctx context.Context, deviceID, protocol, jobType string) ([]bss.RecoveredFault, error)
+}
+
+// PublishRecoveries records a DeviceRecovered event for each of a device's
+// DeviceFault alarms that a successful job of jobType clears. Only alarms
+// actually cleared get an event, so a device that never faulted, or a
+// second success, emits nothing.
+func PublishRecoveries(ctx context.Context, sink Sink, deviceID, protocol, jobType string) error {
+	recoverer, ok := sink.(faultRecoverer)
+	if !ok || strings.TrimSpace(deviceID) == "" {
+		return nil
+	}
+	recovered, err := recoverer.RecoverDeviceFaults(ctx, deviceID, protocol, jobType)
+	if err != nil {
+		return err
+	}
+	at := time.Now().UTC()
+	for _, f := range recovered {
+		key := SourceKey(protocol, deviceID, "recovery|"+f.ConditionKey+"|"+at.Format(time.RFC3339Nano))
+		payload, _ := json.Marshal(map[string]any{"protocol": protocol, "faultCode": f.Code, "conditionKey": f.ConditionKey, "recoveredAt": at})
+		if _, err := sink.CreateEvent(ctx, key, f.AccountID, deviceID, "", "DeviceRecovered", payload, at); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CellularStateChange is one field's observed transition, used only for the
 // event payload — the alarm/fault lifecycle is untouched by cellular state.
 type CellularStateChange struct {

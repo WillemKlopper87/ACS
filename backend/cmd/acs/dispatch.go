@@ -271,6 +271,11 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 		h.publishTMFFault(ctx, deviceID, job.ID, "CWMP", code, msg)
 		return
 	}
+	if h.tmfEvents != nil {
+		if err := telemetry.PublishRecoveries(ctx, h.tmfEvents, deviceID, "CWMP", job.Type); err != nil {
+			h.logger.Warn("failed to publish TMF recovery", "error", err, "device_id", deviceID)
+		}
+	}
 
 	switch job.Type {
 	case jobs.TypeSetParameter:

@@ -80,6 +80,12 @@ paths:
     post:
       tags: [Mappings]
       summary: Upsert an account-device mapping, resolved by oui_serial against the real devices table
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 255 }
+          description: "Optional. Per account, kept 24 hours. A retry with the same key and body gets the first answer again (status, body, Location) with Idempotent-Replayed: true; the same key with another body is 409 ErrIdempotencyKeyReused; a retry while the first runs is 409 ErrIdempotencyKeyInFlight with Retry-After. 5xx answers are not kept."
       requestBody:
         required: true
         content:
@@ -299,6 +305,53 @@ paths:
       responses:
         "204": { description: Deleted }
 
+  /bss/v1/onboardings/{id}/retry:
+    post:
+      tags: [Mappings]
+      summary: Start a held (ON_HOLD) or FAILED sale again after fixing the cause (tmf:execute for customer-bound clients)
+      description: "The sale goes back to PLANNED, or CONTACTED once its CPE connected, and the ACS re-checks everything on the CPE's next contact: a retry that fixed nothing holds again. Emits an OnboardingStateChangeEvent."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The sale after the retry, content: { application/json: { schema: { $ref: "#/components/schemas/Sale" } } } }
+        "404": { description: "Unknown, or another customer's, sale", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "409": { description: "ErrSaleWrongState: the sale is not ON_HOLD or FAILED", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/onboardings/{id}/cancel:
+    post:
+      tags: [Mappings]
+      summary: Cancel a sale that is not in service (tmf:execute for customer-bound clients)
+      description: "The sale is CANCELLED: its serial is free for a new sale, an account mapping it wrote is ended (corrected), a TMF641 item waiting for it FAILS. End a sale in service with a TMF641 delete. Emits an OnboardingStateChangeEvent."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The cancelled sale, content: { application/json: { schema: { $ref: "#/components/schemas/Sale" } } } }
+        "404": { description: "Unknown, or another customer's, sale", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "409": { description: "ErrSaleWrongState: the sale is IN_SERVICE or already CANCELLED", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/devices:
+    get:
+      tags: [Mappings]
+      summary: The caller's customer's devices with their current account and reachability, in pages (tmf:read for customer-bound clients)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, schema: { type: string }, description: "Opaque; next_cursor of the previous page" }
+        - { name: customer_id, in: query, schema: { type: string }, description: "Global clients only (required for them); a customer-bound client reads its own customer" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/CustomerDevice" } }
+                  next_cursor: { type: string, description: "Absent on the last page" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { description: "customer_id names another customer", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
   /bss/v1/onboardings/{id}:
     get:
       tags: [Mappings]
@@ -460,9 +513,21 @@ components:
         created_at: { type: string, format: date-time }
     ErrorEnvelope:
       type: object
+      required: [type, title, status, detail, code, error, message]
+      description: "RFC 9457 problem details (application/problem+json when the client sends Accept: application/problem+json, else application/json), keeping the older error/message keys. code is stable within the problem contract version (v1 in type)."
       properties:
-        error: { type: string, example: ErrInvalidRequest }
-        message: { type: string }
+        type: { type: string, example: "urn:acs:problem:v1:ErrInvalidRequest" }
+        title: { type: string, example: Invalid request }
+        status: { type: integer, example: 400 }
+        detail: { type: string }
+        code: { $ref: "#/components/schemas/ProblemCode" }
+        error: { $ref: "#/components/schemas/ProblemCode" }
+        message: { type: string, description: "Same as detail" }
+
+    ProblemCode:
+      type: string
+      description: "Closed list. New codes come only with a new problem contract version."
+      enum: [ErrInvalidRequest, ErrNotFound, ErrInternal, ErrACSUnreachable, ErrDeviceNotMapped, ErrDeviceNotFound, ErrUnsupportedAction, ErrUnauthorized, ErrJobNotFound, ErrInvalidRelation, ErrConflict, ErrServiceTerminated, ErrServiceNotActive, ErrRoleAlreadyAssigned, ErrDeviceAlreadyAssigned, ErrReplayNeedsCustomer, ErrRateLimited, ErrPreProvisionRefused, ErrIdempotencyKeyReused, ErrIdempotencyKeyInFlight, ErrSaleWrongState, ErrGlobalClientsDisabled, ErrClientNotCustomerBound, invalid_token, insufficient_scope, invalid_request, invalid_client, invalid_scope, unsupported_grant_type, server_error]
 
     Mapping:
       type: object
@@ -475,6 +540,18 @@ components:
         role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "What the device does for this account. One active device per role per account." }
         plan_matched: { type: boolean, description: "On create, when service_plan was given: whether it names an ACS service plan" }
         warnings: { type: array, items: { $ref: "#/components/schemas/SaleWarning" } }
+
+    CustomerDevice:
+      type: object
+      required: [id, oui_serial, online_status]
+      properties:
+        id: { type: string }
+        oui_serial: { type: string }
+        account_id: { type: string, description: "Its current BSS account, if mapped" }
+        role: { type: string }
+        mapping_status: { type: string, enum: [PENDING_ACTIVE, ACTIVE, SUSPENDED, TERMINATED] }
+        online_status: { type: string, enum: [ONLINE, OFFLINE, UNREACHABLE] }
+        last_inform_at: { type: string, format: date-time }
 
     SaleWarning:
       type: object

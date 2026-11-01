@@ -52,4 +52,12 @@ func TestTMF641DeleteWithoutReasonRecordsAReturn(t *testing.T) {
 	if got := reasonOf(newID); got != "return" {
 		t.Fatalf("delete reason = %q, want return", got)
 	}
+
+	// The role is empty now: deleting it again is already done.
+	code, resp = postTMF641(t, h, tmf641OrderRequest{ExternalID: "SO-del-again", AccountID: "acct-del", OrderItem: []tmf641ItemRequest{
+		{Action: "delete", Role: "gateway"},
+	}})
+	if code != http.StatusCreated || resp["state"] != "completed" {
+		t.Fatalf("delete of an empty role = %d %v", code, resp)
+	}
 }

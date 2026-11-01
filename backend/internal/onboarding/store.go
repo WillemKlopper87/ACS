@@ -402,8 +402,8 @@ func (r *Repository) Cancel(ctx context.Context, id string) error {
 func (r *Repository) ExpireUncontacted(ctx context.Context, source string, ttl time.Duration, reason string, limit int) ([]Onboarding, error) {
 	rows, err := r.db.QueryContext(ctx, `UPDATE onboardings SET state = 'CANCELLED', state_code = $3, state_reason = $4, updated_at = now()
 		WHERE id IN (SELECT id FROM onboardings
-			WHERE source = $1 AND state = 'PLANNED' AND device_id IS NULL AND created_at < now() - make_interval(secs => $2::float8)
-			ORDER BY created_at LIMIT $5 FOR UPDATE SKIP LOCKED)
+			WHERE source = $1 AND state = 'PLANNED' AND device_id IS NULL AND updated_at < now() - make_interval(secs => $2::float8)
+			ORDER BY updated_at LIMIT $5 FOR UPDATE SKIP LOCKED)
 		RETURNING `+onboardingColumns, source, ttl.Seconds(), CodeTTLExpired, reason, limit)
 	if err != nil {
 		return nil, fmt.Errorf("expire sales: %w", err)
