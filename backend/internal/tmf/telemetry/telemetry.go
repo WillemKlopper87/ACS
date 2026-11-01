@@ -19,6 +19,24 @@ type Sink interface {
 	ClearAlarm(context.Context, string, string, string) error
 }
 
+// DeviceAccount returns the BSS account a device is currently mapped to,
+// "" when it has none, for a device event's account_id. The account is a
+// BSS account id, never the ACS customer: the event's customer is
+// assigned from the device when the event is stored (migration 0090).
+func DeviceAccount(ctx context.Context, sink Sink, deviceID string) string {
+	lookup, ok := sink.(interface {
+		CurrentAccountForDevice(context.Context, string) (string, error)
+	})
+	if !ok {
+		return ""
+	}
+	account, err := lookup.CurrentAccountForDevice(ctx, deviceID)
+	if err != nil {
+		return ""
+	}
+	return account
+}
+
 type Fault struct {
 	AccountID, DeviceID, JobID, Protocol, Code, Message string
 	At                                                  time.Time
@@ -73,6 +91,35 @@ func PublishRecovery(ctx context.Context, sink Sink, accountID, deviceID, protoc
 		return err
 	}
 	return sink.ClearAlarm(ctx, accountID, deviceID, ConditionKey(protocol, deviceID, code))
+}
+
+// faultRecoverer clears a device's fault alarms (bss.Repository).
+type faultRecoverer interface {
+	RecoverDeviceFaults(ctx context.Context, deviceID, protocol, jobType string) ([]bss.RecoveredFault, error)
+}
+
+// PublishRecoveries records a DeviceRecovered event for each of a device's
+// DeviceFault alarms that a successful job of jobType clears. Only alarms
+// actually cleared get an event, so a device that never faulted, or a
+// second success, emits nothing.
+func PublishRecoveries(ctx context.Context, sink Sink, deviceID, protocol, jobType string) error {
+	recoverer, ok := sink.(faultRecoverer)
+	if !ok || strings.TrimSpace(deviceID) == "" {
+		return nil
+	}
+	recovered, err := recoverer.RecoverDeviceFaults(ctx, deviceID, protocol, jobType)
+	if err != nil {
+		return err
+	}
+	at := time.Now().UTC()
+	for _, f := range recovered {
+		key := SourceKey(protocol, deviceID, "recovery|"+f.ConditionKey+"|"+at.Format(time.RFC3339Nano))
+		payload, _ := json.Marshal(map[string]any{"protocol": protocol, "faultCode": f.Code, "conditionKey": f.ConditionKey, "recoveredAt": at})
+		if _, err := sink.CreateEvent(ctx, key, f.AccountID, deviceID, "", "DeviceRecovered", payload, at); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CellularStateChange is one field's observed transition, used only for the

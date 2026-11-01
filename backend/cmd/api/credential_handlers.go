@@ -125,7 +125,9 @@ func (h *handler) rotateDeviceCredential(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	job, err := h.jobs.Create(r.Context(), id, jobs.TypeSetParameter, jobs.SetParameterPayload{
+	// Rotation owns the CPE's ACS and Connection Request credentials, which
+	// every other write path is refused (parameters.ProtectedReason).
+	job, err := h.jobs.Create(jobs.AllowProtectedWrites(r.Context(), "credential rotation"), id, jobs.TypeSetParameter, jobs.SetParameterPayload{
 		Parameters: []jobs.ParameterWrite{
 			{Name: usernamePath, Value: username, Type: "xsd:string"},
 			{Name: passwordPath, Value: password, Type: "xsd:string"},

@@ -36,7 +36,7 @@ describe("mesh helpers", () => {
     expect(gatewayName(fastMile, {})).toBe("3TG02241 · CSC25430018F");
     expect(gatewayName(null, { gateway_oui_serial: "A4FC77+3TG02241+X" })).toBe("A4FC77+3TG02241+X");
     expect(gatewayName(null, {})).toBe("its gateway");
-    expect(deviceLink("gw 1")).toBe("/fleet?device=gw%201");
+    expect(deviceLink("gw 1")).toBe("/devices/gw%201/overview");
   });
 
   it("warns that satellite recovery depends on the mesh backhaul", () => {

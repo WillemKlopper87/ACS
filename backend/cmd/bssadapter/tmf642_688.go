@@ -94,7 +94,7 @@ func (h *handler) createTMF688Hub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims, ok := h.tmfPrincipal(w, r, bss.ScopeTMFWrite)
-	if !ok || !tmfAccountAllowed(w, claims, strings.TrimSpace(req.AccountID)) {
+	if !ok || !h.accountAllowed(w, r, claims, strings.TrimSpace(req.AccountID)) {
 		return
 	}
 	var account *string
@@ -123,6 +123,20 @@ func (h *handler) listTMF688Hubs(w http.ResponseWriter, r *http.Request) {
 	allowedAccounts := map[string]struct{}{}
 	for _, id := range claims.AccountIDs {
 		allowedAccounts[id] = struct{}{}
+	}
+	if claims.CustomerID != "" {
+		owned, err := h.mappings.OwnedAccounts(r.Context(), claims.CustomerID)
+		if err != nil {
+			writeError(w, 500, "ErrInternal", "internal error")
+			return
+		}
+		listed := allowedAccounts
+		allowedAccounts = map[string]struct{}{}
+		for id := range owned {
+			if _, ok := listed[id]; ok || len(listed) == 0 {
+				allowedAccounts[id] = struct{}{}
+			}
+		}
 	}
 	out := make([]map[string]any, 0, len(subs))
 	for _, s := range subs {
@@ -199,7 +213,7 @@ func (h *handler) listTMF688Events(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "ErrInvalidRequest", "accountId is required for scoped clients")
 		return
 	}
-	if accountID != "" && !tmfAccountAllowed(w, claims, accountID) {
+	if accountID != "" && !h.accountAllowed(w, r, claims, accountID) {
 		return
 	}
 	events, err := h.mappings.ListEvents(r.Context(), accountID, 100)
@@ -232,7 +246,7 @@ func (h *handler) listTMF642Alarms(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "ErrInvalidRequest", "accountId is required for scoped clients")
 		return
 	}
-	if accountID != "" && !tmfAccountAllowed(w, claims, accountID) {
+	if accountID != "" && !h.accountAllowed(w, r, claims, accountID) {
 		return
 	}
 	alarms, err := h.mappings.ListAlarms(r.Context(), accountID, strings.TrimSpace(r.URL.Query().Get("state")), 100)

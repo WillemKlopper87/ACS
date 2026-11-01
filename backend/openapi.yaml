@@ -65,6 +65,8 @@ tags:
     description: Curated named device sets, used by bulk actions/schedules/templates
   - name: Scheduled Jobs
     description: Fixed-interval recurring job dispatch (build plan §4 Phase 7)
+  - name: Onboarding
+    description: Sale to service - sites, service plans and per-CPE onboarding driven by Informs
   - name: Policies
     description: Continuous compliance enforcement, checked on every Inform
   - name: Config Templates
@@ -836,12 +838,19 @@ paths:
     put:
       tags: [Tenancy]
       summary: Assign a device to a customer (tenancy.manage permission)
+      description: |
+        A scoped operator may assign only a customer within their scope and may not clear the customer (null). A
+        device actively mapped to a BSS account is refused (409) for any customer other than the account's owner:
+        unassign it from the account first.
       parameters: [{ $ref: "#/components/parameters/DeviceId" }]
       requestBody:
         required: true
         content: { application/json: { schema: { type: object, properties: { customer_id: { type: string, nullable: true } } } } }
       responses:
         "204": { description: Assigned }
+        "400": { description: "customer_id outside the caller's scope (or null for a scoped caller)" }
+        "404": { description: "No such device, or outside the caller's scope" }
+        "409": { description: "The device is mapped to a BSS account of another customer" }
 
   /api/v1/devices/{id}/projects:
     put:
@@ -1929,6 +1938,125 @@ paths:
       responses:
         "204": { description: Disabled }
 
+  # --- Onboarding ---
+  /api/v1/sites:
+    post:
+      tags: [Onboarding]
+      summary: Create a site, where CPEs are installed (tenancy.manage permission)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SiteInput" }
+      responses:
+        "201": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Site" } } } }
+        "400": { description: Invalid, or a scoped operator named no customer within their scope }
+        "409": { description: The customer already has a site with this external_ref }
+    get:
+      tags: [Onboarding]
+      summary: List sites (a scoped operator sees only the sites of their customers)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Site" } } } } } } }
+
+  /api/v1/sites/{id}:
+    get:
+      tags: [Onboarding]
+      summary: Get a site
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Site" } } } }
+        "404": { description: Not found or outside your scope }
+
+  /api/v1/service-plans:
+    post:
+      tags: [Onboarding]
+      summary: Create a service plan, what a sale means for the CPE (tenancy.manage permission)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ServicePlanInput" }
+      responses:
+        "201": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ServicePlan" } } } }
+        "400": { description: "Invalid (e.g. an allowed network that is not 5-6 digit MCC+MNC, or a template of another customer)" }
+        "409": { description: A plan with this code already exists }
+    get:
+      tags: [Onboarding]
+      summary: List service plans (shared plans plus the own plans of a scoped operator's customers)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/ServicePlan" } } } } } } }
+
+  /api/v1/service-plans/{id}:
+    get:
+      tags: [Onboarding]
+      summary: Get a service plan
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ServicePlan" } } } }
+        "404": { description: Not found or outside your scope }
+
+  /api/v1/onboardings:
+    post:
+      tags: [Onboarding]
+      summary: Record a sale (expected_serial) or claim a CPE that already connected (device_id) (tenancy.manage permission)
+      description: |
+        Starts PLANNED. cmd/acs then moves it on each Inform, and again before a session closes: CONTACTED (bound to
+        the device, which gets the customer and site of the sale), the SIM check (ON_HOLD if the ICCID/IMSI is not the
+        one sold, or the network of the IMSI is not in the allowed_plmns of the plan), SECURED (the CPE uses its own
+        credential or a certificate), DISCOVERED (when the plan needs it), CONFIGURING (the templates of the plan, then
+        its cellular profile last) and IN_SERVICE.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OnboardingInput" }
+      responses:
+        "201": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Onboarding" } } } }
+        "400": { description: Invalid, or a site or plan of another customer }
+        "409": { description: An open onboarding already exists for this serial number }
+    get:
+      tags: [Onboarding]
+      summary: List onboardings, most recently changed first
+      parameters:
+        - { name: state, in: query, required: false, schema: { $ref: "#/components/schemas/OnboardingState" } }
+        - { name: device_id, in: query, required: false, schema: { type: string }, description: "The onboardings of one device, newest first" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/Onboarding" } } } } } } }
+
+  /api/v1/onboardings/unclaimed:
+    get:
+      tags: [Onboarding]
+      summary: CPEs that connected with no onboarding (none for a scoped operator, as they have no customer yet)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/UnclaimedDevice" } } } } } } }
+
+  /api/v1/onboardings/{id}:
+    get:
+      tags: [Onboarding]
+      summary: Get an onboarding
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Onboarding" } } } }
+        "404": { description: Not found or outside your scope }
+
+  /api/v1/onboardings/{id}/cancel:
+    post:
+      tags: [Onboarding]
+      summary: Cancel an open onboarding (tenancy.manage permission)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Onboarding" } } } }
+        "409": { description: Already IN_SERVICE or CANCELLED }
+
+  /api/v1/onboardings/{id}/retry:
+    post:
+      tags: [Onboarding]
+      summary: Re-run every check from CONTACTED for a FAILED or ON_HOLD onboarding (tenancy.manage permission)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Onboarding" } } } }
+        "409": { description: Not FAILED or ON_HOLD }
+
   # --- Config Templates ---
   /api/v1/config-templates:
     post:
@@ -2214,10 +2342,32 @@ paths:
                 global_access:
                   type: boolean
                   default: false
-                  description: "Deliberate fleet-wide TMF access. Mutually exclusive with account_ids."
+                  description: "Deliberate fleet-wide TMF access. Mutually exclusive with account_ids and customer_id."
+                customer_id:
+                  type: string
+                  nullable: true
+                  description: "Bind the client to one ACS customer (an ISP). It acts only on BSS accounts that customer owns and claims a new account on its first write; account_ids may narrow it further. Required for every client when cmd/bssadapter runs with ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true."
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/BSSOAuthClientCreateResult" } } } }
         "400": { description: Invalid OAuth authorization policy }
+
+  /api/v1/bss/accounts/{account_id}/customer:
+    put:
+      tags: [BSS Admin]
+      summary: Assign a BSS account to an ACS customer (superadmin) — for accounts used before customer binding, which a bound client may not claim, or to move an account
+      parameters: [{ name: account_id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [customer_id]
+              properties:
+                customer_id: { type: string }
+      responses:
+        "204": { description: Assigned }
+        "400": { description: Missing or unknown customer_id }
 
   /api/v1/bss/oauth-clients/{id}:
     delete:
@@ -2819,11 +2969,12 @@ components:
 
     ParameterInput:
       type: object
-      required: [name, value]
+      required: [name]
       properties:
         name: { type: string }
-        value: { type: string }
+        value: { type: string, description: "Required unless secret_handle is set" }
         type: { type: string, example: "xsd:string" }
+        secret_handle: { type: string, description: "A sealed BSS secret (POST /bss/v1/secrets) in place of value. Accepted only from the BSS adapter's service identity on PUT /devices/{id}/parameters, never on bulk actions; the gateway opens it when it sends the write." }
 
     CachedParameter:
       type: object
@@ -2943,6 +3094,122 @@ components:
         next_run_at: { type: string, format: date-time }
         last_run_at: { type: string, format: date-time, nullable: true }
         created_at: { type: string, format: date-time }
+
+    OnboardingState:
+      type: string
+      enum: [PLANNED, CONTACTED, SECURED, DISCOVERED, CONFIGURING, IN_SERVICE, ON_HOLD, FAILED, CANCELLED]
+
+    SiteInput:
+      type: object
+      required: [name]
+      properties:
+        customer_id: { type: string, nullable: true, description: "Required for a scoped operator. Null = platform-global (visible to unscoped operators only)." }
+        external_ref: { type: string, nullable: true, description: "The BSS premise id; unique per customer." }
+        name: { type: string }
+        street: { type: string }
+        suburb: { type: string }
+        city: { type: string }
+        postal_code: { type: string }
+        country: { type: string }
+        latitude: { type: number, nullable: true, description: "Give both latitude and longitude, or neither." }
+        longitude: { type: number, nullable: true }
+        region_id: { type: string, nullable: true }
+
+    Site:
+      allOf:
+        - $ref: "#/components/schemas/SiteInput"
+        - type: object
+          required: [id, created_at]
+          properties:
+            id: { type: string }
+            created_at: { type: string, format: date-time }
+
+    CellularProfile:
+      type: object
+      description: Written only where the discovered model of the device has the field writable, and only when the value differs.
+      properties:
+        apn: { type: string }
+        dnn: { type: string, description: "5G SA data network name (a vendor field, e.g. X_ALU-COM_DNN)" }
+        mtu: { type: integer }
+        bootstrap_apn: { type: string }
+
+    ServicePlanInput:
+      type: object
+      required: [code, name]
+      properties:
+        customer_id: { type: string, nullable: true, description: "Required for a scoped operator. Null = a shared plan." }
+        code: { type: string, description: "The BSS servicePlan code" }
+        name: { type: string }
+        template_ids: { type: array, items: { type: string }, description: "Config templates applied in order, before the cellular profile" }
+        cellular: { $ref: "#/components/schemas/CellularProfile" }
+        allowed_plmns: { type: array, items: { type: string }, description: "MCC+MNC (5-6 digits) the IMSI of the SIM must start with; empty allows any" }
+        require_discovery: { type: boolean, description: "Forced true when cellular is set" }
+
+    ServicePlan:
+      allOf:
+        - $ref: "#/components/schemas/ServicePlanInput"
+        - type: object
+          required: [id, created_at]
+          properties:
+            id: { type: string }
+            created_at: { type: string, format: date-time }
+
+    OnboardingInput:
+      type: object
+      properties:
+        customer_id: { type: string, nullable: true, description: "Required for a scoped operator; defaults to the customer of a claimed device." }
+        device_id: { type: string, nullable: true, description: "Claim a CPE that already connected; fills expected_serial and expected_oui." }
+        expected_oui: { type: string }
+        expected_serial: { type: string, description: "Required unless device_id is given" }
+        expected_imei: { type: string }
+        expected_iccid: { type: string }
+        expected_imsi: { type: string }
+        account_ref: { type: string, description: "The BSS account reference; no personal data is stored here." }
+        site_id: { type: string, nullable: true }
+        service_plan_id: { type: string, nullable: true }
+        role: { type: string, enum: [gateway, extender, ont, other] }
+        commercial_model: { type: string, enum: [retail, wholesale, enterprise] }
+        external_ref: { type: string }
+
+    Onboarding:
+      type: object
+      required: [id, expected_serial, state, state_reason, role, commercial_model, source, config_jobs, created_at, updated_at]
+      properties:
+        id: { type: string }
+        customer_id: { type: string, nullable: true }
+        device_id: { type: string, nullable: true }
+        expected_oui: { type: string }
+        expected_serial: { type: string }
+        expected_imei: { type: string, description: "Masked" }
+        expected_iccid: { type: string, description: "Masked" }
+        expected_imsi: { type: string, description: "Masked; keeps the MCC+MNC" }
+        account_ref: { type: string }
+        site_id: { type: string, nullable: true }
+        service_plan_id: { type: string, nullable: true }
+        role: { type: string }
+        commercial_model: { type: string }
+        source: { type: string, enum: [console, bss, import] }
+        external_ref: { type: string }
+        state: { $ref: "#/components/schemas/OnboardingState" }
+        state_reason: { type: string }
+        config_jobs: { type: array, items: { type: string }, description: "Command keys of the configuration jobs" }
+        requested_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        contacted_at: { type: string, format: date-time, nullable: true }
+        in_service_at: { type: string, format: date-time, nullable: true }
+
+    UnclaimedDevice:
+      type: object
+      required: [id, oui_serial, serial_number]
+      properties:
+        id: { type: string }
+        oui_serial: { type: string }
+        manufacturer: { type: string }
+        product_class: { type: string }
+        serial_number: { type: string }
+        online_status: { type: string }
+        last_inform_at: { type: string, format: date-time, nullable: true }
 
     Policy:
       type: object
@@ -3272,6 +3539,7 @@ components:
             enum: [tmf:read, tmf:write, tmf:execute, tmf:acknowledge]
         account_ids: { type: array, items: { type: string } }
         global_access: { type: boolean }
+        customer_id: { type: string, nullable: true, description: "The ACS customer the client is bound to; null for a global or account-listed client" }
         created_at: { type: string, format: date-time }
         revoked_at: { type: string, format: date-time, nullable: true }
 

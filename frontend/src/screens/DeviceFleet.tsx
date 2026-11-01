@@ -1,14 +1,14 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { Device } from "../api/types";
 import { DataTable } from "../components/DataTable";
 import { StatusBadge } from "../components/StatusBadge";
 import { timeAgo, fmtTime } from "../lib/format";
-import { DeviceDetail } from "./DeviceDetail";
+import { devicePath } from "../lib/deviceSections";
 import { useLive } from "../lib/useLive";
-import { useEscape, useSlashFocus } from "../lib/hotkeys";
+import { useSlashFocus } from "../lib/hotkeys";
 import { vendorGroup, vendorLabel } from "../lib/vendorFamily";
 
 // The backend's own maxPageSize (internal/devices/repository.go). This
@@ -27,24 +27,14 @@ export function DeviceFleet() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [vendorFilter, setVendorFilter] = useState("");
-  // The selected device rides in ?device= (audit P2.4: deep links) so a
-  // device drill-down can be shared/bookmarked and survives a reload.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get("device");
-  const setSelectedId = useCallback(
-    (id: string | null) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (id) next.set("device", id);
-          else next.delete("device");
-          return next;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
+  // A device opens in its own workspace, /devices/<id>/<section>. Links
+  // from before that (/fleet?device=<id>) still open the right device.
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const legacyDeviceId = searchParams.get("device");
+  useEffect(() => {
+    if (legacyDeviceId) navigate(devicePath(legacyDeviceId), { replace: true });
+  }, [legacyDeviceId, navigate]);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async (background = false) => {
@@ -68,7 +58,6 @@ export function DeviceFleet() {
 
   const [live, setLive] = useLive(() => load(true), 6000);
   useSlashFocus(searchRef);
-  useEscape(() => setSelectedId(null), selectedId !== null);
 
   // Grouped by vendor family so a Beacon reporting "ALCL" files under Nokia
   // with the FastMile it sits behind; the stored manufacturer is unchanged.
@@ -180,7 +169,7 @@ export function DeviceFleet() {
       {truncated && (
         <div className="banner info">
           Showing the first {devices.length.toLocaleString()} of {total.toLocaleString()} devices — the online and
-          reachability counts above, the vendor filter and the search below all cover only these. Use Fleet Control for
+          reachability counts above, the vendor filter and the search below all cover only these. Use Bulk actions for
           fleet-scale work.
         </div>
       )}
@@ -230,15 +219,13 @@ export function DeviceFleet() {
           data={filtered}
           columns={columns}
           getRowId={(d) => d.id}
-          selectedRowId={selectedId ?? undefined}
-          onRowClick={(d) => setSelectedId(selectedId === d.id ? null : d.id)}
+          onRowClick={(d) => navigate(devicePath(d.id))}
           emptyMessage="No devices match this filter."
           virtualize
           maxHeight="62vh"
         />
       )}
 
-      {selectedId && <DeviceDetail id={selectedId} onClose={() => setSelectedId(null)} />}
     </section>
   );
 }

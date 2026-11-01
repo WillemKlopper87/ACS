@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: ACS BSS/CRM Integration Adapter API
-  version: "1.0.0"
+  version: "1.1.1"
   description: >-
     The external-facing REST API served by cmd/bssadapter (build plan §5,
     bss-integration-guide.md). This is the boundary an external BSS/CRM
@@ -33,6 +33,8 @@ security:
   - oauth2ClientCredentials: []
 
 tags:
+  - name: Events
+    description: Event replay and the integration event envelope
   - name: Auth
     description: OAuth2 client-credentials token issuance (build plan §9, supersedes the legacy shared token)
   - name: Mappings
@@ -78,6 +80,12 @@ paths:
     post:
       tags: [Mappings]
       summary: Upsert an account-device mapping, resolved by oui_serial against the real devices table
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 255 }
+          description: "Optional. Per account, kept 24 hours. A retry with the same key and body gets the first answer again (status, body, Location) with Idempotent-Replayed: true; the same key with another body is 409 ErrIdempotencyKeyReused; a retry while the first runs is 409 ErrIdempotencyKeyInFlight with Retry-After. 5xx answers are not kept."
       requestBody:
         required: true
         content:
@@ -91,10 +99,42 @@ paths:
                 device_uuid: { type: string, description: "Optional — if supplied, must match what oui_serial actually resolves to" }
                 service_plan: { type: string }
                 role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "Optional. Defaults to gateway." }
+                pre_provision: { type: boolean, description: "For a device the ACS has not seen yet: record a sale (a PLANNED onboarding) and answer 202 instead of 404. The mapping is written PENDING_ACTIVE when the CPE first connects and becomes ACTIVE when its onboarding reaches IN_SERVICE. See docs/ONBOARDING.md." }
+                iccid: { type: string, description: "With pre_provision: the SIM sold with the CPE; the onboarding holds if the CPE reports another. Never echoed back." }
+                imsi: { type: string, description: "With pre_provision: as iccid. Its MCC+MNC is also checked against the plan's allowed networks." }
+                place:
+                  type: object
+                  description: "With pre_provision: where the CPE is installed. id is the BSS premise reference; a site is created on first use."
+                  properties:
+                    id: { type: string }
+                    name: { type: string }
+                    street: { type: string }
+                    city: { type: string }
+                    postalCode: { type: string }
+                    country: { type: string }
       responses:
         "200": { description: Mapping created/updated, content: { application/json: { schema: { $ref: "#/components/schemas/Mapping" } } } }
+        "202":
+          description: "pre_provision only: the device is unknown, so a sale was recorded and the mapping waits for the CPE. Location and href point to the sale read."
+          headers:
+            Location: { schema: { type: string }, description: "/bss/v1/onboardings/{onboarding_id}" }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account_id: { type: string }
+                  oui_serial: { type: string }
+                  service_plan: { type: string }
+                  role: { type: string }
+                  status: { type: string, enum: [AWAITING_DEVICE] }
+                  onboarding_id: { type: string }
+                  onboarding_state: { type: string }
+                  href: { type: string, description: "The sale read, GET /bss/v1/onboardings/{onboarding_id}" }
+                  plan_matched: { type: boolean, description: "Whether service_plan names an ACS service plan. False with a PLAN_NOT_FOUND warning when a code was given that matches none." }
+                  warnings: { type: array, items: { $ref: "#/components/schemas/SaleWarning" } }
         "400": { $ref: "#/components/responses/Error" }
-        "404": { description: "ErrDeviceNotMapped — no device found for that oui_serial", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "404": { description: "ErrDeviceNotMapped — no device found for that oui_serial (and pre_provision not set)", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
         "409": { description: "ErrRoleAlreadyAssigned — the account already has an active device in that role", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
 
   /bss/v1/mappings/{account_id}:
@@ -161,7 +201,7 @@ paths:
                 parameters:
                   type: object
                   additionalProperties: { type: string }
-                  description: "Business parameters, e.g. {wifi_ssid, wifi_password} for MODIFY_WIFI"
+                  description: "Business parameters, e.g. {wifi_ssid, wifi_password} for MODIFY_WIFI. Send wifi_password_handle (POST /bss/v1/secrets) instead of wifi_password to keep the passphrase out of the order and the job; the order claims the handle (400 ErrSecretHandleInvalid if it is unknown, expired, already used or another customer's). With ACS_BSS_REQUIRE_SECRET_HANDLES a plain wifi_password is 400 ErrInvalidRequest."
       responses:
         "202": { description: "Queued (or the existing order's current status, if a retry)", content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
         "400": { $ref: "#/components/responses/Error" }
@@ -233,7 +273,7 @@ paths:
   /bss/v1/webhooks:
     post:
       tags: [Webhooks]
-      summary: Subscribe to JOB_COMPLETED push notifications instead of polling Workflow C
+      summary: Subscribe to events (JOB_COMPLETED and the stream events of docs/integration/09-events.md) instead of polling
       requestBody:
         required: true
         content:
@@ -245,7 +285,7 @@ paths:
                 account_id: { type: string, nullable: true, description: "Required for account-scoped OAuth clients. Omit only with a globally-authorized client or the deprecated shared token." }
                 target_url: { type: string }
                 secret: { type: string, description: "HMAC-SHA256 signing secret — deliveries carry Webhook-Id, Webhook-Timestamp, and Webhook-Signature: v1,<mac> over '<Webhook-Id>.<Webhook-Timestamp>.<raw body>'. A whsec_<base64> secret (real Standard Webhooks format) gets base64-decoded key material and a base64-encoded <mac>, fully wire-compatible with an off-the-shelf Standard Webhooks verifier; any other secret keeps the legacy raw-key, hex-encoded scheme." }
-                event_types: { type: array, items: { type: string, enum: [JOB_COMPLETED, DeviceFault, DeviceRecovered, CellularStateChanged] } }
+                event_types: { type: array, items: { type: string, enum: [JOB_COMPLETED, DeviceSeen, DeviceUnreachable, FirmwareChanged, CellularStateChanged, DeviceFault, DeviceRecovered, OnboardingStateChangeEvent, IdentityMismatch] }, description: "Not validated: an unknown type is stored and never matches, so check the spelling." }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/WebhookSubscription" } } } }
     get:
@@ -264,6 +304,211 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         "204": { description: Deleted }
+
+  /bss/v1/onboardings/{id}/retry:
+    post:
+      tags: [Mappings]
+      summary: Start a held (ON_HOLD) or FAILED sale again after fixing the cause (tmf:execute for customer-bound clients)
+      description: "The sale goes back to PLANNED, or CONTACTED once its CPE connected, and the ACS re-checks everything on the CPE's next contact: a retry that fixed nothing holds again. Emits an OnboardingStateChangeEvent."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The sale after the retry, content: { application/json: { schema: { $ref: "#/components/schemas/Sale" } } } }
+        "404": { description: "Unknown, or another customer's, sale", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "409": { description: "ErrSaleWrongState: the sale is not ON_HOLD or FAILED", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/onboardings/{id}/cancel:
+    post:
+      tags: [Mappings]
+      summary: Cancel a sale that is not in service (tmf:execute for customer-bound clients)
+      description: "The sale is CANCELLED: its serial is free for a new sale, an account mapping it wrote is ended (corrected), a TMF641 item waiting for it FAILS. End a sale in service with a TMF641 delete. Emits an OnboardingStateChangeEvent."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The cancelled sale, content: { application/json: { schema: { $ref: "#/components/schemas/Sale" } } } }
+        "404": { description: "Unknown, or another customer's, sale", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "409": { description: "ErrSaleWrongState: the sale is IN_SERVICE or already CANCELLED", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/devices:
+    get:
+      tags: [Mappings]
+      summary: The caller's customer's devices with their current account and reachability, in pages (tmf:read for customer-bound clients)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, schema: { type: string }, description: "Opaque; next_cursor of the previous page" }
+        - { name: customer_id, in: query, schema: { type: string }, description: "Global clients only (required for them); a customer-bound client reads its own customer" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/CustomerDevice" } }
+                  next_cursor: { type: string, description: "Absent on the last page" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { description: "customer_id names another customer", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/onboardings/{id}:
+    get:
+      tags: [Mappings]
+      summary: Read a sale (a pre-provisioned onboarding) of one of the caller's accounts (tmf:read for customer-bound clients)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, description: "onboarding_id from the 202 of a pre_provision mapping, or from an OnboardingStateChangeEvent" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Sale" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { description: "Unknown, or another customer's, sale", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/events:
+    get:
+      tags: [Events]
+      summary: Replay the caller's events after a cursor (tmf:read for customer-bound clients)
+      description: |
+        Events of the caller's customer with sequence > after, oldest first, in the same envelope as webhooks
+        (docs/integration/09-events.md). A customer-bound client reads its own customer; a global client names one
+        with customer_id (empty = events that belong to no customer); account-listed clients are refused. Page by
+        passing next_after back as after. Sequence numbers increase strictly per customer but may skip a number; a
+        skipped number is never a lost event. gap=true means events after the cursor were removed by retention.
+      parameters:
+        - { name: after, in: query, required: false, schema: { type: integer, format: int64, minimum: 0, default: 0 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: customer_id, in: query, required: false, schema: { type: string }, description: "Global clients only" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, next_after, latest_sequence, purged_through, gap]
+                properties:
+                  events: { type: array, items: { $ref: "#/components/schemas/EventEnvelope" } }
+                  next_after: { type: integer, format: int64 }
+                  latest_sequence: { type: integer, format: int64 }
+                  purged_through: { type: integer, format: int64 }
+                  gap: { type: boolean }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { description: "insufficient_scope, ErrClientNotCustomerBound, or ErrReplayNeedsCustomer (account-listed client)" }
+
+  /bss/v1/secrets:
+    post:
+      tags: [Secrets]
+      summary: Store a secret and get a single-use handle to name in an order instead of the value (tmf:write)
+      description: |
+        The value is sealed (AES-256-GCM under ACS_BSS_SECRET_KEY, a key separate from the database credentials) and
+        never returned, logged, audited or put in an order, job or event. Name the handle as wifi_password_handle in
+        POST /bss/v1/orders, a TMF641 modify item, or as the WiFiPasswordHandle characteristic of a TMF640 PATCH.
+        The order claims it for its device; the ACS opens and deletes it when it sends the write to the CPE. A handle
+        is owned by the caller's customer (global clients: by global clients) and is useless to anyone else. It
+        expires after ttl_seconds (default and maximum: ACS_BSS_SECRET_TTL, 15 minutes unless configured); an
+        expired handle is deleted. ttl_seconds outside 60..ACS_BSS_SECRET_TTL, an empty value or one over 256 bytes is
+        400 ErrInvalidRequest. Checks run in this order: authentication and scope (401/403), TLS (403 ErrTLSRequired),
+        client kind (403 ErrClientNotCustomerBound), key configured (503 ErrSecretStoreDisabled), body (400).
+        A job that is dispatched again (a retry) or that waits past expiry fails with
+        SECRET_HANDLE_UNAVAILABLE: store the secret again and send a new order. Accepted only over TLS. Not
+        idempotent: a retried POST makes another handle and the unused one expires.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: string, minLength: 1, maxLength: 256, writeOnly: true }
+                ttl_seconds: { type: integer, minimum: 60, description: "At most ACS_BSS_SECRET_TTL" }
+      responses:
+        "201":
+          description: Stored (Cache-Control no-store)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [handle, expires_at]
+                properties:
+                  handle: { type: string, description: "sh_ plus 22 characters; not secret", example: sh_q3vY7l0aZb1c2D3e4F5g6h }
+                  expires_at: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { description: "insufficient_scope, ErrClientNotCustomerBound (account-listed client), or ErrTLSRequired", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "503": { description: "ErrSecretStoreDisabled: no ACS_BSS_SECRET_KEY", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/secrets/{handle}:
+    delete:
+      tags: [Secrets]
+      summary: Discard a handle that will not be used, claimed or not (tmf:write)
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { description: "Unknown, used, expired, or another customer's handle", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/webhooks/{id}/deliveries:
+    get:
+      tags: [Webhooks]
+      summary: The subscription's deliveries, newest first, with status, attempts and the last error (tmf:read)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [PENDING, DELIVERED, FAILED] } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/WebhookDelivery" } }
+        "404": { description: No such subscription for this caller }
+
+  /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver:
+    post:
+      tags: [Webhooks]
+      summary: Queue a delivery again from its first attempt, with the same Webhook-Id (tmf:write)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: delivery_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "202": { description: Queued }
+        "404": { description: No such subscription or delivery for this caller }
+
+  /bss/v1/webhooks/{id}/rotate-secret:
+    post:
+      tags: [Webhooks]
+      summary: Replace the signing secret; both secrets sign until the overlap ends (tmf:write)
+      description: |
+        The new secret is returned once. Until previous_secret_valid_until, Webhook-Signature carries one signature per
+        secret ("v1,<new> v1,<previous>"); verify by accepting if any signature matches.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                overlap_seconds: { type: integer, minimum: 0, maximum: 604800, default: 86400 }
+      responses:
+        "200":
+          description: Rotated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  secret: { type: string }
+                  previous_secret_valid_until: { type: string, format: date-time }
+        "404": { description: No such subscription for this caller }
 
 components:
   securitySchemes:
@@ -291,11 +536,55 @@ components:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
 
   schemas:
-    ErrorEnvelope:
+    EventEnvelope:
+      type: object
+      required: [id, type, occurred_at, sequence, data]
+      description: "Every integration event, in webhooks and replay. Webhook bodies also keep the older TMF688 keys (eventId, eventType, eventTime, sourceKey, accountId, deviceId, serviceId, event)."
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          description: "DeviceSeen, DeviceUnreachable, FirmwareChanged, DeviceFault, DeviceRecovered, CellularStateChanged, OnboardingStateChangeEvent, IdentityMismatch, and events posted to TMF688"
+        occurred_at: { type: string, format: date-time }
+        sequence: { type: integer, format: int64, description: "Strictly increasing per customer" }
+        customer_id: { type: string, nullable: true }
+        account_id: { type: string, nullable: true }
+        device:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            oui_serial: { type: string }
+        data: { type: object, description: "Event-specific; never secrets or full SIM identifiers" }
+    WebhookDelivery:
       type: object
       properties:
-        error: { type: string, example: ErrInvalidRequest }
-        message: { type: string }
+        id: { type: string, description: "The Webhook-Id header of every attempt" }
+        event_id: { type: string, description: "The envelope id of the event delivered; absent for JOB_COMPLETED" }
+        event_sequence: { type: integer, format: int64, description: "The event's sequence in its customer's stream; absent for JOB_COMPLETED" }
+        event_type: { type: string }
+        status: { type: string, enum: [PENDING, DELIVERED, FAILED] }
+        attempts: { type: integer }
+        last_attempt_at: { type: string, format: date-time, nullable: true }
+        last_error: { type: string }
+        created_at: { type: string, format: date-time }
+    ErrorEnvelope:
+      type: object
+      required: [type, title, status, detail, code, error, message]
+      description: "RFC 9457 problem details (application/problem+json when the client sends Accept: application/problem+json, else application/json), keeping the older error/message keys. code is stable within the problem contract version (v1 in type)."
+      properties:
+        type: { type: string, example: "urn:acs:problem:v1:ErrInvalidRequest" }
+        title: { type: string, example: Invalid request }
+        status: { type: integer, example: 400 }
+        detail: { type: string }
+        code: { $ref: "#/components/schemas/ProblemCode" }
+        error: { $ref: "#/components/schemas/ProblemCode" }
+        message: { type: string, description: "Same as detail" }
+
+    ProblemCode:
+      type: string
+      description: "Closed list. New codes come only with a new problem contract version."
+      enum: [ErrInvalidRequest, ErrNotFound, ErrInternal, ErrACSUnreachable, ErrDeviceNotMapped, ErrDeviceNotFound, ErrUnsupportedAction, ErrUnauthorized, ErrJobNotFound, ErrInvalidRelation, ErrConflict, ErrServiceTerminated, ErrServiceNotActive, ErrRoleAlreadyAssigned, ErrDeviceAlreadyAssigned, ErrReplayNeedsCustomer, ErrRateLimited, ErrPreProvisionRefused, ErrIdempotencyKeyReused, ErrIdempotencyKeyInFlight, ErrSaleWrongState, ErrGlobalClientsDisabled, ErrClientNotCustomerBound, ErrTLSRequired, ErrSecretStoreDisabled, ErrSecretHandleInvalid, invalid_token, insufficient_scope, invalid_request, invalid_client, invalid_scope, unsupported_grant_type, server_error]
 
     Mapping:
       type: object
@@ -306,13 +595,63 @@ components:
         service_plan: { type: string }
         status: { type: string, enum: [PENDING_ACTIVE, ACTIVE, SUSPENDED, TERMINATED] }
         role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "What the device does for this account. One active device per role per account." }
+        plan_matched: { type: boolean, description: "On create, when service_plan was given: whether it names an ACS service plan" }
+        warnings: { type: array, items: { $ref: "#/components/schemas/SaleWarning" } }
+
+    CustomerDevice:
+      type: object
+      required: [id, oui_serial, online_status]
+      properties:
+        id: { type: string }
+        oui_serial: { type: string }
+        account_id: { type: string, description: "Its current BSS account, if mapped" }
+        role: { type: string }
+        mapping_status: { type: string, enum: [PENDING_ACTIVE, ACTIVE, SUSPENDED, TERMINATED] }
+        online_status: { type: string, enum: [ONLINE, OFFLINE, UNREACHABLE] }
+        last_inform_at: { type: string, format: date-time }
+
+    SaleWarning:
+      type: object
+      required: [code, message]
+      description: "Something the BSS should fix that does not stop the sale."
+      properties:
+        code: { type: string, enum: [PLAN_NOT_FOUND] }
+        message: { type: string }
+
+    Sale:
+      type: object
+      required: [id, href, account_id, serial_number, plan_matched, state, created_at, updated_at]
+      description: "A BSS sale and where it is. Timestamps are UTC. No SIM identifiers; reason carries only masked ones."
+      properties:
+        id: { type: string }
+        href: { type: string }
+        account_id: { type: string }
+        external_id: { type: string, description: "The TMF641 order externalId that created the sale, if any" }
+        oui: { type: string }
+        serial_number: { type: string }
+        role: { type: string }
+        service_plan: { type: string }
+        plan_matched: { type: boolean }
+        state: { type: string, enum: [PLANNED, CONTACTED, SECURED, DISCOVERED, CONFIGURING, IN_SERVICE, ON_HOLD, FAILED, CANCELLED] }
+        reason_code: { type: string, description: "As OnboardingStateChangeEvent.reasonCode, including TTL_EXPIRED" }
+        reason: { type: string }
+        device_id: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        contacted_at: { type: string, format: date-time }
+        in_service_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, description: "While PLANNED: when the sale is cancelled (TTL_EXPIRED) if no CPE has connected. ACS_BSS_SALE_TTL, default 30 days." }
+        warnings: { type: array, items: { $ref: "#/components/schemas/SaleWarning" } }
 
     Order:
       type: object
       properties:
         order_tracking_id: { type: string }
-        command_key: { type: string }
-        status: { type: string }
+        command_key: { type: string, description: "Empty while PENDING_DISPATCH or DEAD_LETTERED" }
+        status:
+          type: string
+          enum: [QUEUED, PENDING_DISPATCH, DEAD_LETTERED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, AWAITING_DIAGNOSTICS_COMPLETE, SUCCESS, FAILED, TIMEOUT]
+          description: "QUEUED on a new order. A retried order reports PENDING_DISPATCH or DEAD_LETTERED until it reaches the ACS (outbox), then its job's status (JobStatus)."
         timestamp: { type: string, format: date-time }
 
     ParameterWrite:
@@ -320,8 +659,9 @@ components:
       required: [name, value]
       properties:
         name: { type: string, description: "Resolved device data-model path" }
-        value: { type: string }
+        value: { type: string, description: "***REDACTED*** for a secret path (a passphrase); empty for a write that names a secret_handle" }
         type: { type: string, example: string }
+        secret_handle: { type: string, description: "The sealed handle (POST /bss/v1/secrets) this write will be sent with" }
 
     JobStatus:
       type: object
@@ -349,7 +689,7 @@ components:
       type: object
       properties:
         path: { type: string, description: "Resolved device data-model path the order wrote" }
-        intended_value: { type: string, description: "The value the most recent order for this path sent" }
+        intended_value: { type: string, description: "The value the most recent order for this path sent; ***REDACTED*** for a secret path (status unverifiable), whether it was sent as a value or a handle" }
         actual_value: { type: string, description: "The device's currently cached value — omitted when status is unconfirmed or unverifiable" }
         actual_updated_at: { type: string, format: date-time }
         status: { type: string, enum: [match, drift, unknown, unconfirmed, unverifiable] }

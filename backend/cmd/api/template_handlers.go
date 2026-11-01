@@ -80,6 +80,13 @@ func (h *handler) createTemplate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name and at least one parameter are required", http.StatusBadRequest)
 		return
 	}
+	names := make([]string, 0, len(req.Parameters))
+	for _, p := range req.Parameters {
+		names = append(names, p.Name)
+	}
+	if refuseProtectedWrite(w, names...) {
+		return
+	}
 	if req.AutoApply && (req.ModelFilter == nil || *req.ModelFilter == "") {
 		http.Error(w, "auto_apply requires a non-empty model_filter — applying to every device on first contact is not supported", http.StatusBadRequest)
 		return

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"acs/internal/jobs"
 	"acs/internal/parameters"
 	"acs/internal/scheduler"
 )
@@ -96,6 +97,16 @@ func (h *handler) createScheduledJob(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("job_type %q cannot be scheduled; supported: %s",
 			req.JobType, strings.Join(scheduler.SchedulableJobTypeList(), ", ")), http.StatusBadRequest)
 		return
+	}
+	if req.JobType == jobs.TypeSetParameter {
+		var p jobs.SetParameterPayload
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			http.Error(w, "payload must be a SET_PARAMETER payload: {\"parameters\": [...]}", http.StatusBadRequest)
+			return
+		}
+		if refuseProtectedWrite(w, writeNames(p)...) {
+			return
+		}
 	}
 
 	// audit P0.6/H-3: a schedule fires unattended, long after this

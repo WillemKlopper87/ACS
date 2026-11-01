@@ -43,10 +43,13 @@ func ServiceOrderState(cancelled bool, states []string) string {
 	if len(states) == 0 {
 		return "acknowledged"
 	}
+	// SKIPPED items (behind a failed one) did nothing: they neither block
+	// completion nor make a failed order partial.
 	completed, failed, outstanding := 0, 0, 0
 	for _, state := range states {
 		switch state {
-		case "COMPLETED", "SKIPPED":
+		case "SKIPPED":
+		case "COMPLETED":
 			completed++
 		case "FAILED":
 			failed++

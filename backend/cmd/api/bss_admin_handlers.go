@@ -32,6 +32,8 @@ type createBSSOAuthClientRequest struct {
 	Scopes       []string `json:"scopes"`
 	AccountIDs   []string `json:"account_ids"`
 	GlobalAccess bool     `json:"global_access"`
+	// CustomerID binds the client to one ACS customer (an ISP).
+	CustomerID *string `json:"customer_id"`
 }
 
 // createBSSOAuthClient registers a new OAuth2 client-credentials
@@ -51,7 +53,11 @@ func (h *handler) createBSSOAuthClient(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
-	policy := bss.OAuthPolicy{Scopes: req.Scopes, AccountIDs: req.AccountIDs, GlobalAccess: req.GlobalAccess}
+	if req.CustomerID != nil && strings.TrimSpace(*req.CustomerID) != "" && !h.customerExists(r, strings.TrimSpace(*req.CustomerID)) {
+		http.Error(w, "customer_id does not exist", http.StatusBadRequest)
+		return
+	}
+	policy := bss.OAuthPolicy{Scopes: req.Scopes, AccountIDs: req.AccountIDs, GlobalAccess: req.GlobalAccess, CustomerID: req.CustomerID}
 	client, secret, err := h.bssOAuthClients.CreateClientWithPolicy(r.Context(), req.Name, policy)
 	if errors.Is(err, bss.ErrInvalidOAuthPolicy) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -65,7 +71,7 @@ func (h *handler) createBSSOAuthClient(w http.ResponseWriter, r *http.Request) {
 	actor := operatorFromRequest(r)
 	if err := h.auditor.Record(r.Context(), actor, "", "BSSOAuthClientCreated", map[string]any{
 		"name": req.Name, "client_id": client.ClientID, "scopes": client.Scopes,
-		"account_ids": client.AccountIDs, "global_access": client.GlobalAccess,
+		"account_ids": client.AccountIDs, "global_access": client.GlobalAccess, "customer_id": client.CustomerID,
 	}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
@@ -501,4 +507,50 @@ func (h *handler) troubleshootOrderDispatch(w http.ResponseWriter, r *http.Reque
 	})
 	result := h.doAdapterCall(r, "Workflow B: real MODIFY_WIFI order dispatch (not a dry run)", http.MethodPost, "/bss/v1/orders", body, true)
 	writeJSON(w, http.StatusOK, result)
+}
+
+// customerExists reports whether an ACS customer id is real, so a bad
+// customer_id is a 400 rather than a foreign-key 500.
+func (h *handler) customerExists(r *http.Request, id string) bool {
+	customers, err := h.tenancy.ListCustomers(r.Context())
+	if err != nil {
+		return false
+	}
+	for _, c := range customers {
+		if c.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// setBSSAccountCustomer assigns a BSS account to an ACS customer. Customer-
+// bound integrations claim new accounts themselves; this is for accounts
+// that predate customer binding (which they may not claim) and for moving
+// an account between customers, which only an operator may do.
+func (h *handler) setBSSAccountCustomer(w http.ResponseWriter, r *http.Request) {
+	accountID := strings.TrimSpace(r.PathValue("account_id"))
+	var req struct {
+		CustomerID string `json:"customer_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.CustomerID) == "" {
+		http.Error(w, "customer_id is required", http.StatusBadRequest)
+		return
+	}
+	if !h.customerExists(r, strings.TrimSpace(req.CustomerID)) {
+		http.Error(w, "customer_id does not exist", http.StatusBadRequest)
+		return
+	}
+	actor := operatorFromRequest(r)
+	if err := h.bssMappings.AssignAccountOwner(r.Context(), accountID, strings.TrimSpace(req.CustomerID), "operator:"+actor); err != nil {
+		h.logger.Error("failed to assign bss account customer", "err", err, "account_id", accountID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := h.auditor.Record(r.Context(), actor, "", "BSSAccountCustomerAssigned", map[string]any{
+		"account_id": accountID, "customer_id": req.CustomerID,
+	}); err != nil {
+		h.logger.Error("failed to write audit record", "err", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

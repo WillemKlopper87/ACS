@@ -77,6 +77,10 @@ func TranslateModifyWifiNetworks(params map[string]string, view *WiFiNetworksVie
 	if len(view.Primary) == 0 {
 		return nil, fmt.Errorf("%w: MODIFY_WIFI: the device has no primary (non-guest) Wi-Fi network", ErrUnsupportedAction)
 	}
+	pass, handle, err := passphraseInput(params)
+	if err != nil {
+		return nil, err
+	}
 	var out []ParameterWrite
 	for _, n := range view.Primary {
 		if ssid := params["wifi_ssid"]; ssid != "" {
@@ -85,11 +89,12 @@ func TranslateModifyWifiNetworks(params map[string]string, view *WiFiNetworksVie
 			}
 			out = append(out, ParameterWrite{Name: n.NamePath, Value: ssid, Type: "xsd:string"})
 		}
-		if pass := params["wifi_password"]; pass != "" {
+		if pass != "" || handle != "" {
 			if n.PassphrasePath == "" || !n.PassphraseWritable {
 				return nil, fmt.Errorf("%w: MODIFY_WIFI: passphrase of network %d is not writable", ErrUnsupportedAction, n.Instance)
 			}
-			out = append(out, ParameterWrite{Name: n.PassphrasePath, Value: pass, Type: "xsd:string"})
+			// One handle on every band: the gateway opens it once per job.
+			out = append(out, ParameterWrite{Name: n.PassphrasePath, Value: pass, Type: "xsd:string", SecretHandle: handle})
 		}
 		if raw := params["wifi_enabled"]; raw != "" {
 			value, err := cwmpBoolean(raw)
@@ -103,7 +108,7 @@ func TranslateModifyWifiNetworks(params map[string]string, view *WiFiNetworksVie
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("%w: MODIFY_WIFI requires at least one of wifi_ssid, wifi_password, wifi_enabled", ErrInvalidParameters)
+		return nil, fmt.Errorf("%w: MODIFY_WIFI requires at least one of wifi_ssid, wifi_password (or wifi_password_handle), wifi_enabled", ErrInvalidParameters)
 	}
 	return out, nil
 }

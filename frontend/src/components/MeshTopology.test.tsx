@@ -52,7 +52,7 @@ describe("MeshTopology", () => {
     );
     expect(screen.getByText(/1 mesh satellite behind this gateway/)).toBeTruthy();
     const link = screen.getByText("Beacon 3.1 · ALCLB0000001") as HTMLAnchorElement;
-    expect(link.getAttribute("href")).toBe("/fleet?device=sat-1");
+    expect(link.getAttribute("href")).toBe("/devices/sat-1/overview");
     expect(screen.getByText(/Nokia \(ALCL\) · Beacon 3\.1 · last inform/)).toBeTruthy();
     expect(screen.getByText("REBOOTING")).toBeTruthy();
   });
@@ -64,7 +64,7 @@ describe("MeshTopology", () => {
       </MemoryRouter>,
     );
     expect(screen.getByText(/Mesh satellite of/)).toBeTruthy();
-    expect((screen.getByText("Lab FastMile") as HTMLAnchorElement).getAttribute("href")).toBe("/fleet?device=gw-1");
+    expect((screen.getByText("Lab FastMile") as HTMLAnchorElement).getAttribute("href")).toBe("/devices/gw-1/overview");
   });
 
   it("shows the reported identity when the gateway is not readable", () => {

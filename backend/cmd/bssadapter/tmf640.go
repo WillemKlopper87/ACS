@@ -52,7 +52,7 @@ func (h *handler) serviceFromMapping(r *http.Request, m *bss.AccountDeviceMappin
 		ID:           m.ID,
 		Href:         tmfServiceBasePath + m.ID,
 		Category:     "customer facing service",
-		State:        "active",
+		State:        tmf640State(m),
 		RelatedParty: []tmfRelatedParty{{ID: m.AccountID}},
 	}
 
@@ -94,6 +94,19 @@ func (h *handler) serviceFromMapping(r *http.Request, m *bss.AccountDeviceMappin
 		svc.ServiceCharacteristic = append(svc.ServiceCharacteristic, tmfServiceCharacteristic{Name: "SSIDStatus", Value: reason})
 	}
 	return svc, nil
+}
+
+// tmf640State reports a mapping as a TMF ServiceStateType: reserved while a
+// pre-provisioned CPE is onboarding (PENDING_ACTIVE), terminated once its
+// assignment has ended, otherwise from the mapping status.
+func tmf640State(m *bss.AccountDeviceMapping) string {
+	if m.UnassignedAt != nil {
+		return "terminated"
+	}
+	if s := tmf638State(m.Status); s != "" {
+		return s
+	}
+	return "active"
 }
 
 // getService implements GET /service/{id}.

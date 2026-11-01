@@ -9,10 +9,12 @@ import (
 	"acs/internal/diagnostics"
 	"acs/internal/jobs"
 	"acs/internal/parameters"
+	"acs/internal/secretstore"
 	"acs/internal/tmf/telemetry"
 	"acs/internal/wifiinsights"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"time"
 )
@@ -61,6 +63,50 @@ func prefixed(prefix string, leaves []string) []string {
 		out[i] = prefix + leaf
 	}
 	return out
+}
+
+// openSecretHandles returns job with each sealed BSS secret handle in a
+// SET_PARAMETER payload replaced by its value, opening (and so deleting)
+// each handle once. The copy is only rendered, never stored: the job row
+// keeps the handle. A verification read-back needs no value and opens
+// nothing.
+func (h *handler) openSecretHandles(ctx context.Context, job *jobs.Job) (*jobs.Job, error) {
+	if job.Type != jobs.TypeSetParameter {
+		return job, nil
+	}
+	var payload jobs.SetParameterPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil || payload.VerificationPending {
+		return job, nil
+	}
+	values := map[string]string{}
+	for i, p := range payload.Parameters {
+		if p.SecretHandle == "" {
+			continue
+		}
+		value, seen := values[p.SecretHandle]
+		if !seen {
+			if h.secrets == nil {
+				return nil, secretstore.ErrDisabled
+			}
+			v, err := h.secrets.Open(ctx, p.SecretHandle, job.DeviceID)
+			if err != nil {
+				return nil, fmt.Errorf("secret handle %s: %w", p.SecretHandle, err)
+			}
+			value, values[p.SecretHandle] = v, v
+		}
+		payload.Parameters[i].Value = value
+		payload.Parameters[i].SecretHandle = ""
+	}
+	if len(values) == 0 {
+		return job, nil
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	rendered := *job
+	rendered.Payload = body
+	return &rendered, nil
 }
 
 // renderJobRequest turns a leased job into the CWMP RPC request bytes to
@@ -271,6 +317,11 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 		h.publishTMFFault(ctx, deviceID, job.ID, "CWMP", code, msg)
 		return
 	}
+	if h.tmfEvents != nil {
+		if err := telemetry.PublishRecoveries(ctx, h.tmfEvents, deviceID, "CWMP", job.Type); err != nil {
+			h.logger.Warn("failed to publish TMF recovery", "error", err, "device_id", deviceID)
+		}
+	}
 
 	switch job.Type {
 	case jobs.TypeSetParameter:
@@ -312,7 +363,11 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 			values := make(map[string]parameters.CachedValue, len(payload.Parameters))
 			paths := make([]string, len(payload.Parameters))
 			for i, p := range payload.Parameters {
-				values[p.Name] = parameters.CachedValue{Value: p.Value, Type: p.Type, UpdatedAt: time.Now().UTC(), Source: parameters.SourceSetValues}
+				value := p.Value
+				if p.SecretHandle != "" {
+					value = parameters.SecretRedacted // set, from a handle; never "not set"
+				}
+				values[p.Name] = parameters.CachedValue{Value: value, Type: p.Type, UpdatedAt: time.Now().UTC(), Source: parameters.SourceSetValues}
 				paths[i] = p.Name
 			}
 			if err := h.params.Upsert(ctx, deviceID, values); err != nil {
@@ -776,15 +831,7 @@ func (h *handler) publishTMFFault(ctx context.Context, deviceID, jobID, protocol
 	if h.tmfEvents == nil {
 		return
 	}
-	d, err := h.devices.Get(ctx, deviceID)
-	if err != nil {
-		h.logger.Warn("failed to load device for TMF fault", "error", err)
-		return
-	}
-	account := ""
-	if d.CustomerID != nil {
-		account = *d.CustomerID
-	}
+	account := telemetry.DeviceAccount(ctx, h.tmfEvents, deviceID)
 	if err := telemetry.PublishFault(ctx, h.tmfEvents, telemetry.Fault{AccountID: account, DeviceID: deviceID, JobID: jobID, Protocol: protocol, Code: code, Message: message}); err != nil {
 		h.logger.Warn("failed to publish TMF fault", "error", err, "device_id", deviceID)
 	}

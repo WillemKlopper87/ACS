@@ -30,7 +30,7 @@ func newMappingTestHandler(t *testing.T) (context.Context, *handler, *sql.DB) {
 		t.Skip("ACS_TEST_POSTGRES_DSN not set — skipping DB-backed integration test")
 	}
 	ctx := context.Background()
-	db, err := store.Open(ctx, dsn)
+	db, err := store.OpenUTC(ctx, dsn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

@@ -1,0 +1,99 @@
+{
+  "name": "acs/tmf641-add-awaiting-device",
+  "description": "TMF641 add for an unseen CPE: the item is AWAITING_DEVICE and the modify behind it stays PENDING.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0520101, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/tmf-api/serviceOrdering/v4/serviceOrder",
+      "status": 201,
+      "mutating": true,
+      "body": {
+        "externalId": "SO-CONTRACT-1",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/5890b013-f318-4feb-99d7-c9fd8c9fd64c",
+        "id": "5890b013-f318-4feb-99d7-c9fd8c9fd64c",
+        "orderDate": "2026-11-01T19:10:25.839939Z",
+        "orderItem": [
+          {
+            "id": "7df60b40-9d35-4b2b-8488-b35962c0d4b0",
+            "action": "add",
+            "state": "AWAITING_DEVICE",
+            "role": "gateway"
+          },
+          {
+            "id": "144baefe-1cff-4b9a-ad5a-59f0088cc84e",
+            "action": "modify",
+            "state": "PENDING",
+            "role": "gateway"
+          }
+        ],
+        "relatedParty": [
+          {
+            "id": "contract.0003",
+            "role": "customer"
+          }
+        ],
+        "state": "acknowledged"
+      },
+      "request": {
+        "externalId": "SO-CONTRACT-1",
+        "accountId": "contract.0003",
+        "orderItem": [
+          {
+            "id": "1",
+            "action": "add",
+            "role": "gateway",
+            "ouiSerial": "A4FC77+3TG02241+CONTRACT03",
+            "servicePlan": "HOME-5G",
+            "imsi": "***REDACTED***",
+            "place": {
+              "id": "PREM-CONTRACT-2",
+              "name": "9 Elm St"
+            }
+          },
+          {
+            "id": "2",
+            "action": "modify",
+            "role": "gateway",
+            "parameters": {
+              "wifi_ssid": "Elm"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/tmf-api/serviceOrdering/v4/serviceOrder/SO-CONTRACT-1",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "externalId": "SO-CONTRACT-1",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/5890b013-f318-4feb-99d7-c9fd8c9fd64c",
+        "id": "5890b013-f318-4feb-99d7-c9fd8c9fd64c",
+        "orderDate": "2026-11-01T19:10:25.839939Z",
+        "orderItem": [
+          {
+            "id": "7df60b40-9d35-4b2b-8488-b35962c0d4b0",
+            "action": "add",
+            "state": "AWAITING_DEVICE",
+            "role": "gateway"
+          },
+          {
+            "id": "144baefe-1cff-4b9a-ad5a-59f0088cc84e",
+            "action": "modify",
+            "state": "PENDING",
+            "role": "gateway"
+          }
+        ],
+        "relatedParty": [
+          {
+            "id": "contract.0003",
+            "role": "customer"
+          }
+        ],
+        "state": "acknowledged"
+      }
+    }
+  ]
+}

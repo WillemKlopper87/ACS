@@ -179,11 +179,11 @@ func resolveDeviceID(ctx context.Context, q interface {
 // and a violation surfaces as ErrRoleAlreadyAssigned.
 func insertAssignment(ctx context.Context, q interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, id, accountID, deviceID, ouiSerial, role string, servicePlan any) error {
+}, id, accountID, deviceID, ouiSerial, role string, servicePlan any, status string) error {
 	_, err := q.ExecContext(ctx, `
 		INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, service_plan, status, role)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, id, accountID, deviceID, ouiSerial, servicePlan, StatusActive, role)
+	`, id, accountID, deviceID, ouiSerial, servicePlan, status, role)
 	if isUniqueViolation(err) {
 		return uniqueViolationErr(err, accountID, role)
 	}
@@ -204,15 +204,32 @@ func (r *Repository) DeviceIDForSerial(ctx context.Context, ouiSerial string) (s
 // AssignDevice resolves oui_serial against the devices table and records
 // that the device now serves the account in the given role.
 func (r *Repository) AssignDevice(ctx context.Context, accountID, ouiSerial, role, servicePlan string) (*AccountDeviceMapping, error) {
+	return r.AssignDeviceStatus(ctx, accountID, ouiSerial, role, servicePlan, StatusActive)
+}
+
+// AssignDeviceStatus is AssignDevice with the mapping's status: a
+// pre-provisioned CPE is assigned PENDING_ACTIVE on first contact and
+// becomes ACTIVE when its onboarding reaches IN_SERVICE.
+func (r *Repository) AssignDeviceStatus(ctx context.Context, accountID, ouiSerial, role, servicePlan, status string) (*AccountDeviceMapping, error) {
 	if !ValidRole(role) {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidRole, role)
 	}
-	deviceID, err := resolveDeviceID(ctx, r.db, ouiSerial)
+	// One transaction: a device only joins the account's customer when the
+	// mapping that needs it is written.
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin assignment: %w", err)
+	}
+	defer tx.Rollback()
+	deviceID, err := deviceForAccount(ctx, tx, ouiSerial, accountID)
 	if err != nil {
 		return nil, err
 	}
-	if err := insertAssignment(ctx, r.db, uuid.New().String(), accountID, deviceID, ouiSerial, role, nullIfEmpty(servicePlan)); err != nil {
+	if err := insertAssignment(ctx, tx, uuid.New().String(), accountID, deviceID, ouiSerial, role, nullIfEmpty(servicePlan), status); err != nil {
 		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit assignment: %w", err)
 	}
 	return r.getByAccountDevice(ctx, accountID, deviceID)
 }
@@ -276,7 +293,7 @@ func (r *Repository) SwapDevice(ctx context.Context, accountID, role, newOUISeri
 		return nil, fmt.Errorf("release old assignment: %w", err)
 	}
 
-	newDeviceID, err := resolveDeviceID(ctx, tx, newOUISerial)
+	newDeviceID, err := deviceForAccount(ctx, tx, newOUISerial, accountID)
 	if err != nil {
 		return nil, err // deferred Rollback restores the old assignment
 	}
@@ -284,7 +301,7 @@ func (r *Repository) SwapDevice(ctx context.Context, accountID, role, newOUISeri
 	if servicePlan.Valid {
 		plan = servicePlan.String
 	}
-	if err := insertAssignment(ctx, tx, uuid.New().String(), accountID, newDeviceID, newOUISerial, role, plan); err != nil {
+	if err := insertAssignment(ctx, tx, uuid.New().String(), accountID, newDeviceID, newOUISerial, role, plan, StatusActive); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

@@ -466,6 +466,8 @@ export interface BSSOAuthClient {
   scopes: string[];
   account_ids: string[];
   global_access: boolean;
+  /** The ACS customer (ISP) the client is bound to; null for global or account-listed clients. */
+  customer_id?: string | null;
   created_at: string;
   revoked_at?: string;
 }

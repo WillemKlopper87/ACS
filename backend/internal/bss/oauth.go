@@ -55,6 +55,9 @@ type OAuthPolicy struct {
 	Scopes       []string `json:"scopes"`
 	AccountIDs   []string `json:"account_ids"`
 	GlobalAccess bool     `json:"global_access"`
+	// CustomerID binds the client to one ACS customer (an ISP). It acts
+	// only on accounts that customer owns; AccountIDs may narrow it further.
+	CustomerID *string `json:"customer_id"`
 }
 
 func NormalizeOAuthPolicy(policy OAuthPolicy) (OAuthPolicy, error) {
@@ -65,13 +68,21 @@ func NormalizeOAuthPolicy(policy OAuthPolicy) (OAuthPolicy, error) {
 			return OAuthPolicy{}, fmt.Errorf("%w: unsupported scope %q", ErrInvalidOAuthPolicy, scope)
 		}
 	}
+	var customer *string
+	if policy.CustomerID != nil && strings.TrimSpace(*policy.CustomerID) != "" {
+		c := strings.TrimSpace(*policy.CustomerID)
+		customer = &c
+	}
 	if policy.GlobalAccess && len(accounts) > 0 {
 		return OAuthPolicy{}, fmt.Errorf("%w: global_access cannot be combined with account_ids", ErrInvalidOAuthPolicy)
 	}
-	if len(scopes) > 0 && !policy.GlobalAccess && len(accounts) == 0 {
-		return OAuthPolicy{}, fmt.Errorf("%w: scoped clients require global_access or at least one account_id", ErrInvalidOAuthPolicy)
+	if policy.GlobalAccess && customer != nil {
+		return OAuthPolicy{}, fmt.Errorf("%w: global_access cannot be combined with customer_id", ErrInvalidOAuthPolicy)
 	}
-	return OAuthPolicy{Scopes: scopes, AccountIDs: accounts, GlobalAccess: policy.GlobalAccess}, nil
+	if len(scopes) > 0 && !policy.GlobalAccess && len(accounts) == 0 && customer == nil {
+		return OAuthPolicy{}, fmt.Errorf("%w: scoped clients require customer_id, global_access or at least one account_id", ErrInvalidOAuthPolicy)
+	}
+	return OAuthPolicy{Scopes: scopes, AccountIDs: accounts, GlobalAccess: policy.GlobalAccess, CustomerID: customer}, nil
 }
 
 func uniqueTrimmed(values []string) []string {
@@ -102,6 +113,7 @@ type OAuthClient struct {
 	Scopes       []string   `json:"scopes"`
 	AccountIDs   []string   `json:"account_ids"`
 	GlobalAccess bool       `json:"global_access"`
+	CustomerID   *string    `json:"customer_id"`
 	CreatedAt    time.Time  `json:"created_at"`
 	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
 }
@@ -148,13 +160,13 @@ func (r *OAuthRepository) CreateClientWithPolicy(ctx context.Context, name strin
 	accountsJSON, _ := json.Marshal(policy.AccountIDs)
 
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO bss_oauth_clients (id, name, client_id, client_secret_hash, scopes, account_ids, global_access)
+		INSERT INTO bss_oauth_clients (id, name, client_id, client_secret_hash, scopes, account_ids, global_access, customer_id)
 		VALUES ($1, $2, $3, $4,
 			ARRAY(SELECT jsonb_array_elements_text($5::jsonb)),
-			ARRAY(SELECT jsonb_array_elements_text($6::jsonb)), $7)
+			ARRAY(SELECT jsonb_array_elements_text($6::jsonb)), $7, $8)
 		RETURNING id, name, client_id, created_at, revoked_at,
-			array_to_json(scopes), array_to_json(account_ids), global_access`,
-		uuid.New().String(), name, clientID, string(hash), string(scopesJSON), string(accountsJSON), policy.GlobalAccess)
+			array_to_json(scopes), array_to_json(account_ids), global_access, customer_id::text`,
+		uuid.New().String(), name, clientID, string(hash), string(scopesJSON), string(accountsJSON), policy.GlobalAccess, policy.CustomerID)
 	c, err := scanOAuthClient(row)
 	if err != nil {
 		return nil, "", err
@@ -165,7 +177,7 @@ func (r *OAuthRepository) CreateClientWithPolicy(ctx context.Context, name strin
 func (r *OAuthRepository) ListClients(ctx context.Context) ([]OAuthClient, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, name, client_id, created_at, revoked_at,
-			array_to_json(scopes), array_to_json(account_ids), global_access
+			array_to_json(scopes), array_to_json(account_ids), global_access, customer_id::text
 		FROM bss_oauth_clients ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list oauth clients: %w", err)
@@ -218,11 +230,12 @@ func (r *OAuthRepository) AuthenticateClient(ctx context.Context, clientID, clie
 	var createdAt time.Time
 	var scopesRaw, accountsRaw []byte
 	var globalAccess bool
+	var customerID sql.NullString
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id, name, client_secret_hash, created_at, revoked_at,
-			array_to_json(scopes), array_to_json(account_ids), global_access
+			array_to_json(scopes), array_to_json(account_ids), global_access, customer_id::text
 		FROM bss_oauth_clients WHERE client_id = $1`, clientID).
-		Scan(&id, &name, &hash, &createdAt, &revokedAt, &scopesRaw, &accountsRaw, &globalAccess)
+		Scan(&id, &name, &hash, &createdAt, &revokedAt, &scopesRaw, &accountsRaw, &globalAccess, &customerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrInvalidClientCredentials
 	}
@@ -233,6 +246,9 @@ func (r *OAuthRepository) AuthenticateClient(ctx context.Context, clientID, clie
 		return nil, ErrInvalidClientCredentials
 	}
 	client := &OAuthClient{ID: id, Name: name, ClientID: clientID, CreatedAt: createdAt, GlobalAccess: globalAccess}
+	if customerID.Valid {
+		client.CustomerID = &customerID.String
+	}
 	if revokedAt.Valid {
 		t := revokedAt.Time
 		client.RevokedAt = &t
@@ -260,8 +276,12 @@ func scanOAuthClient(s oauthScanner) (*OAuthClient, error) {
 	var c OAuthClient
 	var revokedAt sql.NullTime
 	var scopesRaw, accountsRaw []byte
-	if err := s.Scan(&c.ID, &c.Name, &c.ClientID, &c.CreatedAt, &revokedAt, &scopesRaw, &accountsRaw, &c.GlobalAccess); err != nil {
+	var customerID sql.NullString
+	if err := s.Scan(&c.ID, &c.Name, &c.ClientID, &c.CreatedAt, &revokedAt, &scopesRaw, &accountsRaw, &c.GlobalAccess, &customerID); err != nil {
 		return nil, fmt.Errorf("scan oauth client: %w", err)
+	}
+	if customerID.Valid {
+		c.CustomerID = &customerID.String
 	}
 	if revokedAt.Valid {
 		t := revokedAt.Time

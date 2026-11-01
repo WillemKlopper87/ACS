@@ -6,6 +6,7 @@
 // reported by the gateway's EasyMesh controller, and a reboot only completes
 // once the mesh backhaul rejoins.
 import type { Device } from "../api/types";
+import { devicePath } from "./deviceSections";
 
 /** True when the device reported an upstream gateway (linked or not). */
 export function isMeshSatellite(device: Pick<Device, "gateway_device_id" | "gateway_oui_serial"> | null | undefined): boolean {
@@ -21,7 +22,7 @@ export function deviceDisplayName(device: Pick<Device, "label" | "manufacturer" 
 
 /** Deep link to a device in the fleet view. */
 export function deviceLink(id: string): string {
-  return `/fleet?device=${encodeURIComponent(id)}`;
+  return devicePath(id);
 }
 
 /** Name for the gateway: the loaded gateway row, else the reported identity. */

@@ -154,6 +154,27 @@ func (r *Repository) DeleteProject(ctx context.Context, id string) error {
 
 // --- device assignment -------------------------------------------------------------
 
+// MappedAccountCustomers returns the customers owning the BSS accounts a
+// device is actively mapped to (accounts with no owner are left out).
+func (r *Repository) MappedAccountCustomers(ctx context.Context, deviceID string) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT a.customer_id::text FROM account_device_mappings m
+		JOIN bss_accounts a ON a.account_id = m.account_id
+		WHERE m.device_id = $1 AND m.unassigned_at IS NULL`, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("mapped account customers: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // AssignDeviceCustomer sets (or clears, if customerID is nil) a device's
 // owning customer.
 func (r *Repository) AssignDeviceCustomer(ctx context.Context, deviceID string, customerID *string) error {

@@ -31,6 +31,7 @@ import (
 	"acs/internal/jobs"
 	"acs/internal/mailer"
 	"acs/internal/observability"
+	"acs/internal/onboarding"
 	"acs/internal/operators"
 	"acs/internal/parameters"
 	"acs/internal/policy"
@@ -128,6 +129,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		mailer:           mailer.New(mailer.Config{}, logger),
 		frontendBaseURL:  "http://console.test",
 		tenancy:          tenancy.NewRepository(db),
+		onboarding:       onboarding.NewRepository(db),
 		dashboards:       dashboard.NewRepository(db),
 		bssMappings:      bss.NewRepository(db),
 		bssWebhooks:      bss.NewWebhookRepository(db),
@@ -408,6 +410,38 @@ func TestIntegration_H3SubResourceIsolation(t *testing.T) {
 		}
 		if r := e.call("bob", "DELETE", "/api/v1/devices/"+devB+"/cli/credentials/"+created.ID, nil); r.code != 204 {
 			t.Errorf("bob delete his own cli credential → %d, want 204", r.code)
+		}
+	})
+
+	t.Run("S6: a scoped manager cannot move a device to another customer", func(t *testing.T) {
+		if r := e.call("alice", "PUT", "/api/v1/devices/"+devA+"/customer", map[string]any{"customer_id": custB}); r.code != 400 {
+			t.Errorf("alice move her device to customer B → %d %s, want 400", r.code, r.body)
+		}
+		if r := e.call("alice", "PUT", "/api/v1/devices/"+devA+"/customer", map[string]any{"customer_id": nil}); r.code != 400 {
+			t.Errorf("alice clear her device's customer → %d %s, want 400", r.code, r.body)
+		}
+		if d, err := e.h.devices.Get(e.ctx, devA); err != nil || d.CustomerID == nil || *d.CustomerID != custA {
+			t.Fatalf("device A's customer changed: %v %v", d, err)
+		}
+		if r := e.call("alice", "PUT", "/api/v1/devices/"+devA+"/customer", map[string]any{"customer_id": custA}); r.code != 204 {
+			t.Errorf("alice reassign within her scope → %d %s, want 204", r.code, r.body)
+		}
+	})
+
+	t.Run("a BSS-mapped device stays with its account's customer", func(t *testing.T) {
+		if _, err := e.db.ExecContext(e.ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('acct-s6', $1, 'test')`, custB); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.db.ExecContext(e.ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at)
+			SELECT gen_random_uuid(), 'acct-s6', id, oui_serial, 'gateway', now() FROM devices WHERE id = $1`, devB); err != nil {
+			t.Fatal(err)
+		}
+		e.operator("root", operators.RoleSuperAdmin)
+		if r := e.call("root", "PUT", "/api/v1/devices/"+devB+"/customer", map[string]any{"customer_id": custA}); r.code != 409 {
+			t.Errorf("move a device mapped to customer B's account → %d %s, want 409", r.code, r.body)
+		}
+		if r := e.call("root", "PUT", "/api/v1/devices/"+devB+"/customer", map[string]any{"customer_id": custB}); r.code != 204 {
+			t.Errorf("assign it to its account's own customer → %d %s, want 204", r.code, r.body)
 		}
 	})
 

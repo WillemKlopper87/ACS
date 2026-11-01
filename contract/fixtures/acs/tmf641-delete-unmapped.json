@@ -1,0 +1,45 @@
+{
+  "name": "acs/tmf641-delete-unmapped",
+  "description": "A delete of a role with no device: completed, since what it asks for is already true.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0520101, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/tmf-api/serviceOrdering/v4/serviceOrder",
+      "status": 201,
+      "mutating": true,
+      "body": {
+        "externalId": "SO-CONTRACT-DEL-2",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/621e21a2-4344-4fdc-83a4-19a0048c3d93",
+        "id": "621e21a2-4344-4fdc-83a4-19a0048c3d93",
+        "orderDate": "2026-11-01T19:10:25.641693Z",
+        "orderItem": [
+          {
+            "id": "e9ba51e5-319d-40b1-94a3-45b97e0d242a",
+            "action": "delete",
+            "state": "COMPLETED",
+            "role": "gateway"
+          }
+        ],
+        "relatedParty": [
+          {
+            "id": "contract.0005",
+            "role": "customer"
+          }
+        ],
+        "state": "completed"
+      },
+      "request": {
+        "externalId": "SO-CONTRACT-DEL-2",
+        "accountId": "contract.0005",
+        "orderItem": [
+          {
+            "id": "1",
+            "action": "delete",
+            "role": "gateway"
+          }
+        ]
+      }
+    }
+  ]
+}

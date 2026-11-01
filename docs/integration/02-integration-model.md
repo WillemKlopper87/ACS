@@ -54,12 +54,28 @@ Resubmitting an identical order returns the **original** job with its
 | Connection dropped mid-request | **Resend the identical order.** |
 | `5xx` from the ACS | Back off, then resend the identical order. |
 | Genuinely a new change | New `external_order_id`. |
+| Your key, another tenant's account | `404 ErrNotFound`: a key never confirms that another tenant used it. |
 | Retrying a *failed* order after fixing the cause | New `external_order_id` — the original is terminal. |
 
 **The anti-pattern that causes real incidents:** appending a suffix or a
 timestamp to retry (`ORD-123-retry-2`). That is a *new* order, and it will
 dispatch a *second* change to the device. Retry means byte-identical
 resubmission.
+
+**The other writes have keys too:**
+
+| Write | Idempotency key | Same key, different request |
+|---|---|---|
+| TMF641 service order | `externalId` | `409 ErrIdempotencyKeyReused` |
+| TMF640 `PATCH /service/{id}` | `X-Idempotency-Key` header (required) | `409 ErrIdempotencyKeyReused` |
+| `POST /bss/v1/mappings` (incl. `pre_provision`) | `Idempotency-Key` header (optional; per account; kept 24 h) | `409 ErrIdempotencyKeyReused` |
+
+A replay answers with the first response and `Idempotent-Replayed: true`
+(TMF641 answers `200` with the order as it is now). With `Idempotency-Key`,
+a retry that arrives while the first request still runs gets
+`409 ErrIdempotencyKeyInFlight` with `Retry-After`; a `5xx` is not kept, so
+its retry runs again. Without the key a repeated mapping gets
+`409 ErrRoleAlreadyAssigned`, so send one.
 
 Order intent is recorded durably **before** dispatch is attempted, and a
 background reconciler retries failed dispatches with exponential backoff,
@@ -71,22 +87,36 @@ rather than compounding.
 | Status | Code | Class | Your action |
 |---|---|---|---|
 | `400` | `ErrInvalidRequest` | Permanent | Fix the request. Never retry unchanged. |
-| `401` | `ErrUnauthorized` | Permanent | Refresh the token once; if it recurs, stop and alert. |
+| `401` | `ErrUnauthorized` or `invalid_token` | Permanent | Refresh the token once; if it recurs, stop and alert. Which code depends on where the token is checked (a missing or malformed header, a revoked client: `ErrUnauthorized`; a token checked by `/bss/v1` or TMF: `invalid_token`): switch on the status. |
 | `404` | `ErrDeviceNotMapped` | Permanent | The device is unknown or the account has no active mapping. |
 | `404` | `ErrJobNotFound` | Permanent | Wrong `command_key`. |
 | `409` | `ErrRoleAlreadyAssigned` | Needs a decision | The role is occupied. Unassign or swap — do not retry. |
+| `409` | `ErrIdempotencyKeyReused` | Permanent | A key reused for a different request. A bug on the caller's side. |
+| `409` | `ErrIdempotencyKeyInFlight` | **Retryable** | The first request with the key still runs; retry after `Retry-After`. |
+| `409` | `ErrSaleWrongState` | Permanent | The sale's state does not allow the retry or cancel. Read the sale. |
+| `400` | `ErrSecretHandleInvalid` | Permanent | The `wifi_password_handle` is unknown, expired, already used or another customer's. Store the secret again (§8.2). |
+| `403` | `ErrTLSRequired` | Permanent | `POST /bss/v1/secrets` over plain HTTP. Use the TLS endpoint. |
+| `503` | `ErrSecretStoreDisabled` | Permanent until the operator acts | The ACS has no secret store key; send the passphrase as `wifi_password` or ask the operator. |
 | `429` | — | **Retryable** | Back off and retry. **Not** an auth problem. |
 | `502` | `ErrACSUnreachable` | **Retryable** | Internal ACS engine unavailable. Back off and retry. |
 | `500` | `ErrInternal` | **Retryable**, and report it | Back off, retry, and tell us. |
 
-Every error body has the same shape:
+Every error is an RFC 9457 problem that keeps the older keys:
 
 ```json
-{ "error": "ErrInvalidRequest", "message": "human-readable detail" }
+{ "type": "urn:acs:problem:v1:ErrInvalidRequest", "title": "Invalid request", "status": 400,
+  "detail": "human-readable detail", "code": "ErrInvalidRequest",
+  "error": "ErrInvalidRequest", "message": "human-readable detail" }
 ```
 
-Switch on `error`, not on `message` — messages are for humans and may be
-reworded.
+Send `Accept: application/problem+json` to get that media type; otherwise
+it is `application/json`. Switch on `code` (= `error`), not on `detail` —
+details are for humans and may be reworded. The codes are a closed list
+(`ProblemCode` in `openapi-bssadapter.yaml`). A request that worked under an
+earlier contract version never gets a new code; a new endpoint or a new
+parameter may bring new codes, added to the list with a minor version
+(1.1.0 added the three secret-handle codes). A changed meaning comes only
+with a new problem version (`v1` in `type`).
 
 **Blanket retry-everything is wrong here.** Retrying a `400` hides a real
 defect behind noise; retrying a `409` will never succeed. Classify first.
@@ -137,6 +167,35 @@ enforced in the database.
 - Assignment is temporal: releasing a device records when and why, and the
   same device can later be reassigned. A device is bound to at most one
   account at a time.
+- **Why** is one of `rma`, `upgrade`, `return`, `moved`, `corrected`
+  (TMF641 `unassignReason`). Another value is refused with 400 before
+  anything runs. Without one, a swap (delete then add, same role) records
+  `upgrade` and a delete records `return`.
+- **A TMF641 delete** names the role, and may name the device
+  (`ouiSerial`, either id form). With `ouiSerial`, the item **fails and
+  ends nothing** when another device holds the role: send it, so a stale
+  view cannot end the wrong CPE. A role with no device is already deleted:
+  the item completes. A delete also cancels the account's open sale in the
+  role (a pre-provisioned CPE not yet in service; only the one for
+  `ouiSerial` when given), with an `OnboardingStateChangeEvent`.
+
+### 6.1 Device identity (`oui_serial`)
+
+The canonical device id on every request and response is the ACS natural
+key, built from the TR-069 `DeviceIdStruct` the CPE sends (USP agents use
+the same rule):
+
+- `OUI+ProductClass+SerialNumber`, joined by `+`, when the CPE reports a
+  ProductClass; `OUI+SerialNumber` when it reports none. The middle segment
+  is the TR-069 **ProductClass**, exactly as the CPE reports it.
+- The OUI is upper-case hex with `:`, `-` and spaces removed.
+- Any field may contain any character the CPE sends. A literal `+` or `\`
+  inside a field is escaped as `\+` or `\\`, so ids never collide (a serial
+  `SN+2` appears as `SN\+2`). Send ids exactly as the ACS returns them or as
+  you computed them with this rule.
+- For pre-provisioning, `OUI-ProductClass-Serial` and `OUI-Serial` (TR-069
+  Annex style, unescaped) are also accepted; the ACS matches the sale on OUI
+  and serial when the CPE first connects. Prefer the canonical form.
 
 ## 7. What the ACS does not know
 
@@ -160,11 +219,106 @@ back. It does not interpret it or change device behaviour based on it.
   operator to revoke immediately; there is no rotate-in-place, a
   compromised client is revoked and replaced.
 - **Wi-Fi passwords are write-only.** You can set one; no API returns one.
-  This is deliberate and will not change.
+  This is deliberate and will not change. Send them as sealed handles
+  (§8.2) so they are not stored in the order or the job either.
 - **mTLS** is available as additional transport hardening. It supplements
   the bearer token rather than replacing it.
-- **Log hygiene:** `wifi_password` appears in request bodies you send.
-  Redact it in your own logs.
+- **Log hygiene:** `wifi_password` (and the `value` of `POST
+  /bss/v1/secrets`) appears in request bodies you send. Redact it in your
+  own logs. A handle is not secret.
+
+### 8.1 Customer-bound clients (one ISP, one customer)
+
+An OAuth client can be **bound to one ACS customer** (an ISP). This is the
+recommended model for an ISP or NaaS platform, and the only one accepted
+when the ACS runs with `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true`.
+
+- **Accounts belong to customers.** The first *write* a bound client makes
+  for a new `account_id` (a mapping, an order, a TMF641 order, a webhook)
+  claims that account for its customer. From then on only that customer's
+  clients can read or change it. Every other client gets **404**, never
+  403, so account ids are no existence oracle across ISPs. A read of an
+  account nobody owns yet is also 404.
+- **Account ids stay globally unique.** Mint them so they cannot collide
+  across ISPs, for example `<tenant prefix>.<uuid>`. Ownership, not
+  per-customer uniqueness, is what keeps one ISP out of the accounts of
+  another.
+- **Devices follow the account.** Mapping a device with no customer to a
+  bound account gives the device that customer. A device of another
+  customer is not found (404 `ErrDeviceNotMapped`). The device only
+  changes customer when the mapping is actually written.
+- **Pre-provisioned sales** (`pre_provision`, TMF641 `add` for an unseen
+  CPE) belong to the account's customer. Plan codes resolve only to that
+  customer's plans or shared ones. An explicit `customer_id` (mapping) or
+  `customerId` (TMF641 order) must be the account's customer, else the
+  request is refused (409 on mappings, a FAILED item on TMF641).
+- **Accounts from before binding.** An account that already has mappings,
+  orders, service orders or webhooks from a global client cannot be
+  claimed by a bound client; it stays 404 until an operator assigns it
+  (`PUT /api/v1/bss/accounts/{account_id}/customer`, superadmin). Only an
+  operator can move an account between customers.
+- **Scopes apply to `/bss/v1` too.** A bound client needs the same scope
+  as the TMF counterpart of each call: `tmf:read` for reads, job status,
+  reconciliation and preflight; `tmf:write` for mappings and webhooks;
+  `tmf:execute` for orders. A missing scope is 403 `insufficient_scope`,
+  checked before an account is claimed. Grant an integration only what
+  it uses. (Clients that predate binding keep the older rule, where scopes
+  govern only the TMF APIs.)
+- **Asserting your binding.** The token response carries `customer_id`,
+  and the JWT carries it as `cust`. A client cannot be both bound and
+  fleet-wide; `account_ids` on a bound client narrows it further.
+- **Fleet-wide operations** (a webhook with no `account_id`, TMF lists
+  without `accountId`) need a global client, which
+  `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true` disables together with the
+  shared `ACS_BSS_API_TOKEN` and the unauthenticated lab mode.
+
+### 8.2 Sealed secret handles (Wi-Fi passphrases)
+
+A passphrase sent as `wifi_password` is stored in the order and the job
+until the job finishes. Send a handle instead and the ACS keeps the value
+only sealed, briefly, and only until it writes it to the CPE:
+
+1. `POST /bss/v1/secrets` `{"value": "<passphrase>"}` (scope `tmf:write`,
+   TLS only) returns `201 {"handle": "sh_…", "expires_at": "…"}`. Optional
+   `ttl_seconds`: 60 up to the ACS's `ACS_BSS_SECRET_TTL` (15 minutes
+   unless the operator changed it), which is also the default.
+2. Name the handle where the passphrase would go: `wifi_password_handle`
+   in `POST /bss/v1/orders` (and preflight) or a TMF641 `modify` item, or a
+   `WiFiPasswordHandle` characteristic in a TMF640 PATCH. The order
+   **claims** the handle for its device; a second order naming it is `400
+   ErrSecretHandleInvalid` (a TMF641 item FAILS with that note). Preflight
+   checks the handle without claiming it.
+3. When the ACS sends the write to the CPE it opens the handle, which
+   **deletes** it. The job keeps the handle, never the value.
+
+What you can rely on:
+
+- **Sealed at rest** with AES-256-GCM under `ACS_BSS_SECRET_KEY`, a key
+  separate from the database credentials; the handle and owner are bound
+  into the ciphertext.
+- **Never** in an order, a job, the parameter cache, an audit record, an
+  event, a webhook or a log line. Our canary test pushes a marker value
+  through an order and scans every table, the logs and the internal calls
+  for it.
+- **Per customer.** A handle belongs to your client's customer (a global
+  client's handles belong to global clients). Another customer's handle is
+  `400 ErrSecretHandleInvalid` in an order and `404` on delete, exactly
+  like an unknown one. Account-listed clients cannot use handles (`403`).
+- **Single use, short life.** Deleted when used and when it expires;
+  `DELETE /bss/v1/secrets/{handle}` discards one you will not use.
+
+The retry story: a handle opens once. If the job fails after the write was
+sent (the CPE refused it, the session dropped and the job was dispatched
+again), or waited past `expires_at` for its device, it FAILS with
+`SECRET_HANDLE_UNAVAILABLE` or the CPE's fault. Store the secret again and
+send a **new** order (new `external_order_id`). A retry of the *same*
+order id answers with the existing order and claims nothing, so it does not
+need a new handle. Order soon after storing: an offline device may not
+connect before the handle expires.
+
+`POST /bss/v1/secrets` is not idempotent; a retried POST makes a second
+handle and the unused one expires. With `ACS_BSS_REQUIRE_SECRET_HANDLES=true`
+the ACS refuses a plain `wifi_password` (`400 ErrInvalidRequest`).
 
 ## 9. Known limits to design around
 

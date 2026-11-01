@@ -380,6 +380,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	h.assignDeviceProfile(ctx, device, inform.DeviceId)
 	h.correlateValueChangeEvents(ctx, device, inform.Event, inform.ParameterList)
 	h.enforcePolicies(ctx, device, inform.ParameterList)
+	h.reconcileOnboarding(ctx, device, true)
 
 	if inform.HasEventCode("0") {
 		h.applyAutoProvisioningTemplates(ctx, device)
@@ -577,6 +578,9 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 	}
 
 	job, err := h.jobs.Lease(ctx, session.DeviceID)
+	if err == nil && job == nil && h.reconcileOnboardingAtSessionEnd(ctx, session.DeviceID) {
+		job, err = h.jobs.Lease(ctx, session.DeviceID)
+	}
 	if err != nil {
 		h.logger.Error("failed to lease next job", "err", err, "device_id", session.DeviceID)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -600,7 +604,19 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 			return
 		}
 	}
-	requestBody, ok := h.renderJobRequest(job)
+	rendered, err := h.openSecretHandles(ctx, job)
+	if err != nil {
+		// The handle was used by an earlier dispatch of this job (a
+		// retry), expired while the job waited, or the key is missing.
+		// The BSS stores the secret again and sends a new order.
+		h.logger.Warn("job's secret handle cannot be opened; failing it", "job_id", job.ID, "err", err)
+		if err := h.jobs.MarkFailed(ctx, job.ID, "SECRET_HANDLE_UNAVAILABLE", err.Error()); err != nil {
+			h.logger.Error("failed to mark job failed", "err", err, "job_id", job.ID)
+		}
+		h.respondEmpty(w)
+		return
+	}
+	requestBody, ok := h.renderJobRequest(rendered)
 	if !ok {
 		h.logger.Error("job has unrenderable payload; failing it", "job_id", job.ID, "type", job.Type)
 		if err := h.jobs.MarkFailed(ctx, job.ID, "", "unrenderable job payload"); err != nil {
@@ -869,15 +885,7 @@ func (h *handler) publishCellularStateChanges(ctx context.Context, deviceID stri
 	if h.tmfEvents == nil || len(changes) == 0 {
 		return
 	}
-	d, err := h.devices.Get(ctx, deviceID)
-	if err != nil {
-		h.logger.Warn("failed to load device for cellular state event", "error", err, "device_id", deviceID)
-		return
-	}
-	account := ""
-	if d.CustomerID != nil {
-		account = *d.CustomerID
-	}
+	account := telemetry.DeviceAccount(ctx, h.tmfEvents, deviceID)
 	if err := telemetry.PublishCellularStateChanged(ctx, h.tmfEvents, account, deviceID, "CWMP", changes, at); err != nil {
 		h.logger.Warn("failed to publish cellular state event", "error", err, "device_id", deviceID)
 	}

@@ -37,7 +37,9 @@ import (
 	"acs/internal/config"
 	"acs/internal/netguard"
 	"acs/internal/observability"
+	"acs/internal/onboarding"
 	"acs/internal/ratelimit"
+	"acs/internal/secretstore"
 	"acs/internal/store"
 )
 
@@ -121,7 +123,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := store.Open(ctx, dsn)
+	db, err := store.OpenUTC(ctx, dsn)
 	if err != nil {
 		logger.Error("failed to connect to postgres", "err", err)
 		os.Exit(1)
@@ -156,20 +158,36 @@ func main() {
 		webhookNetPolicy.AllowedCIDRs = cidrs
 	}
 
+	secretStore, err := secretstore.New(db, os.Getenv(secretstore.KeyEnv))
+	if err != nil {
+		logger.Error("failed to initialize the secret store", "err", err)
+		os.Exit(1)
+	}
+	if !secretStore.Enabled() {
+		logger.Warn(secretstore.KeyEnv + " not set — POST /bss/v1/secrets is disabled and orders cannot name a wifi_password_handle")
+	}
+
 	h := &handler{
-		logger:             logger,
-		mappings:           bss.NewRepository(db),
-		acs:                bss.NewACSClient(acsBaseURL, 10*time.Second, internalServiceToken),
-		auditor:            observability.NewAuditor(db),
-		token:              token,
-		oauthClients:       bss.NewOAuthRepository(db),
-		oauthSigningSecret: oauthSigningSecret,
-		metrics:            metrics,
-		walledGarden:       walledGarden,
-		webhooks:           bss.NewWebhookRepository(db),
-		alertPolicies:      alerting.NewRepository(db),
-		alertIncidents:     alerting.NewIncidentRepository(db),
-		netPolicy:          webhookNetPolicy,
+		logger:                logger,
+		mappings:              bss.NewRepository(db),
+		onboarding:            onboarding.NewRepository(db),
+		acs:                   bss.NewACSClient(acsBaseURL, 10*time.Second, internalServiceToken),
+		auditor:               observability.NewAuditor(db),
+		token:                 token,
+		oauthClients:          bss.NewOAuthRepository(db),
+		oauthSigningSecret:    oauthSigningSecret,
+		requireCustomerBound:  os.Getenv("ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS") == "true",
+		saleTTL:               saleTTLFromEnv(logger),
+		secrets:               secretStore,
+		secretTTL:             secretTTLFromEnv(logger),
+		secretsBehindTLSProxy: os.Getenv("ACS_BSS_SECRETS_BEHIND_TLS_PROXY") == "true",
+		requireSecretHandles:  os.Getenv("ACS_BSS_REQUIRE_SECRET_HANDLES") == "true",
+		metrics:               metrics,
+		walledGarden:          walledGarden,
+		webhooks:              bss.NewWebhookRepository(db),
+		alertPolicies:         alerting.NewRepository(db),
+		alertIncidents:        alerting.NewIncidentRepository(db),
+		netPolicy:             webhookNetPolicy,
 	}
 
 	mux := http.NewServeMux()
@@ -187,6 +205,16 @@ func main() {
 	mux.HandleFunc("POST /bss/v1/webhooks", metrics.InstrumentHTTP("POST /bss/v1/webhooks", h.createWebhookSubscription))
 	mux.HandleFunc("GET /bss/v1/webhooks", metrics.InstrumentHTTP("GET /bss/v1/webhooks", h.listWebhookSubscriptions))
 	mux.HandleFunc("DELETE /bss/v1/webhooks/{id}", metrics.InstrumentHTTP("DELETE /bss/v1/webhooks/{id}", h.deleteWebhookSubscription))
+	mux.HandleFunc("GET /bss/v1/onboardings/{id}", metrics.InstrumentHTTP("GET /bss/v1/onboardings/{id}", h.getSale))
+	mux.HandleFunc("POST /bss/v1/onboardings/{id}/retry", metrics.InstrumentHTTP("POST /bss/v1/onboardings/{id}/retry", h.retrySale))
+	mux.HandleFunc("POST /bss/v1/onboardings/{id}/cancel", metrics.InstrumentHTTP("POST /bss/v1/onboardings/{id}/cancel", h.cancelSale))
+	mux.HandleFunc("GET /bss/v1/devices", metrics.InstrumentHTTP("GET /bss/v1/devices", h.listCustomerDevices))
+	mux.HandleFunc("GET /bss/v1/events", metrics.InstrumentHTTP("GET /bss/v1/events", h.listEvents))
+	mux.HandleFunc("POST /bss/v1/secrets", metrics.InstrumentHTTP("POST /bss/v1/secrets", h.createSecret))
+	mux.HandleFunc("DELETE /bss/v1/secrets/{handle}", metrics.InstrumentHTTP("DELETE /bss/v1/secrets/{handle}", h.deleteSecret))
+	mux.HandleFunc("GET /bss/v1/webhooks/{id}/deliveries", metrics.InstrumentHTTP("GET /bss/v1/webhooks/{id}/deliveries", h.listWebhookDeliveries))
+	mux.HandleFunc("POST /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver", metrics.InstrumentHTTP("POST /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver", h.redeliverWebhook))
+	mux.HandleFunc("POST /bss/v1/webhooks/{id}/rotate-secret", metrics.InstrumentHTTP("POST /bss/v1/webhooks/{id}/rotate-secret", h.rotateWebhookSecret))
 	mux.HandleFunc("GET /tmf-api/serviceInventoryManagement/v4/service", metrics.InstrumentHTTP("GET /tmf-api/serviceInventoryManagement/v4/service", h.listTMF638Services))
 	mux.HandleFunc("GET /tmf-api/serviceInventoryManagement/v4/service/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceInventoryManagement/v4/service/{id}", h.getTMF638Service))
 	// TMF640 uses the same service projection and order engine as the legacy
@@ -195,6 +223,8 @@ func main() {
 	// states (the handlers are intentionally implemented in tmf640.go).
 	mux.HandleFunc("GET /tmf-api/serviceActivationAndConfiguration/v4/service", metrics.InstrumentHTTP("GET /tmf-api/serviceActivationAndConfiguration/v4/service", h.listServices))
 	mux.HandleFunc("GET /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", h.getService))
+	mux.HandleFunc("PATCH /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", metrics.InstrumentHTTP("PATCH /tmf-api/serviceActivationAndConfiguration/v4/service/{id}", h.patchService))
+	mux.HandleFunc("GET /tmf-api/serviceActivationAndConfiguration/v4/monitor/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceActivationAndConfiguration/v4/monitor/{id}", h.getMonitor))
 	mux.HandleFunc("POST /tmf-api/serviceProblemManagement/v4/serviceProblem", metrics.InstrumentHTTP("POST /tmf-api/serviceProblemManagement/v4/serviceProblem", h.createTMF656Problem))
 	mux.HandleFunc("GET /tmf-api/serviceProblemManagement/v4/serviceProblem/{id}", metrics.InstrumentHTTP("GET /tmf-api/serviceProblemManagement/v4/serviceProblem/{id}", h.getTMF656Problem))
 	mux.HandleFunc("GET /tmf-api/serviceProblemManagement/v4/serviceProblem", metrics.InstrumentHTTP("GET /tmf-api/serviceProblemManagement/v4/serviceProblem", h.listTMF656Problems))
@@ -221,6 +251,7 @@ func main() {
 	go h.runEscalationLoop(ctx)
 	go h.runOrderReconcileLoop(ctx)
 	go h.runTMF641ReconcileLoop(ctx)
+	go h.runPreProvisionSyncLoop(ctx)
 
 	rateLimitPerSecond := envOrFloat("ACS_BSS_RATE_LIMIT_PER_SECOND", defaultRateLimitPerSecond)
 	rateLimitBurst := envOrInt("ACS_BSS_RATE_LIMIT_BURST", defaultRateLimitBurst)
@@ -233,7 +264,7 @@ func main() {
 		// missing token is rejected (401) without ever touching the rate
 		// limiter — otherwise an attacker could spray distinct bogus
 		// tokens to dodge a per-token bucket entirely.
-		Handler:           withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(mux))),
+		Handler:           withProblemMediaType(withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(mux)))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second, // every BSS route is a small JSON exchange
 		WriteTimeout:      60 * time.Second,
@@ -394,6 +425,9 @@ func withRateLimit(limiter *ratelimit.Limiter, metrics *observability.Metrics, n
 		}
 		if !limiter.Allow(key) {
 			metrics.RateLimitRejectedTotal.Inc()
+			// A token frees within 1/rate seconds; at the default 5/s and any
+			// rate of at least 1/s, a client retrying after a second gets in.
+			w.Header().Set("Retry-After", "1")
 			writeError(w, http.StatusTooManyRequests, "ErrRateLimited", "rate limit exceeded, slow down")
 			return
 		}
@@ -412,18 +446,38 @@ func withMaxBody(next http.Handler) http.Handler {
 }
 
 type handler struct {
-	logger             *slog.Logger
-	mappings           *bss.Repository
-	acs                *bss.ACSClient
-	auditor            *observability.Auditor
-	token              string
-	oauthClients       *bss.OAuthRepository
-	oauthSigningSecret []byte
-	metrics            *observability.Metrics
-	walledGarden       bss.WalledGardenConfig
-	webhooks           *bss.WebhookRepository
-	alertPolicies      *alerting.Repository
-	alertIncidents     *alerting.IncidentRepository
+	logger   *slog.Logger
+	mappings *bss.Repository
+	// requireCustomerBound accepts only OAuth clients bound to a customer
+	// (ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS): no shared token, no global
+	// client, no unauthenticated lab mode.
+	requireCustomerBound bool
+	// onboarding records pre-provisioned sales; nil keeps an unknown
+	// device an error, as before.
+	onboarding *onboarding.Repository
+	// saleTTL cancels a pre-provisioned sale no CPE contacted in time
+	// (ACS_BSS_SALE_TTL); zero keeps sales open indefinitely.
+	saleTTL time.Duration
+	// secrets holds sealed secret handles (I4, POST /bss/v1/secrets);
+	// keyless, it refuses them. secretTTL is a handle's longest life
+	// (ACS_BSS_SECRET_TTL). secretsBehindTLSProxy accepts secrets on a
+	// plaintext listener that only a TLS-terminating proxy reaches
+	// (ACS_BSS_SECRETS_BEHIND_TLS_PROXY); requireSecretHandles refuses a
+	// plain wifi_password (ACS_BSS_REQUIRE_SECRET_HANDLES).
+	secrets               *secretstore.Store
+	secretTTL             time.Duration
+	secretsBehindTLSProxy bool
+	requireSecretHandles  bool
+	acs                   *bss.ACSClient
+	auditor               *observability.Auditor
+	token                 string
+	oauthClients          *bss.OAuthRepository
+	oauthSigningSecret    []byte
+	metrics               *observability.Metrics
+	walledGarden          bss.WalledGardenConfig
+	webhooks              *bss.WebhookRepository
+	alertPolicies         *alerting.Repository
+	alertIncidents        *alerting.IncidentRepository
 	// netPolicy bounds where a webhook target_url (BSS-operator-
 	// controlled) may point (audit H-7) -- checked at subscription
 	// creation and again at delivery time.
@@ -473,16 +527,10 @@ func (h *handler) clientRevoked(ctx context.Context, clientID string) bool {
 	return revoked
 }
 
-// errorEnvelope matches the BSS integration guide §4 error shape.
-type errorEnvelope struct {
-	Error   string `json:"error"`
-	Message string `json:"message"`
-}
-
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(errorEnvelope{Error: code, Message: message})
+	_ = json.NewEncoder(w).Encode(newProblem(status, code, message))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -499,6 +547,14 @@ type createMappingRequest struct {
 	DeviceUUID  string `json:"device_uuid"`
 	ServicePlan string `json:"service_plan"`
 	Role        string `json:"role"` // optional; defaults to gateway
+	// PreProvision: for a device the ACS has not seen, record a sale and
+	// answer 202 instead of 404 (preprovision.go). Opt-in, so integrations
+	// that rely on the 404 keep it.
+	PreProvision bool         `json:"pre_provision"`
+	CustomerID   string       `json:"customer_id"`
+	ICCID        string       `json:"iccid"`
+	IMSI         string       `json:"imsi"`
+	Place        *tmf641Place `json:"place"`
 }
 
 type mappingResponse struct {
@@ -508,6 +564,10 @@ type mappingResponse struct {
 	ServicePlan string `json:"service_plan,omitempty"`
 	Status      string `json:"status"`
 	Role        string `json:"role"`
+	// PlanMatched says whether service_plan names an ACS service plan;
+	// absent when no plan was given.
+	PlanMatched *bool         `json:"plan_matched,omitempty"`
+	Warnings    []saleWarning `json:"warnings,omitempty"`
 }
 
 // roleOrDefault applies the contract rule for callers that name no role:
@@ -534,10 +594,15 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "account_id and oui_serial are required")
 		return
 	}
-	if !h.authorizeBSSAccount(w, r, req.AccountID) {
+	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFWrite, req.AccountID) {
 		return
 	}
+	h.idempotent(w, r, req.AccountID, "mapping.create", req, func(w http.ResponseWriter) { h.createMappingAuthorized(w, r, req) })
+}
 
+// createMappingAuthorized is createMapping once the request is valid and
+// the caller may write the account.
+func (h *handler) createMappingAuthorized(w http.ResponseWriter, r *http.Request, req createMappingRequest) {
 	// Resolve and validate device_uuid *before* writing anything. Doing
 	// this after AssignDevice used to commit the row, then reject the
 	// caller with a 400 that left the role slot wedged — their corrected
@@ -561,6 +626,28 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mapping, err := h.mappings.AssignDevice(r.Context(), req.AccountID, req.OUISerial, roleOrDefault(req.Role), req.ServicePlan)
+	if errors.Is(err, bss.ErrDeviceNotFound) && req.PreProvision {
+		o, ppErr := h.preProvision(r.Context(), preProvisionRequest{CustomerID: req.CustomerID, AccountID: req.AccountID, OUISerial: req.OUISerial, Role: req.Role,
+			ServicePlan: req.ServicePlan, ICCID: req.ICCID, IMSI: req.IMSI, Place: req.Place})
+		switch {
+		case ppErr == nil:
+			body := map[string]any{"account_id": req.AccountID, "oui_serial": req.OUISerial,
+				"service_plan": req.ServicePlan, "role": roleOrDefault(req.Role), "status": "AWAITING_DEVICE",
+				"onboarding_id": o.ID, "onboarding_state": o.State, "href": saleHref(o.ID), "plan_matched": o.ServicePlanID != nil}
+			if warnings := planWarnings(req.ServicePlan, o.ServicePlanID != nil); len(warnings) > 0 {
+				body["warnings"] = warnings
+			}
+			w.Header().Set("Location", saleHref(o.ID))
+			writeJSON(w, http.StatusAccepted, body)
+			return
+		case errors.Is(ppErr, bss.ErrInvalidRole), errors.Is(ppErr, onboarding.ErrInvalid):
+			writeError(w, http.StatusBadRequest, "ErrInvalidRequest", ppErr.Error())
+			return
+		case !errors.Is(ppErr, errPreProvisionUnavailable):
+			writeError(w, http.StatusConflict, "ErrPreProvisionRefused", ppErr.Error())
+			return
+		}
+	}
 	if errors.Is(err, bss.ErrDeviceNotFound) {
 		writeError(w, http.StatusNotFound, "ErrDeviceNotMapped", err.Error())
 		return
@@ -590,15 +677,24 @@ func (h *handler) createMapping(w http.ResponseWriter, r *http.Request) {
 	}
 	h.logger.Info("mapping created", "account_id", req.AccountID, "device_id", mapping.DeviceID)
 
-	writeJSON(w, http.StatusOK, mappingResponse{
+	resp := mappingResponse{
 		AccountID: mapping.AccountID, DeviceUUID: mapping.DeviceID, OUISerial: mapping.OUISerial,
 		ServicePlan: mapping.ServicePlan, Status: mapping.Status, Role: mapping.Role,
-	})
+	}
+	if strings.TrimSpace(mapping.ServicePlan) != "" && h.onboarding != nil {
+		owner, ownerErr := h.mappings.AccountOwner(r.Context(), req.AccountID)
+		plan, planErr := h.resolvePlan(r.Context(), mapping.ServicePlan, owner)
+		if ownerErr == nil && planErr == nil {
+			matched := plan != nil
+			resp.PlanMatched, resp.Warnings = &matched, planWarnings(mapping.ServicePlan, matched)
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *handler) listMappings(w http.ResponseWriter, r *http.Request) {
 	accountID := r.PathValue("account_id")
-	if !h.authorizeBSSAccount(w, r, accountID) {
+	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, accountID) {
 		return
 	}
 	list, err := h.mappings.ListByAccount(r.Context(), accountID)
@@ -624,7 +720,7 @@ func (h *handler) listMappings(w http.ResponseWriter, r *http.Request) {
 // by CWMP discovery. It does not expose cached values or credentials.
 func (h *handler) getMappedDeviceCapabilities(w http.ResponseWriter, r *http.Request) {
 	accountID := r.PathValue("account_id")
-	if !h.authorizeBSSAccount(w, r, accountID) {
+	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, accountID) {
 		return
 	}
 	mapping, err := h.mappings.ActiveDeviceForAccount(r.Context(), accountID, roleOrDefault(r.URL.Query().Get("role")))
@@ -758,7 +854,7 @@ func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "account_id and action are required")
 		return
 	}
-	if !h.authorizeBSSAccount(w, r, req.AccountID) {
+	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, req.AccountID) {
 		return
 	}
 	mapping, err := h.mappings.ActiveDeviceForAccount(r.Context(), req.AccountID, roleOrDefault(req.Role))
@@ -784,7 +880,14 @@ func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ErrUnsupportedAction", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, actionPreflightResponse{AccountID: req.AccountID, DeviceID: mapping.DeviceID, Action: req.Action, Parameters: params})
+	if err := h.claimSecrets(r.Context(), r, req.Parameters, params, mapping.DeviceID, false); err != nil {
+		if !writeSecretError(w, err) {
+			h.logger.Error("failed to check secret handles", "err", err)
+			writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, actionPreflightResponse{AccountID: req.AccountID, DeviceID: mapping.DeviceID, Action: req.Action, Parameters: bss.RedactSecretWrites(params)})
 }
 
 // dispatchOrder runs the outbox's write-ahead-then-dispatch sequence
@@ -793,9 +896,9 @@ func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
 // the audit record and log line -- extracted here as the ONE place this
 // sequence exists (design docs/superpowers/specs/
 // 2026-09-13-bss-tmf640-design.md §4.2), shared by createOrder
-// (/bss/v1/orders) and patchService (TMF640's PATCH /service/{id}, added
-// in a later task in this same plan) so neither path can drift from the
-// other's outbox semantics.
+// (/bss/v1/orders) and patchService (TMF640's PATCH /service/{id},
+// tmf640_patch.go) so neither path can drift from the other's outbox
+// semantics.
 //
 // On a genuine InsertPending race (bss.ErrOrderAlreadyExists returned
 // unwrapped, per errors.Is), the caller is responsible for routing to
@@ -908,7 +1011,7 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "external_order_id, account_id, and action are required")
 		return
 	}
-	if !h.authorizeBSSAccount(w, r, req.AccountID) {
+	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFExecute, req.AccountID) {
 		return
 	}
 
@@ -943,6 +1046,13 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", err.Error())
+		return
+	}
+	if err := h.claimSecrets(r.Context(), r, req.Parameters, params, mapping.DeviceID, true); err != nil {
+		if !writeSecretError(w, err) {
+			h.logger.Error("failed to claim secret handles", "err", err, "external_order_id", req.ExternalOrderID)
+			writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		}
 		return
 	}
 
@@ -989,7 +1099,7 @@ func (h *handler) getJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
-	if order == nil || !h.authorizeBSSAccount(w, r, order.AccountID) {
+	if order == nil || !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, order.AccountID) {
 		// Report a job outside the BSS outbox exactly like an unknown job.
 		// This prevents account-scoped OAuth clients from probing ACS job IDs.
 		if order == nil {

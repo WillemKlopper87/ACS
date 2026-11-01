@@ -4466,6 +4466,508 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List sites (a scoped operator sees only the sites of their customers) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items?: components["schemas"]["Site"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a site, where CPEs are installed (tenancy.manage permission) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SiteInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Site"];
+                    };
+                };
+                /** @description Invalid */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The customer already has a site with this external_ref */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sites/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a site */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Site"];
+                    };
+                };
+                /** @description Not found or outside your scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/service-plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List service plans (shared plans plus the own plans of a scoped operator's customers) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items?: components["schemas"]["ServicePlan"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a service plan, what a sale means for the CPE (tenancy.manage permission) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ServicePlanInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ServicePlan"];
+                    };
+                };
+                /** @description Invalid (e.g. an allowed network that is not 5-6 digit MCC+MNC, or a template of another customer) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description A plan with this code already exists */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/service-plans/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a service plan */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ServicePlan"];
+                    };
+                };
+                /** @description Not found or outside your scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/onboardings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List onboardings, most recently changed first */
+        get: {
+            parameters: {
+                query?: {
+                    state?: components["schemas"]["OnboardingState"];
+                    /** @description The onboardings of one device, newest first */
+                    device_id?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items?: components["schemas"]["Onboarding"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Record a sale (expected_serial) or claim a CPE that already connected (device_id) (tenancy.manage permission)
+         * @description Starts PLANNED. cmd/acs then moves it on each Inform, and again before a session closes: CONTACTED (bound to
+         *     the device, which gets the customer and site of the sale), the SIM check (ON_HOLD if the ICCID/IMSI is not the
+         *     one sold, or the network of the IMSI is not in the allowed_plmns of the plan), SECURED (the CPE uses its own
+         *     credential or a certificate), DISCOVERED (when the plan needs it), CONFIGURING (the templates of the plan, then
+         *     its cellular profile last) and IN_SERVICE.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["OnboardingInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Onboarding"];
+                    };
+                };
+                /** @description Invalid */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description An open onboarding already exists for this serial number */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/onboardings/unclaimed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** CPEs that connected with no onboarding (none for a scoped operator, as they have no customer yet) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items?: components["schemas"]["UnclaimedDevice"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/onboardings/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an onboarding */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Onboarding"];
+                    };
+                };
+                /** @description Not found or outside your scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/onboardings/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel an open onboarding (tenancy.manage permission) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Onboarding"];
+                    };
+                };
+                /** @description Already IN_SERVICE or CANCELLED */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/onboardings/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-run every check from CONTACTED for a FAILED or ON_HOLD onboarding (tenancy.manage permission) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Onboarding"];
+                    };
+                };
+                /** @description Not FAILED or ON_HOLD */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config-templates": {
         parameters: {
             query?: never;
@@ -5356,10 +5858,12 @@ export interface paths {
                         /** @description Accounts this client may access. Required for a non-empty scope list unless global_access is true; mutually exclusive with global_access. */
                         account_ids?: string[];
                         /**
-                         * @description Deliberate fleet-wide TMF access. Mutually exclusive with account_ids.
+                         * @description Deliberate fleet-wide TMF access. Mutually exclusive with account_ids and customer_id.
                          * @default false
                          */
                         global_access?: boolean;
+                        /** @description Bind the client to one ACS customer (an ISP). It acts only on BSS accounts that customer owns and claims a new account on its first write; account_ids may narrow it further. Required for every client when cmd/bssadapter runs with ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true. */
+                        customer_id?: string | null;
                     };
                 };
             };
@@ -5382,6 +5886,55 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bss/accounts/{account_id}/customer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Assign a BSS account to an ACS customer (superadmin) — for accounts used before customer binding, which a bound client may not claim, or to move an account */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    account_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        customer_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Assigned */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Missing or unknown customer_id */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6771,6 +7324,121 @@ export interface components {
             /** Format: date-time */
             created_at?: string;
         };
+        /** @enum {string} */
+        OnboardingState: "PLANNED" | "CONTACTED" | "SECURED" | "DISCOVERED" | "CONFIGURING" | "IN_SERVICE" | "ON_HOLD" | "FAILED" | "CANCELLED";
+        SiteInput: {
+            /** @description Required for a scoped operator. Null = platform-global (visible to unscoped operators only). */
+            customer_id?: string | null;
+            /** @description The BSS premise id; unique per customer. */
+            external_ref?: string | null;
+            name: string;
+            street?: string;
+            suburb?: string;
+            city?: string;
+            postal_code?: string;
+            country?: string;
+            /** @description Give both latitude and longitude, or neither. */
+            latitude?: number | null;
+            longitude?: number | null;
+            region_id?: string | null;
+        };
+        Site: components["schemas"]["SiteInput"] & {
+            id: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description Written only where the discovered model of the device has the field writable, and only when the value differs. */
+        CellularProfile: {
+            apn?: string;
+            /** @description 5G SA data network name (a vendor field, e.g. X_ALU-COM_DNN) */
+            dnn?: string;
+            mtu?: number;
+            bootstrap_apn?: string;
+        };
+        ServicePlanInput: {
+            /** @description Required for a scoped operator. Null = a shared plan. */
+            customer_id?: string | null;
+            /** @description The BSS servicePlan code */
+            code: string;
+            name: string;
+            /** @description Config templates applied in order, before the cellular profile */
+            template_ids?: string[];
+            cellular?: components["schemas"]["CellularProfile"];
+            /** @description MCC+MNC (5-6 digits) the IMSI of the SIM must start with; empty allows any */
+            allowed_plmns?: string[];
+            /** @description Forced true when cellular is set */
+            require_discovery?: boolean;
+        };
+        ServicePlan: components["schemas"]["ServicePlanInput"] & {
+            id: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        OnboardingInput: {
+            /** @description Required for a scoped operator; defaults to the customer of a claimed device. */
+            customer_id?: string | null;
+            /** @description Claim a CPE that already connected; fills expected_serial and expected_oui. */
+            device_id?: string | null;
+            expected_oui?: string;
+            /** @description Required unless device_id is given */
+            expected_serial?: string;
+            expected_imei?: string;
+            expected_iccid?: string;
+            expected_imsi?: string;
+            /** @description The BSS account reference; no personal data is stored here. */
+            account_ref?: string;
+            site_id?: string | null;
+            service_plan_id?: string | null;
+            /** @enum {string} */
+            role?: "gateway" | "extender" | "ont" | "other";
+            /** @enum {string} */
+            commercial_model?: "retail" | "wholesale" | "enterprise";
+            external_ref?: string;
+        };
+        Onboarding: {
+            id: string;
+            customer_id?: string | null;
+            device_id?: string | null;
+            expected_oui?: string;
+            expected_serial: string;
+            /** @description Masked */
+            expected_imei?: string;
+            /** @description Masked */
+            expected_iccid?: string;
+            /** @description Masked; keeps the MCC+MNC */
+            expected_imsi?: string;
+            account_ref?: string;
+            site_id?: string | null;
+            service_plan_id?: string | null;
+            role: string;
+            commercial_model: string;
+            /** @enum {string} */
+            source: "console" | "bss" | "import";
+            external_ref?: string;
+            state: components["schemas"]["OnboardingState"];
+            state_reason: string;
+            /** @description Command keys of the configuration jobs */
+            config_jobs: string[];
+            requested_by?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            contacted_at?: string | null;
+            /** Format: date-time */
+            in_service_at?: string | null;
+        };
+        UnclaimedDevice: {
+            id: string;
+            oui_serial: string;
+            manufacturer?: string;
+            product_class?: string;
+            serial_number: string;
+            online_status?: string;
+            /** Format: date-time */
+            last_inform_at?: string | null;
+        };
         Policy: {
             id?: string;
             name?: string;
@@ -7118,6 +7786,8 @@ export interface components {
             scopes: ("tmf:read" | "tmf:write" | "tmf:execute" | "tmf:acknowledge")[];
             account_ids: string[];
             global_access: boolean;
+            /** @description The ACS customer the client is bound to; null for a global or account-listed client */
+            customer_id?: string | null;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */

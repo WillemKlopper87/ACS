@@ -1,0 +1,116 @@
+{
+  "name": "acs/mapping-idempotency-key",
+  "description": "Idempotency-Key on a mapping: the first answer, its replay (Idempotent-Replayed, the same body and Location, nothing done again), and the same key with another body (409 ErrIdempotencyKeyReused).",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0520101, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/bss/v1/mappings",
+      "status": 202,
+      "mutating": true,
+      "body": {
+        "account_id": "contract.0002",
+        "href": "/bss/v1/onboardings/db107963-8621-4b61-91e2-e7a01b440b20",
+        "onboarding_id": "db107963-8621-4b61-91e2-e7a01b440b20",
+        "onboarding_state": "PLANNED",
+        "oui_serial": "A4FC77+3TG02241+CONTRACT02",
+        "plan_matched": true,
+        "role": "gateway",
+        "service_plan": "HOME-5G",
+        "status": "AWAITING_DEVICE"
+      },
+      "request": {
+        "account_id": "contract.0002",
+        "oui_serial": "A4FC77+3TG02241+CONTRACT02",
+        "service_plan": "HOME-5G",
+        "pre_provision": true,
+        "iccid": "***REDACTED***",
+        "place": {
+          "id": "PREM-CONTRACT-1",
+          "name": "14 Oak Ave",
+          "city": "Embalenhle",
+          "country": "ZA"
+        }
+      },
+      "request_headers": {
+        "Idempotency-Key": "sale-contract-0002"
+      },
+      "headers": {
+        "Location": "/bss/v1/onboardings/db107963-8621-4b61-91e2-e7a01b440b20",
+        "Content-Type": "application/json"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/bss/v1/mappings",
+      "status": 202,
+      "mutating": false,
+      "body": {
+        "account_id": "contract.0002",
+        "href": "/bss/v1/onboardings/db107963-8621-4b61-91e2-e7a01b440b20",
+        "onboarding_id": "db107963-8621-4b61-91e2-e7a01b440b20",
+        "onboarding_state": "PLANNED",
+        "oui_serial": "A4FC77+3TG02241+CONTRACT02",
+        "plan_matched": true,
+        "role": "gateway",
+        "service_plan": "HOME-5G",
+        "status": "AWAITING_DEVICE"
+      },
+      "request": {
+        "account_id": "contract.0002",
+        "oui_serial": "A4FC77+3TG02241+CONTRACT02",
+        "service_plan": "HOME-5G",
+        "pre_provision": true,
+        "iccid": "***REDACTED***",
+        "place": {
+          "id": "PREM-CONTRACT-1",
+          "name": "14 Oak Ave",
+          "city": "Embalenhle",
+          "country": "ZA"
+        }
+      },
+      "request_headers": {
+        "Idempotency-Key": "sale-contract-0002"
+      },
+      "headers": {
+        "Location": "/bss/v1/onboardings/db107963-8621-4b61-91e2-e7a01b440b20",
+        "Idempotent-Replayed": "true",
+        "Content-Type": "application/json"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/bss/v1/mappings",
+      "status": 409,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrIdempotencyKeyReused",
+        "title": "Idempotency key reused",
+        "status": 409,
+        "detail": "this Idempotency-Key was already used for a different request",
+        "code": "ErrIdempotencyKeyReused",
+        "error": "ErrIdempotencyKeyReused",
+        "message": "this Idempotency-Key was already used for a different request"
+      },
+      "request": {
+        "account_id": "contract.0002",
+        "oui_serial": "A4FC77+3TG02241+CONTRACT02",
+        "service_plan": "HOME-5G-PLUS",
+        "pre_provision": true,
+        "iccid": "***REDACTED***",
+        "place": {
+          "id": "PREM-CONTRACT-1",
+          "name": "14 Oak Ave",
+          "city": "Embalenhle",
+          "country": "ZA"
+        }
+      },
+      "request_headers": {
+        "Idempotency-Key": "sale-contract-0002"
+      },
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    }
+  ]
+}

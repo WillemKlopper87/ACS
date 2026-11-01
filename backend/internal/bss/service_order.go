@@ -158,7 +158,7 @@ func (r *Repository) ClaimDueServiceOrderItems(ctx context.Context, limit int) (
 }
 
 func (r *Repository) CancelServiceOrder(ctx context.Context, id string) error {
-	res, err := r.db.ExecContext(ctx, `UPDATE service_orders SET cancelled_at=now() WHERE id=$1 AND cancelled_at IS NULL AND NOT EXISTS (SELECT 1 FROM service_order_items WHERE order_id=$1 AND status <> 'PENDING')`, id)
+	res, err := r.db.ExecContext(ctx, `UPDATE service_orders SET cancelled_at=now() WHERE id=$1 AND cancelled_at IS NULL AND NOT EXISTS (SELECT 1 FROM service_order_items WHERE order_id=$1 AND status NOT IN ('PENDING', 'AWAITING_DEVICE'))`, id)
 	if err != nil {
 		return fmt.Errorf("cancel service order: %w", err)
 	}

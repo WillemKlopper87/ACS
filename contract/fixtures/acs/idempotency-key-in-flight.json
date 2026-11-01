@@ -1,0 +1,34 @@
+{
+  "name": "acs/idempotency-key-in-flight",
+  "description": "A retry while the first request with the key is still running (that state is set in the database): 409 ErrIdempotencyKeyInFlight with Retry-After.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0520101, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/bss/v1/mappings",
+      "status": 409,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrIdempotencyKeyInFlight",
+        "title": "Idempotency key in flight",
+        "status": 409,
+        "detail": "a request with this Idempotency-Key is still being processed",
+        "code": "ErrIdempotencyKeyInFlight",
+        "error": "ErrIdempotencyKeyInFlight",
+        "message": "a request with this Idempotency-Key is still being processed"
+      },
+      "request": {
+        "account_id": "contract.0011",
+        "oui_serial": "A4FC77+3TG02241+CONTRACT11",
+        "pre_provision": true
+      },
+      "request_headers": {
+        "Idempotency-Key": "inflight-contract-0011"
+      },
+      "headers": {
+        "Content-Type": "application/json",
+        "Retry-After": "1"
+      }
+    }
+  ]
+}

@@ -30,9 +30,11 @@ import (
 	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
 	"acs/internal/observability"
+	"acs/internal/onboarding"
 	"acs/internal/parameters"
 	"acs/internal/policy"
 	"acs/internal/ratelimit"
+	"acs/internal/secretstore"
 	"acs/internal/sessions"
 	"acs/internal/store"
 	"acs/internal/stun"
@@ -111,6 +113,11 @@ func main() {
 	}
 	if os.Getenv("ACS_CREDENTIAL_ENCRYPTION_KEY") == "" {
 		logger.Warn("ACS_CREDENTIAL_ENCRYPTION_KEY not set on cmd/acs — per-device CWMP Digest credentials encrypted by cmd/api will not verify here")
+	}
+	secretStore, err := secretstore.New(db, os.Getenv(secretstore.KeyEnv))
+	if err != nil {
+		logger.Error("failed to initialize the BSS secret store", "err", err)
+		os.Exit(1)
 	}
 	// audit P1.6: replay state lives in Postgres, not this process's
 	// memory, so a captured Authorization header can't replay cleanly
@@ -225,6 +232,9 @@ func main() {
 		ipLimiter:          ratelimit.New(ipRate, ipBurst, rateLimitIdleTTL),
 		deviceLimiter:      ratelimit.New(deviceRate, deviceBurst, rateLimitIdleTTL),
 		onboardingListener: newOnboardingListener(envOr("ACS_ONBOARDING_LISTENER", "off"), logger),
+		onboarding:         onboarding.NewRepository(db),
+		credentials:        credRepo,
+		secrets:            secretStore,
 		// Wi-Fi insights sampling cadence; 0 disables it.
 		wifiInsights: &wifiInsightsSampler{
 			repo:     wifiinsights.NewRepository(db, wifiinsights.DefaultOUIRegistry()),
@@ -481,6 +491,13 @@ type handler struct {
 	deviceLimiter      *ratelimit.Limiter
 	onboardingListener *onboardingListener
 	wifiInsights       *wifiInsightsSampler
+	// onboarding and credentials drive sold CPEs to IN_SERVICE; nil
+	// onboarding turns the reconciler off.
+	onboarding  *onboarding.Repository
+	credentials *credentials.Repository
+	// secrets opens the sealed BSS secret handles a SET_PARAMETER job
+	// names (I4); nil or keyless fails such jobs.
+	secrets *secretstore.Store
 
 	// sharedCredentialBootstrapOnly prevents the legacy fleet credential
 	// from authenticating an identity that already exists or continuing a

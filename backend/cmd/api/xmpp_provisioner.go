@@ -325,7 +325,9 @@ func (x *xmppProvisioner) stepSet(ctx context.Context, p *xmppprov.Provisioning,
 		// Known issue S1: like credential rotation, the SET payload (and,
 		// after success, the parameter cache until the confirmation read
 		// returns the CPE's masked value) holds the password in plaintext.
-		return x.jobs.Create(ctx, p.DeviceID, jobs.TypeSetParameter, jobs.SetParameterPayload{Parameters: writes}, xmppProvCreatedBy)
+		// Provisioning owns the XMPP Connection Request settings, which every
+		// other write path is refused (parameters.ProtectedReason).
+		return x.jobs.Create(jobs.AllowProtectedWrites(ctx, "XMPP provisioning"), p.DeviceID, jobs.TypeSetParameter, jobs.SetParameterPayload{Parameters: writes}, xmppProvCreatedBy)
 	})
 	if buildErr != nil {
 		return x.fail(ctx, p, "%s: %v", p.State, buildErr)

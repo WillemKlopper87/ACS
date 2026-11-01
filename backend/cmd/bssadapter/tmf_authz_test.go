@@ -92,12 +92,12 @@ func TestAuthorizeBSSAccountEnforcesOAuthAccountPolicy(t *testing.T) {
 	r.Header.Set("Authorization", "Bearer "+tmfTestToken(t, secret, []string{bss.ScopeTMFExecute}, []string{"acct-a"}, false))
 
 	rr := httptest.NewRecorder()
-	if !h.authorizeBSSAccount(rr, r, "acct-a") {
+	if !h.authorizeBSSAccount(rr, r, bss.ScopeTMFRead, "acct-a") {
 		t.Fatalf("allowed account rejected: %d %s", rr.Code, rr.Body.String())
 	}
 
 	rr = httptest.NewRecorder()
-	if h.authorizeBSSAccount(rr, r, "acct-b") {
+	if h.authorizeBSSAccount(rr, r, bss.ScopeTMFRead, "acct-b") {
 		t.Fatal("cross-account legacy BSS request was accepted")
 	}
 	if rr.Code != http.StatusNotFound {
@@ -110,7 +110,7 @@ func TestAuthorizeBSSAccountRetainsLegacyCompatibility(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/bss/v1/orders", nil)
 	r.Header.Set("Authorization", "Bearer legacy-shared-token")
 	rr := httptest.NewRecorder()
-	if !h.authorizeBSSAccount(rr, r, "any-account") {
+	if !h.authorizeBSSAccount(rr, r, bss.ScopeTMFRead, "any-account") {
 		t.Fatalf("legacy token rejected: %d %s", rr.Code, rr.Body.String())
 	}
 }

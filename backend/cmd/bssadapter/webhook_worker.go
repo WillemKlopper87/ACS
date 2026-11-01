@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -175,11 +176,11 @@ func (h *handler) deliverDueWebhooks(ctx context.Context, client *http.Client) {
 		return
 	}
 	for _, d := range deliveries {
-		if h.sendWebhookDelivery(ctx, client, d) {
+		if ok, reason := h.sendWebhookDelivery(ctx, client, d); ok {
 			if err := h.webhooks.MarkDelivered(ctx, d.ID); err != nil {
 				h.logger.Error("failed to mark webhook delivery delivered", "err", err, "delivery_id", d.ID)
 			}
-		} else if err := h.webhooks.MarkAttemptFailed(ctx, d.ID); err != nil {
+		} else if err := h.webhooks.MarkAttemptFailed(ctx, d.ID, reason); err != nil {
 			h.logger.Error("failed to mark webhook delivery attempt failed", "err", err, "delivery_id", d.ID)
 		}
 	}
@@ -196,47 +197,54 @@ func (h *handler) deliverDueWebhooks(ctx context.Context, client *http.Client) {
 // hex-encode the MAC and use a plain shared secret, where Standard
 // Webhooks base64-encodes it and expects a whsec_-prefixed, base64-decoded
 // secret. Only the signed-string construction and header names match.
-func (h *handler) sendWebhookDelivery(ctx context.Context, client *http.Client, d bss.WebhookDelivery) bool {
+//
+// During a secret rotation Webhook-Signature carries one signature per
+// secret ("v1,<new> v1,<previous>"); a receiver accepts if any verifies.
+// It reports why a failed attempt failed, for the delivery view.
+func (h *handler) sendWebhookDelivery(ctx context.Context, client *http.Client, d bss.WebhookDelivery) (bool, string) {
 	// audit H-7: re-checked at send time, not just at subscription
 	// creation — a target allowed when the subscription was created
 	// shouldn't be trusted forever if the policy tightens later.
 	if u, err := url.Parse(d.TargetURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		h.logger.Warn("webhook delivery target has an invalid scheme, refusing", "delivery_id", d.ID, "target_url", d.TargetURL)
-		return false
+		return false, "target URL has an invalid scheme"
 	} else if err := h.netPolicy.CheckHost(ctx, u.Hostname()); err != nil {
 		h.logger.Warn("webhook delivery target rejected by network policy", "err", err, "delivery_id", d.ID, "target_url", d.TargetURL)
-		return false
+		return false, "target refused by the network policy"
 	}
 
 	// Fresh timestamp per attempt, not per delivery: a retry an hour later
 	// must still land inside the consumer's freshness window, while any
 	// captured copy of an earlier attempt falls outside it.
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-	signature := webhookSignature(d.Secret, d.ID, timestamp, d.Payload)
+	signature := "v1," + webhookSignature(d.Secret, d.ID, timestamp, d.Payload)
+	if d.PreviousSecret != "" {
+		signature += " v1," + webhookSignature(d.PreviousSecret, d.ID, timestamp, d.Payload)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.TargetURL, bytes.NewReader(d.Payload))
 	if err != nil {
 		h.logger.Error("failed to build webhook delivery request", "err", err, "delivery_id", d.ID)
-		return false
+		return false, "could not build the request"
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Webhook-Id", d.ID)
 	req.Header.Set("Webhook-Timestamp", timestamp)
-	req.Header.Set("Webhook-Signature", "v1,"+signature)
+	req.Header.Set("Webhook-Signature", signature)
 	req.Header.Set("X-Webhook-Event", d.EventType)
 
 	resp, err := client.Do(req)
 	if err != nil {
 		h.logger.Warn("webhook delivery request failed", "err", err, "delivery_id", d.ID, "target_url", d.TargetURL, "attempt", d.Attempts+1)
-		return false
+		return false, "request failed: could not reach the receiver"
 	}
 	defer resp.Body.Close()
 
-	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
-	if !ok {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		h.logger.Warn("webhook delivery rejected", "delivery_id", d.ID, "target_url", d.TargetURL, "status", resp.StatusCode, "attempt", d.Attempts+1)
+		return false, fmt.Sprintf("receiver answered HTTP %d", resp.StatusCode)
 	}
-	return ok
+	return true, ""
 }
 
 // webhookSecretKeyMaterial resolves the HMAC key and output encoding for a
@@ -340,7 +348,7 @@ func (h *handler) createWebhookSubscription(w http.ResponseWriter, r *http.Reque
 		if !h.authorizeBSSFleet(w, r) {
 			return
 		}
-	} else if !h.authorizeBSSAccount(w, r, *req.AccountID) {
+	} else if !h.authorizeBSSAccount(w, r, bss.ScopeTMFWrite, *req.AccountID) {
 		return
 	}
 	// audit H-7: validate at save time too, not only at delivery.
@@ -374,7 +382,7 @@ func (h *handler) listWebhookSubscriptions(w http.ResponseWriter, r *http.Reques
 		}
 		subs, err = h.webhooks.ListSubscriptions(r.Context())
 	} else {
-		if !h.authorizeBSSAccount(w, r, accountID) {
+		if !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, accountID) {
 			return
 		}
 		subs, err = h.webhooks.ListSubscriptionsForAccount(r.Context(), accountID)
@@ -407,7 +415,7 @@ func (h *handler) deleteWebhookSubscription(w http.ResponseWriter, r *http.Reque
 		if !h.authorizeBSSFleet(w, r) {
 			return
 		}
-	} else if !h.authorizeBSSAccount(w, r, *sub.AccountID) {
+	} else if !h.authorizeBSSAccount(w, r, bss.ScopeTMFWrite, *sub.AccountID) {
 		return
 	}
 	if err := h.webhooks.DeleteSubscription(r.Context(), id); err != nil {

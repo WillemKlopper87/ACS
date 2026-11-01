@@ -1,0 +1,47 @@
+{
+  "name": "acs/tmf641-order-failed",
+  "description": "A delete naming a device that is not the one in the role: the item FAILS and nothing is ended (the order state is failed). TMF641 order states are acknowledged (work outstanding; see tmf641-add-awaiting-device), completed, failed, partial and cancelled; there is no inProgress.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0520101, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/tmf-api/serviceOrdering/v4/serviceOrder",
+      "status": 201,
+      "mutating": true,
+      "body": {
+        "externalId": "SO-CONTRACT-STALE",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/0aa73ae8-0542-47be-add8-a8669574504b",
+        "id": "0aa73ae8-0542-47be-add8-a8669574504b",
+        "orderDate": "2026-11-01T19:10:47.406899Z",
+        "orderItem": [
+          {
+            "id": "54623395-8ac5-4200-b064-50bbd9af4db1",
+            "action": "delete",
+            "state": "FAILED",
+            "role": "gateway"
+          }
+        ],
+        "relatedParty": [
+          {
+            "id": "contract.0008",
+            "role": "customer"
+          }
+        ],
+        "state": "failed"
+      },
+      "request": {
+        "externalId": "SO-CONTRACT-STALE",
+        "accountId": "contract.0008",
+        "orderItem": [
+          {
+            "id": "1",
+            "action": "delete",
+            "role": "gateway",
+            "ouiSerial": "A4FC77+3TG02241+CONTRACT99",
+            "unassignReason": "return"
+          }
+        ]
+      }
+    }
+  ]
+}

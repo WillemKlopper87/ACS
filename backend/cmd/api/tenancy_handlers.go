@@ -170,6 +170,35 @@ func (h *handler) assignDeviceCustomer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
+	if req.CustomerID != nil && *req.CustomerID == "" {
+		req.CustomerID = nil
+	}
+	// S6: a scoped operator may move a device only to a customer in their
+	// own scope, and may not clear it (an unassigned device is outside
+	// every scope), or a manager could hand a CPE to another tenant.
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if scoped && !deviceInScope(req.CustomerID, customerIDs) {
+		http.Error(w, "customer_id is required and must be within your assigned scope", http.StatusBadRequest)
+		return
+	}
+	// A device still mapped to another customer's BSS account would stay
+	// under that ISP's control: unassign it there first.
+	owners, err := h.tenancy.MappedAccountCustomers(r.Context(), id)
+	if err != nil {
+		h.logger.Error("failed to read device mappings", "err", err, "device_id", id)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	for _, owner := range owners {
+		if req.CustomerID == nil || owner != *req.CustomerID {
+			http.Error(w, "the device is mapped to a BSS account of another customer; unassign it from that account first", http.StatusConflict)
+			return
+		}
+	}
 	if err := h.tenancy.AssignDeviceCustomer(r.Context(), id, req.CustomerID); err != nil {
 		h.logger.Error("failed to assign device customer", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)

@@ -17,6 +17,33 @@ type ParameterWrite struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
 	Type  string `json:"type"`
+	// SecretHandle replaces Value for a secret the BSS stored with POST
+	// /bss/v1/secrets (I4): Value is empty and the CWMP gateway opens the
+	// handle when it sends the write.
+	SecretHandle string `json:"secret_handle,omitempty"`
+}
+
+// passphraseInput reads MODIFY_WIFI's passphrase: a value
+// (wifi_password) or a sealed handle (wifi_password_handle), never both.
+func passphraseInput(params map[string]string) (value, handle string, err error) {
+	value, handle = params["wifi_password"], params["wifi_password_handle"]
+	if value != "" && handle != "" {
+		return "", "", fmt.Errorf("%w: send wifi_password or wifi_password_handle, not both", ErrInvalidParameters)
+	}
+	return value, handle, nil
+}
+
+// SecretHandles lists the distinct handles of writes.
+func SecretHandles(writes []ParameterWrite) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, w := range writes {
+		if w.SecretHandle != "" && !seen[w.SecretHandle] {
+			seen[w.SecretHandle] = true
+			out = append(out, w.SecretHandle)
+		}
+	}
+	return out
 }
 
 var (
@@ -137,12 +164,16 @@ func translateModifyWifiWithCapabilities(params map[string]string, dataModelRoot
 		}
 		out = append(out, ParameterWrite{Name: path, Value: ssid, Type: "string"})
 	}
-	if pass := params["wifi_password"]; pass != "" {
+	pass, handle, err := passphraseInput(params)
+	if err != nil {
+		return nil, err
+	}
+	if pass != "" || handle != "" {
 		path, err := adapters.ResolveWritablePath(dataModelRoot, adapters.WiFiKeyPassphrase, discovered)
 		if err != nil {
 			return nil, fmt.Errorf("%w: Wi-Fi passphrase: %v", ErrUnsupportedAction, err)
 		}
-		out = append(out, ParameterWrite{Name: path, Value: pass, Type: "string"})
+		out = append(out, ParameterWrite{Name: path, Value: pass, Type: "string", SecretHandle: handle})
 	}
 	if raw := params["wifi_enabled"]; raw != "" {
 		value, err := cwmpBoolean(raw)
@@ -156,7 +187,7 @@ func translateModifyWifiWithCapabilities(params map[string]string, dataModelRoot
 		out = append(out, ParameterWrite{Name: path, Value: value, Type: "boolean"})
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("%w: MODIFY_WIFI requires at least one of wifi_ssid, wifi_password, wifi_enabled", ErrInvalidParameters)
+		return nil, fmt.Errorf("%w: MODIFY_WIFI requires at least one of wifi_ssid, wifi_password (or wifi_password_handle), wifi_enabled", ErrInvalidParameters)
 	}
 	return out, nil
 }

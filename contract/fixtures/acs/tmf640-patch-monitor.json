@@ -1,0 +1,64 @@
+{
+  "name": "acs/tmf640-patch-monitor",
+  "description": "TMF640 PATCH with X-Idempotency-Key, its replay (same Monitor, nothing dispatched again), the Monitor, and an unknown Monitor (404).",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0520101, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "PATCH",
+      "path": "/tmf-api/serviceActivationAndConfiguration/v4/service/5868cfe3-8da4-48d3-af6e-f7d1f7cb7df2",
+      "status": 202,
+      "mutating": true,
+      "body": {
+        "id": "intent-contract-1",
+        "href": "/tmf-api/serviceActivationAndConfiguration/v4/monitor/intent-contract-1",
+        "state": "InProgress",
+        "sourceHref": "/tmf-api/serviceActivationAndConfiguration/v4/service/5868cfe3-8da4-48d3-af6e-f7d1f7cb7df2"
+      },
+      "request": {
+        "state": "inactive"
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/tmf-api/serviceActivationAndConfiguration/v4/service/5868cfe3-8da4-48d3-af6e-f7d1f7cb7df2",
+      "status": 202,
+      "mutating": false,
+      "body": {
+        "id": "intent-contract-1",
+        "href": "/tmf-api/serviceActivationAndConfiguration/v4/monitor/intent-contract-1",
+        "state": "InProgress",
+        "sourceHref": "/tmf-api/serviceActivationAndConfiguration/v4/service/5868cfe3-8da4-48d3-af6e-f7d1f7cb7df2"
+      },
+      "request": {
+        "state": "inactive"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/tmf-api/serviceActivationAndConfiguration/v4/monitor/intent-contract-1",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "id": "intent-contract-1",
+        "href": "/tmf-api/serviceActivationAndConfiguration/v4/monitor/intent-contract-1",
+        "state": "InProgress",
+        "sourceHref": "/tmf-api/serviceActivationAndConfiguration/v4/service/5868cfe3-8da4-48d3-af6e-f7d1f7cb7df2"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/tmf-api/serviceActivationAndConfiguration/v4/monitor/never-issued",
+      "status": 404,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrNotFound",
+        "title": "Not found",
+        "status": 404,
+        "detail": "no such monitor",
+        "code": "ErrNotFound",
+        "error": "ErrNotFound",
+        "message": "no such monitor"
+      }
+    }
+  ]
+}

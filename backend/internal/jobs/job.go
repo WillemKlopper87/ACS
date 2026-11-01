@@ -134,6 +134,9 @@ func (r *Repository) Create(ctx context.Context, deviceID, jobType string, paylo
 	if err != nil {
 		return nil, fmt.Errorf("marshal job payload: %w", err)
 	}
+	if err := checkProtectedWrite(ctx, jobType, payloadJSON); err != nil {
+		return nil, err
+	}
 
 	id := uuid.New().String()
 	commandKey := newCommandKey(jobType)
@@ -157,6 +160,9 @@ func (r *Repository) CreateWithIdempotency(ctx context.Context, deviceID, jobTyp
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal job payload: %w", err)
+	}
+	if err := checkProtectedWrite(ctx, jobType, payloadJSON); err != nil {
+		return nil, err
 	}
 	hash := fmt.Sprintf("%x", sha256.Sum256(payloadJSON))
 	row := r.db.QueryRowContext(ctx, `INSERT INTO jobs (id, command_key, device_id, type, status, payload, created_by, idempotency_key, request_hash)
@@ -193,6 +199,9 @@ func (r *Repository) CreateWithMaxAttempts(ctx context.Context, deviceID, jobTyp
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal job payload: %w", err)
+	}
+	if err := checkProtectedWrite(ctx, jobType, payloadJSON); err != nil {
+		return nil, err
 	}
 
 	id := uuid.New().String()
