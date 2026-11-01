@@ -39,6 +39,7 @@ import (
 	"acs/internal/observability"
 	"acs/internal/onboarding"
 	"acs/internal/ratelimit"
+	"acs/internal/secretstore"
 	"acs/internal/store"
 )
 
@@ -157,23 +158,36 @@ func main() {
 		webhookNetPolicy.AllowedCIDRs = cidrs
 	}
 
+	secretStore, err := secretstore.New(db, os.Getenv(secretstore.KeyEnv))
+	if err != nil {
+		logger.Error("failed to initialize the secret store", "err", err)
+		os.Exit(1)
+	}
+	if !secretStore.Enabled() {
+		logger.Warn(secretstore.KeyEnv + " not set — POST /bss/v1/secrets is disabled and orders cannot name a wifi_password_handle")
+	}
+
 	h := &handler{
-		logger:               logger,
-		mappings:             bss.NewRepository(db),
-		onboarding:           onboarding.NewRepository(db),
-		acs:                  bss.NewACSClient(acsBaseURL, 10*time.Second, internalServiceToken),
-		auditor:              observability.NewAuditor(db),
-		token:                token,
-		oauthClients:         bss.NewOAuthRepository(db),
-		oauthSigningSecret:   oauthSigningSecret,
-		requireCustomerBound: os.Getenv("ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS") == "true",
-		saleTTL:              saleTTLFromEnv(logger),
-		metrics:              metrics,
-		walledGarden:         walledGarden,
-		webhooks:             bss.NewWebhookRepository(db),
-		alertPolicies:        alerting.NewRepository(db),
-		alertIncidents:       alerting.NewIncidentRepository(db),
-		netPolicy:            webhookNetPolicy,
+		logger:                logger,
+		mappings:              bss.NewRepository(db),
+		onboarding:            onboarding.NewRepository(db),
+		acs:                   bss.NewACSClient(acsBaseURL, 10*time.Second, internalServiceToken),
+		auditor:               observability.NewAuditor(db),
+		token:                 token,
+		oauthClients:          bss.NewOAuthRepository(db),
+		oauthSigningSecret:    oauthSigningSecret,
+		requireCustomerBound:  os.Getenv("ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS") == "true",
+		saleTTL:               saleTTLFromEnv(logger),
+		secrets:               secretStore,
+		secretTTL:             secretTTLFromEnv(logger),
+		secretsBehindTLSProxy: os.Getenv("ACS_BSS_SECRETS_BEHIND_TLS_PROXY") == "true",
+		requireSecretHandles:  os.Getenv("ACS_BSS_REQUIRE_SECRET_HANDLES") == "true",
+		metrics:               metrics,
+		walledGarden:          walledGarden,
+		webhooks:              bss.NewWebhookRepository(db),
+		alertPolicies:         alerting.NewRepository(db),
+		alertIncidents:        alerting.NewIncidentRepository(db),
+		netPolicy:             webhookNetPolicy,
 	}
 
 	mux := http.NewServeMux()
@@ -196,6 +210,8 @@ func main() {
 	mux.HandleFunc("POST /bss/v1/onboardings/{id}/cancel", metrics.InstrumentHTTP("POST /bss/v1/onboardings/{id}/cancel", h.cancelSale))
 	mux.HandleFunc("GET /bss/v1/devices", metrics.InstrumentHTTP("GET /bss/v1/devices", h.listCustomerDevices))
 	mux.HandleFunc("GET /bss/v1/events", metrics.InstrumentHTTP("GET /bss/v1/events", h.listEvents))
+	mux.HandleFunc("POST /bss/v1/secrets", metrics.InstrumentHTTP("POST /bss/v1/secrets", h.createSecret))
+	mux.HandleFunc("DELETE /bss/v1/secrets/{handle}", metrics.InstrumentHTTP("DELETE /bss/v1/secrets/{handle}", h.deleteSecret))
 	mux.HandleFunc("GET /bss/v1/webhooks/{id}/deliveries", metrics.InstrumentHTTP("GET /bss/v1/webhooks/{id}/deliveries", h.listWebhookDeliveries))
 	mux.HandleFunc("POST /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver", metrics.InstrumentHTTP("POST /bss/v1/webhooks/{id}/deliveries/{delivery_id}/redeliver", h.redeliverWebhook))
 	mux.HandleFunc("POST /bss/v1/webhooks/{id}/rotate-secret", metrics.InstrumentHTTP("POST /bss/v1/webhooks/{id}/rotate-secret", h.rotateWebhookSecret))
@@ -441,17 +457,27 @@ type handler struct {
 	onboarding *onboarding.Repository
 	// saleTTL cancels a pre-provisioned sale no CPE contacted in time
 	// (ACS_BSS_SALE_TTL); zero keeps sales open indefinitely.
-	saleTTL            time.Duration
-	acs                *bss.ACSClient
-	auditor            *observability.Auditor
-	token              string
-	oauthClients       *bss.OAuthRepository
-	oauthSigningSecret []byte
-	metrics            *observability.Metrics
-	walledGarden       bss.WalledGardenConfig
-	webhooks           *bss.WebhookRepository
-	alertPolicies      *alerting.Repository
-	alertIncidents     *alerting.IncidentRepository
+	saleTTL time.Duration
+	// secrets holds sealed secret handles (I4, POST /bss/v1/secrets);
+	// keyless, it refuses them. secretTTL is a handle's longest life
+	// (ACS_BSS_SECRET_TTL). secretsBehindTLSProxy accepts secrets on a
+	// plaintext listener that only a TLS-terminating proxy reaches
+	// (ACS_BSS_SECRETS_BEHIND_TLS_PROXY); requireSecretHandles refuses a
+	// plain wifi_password (ACS_BSS_REQUIRE_SECRET_HANDLES).
+	secrets               *secretstore.Store
+	secretTTL             time.Duration
+	secretsBehindTLSProxy bool
+	requireSecretHandles  bool
+	acs                   *bss.ACSClient
+	auditor               *observability.Auditor
+	token                 string
+	oauthClients          *bss.OAuthRepository
+	oauthSigningSecret    []byte
+	metrics               *observability.Metrics
+	walledGarden          bss.WalledGardenConfig
+	webhooks              *bss.WebhookRepository
+	alertPolicies         *alerting.Repository
+	alertIncidents        *alerting.IncidentRepository
 	// netPolicy bounds where a webhook target_url (BSS-operator-
 	// controlled) may point (audit H-7) -- checked at subscription
 	// creation and again at delivery time.
@@ -854,6 +880,13 @@ func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ErrUnsupportedAction", err.Error())
 		return
 	}
+	if err := h.claimSecrets(r.Context(), r, req.Parameters, params, mapping.DeviceID, false); err != nil {
+		if !writeSecretError(w, err) {
+			h.logger.Error("failed to check secret handles", "err", err)
+			writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		}
+		return
+	}
 	writeJSON(w, http.StatusOK, actionPreflightResponse{AccountID: req.AccountID, DeviceID: mapping.DeviceID, Action: req.Action, Parameters: params})
 }
 
@@ -1013,6 +1046,13 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", err.Error())
+		return
+	}
+	if err := h.claimSecrets(r.Context(), r, req.Parameters, params, mapping.DeviceID, true); err != nil {
+		if !writeSecretError(w, err) {
+			h.logger.Error("failed to claim secret handles", "err", err, "external_order_id", req.ExternalOrderID)
+			writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		}
 		return
 	}
 

@@ -197,6 +197,7 @@ func (h *handler) runPreProvisionSyncLoop(ctx context.Context) {
 // their onboardings. Mappings go first, so an item whose CPE reached
 // IN_SERVICE completes with its mapping in the same pass.
 func (h *handler) syncPreProvisioned(ctx context.Context) {
+	h.sweepSecrets(ctx)
 	if h.onboarding == nil {
 		return
 	}

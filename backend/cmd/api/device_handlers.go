@@ -449,6 +449,9 @@ type parameterInput struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
 	Type  string `json:"type"`
+	// SecretHandle: a sealed BSS secret (internal/secretstore) in place of
+	// Value. Only the BSS adapter's service identity may send one.
+	SecretHandle string `json:"secret_handle,omitempty"`
 }
 
 func buildSetParameterPayload(inputs []parameterInput) (jobs.SetParameterPayload, error) {
@@ -459,6 +462,14 @@ func buildSetParameterPayload(inputs []parameterInput) (jobs.SetParameterPayload
 	for i, p := range inputs {
 		if p.Name == "" {
 			return jobs.SetParameterPayload{}, errors.New("each parameter requires a name")
+		}
+		if p.SecretHandle != "" {
+			// The value is not here to validate; a bad one is a CPE fault.
+			if p.Value != "" {
+				return jobs.SetParameterPayload{}, fmt.Errorf("parameter %q has both a value and a secret_handle", p.Name)
+			}
+			payload.Parameters[i] = jobs.ParameterWrite{Name: p.Name, Type: p.Type, SecretHandle: p.SecretHandle}
+			continue
 		}
 		if strings.HasPrefix(p.Name, "Device.") {
 			dictionary, err := datamodel.Load("cwmp", "")
@@ -533,6 +544,15 @@ func validateDiscoveredWritableParameters(names map[string]bool, payload jobs.Se
 	return nil
 }
 
+func hasSecretHandle(inputs []parameterInput) bool {
+	for _, p := range inputs {
+		if p.SecretHandle != "" {
+			return true
+		}
+	}
+	return false
+}
+
 type putParametersRequest struct {
 	Parameters []parameterInput `json:"parameters"`
 }
@@ -551,6 +571,14 @@ func (h *handler) putParameters(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
+	}
+	if hasSecretHandle(req.Parameters) {
+		// Handles are claimed for a device by the BSS adapter; an operator
+		// has no use for one and must not spend a BSS customer's handle.
+		if claims, ok := operatorClaims(r.Context()); ok && claims.Subject != serviceSubject {
+			http.Error(w, "secret_handle is accepted only from the BSS adapter", http.StatusBadRequest)
+			return
+		}
 	}
 	payload, err := buildSetParameterPayload(req.Parameters)
 	if err != nil {
@@ -647,6 +675,10 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 	var setParamPayload jobs.SetParameterPayload
 	var wifi wifiSettings
 	if req.Action == jobs.TypeSetParameter {
+		if hasSecretHandle(req.Parameters) {
+			http.Error(w, "secret_handle is not accepted on bulk actions", http.StatusBadRequest)
+			return
+		}
 		payload, err := buildSetParameterPayload(req.Parameters)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)

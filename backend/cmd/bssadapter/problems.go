@@ -42,6 +42,9 @@ var problemTitles = map[string]string{
 	"ErrSaleWrongState":         "Sale in the wrong state",
 	"ErrGlobalClientsDisabled":  "Global clients disabled",
 	"ErrClientNotCustomerBound": "Client not customer-bound",
+	"ErrTLSRequired":            "TLS required",
+	"ErrSecretStoreDisabled":    "Secret store disabled",
+	"ErrSecretHandleInvalid":    "Secret handle invalid",
 	// OAuth 2.0 (RFC 6749 §5.2, RFC 6750 §3.1) codes keep their spelling.
 	"invalid_token":          "Invalid token",
 	"insufficient_scope":     "Insufficient scope",

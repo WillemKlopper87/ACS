@@ -62,6 +62,7 @@ failure we have either seen or specifically designed against.
       in your system, and both appear in your logs. They are what make an
       issue traceable on our side.
 - [ ] `wifi_password` redacted from your logs, traces and error reports.
+- [ ] Wi-Fi passphrases sent as sealed handles (`wifi_password_handle`, 02 §8.2), with a new handle for each new order.
 - [ ] Dead-lettered orders are surfaced to a human rather than retried
       indefinitely.
 - [ ] Alerting on: token refresh failures, sustained `429`, any `500`,

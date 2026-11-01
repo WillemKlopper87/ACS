@@ -293,6 +293,9 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			params, translateErr := h.translateActionForDevice(r.Context(), "MODIFY_WIFI", item.Parameters, mapping.DeviceID)
+			if translateErr == nil {
+				translateErr = h.claimSecrets(r.Context(), r, item.Parameters, params, mapping.DeviceID, true)
+			}
 			if translateErr != nil {
 				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", translateErr.Error())
 				items[i].Status = "FAILED"

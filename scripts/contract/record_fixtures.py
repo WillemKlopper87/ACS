@@ -41,7 +41,7 @@ import urllib.request
 
 # SIM identifiers in request examples are synthetic, but fixtures travel:
 # they are redacted like secrets.
-SECRET_KEYS = {"access_token", "client_secret", "secret", "iccid", "imsi"}
+SECRET_KEYS = {"access_token", "client_secret", "secret", "iccid", "imsi", "value", "wifi_password"}
 REDACTED = "***REDACTED***"
 
 API = os.environ["ACS_API_URL"].rstrip("/")
@@ -386,6 +386,7 @@ def main():
 
     if os.environ.get("ACS_CWMP_URL"):
         record_webhook_bodies(token)
+        record_secret_handles(token)
 
     for name, fixture in fixtures.items():
         with open(os.path.join(OUT, name + ".json"), "w", encoding="utf-8", newline="\n") as f:
@@ -394,10 +395,10 @@ def main():
     print(f"wrote {len(fixtures)} fixtures to {OUT}")
 
 
-def map_device(token, n):
+def map_device(token, n, root="DEVICE2"):
     serial = f"CONTRACT{n:02d}"
     sql(f"""INSERT INTO devices (id, oui_serial, oui, product_class, serial_number, manufacturer, data_model_root, online_status)
-            VALUES (gen_random_uuid(), 'A4FC77+3TG02241+{serial}', 'A4FC77', '3TG02241', '{serial}', 'Nokia', 'DEVICE2', 'OFFLINE');""")
+            VALUES (gen_random_uuid(), 'A4FC77+3TG02241+{serial}', 'A4FC77', '3TG02241', '{serial}', 'Nokia', '{root}', 'OFFLINE');""")
     status, _ = call(BSS, "POST", "/bss/v1/mappings", {"account_id": f"contract.00{n:02d}", "oui_serial": f"A4FC77+3TG02241+{serial}",
                                                       "service_plan": "HOME-5G"}, token)
     assert status == 200, status
@@ -561,6 +562,66 @@ def record_webhook_bodies(token):
     record("webhook-bodies", "One delivered webhook body per event type: the envelope plus the older TMF688 keys. "
            "All come from real CWMP sessions with cmd/acs: Informs drive the onboarding events, a parameter write the CPE "
            "refuses with fault 9007 raises DeviceFault, and the next write it accepts clears it (DeviceRecovered).", exchanges)
+
+
+def record_secret_handles(token):
+    """A Wi-Fi passphrase sent as a sealed handle (I4), through a real CWMP
+    session: stored, preflighted, ordered, refused on reuse, opened when the
+    write is sent; then a handle that expires while its job waits."""
+    map_device(token, 13, root="IGD1")
+    account, passphrase = "contract.0013", "Contract-wifi-" + base64.b16encode(os.urandom(4)).decode()
+    igd = {"InternetGatewayDevice.DeviceInfo.SoftwareVersion": "1.2601.00.0101"}
+    exchanges = []
+
+    status, handle = call(BSS, "POST", "/bss/v1/secrets", {"value": passphrase}, token)
+    assert status == 201, (status, handle)
+    exchanges.append(exchange("POST", "/bss/v1/secrets", status, handle, True, {"value": passphrase}, dict(LAST_HEADERS)))
+    params = {"wifi_password_handle": handle["handle"]}
+    pre = {"account_id": account, "action": "MODIFY_WIFI", "parameters": params}
+    status, resp = call(BSS, "POST", "/bss/v1/actions/preflight", pre, token)
+    exchanges.append(exchange("POST", "/bss/v1/actions/preflight", status, resp, False, pre))
+    order = {"external_order_id": "ORD-CONTRACT-SECRET", "account_id": account, "action": "MODIFY_WIFI", "parameters": params}
+    status, placed = call(BSS, "POST", "/bss/v1/orders", order, token)
+    assert status == 202, (status, placed)
+    exchanges.append(exchange("POST", "/bss/v1/orders", status, placed, True, order))
+    again = dict(order, external_order_id="ORD-CONTRACT-SECRET-2")
+    status, resp = call(BSS, "POST", "/bss/v1/orders", again, token)
+    exchanges.append(exchange("POST", "/bss/v1/orders", status, resp, False, again))
+
+    values = dict(igd)
+    seen = cwmp_session("CONTRACT13", igd, False, values)
+    assert passphrase in values.values(), ("the CPE did not get the passphrase", seen)
+    for (stored,) in query("SELECT payload::text FROM jobs;") + query("SELECT parameters::text FROM bss_orders;"):
+        assert passphrase not in stored, "the passphrase is stored in clear"
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        status, job = call(BSS, "GET", f"/bss/v1/jobs/{placed['command_key']}", token=token)
+        if job.get("status") in ("SUCCESS", "FAILED"):
+            break
+        cwmp_session("CONTRACT13", igd, False, values)
+    exchanges.append(exchange("GET", f"/bss/v1/jobs/{placed['command_key']}", status, job, False))
+    status, resp = call(BSS, "DELETE", f"/bss/v1/secrets/{handle['handle']}", None, token)
+    exchanges.append(exchange("DELETE", "/bss/v1/secrets/{handle} (already used)", status, resp, False))
+    record("secret-handle-order", "A Wi-Fi passphrase as a sealed handle: POST /bss/v1/secrets (the value is redacted here; the "
+           "recording stack is plain HTTP on localhost with ACS_BSS_SECRETS_BEHIND_TLS_PROXY=true, production takes it over TLS "
+           "only), a preflight that checks it, the order that claims it, a second order naming it (400 ErrSecretHandleInvalid), "
+           "the job after the CPE session in which the ACS opened the handle and sent the value, and a delete of the used "
+           "handle (404). The value is in no order, job, event or log.", exchanges)
+
+    status, late = call(BSS, "POST", "/bss/v1/secrets", {"value": passphrase}, token)
+    assert status == 201, status
+    order = {"external_order_id": "ORD-CONTRACT-SECRET-LATE", "account_id": account, "action": "MODIFY_WIFI",
+             "parameters": {"wifi_password_handle": late["handle"]}}
+    status, placed = call(BSS, "POST", "/bss/v1/orders", order, token)
+    assert status == 202, (status, placed)
+    # The device stays away past the handle's expiry: aged in the database.
+    sql(f"UPDATE bss_secrets SET expires_at = now() - interval '1 second' WHERE id = '{late['handle']}';")
+    cwmp_session("CONTRACT13", igd, False, dict(igd))
+    status, job = call(BSS, "GET", f"/bss/v1/jobs/{placed['command_key']}", token=token)
+    record("secret-handle-expired", "A handle that expired while its job waited for the CPE (the expiry is set in the database): "
+           "at dispatch the job FAILS with SECRET_HANDLE_UNAVAILABLE and nothing is written. Store the secret again and send "
+           "a new order.", [exchange("POST", "/bss/v1/orders", 202, placed, True, order),
+                            exchange("GET", f"/bss/v1/jobs/{placed['command_key']}", status, job, False)])
 
 
 if __name__ == "__main__":

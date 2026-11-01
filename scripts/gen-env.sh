@@ -45,6 +45,9 @@ export ACS_GRAFANA_DB_PASSWORD="$(openssl rand -base64 24)"
 
 export ACS_JWT_SIGNING_SECRET="$(openssl rand -base64 32)"
 export ACS_CREDENTIAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+# Seals BSS secret handles (POST /bss/v1/secrets); cmd/bssadapter and
+# cmd/acs both need it. Changing it invalidates handles not yet used.
+export ACS_BSS_SECRET_KEY="$(openssl rand -base64 32)"
 export ACS_INTERNAL_SERVICE_TOKEN="$(openssl rand -base64 32)"
 export ACS_BSS_OAUTH_SIGNING_SECRET="$(openssl rand -base64 32)"
 
@@ -283,6 +286,7 @@ chmod 600 "$COMPOSE_ENV"
   echo "ACS_BOOTSTRAP_ADMIN_PASSWORD=$ACS_BOOTSTRAP_ADMIN_PASSWORD"
   echo "ACS_JWT_SIGNING_SECRET=$ACS_JWT_SIGNING_SECRET"
   echo "ACS_CREDENTIAL_ENCRYPTION_KEY=$ACS_CREDENTIAL_ENCRYPTION_KEY"
+  echo "ACS_BSS_SECRET_KEY=$ACS_BSS_SECRET_KEY"
   echo "ACS_INTERNAL_SERVICE_TOKEN=$ACS_INTERNAL_SERVICE_TOKEN"
   echo "ACS_BSS_OAUTH_SIGNING_SECRET=$ACS_BSS_OAUTH_SIGNING_SECRET"
   echo "ACS_ADDR=$ACS_ADDR"

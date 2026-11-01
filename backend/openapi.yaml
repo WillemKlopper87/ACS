@@ -2962,11 +2962,12 @@ components:
 
     ParameterInput:
       type: object
-      required: [name, value]
+      required: [name]
       properties:
         name: { type: string }
-        value: { type: string }
+        value: { type: string, description: "Required unless secret_handle is set" }
         type: { type: string, example: "xsd:string" }
+        secret_handle: { type: string, description: "A sealed BSS secret (POST /bss/v1/secrets) in place of value. Accepted only from the BSS adapter's service identity on PUT /devices/{id}/parameters, never on bulk actions; the gateway opens it when it sends the write." }
 
     CachedParameter:
       type: object

@@ -19,6 +19,10 @@ type ParameterWrite struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
 	Type  string `json:"type"`
+	// SecretHandle (internal/secretstore) stands in for Value, which is
+	// empty: the gateway opens the handle when it renders the RPC, so the
+	// value is never stored in the job.
+	SecretHandle string `json:"secret_handle,omitempty"`
 }
 
 // GetParameterPayload is the payload shape for a GET_PARAMETER job.

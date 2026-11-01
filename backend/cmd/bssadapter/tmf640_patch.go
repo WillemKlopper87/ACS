@@ -66,8 +66,11 @@ func interpretTMF640Patch(raw []byte) (action string, params map[string]string, 
 				params["wifi_ssid"] = c.Value
 			case "WiFiPassword":
 				params["wifi_password"] = c.Value
+			case "WiFiPasswordHandle":
+				// A sealed handle from POST /bss/v1/secrets (I4).
+				params["wifi_password_handle"] = c.Value
 			default:
-				return "", nil, errors.Join(errTMF640Patch, errors.New("unsupported serviceCharacteristic "+c.Name+"; SSID and WiFiPassword are supported"))
+				return "", nil, errors.Join(errTMF640Patch, errors.New("unsupported serviceCharacteristic "+c.Name+"; SSID, WiFiPassword and WiFiPasswordHandle are supported"))
 			}
 		}
 		return "MODIFY_WIFI", params, nil
@@ -143,6 +146,13 @@ func (h *handler) patchService(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		writeError(w, http.StatusBadRequest, "ErrUnsupportedAction", err.Error())
+		return
+	}
+	if err := h.claimSecrets(r.Context(), r, params, writes, m.DeviceID, true); err != nil {
+		if !writeSecretError(w, err) {
+			h.logger.Error("failed to claim secret handles", "err", err, "external_order_id", key)
+			writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		}
 		return
 	}
 

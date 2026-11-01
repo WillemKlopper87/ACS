@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: ACS BSS/CRM Integration Adapter API
-  version: "1.0.0"
+  version: "1.1.0"
   description: >-
     The external-facing REST API served by cmd/bssadapter (build plan §5,
     bss-integration-guide.md). This is the boundary an external BSS/CRM
@@ -201,7 +201,7 @@ paths:
                 parameters:
                   type: object
                   additionalProperties: { type: string }
-                  description: "Business parameters, e.g. {wifi_ssid, wifi_password} for MODIFY_WIFI"
+                  description: "Business parameters, e.g. {wifi_ssid, wifi_password} for MODIFY_WIFI. Send wifi_password_handle (POST /bss/v1/secrets) instead of wifi_password to keep the passphrase out of the order and the job; the order claims the handle (400 ErrSecretHandleInvalid if it is unknown, expired, already used or another customer's). With ACS_BSS_REQUIRE_SECRET_HANDLES a plain wifi_password is 400 ErrInvalidRequest."
       responses:
         "202": { description: "Queued (or the existing order's current status, if a retry)", content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
         "400": { $ref: "#/components/responses/Error" }
@@ -395,6 +395,58 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { description: "insufficient_scope, ErrClientNotCustomerBound, or ErrReplayNeedsCustomer (account-listed client)" }
 
+  /bss/v1/secrets:
+    post:
+      tags: [Secrets]
+      summary: Store a secret and get a single-use handle to name in an order instead of the value (tmf:write)
+      description: |
+        The value is sealed (AES-256-GCM under ACS_BSS_SECRET_KEY, a key separate from the database credentials) and
+        never returned, logged, audited or put in an order, job or event. Name the handle as wifi_password_handle in
+        POST /bss/v1/orders, a TMF641 modify item, or as the WiFiPasswordHandle characteristic of a TMF640 PATCH.
+        The order claims it for its device; the ACS opens and deletes it when it sends the write to the CPE. A handle
+        is owned by the caller's customer (global clients: by global clients) and is useless to anyone else. It
+        expires after ttl_seconds (default and maximum: ACS_BSS_SECRET_TTL, 15 minutes unless configured); an
+        expired handle is deleted. A job that is dispatched again (a retry) or that waits past expiry fails with
+        SECRET_HANDLE_UNAVAILABLE: store the secret again and send a new order. Accepted only over TLS. Not
+        idempotent: a retried POST makes another handle and the unused one expires.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: string, minLength: 1, maxLength: 256, writeOnly: true }
+                ttl_seconds: { type: integer, minimum: 60, description: "At most ACS_BSS_SECRET_TTL" }
+      responses:
+        "201":
+          description: Stored (Cache-Control no-store)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [handle, expires_at]
+                properties:
+                  handle: { type: string, description: "sh_ plus 22 characters; not secret", example: sh_q3vY7l0aZb1c2D3e4F5g6h }
+                  expires_at: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { description: "insufficient_scope, ErrClientNotCustomerBound (account-listed client), or ErrTLSRequired", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "503": { description: "ErrSecretStoreDisabled: no ACS_BSS_SECRET_KEY", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/secrets/{handle}:
+    delete:
+      tags: [Secrets]
+      summary: Discard a handle that will not be used, claimed or not (tmf:write)
+      parameters:
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { description: "Unknown, used, expired, or another customer's handle", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
   /bss/v1/webhooks/{id}/deliveries:
     get:
       tags: [Webhooks]
@@ -529,7 +581,7 @@ components:
     ProblemCode:
       type: string
       description: "Closed list. New codes come only with a new problem contract version."
-      enum: [ErrInvalidRequest, ErrNotFound, ErrInternal, ErrACSUnreachable, ErrDeviceNotMapped, ErrDeviceNotFound, ErrUnsupportedAction, ErrUnauthorized, ErrJobNotFound, ErrInvalidRelation, ErrConflict, ErrServiceTerminated, ErrServiceNotActive, ErrRoleAlreadyAssigned, ErrDeviceAlreadyAssigned, ErrReplayNeedsCustomer, ErrRateLimited, ErrPreProvisionRefused, ErrIdempotencyKeyReused, ErrIdempotencyKeyInFlight, ErrSaleWrongState, ErrGlobalClientsDisabled, ErrClientNotCustomerBound, invalid_token, insufficient_scope, invalid_request, invalid_client, invalid_scope, unsupported_grant_type, server_error]
+      enum: [ErrInvalidRequest, ErrNotFound, ErrInternal, ErrACSUnreachable, ErrDeviceNotMapped, ErrDeviceNotFound, ErrUnsupportedAction, ErrUnauthorized, ErrJobNotFound, ErrInvalidRelation, ErrConflict, ErrServiceTerminated, ErrServiceNotActive, ErrRoleAlreadyAssigned, ErrDeviceAlreadyAssigned, ErrReplayNeedsCustomer, ErrRateLimited, ErrPreProvisionRefused, ErrIdempotencyKeyReused, ErrIdempotencyKeyInFlight, ErrSaleWrongState, ErrGlobalClientsDisabled, ErrClientNotCustomerBound, ErrTLSRequired, ErrSecretStoreDisabled, ErrSecretHandleInvalid, invalid_token, insufficient_scope, invalid_request, invalid_client, invalid_scope, unsupported_grant_type, server_error]
 
     Mapping:
       type: object

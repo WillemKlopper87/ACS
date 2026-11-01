@@ -94,6 +94,9 @@ rather than compounding.
 | `409` | `ErrIdempotencyKeyReused` | Permanent | A key reused for a different request. A bug on the caller's side. |
 | `409` | `ErrIdempotencyKeyInFlight` | **Retryable** | The first request with the key still runs; retry after `Retry-After`. |
 | `409` | `ErrSaleWrongState` | Permanent | The sale's state does not allow the retry or cancel. Read the sale. |
+| `400` | `ErrSecretHandleInvalid` | Permanent | The `wifi_password_handle` is unknown, expired, already used or another customer's. Store the secret again (§8.2). |
+| `403` | `ErrTLSRequired` | Permanent | `POST /bss/v1/secrets` over plain HTTP. Use the TLS endpoint. |
+| `503` | `ErrSecretStoreDisabled` | Permanent until the operator acts | The ACS has no secret store key; send the passphrase as `wifi_password` or ask the operator. |
 | `429` | — | **Retryable** | Back off and retry. **Not** an auth problem. |
 | `502` | `ErrACSUnreachable` | **Retryable** | Internal ACS engine unavailable. Back off and retry. |
 | `500` | `ErrInternal` | **Retryable**, and report it | Back off, retry, and tell us. |
@@ -109,8 +112,11 @@ Every error is an RFC 9457 problem that keeps the older keys:
 Send `Accept: application/problem+json` to get that media type; otherwise
 it is `application/json`. Switch on `code` (= `error`), not on `detail` —
 details are for humans and may be reworded. The codes are a closed list
-(`ProblemCode` in `openapi-bssadapter.yaml`); a new code comes only with a
-new problem version (`v1` in `type`).
+(`ProblemCode` in `openapi-bssadapter.yaml`). A request that worked under an
+earlier contract version never gets a new code; a new endpoint or a new
+parameter may bring new codes, added to the list with a minor version
+(1.1.0 added the three secret-handle codes). A changed meaning comes only
+with a new problem version (`v1` in `type`).
 
 **Blanket retry-everything is wrong here.** Retrying a `400` hides a real
 defect behind noise; retrying a `409` will never succeed. Classify first.
@@ -213,11 +219,13 @@ back. It does not interpret it or change device behaviour based on it.
   operator to revoke immediately; there is no rotate-in-place, a
   compromised client is revoked and replaced.
 - **Wi-Fi passwords are write-only.** You can set one; no API returns one.
-  This is deliberate and will not change.
+  This is deliberate and will not change. Send them as sealed handles
+  (§8.2) so they are not stored in the order or the job either.
 - **mTLS** is available as additional transport hardening. It supplements
   the bearer token rather than replacing it.
-- **Log hygiene:** `wifi_password` appears in request bodies you send.
-  Redact it in your own logs.
+- **Log hygiene:** `wifi_password` (and the `value` of `POST
+  /bss/v1/secrets`) appears in request bodies you send. Redact it in your
+  own logs. A handle is not secret.
 
 ### 8.1 Customer-bound clients (one ISP, one customer)
 
@@ -263,6 +271,54 @@ when the ACS runs with `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true`.
   without `accountId`) need a global client, which
   `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true` disables together with the
   shared `ACS_BSS_API_TOKEN` and the unauthenticated lab mode.
+
+### 8.2 Sealed secret handles (Wi-Fi passphrases)
+
+A passphrase sent as `wifi_password` is stored in the order and the job
+until the job finishes. Send a handle instead and the ACS keeps the value
+only sealed, briefly, and only until it writes it to the CPE:
+
+1. `POST /bss/v1/secrets` `{"value": "<passphrase>"}` (scope `tmf:write`,
+   TLS only) returns `201 {"handle": "sh_…", "expires_at": "…"}`. Optional
+   `ttl_seconds`: 60 up to the ACS's `ACS_BSS_SECRET_TTL` (15 minutes
+   unless the operator changed it), which is also the default.
+2. Name the handle where the passphrase would go: `wifi_password_handle`
+   in `POST /bss/v1/orders` (and preflight) or a TMF641 `modify` item, or a
+   `WiFiPasswordHandle` characteristic in a TMF640 PATCH. The order
+   **claims** the handle for its device; a second order naming it is `400
+   ErrSecretHandleInvalid` (a TMF641 item FAILS with that note). Preflight
+   checks the handle without claiming it.
+3. When the ACS sends the write to the CPE it opens the handle, which
+   **deletes** it. The job keeps the handle, never the value.
+
+What you can rely on:
+
+- **Sealed at rest** with AES-256-GCM under `ACS_BSS_SECRET_KEY`, a key
+  separate from the database credentials; the handle and owner are bound
+  into the ciphertext.
+- **Never** in an order, a job, the parameter cache, an audit record, an
+  event, a webhook or a log line. Our canary test pushes a marker value
+  through an order and scans every table, the logs and the internal calls
+  for it.
+- **Per customer.** A handle belongs to your client's customer (a global
+  client's handles belong to global clients). Another customer's handle is
+  `400 ErrSecretHandleInvalid` in an order and `404` on delete, exactly
+  like an unknown one. Account-listed clients cannot use handles (`403`).
+- **Single use, short life.** Deleted when used and when it expires;
+  `DELETE /bss/v1/secrets/{handle}` discards one you will not use.
+
+The retry story: a handle opens once. If the job fails after the write was
+sent (the CPE refused it, the session dropped and the job was dispatched
+again), or waited past `expires_at` for its device, it FAILS with
+`SECRET_HANDLE_UNAVAILABLE` or the CPE's fault. Store the secret again and
+send a **new** order (new `external_order_id`). A retry of the *same*
+order id answers with the existing order and claims nothing, so it does not
+need a new handle. Order soon after storing: an offline device may not
+connect before the handle expires.
+
+`POST /bss/v1/secrets` is not idempotent; a retried POST makes a second
+handle and the unused one expires. With `ACS_BSS_REQUIRE_SECRET_HANDLES=true`
+the ACS refuses a plain `wifi_password` (`400 ErrInvalidRequest`).
 
 ## 9. Known limits to design around
 

@@ -604,7 +604,19 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 			return
 		}
 	}
-	requestBody, ok := h.renderJobRequest(job)
+	rendered, err := h.openSecretHandles(ctx, job)
+	if err != nil {
+		// The handle was used by an earlier dispatch of this job (a
+		// retry), expired while the job waited, or the key is missing.
+		// The BSS stores the secret again and sends a new order.
+		h.logger.Warn("job's secret handle cannot be opened; failing it", "job_id", job.ID, "err", err)
+		if err := h.jobs.MarkFailed(ctx, job.ID, "SECRET_HANDLE_UNAVAILABLE", err.Error()); err != nil {
+			h.logger.Error("failed to mark job failed", "err", err, "job_id", job.ID)
+		}
+		h.respondEmpty(w)
+		return
+	}
+	requestBody, ok := h.renderJobRequest(rendered)
 	if !ok {
 		h.logger.Error("job has unrenderable payload; failing it", "job_id", job.ID, "type", job.Type)
 		if err := h.jobs.MarkFailed(ctx, job.ID, "", "unrenderable job payload"); err != nil {
