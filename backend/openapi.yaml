@@ -838,12 +838,19 @@ paths:
     put:
       tags: [Tenancy]
       summary: Assign a device to a customer (tenancy.manage permission)
+      description: |
+        A scoped operator may assign only a customer within their scope and may not clear the customer (null). A
+        device actively mapped to a BSS account is refused (409) for any customer other than the account's owner:
+        unassign it from the account first.
       parameters: [{ $ref: "#/components/parameters/DeviceId" }]
       requestBody:
         required: true
         content: { application/json: { schema: { type: object, properties: { customer_id: { type: string, nullable: true } } } } }
       responses:
         "204": { description: Assigned }
+        "400": { description: "customer_id outside the caller's scope (or null for a scoped caller)" }
+        "404": { description: "No such device, or outside the caller's scope" }
+        "409": { description: "The device is mapped to a BSS account of another customer" }
 
   /api/v1/devices/{id}/projects:
     put:

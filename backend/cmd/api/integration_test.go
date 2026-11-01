@@ -413,6 +413,38 @@ func TestIntegration_H3SubResourceIsolation(t *testing.T) {
 		}
 	})
 
+	t.Run("S6: a scoped manager cannot move a device to another customer", func(t *testing.T) {
+		if r := e.call("alice", "PUT", "/api/v1/devices/"+devA+"/customer", map[string]any{"customer_id": custB}); r.code != 400 {
+			t.Errorf("alice move her device to customer B → %d %s, want 400", r.code, r.body)
+		}
+		if r := e.call("alice", "PUT", "/api/v1/devices/"+devA+"/customer", map[string]any{"customer_id": nil}); r.code != 400 {
+			t.Errorf("alice clear her device's customer → %d %s, want 400", r.code, r.body)
+		}
+		if d, err := e.h.devices.Get(e.ctx, devA); err != nil || d.CustomerID == nil || *d.CustomerID != custA {
+			t.Fatalf("device A's customer changed: %v %v", d, err)
+		}
+		if r := e.call("alice", "PUT", "/api/v1/devices/"+devA+"/customer", map[string]any{"customer_id": custA}); r.code != 204 {
+			t.Errorf("alice reassign within her scope → %d %s, want 204", r.code, r.body)
+		}
+	})
+
+	t.Run("a BSS-mapped device stays with its account's customer", func(t *testing.T) {
+		if _, err := e.db.ExecContext(e.ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('acct-s6', $1, 'test')`, custB); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.db.ExecContext(e.ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at)
+			SELECT gen_random_uuid(), 'acct-s6', id, oui_serial, 'gateway', now() FROM devices WHERE id = $1`, devB); err != nil {
+			t.Fatal(err)
+		}
+		e.operator("root", operators.RoleSuperAdmin)
+		if r := e.call("root", "PUT", "/api/v1/devices/"+devB+"/customer", map[string]any{"customer_id": custA}); r.code != 409 {
+			t.Errorf("move a device mapped to customer B's account → %d %s, want 409", r.code, r.body)
+		}
+		if r := e.call("root", "PUT", "/api/v1/devices/"+devB+"/customer", map[string]any{"customer_id": custB}); r.code != 204 {
+			t.Errorf("assign it to its account's own customer → %d %s, want 204", r.code, r.body)
+		}
+	})
+
 	t.Run("bulk import cannot plant or reassign a device outside scope", func(t *testing.T) {
 		r := e.call("alice", "POST", "/api/v1/devices/import?format=json", []map[string]any{
 			{"manufacturer": "Evil", "oui": "AABBCC", "serial_number": "HIJACK01", "customer_id": custB},
