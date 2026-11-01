@@ -30,6 +30,9 @@ type Policy struct {
 	ResetTokensDays       int
 	CaptureSessionsDays   int
 	WiFiInsightsDays      int
+	// TMFEventsDays bounds the integration event stream (tmf_events,
+	// replayed by GET /bss/v1/events); see pruneEvents.
+	TMFEventsDays int
 }
 
 // DefaultPolicy is deliberately conservative: long enough that an
@@ -46,6 +49,7 @@ var DefaultPolicy = Policy{
 	ResetTokensDays:       1,
 	CaptureSessionsDays:   1,
 	WiFiInsightsDays:      30,
+	TMFEventsDays:         90,
 }
 
 func envDays(key string, fallback int) int {
@@ -70,6 +74,7 @@ func PolicyFromEnv() Policy {
 		ResetTokensDays:       envDays("ACS_RETENTION_RESET_TOKENS_DAYS", d.ResetTokensDays),
 		CaptureSessionsDays:   envDays("ACS_RETENTION_CAPTURE_SESSIONS_DAYS", d.CaptureSessionsDays),
 		WiFiInsightsDays:      envDays("ACS_RETENTION_WIFI_INSIGHTS_DAYS", d.WiFiInsightsDays),
+		TMFEventsDays:         envDays("ACS_RETENTION_TMF_EVENTS_DAYS", d.TMFEventsDays),
 	}
 }
 
@@ -148,5 +153,78 @@ func Run(ctx context.Context, db *sql.DB, p Policy) (Result, error) {
 			}
 		}
 	}
+	if p.TMFEventsDays > 0 {
+		cutoff := time.Now().UTC().Add(-time.Duration(p.TMFEventsDays) * 24 * time.Hour)
+		n, err := pruneEvents(ctx, db, cutoff)
+		res["tmf_events"] += n
+		if err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("prune tmf_events: %w", err)
+		}
+	}
 	return res, firstErr
+}
+
+// pruneEvents removes old events from each customer's stream as a prefix
+// of its sequence: for each scope it removes every event numbered at or
+// below the last number before the first event at or after cutoff, so an
+// event that is still recent is never removed and a later event never
+// outlives an earlier one. purged_through is raised first, so a reader
+// that sees events missing also sees gap: true.
+func pruneEvents(ctx context.Context, db *sql.DB, cutoff time.Time) (int64, error) {
+	rows, err := db.QueryContext(ctx, `SELECT scope, purged_through FROM tmf_event_sequences`)
+	if err != nil {
+		return 0, err
+	}
+	type scope struct {
+		key    string
+		purged int64
+	}
+	var scopes []scope
+	for rows.Next() {
+		var s scope
+		if err := rows.Scan(&s.key, &s.purged); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		scopes = append(scopes, s)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	var total int64
+	for _, sc := range scopes {
+		var through sql.NullInt64
+		err := db.QueryRowContext(ctx, `SELECT COALESCE(
+			(SELECT min(seq) - 1 FROM tmf_events WHERE COALESCE(customer_id::text, '') = $1 AND event_time >= $2),
+			(SELECT max(seq) FROM tmf_events WHERE COALESCE(customer_id::text, '') = $1))`, sc.key, cutoff).Scan(&through)
+		if err != nil {
+			return total, err
+		}
+		if !through.Valid || through.Int64 <= sc.purged {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE tmf_event_sequences SET purged_through = GREATEST(purged_through, $2) WHERE scope = $1`,
+			sc.key, through.Int64); err != nil {
+			return total, err
+		}
+		for {
+			if ctx.Err() != nil {
+				return total, ctx.Err()
+			}
+			out, err := db.ExecContext(ctx, fmt.Sprintf(`DELETE FROM tmf_events WHERE id IN (
+				SELECT id FROM tmf_events WHERE COALESCE(customer_id::text, '') = $1 AND seq <= $2 ORDER BY seq LIMIT %d)`, batchSize),
+				sc.key, through.Int64)
+			if err != nil {
+				return total, err
+			}
+			n, _ := out.RowsAffected()
+			total += n
+			if n < batchSize {
+				break
+			}
+		}
+	}
+	return total, nil
 }

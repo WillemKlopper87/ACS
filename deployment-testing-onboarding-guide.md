@@ -319,8 +319,9 @@ ACS_DB_CONN_MAX_IDLE_TIME (all services — pool limits; defaults 20/5/30m/5m),
 ACS_RETENTION_SESSIONS_DAYS, ACS_RETENTION_AUDIT_LOG_DAYS,
 ACS_RETENTION_PARAMETER_HISTORY_DAYS, ACS_RETENTION_WEBHOOK_DELIVERIES_DAYS,
 ACS_RETENTION_FINISHED_JOBS_DAYS, ACS_RETENTION_STALE_UPLOAD_SLOTS_DAYS,
-ACS_RETENTION_RESET_TOKENS_DAYS (cmd/api — pruning windows, 0 disables;
-  defaults 30/365/90/30/90/7/1),
+ACS_RETENTION_RESET_TOKENS_DAYS, ACS_RETENTION_TMF_EVENTS_DAYS (cmd/api —
+  pruning windows, 0 disables; defaults 30/365/90/30/90/7/1/90; the last is
+  the integration event stream GET /bss/v1/events replays),
 ACS_API_CORS_ORIGIN now defaults to ACS_FRONTEND_BASE_URL rather than "*"
 
 # docker compose (infra/docker-compose.yml) — shell/.env, not the app env file

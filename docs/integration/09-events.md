@@ -125,9 +125,15 @@ caller's customer's events with `sequence > after`, oldest first:
 - A **customer-bound client** reads its own customer. A global client names one
   with `customer_id` (empty = events with no customer). Account-listed clients
   are refused; they use the TMF688 lists.
-- **Retention:** events are kept indefinitely today. When retention removes
-  events, `purged_through` is the highest sequence number removed, and
-  `gap: true` means `after < purged_through`. That is conservative: it is also
+- **Retention:** events are kept for 90 days by default
+  (`ACS_RETENTION_TMF_EVENTS_DAYS` on the operator side; 0 keeps them
+  indefinitely). Ask your operator for the value: it is how long you can be
+  away and still replay. Old events are removed per customer from the
+  start of the stream, never past an event that is still within the window,
+  so a late-arriving old event can outlive the window until the events
+  before it go. `purged_through` is the highest sequence number removed
+  (every number at or below it is gone), and `gap: true` means
+  `after < purged_through`. That is conservative: it is also
   true when the removed range happened to contain only skipped numbers.
   Reconcile from current state, then continue from `latest_sequence`.
 
