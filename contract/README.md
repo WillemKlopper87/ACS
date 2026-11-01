@@ -34,7 +34,9 @@ these values. Exchanges keep the response headers an integration acts on
 and the request headers that matter (`request_headers`). Errors are RFC 9457
 problems that keep the older `error`/`message` keys.
 
-**Not yet a versioned contract.** These fixtures follow the branch they were
-recorded on and change with it until the contract is tagged. Re-record with
-[`scripts/contract/record_fixtures.py`](../scripts/contract/record_fixtures.py)
+**Versioned.** The contract is tagged `bss-contract-v<major>.<minor>.<patch>`
+(first: `bss-contract-v1.0.0`). Within a major version, changes only add
+(fields, endpoints, codes in a new problem version); a removal or a changed
+meaning bumps the major version. Pin integration tests to a tag. Re-record
+with [`scripts/contract/record_fixtures.py`](../scripts/contract/record_fixtures.py)
 against a throwaway stack (its docstring lists the environment it needs).

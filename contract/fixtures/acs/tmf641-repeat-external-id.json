@@ -1,0 +1,78 @@
+{
+  "name": "acs/tmf641-repeat-external-id",
+  "description": "The same externalId again: the identical order answers 200 with the order as it is (Idempotent-Replayed, nothing done again); another order under it is 409 ErrIdempotencyKeyReused.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c2f68af, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/tmf-api/serviceOrdering/v4/serviceOrder",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "externalId": "SO-CONTRACT-DEL-1",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/c188c004-ebc9-4c65-8c3f-04c178e9745e",
+        "id": "c188c004-ebc9-4c65-8c3f-04c178e9745e",
+        "orderDate": "2026-11-01T15:25:06.261489Z",
+        "orderItem": [
+          {
+            "id": "e722106b-3e0b-46ae-bf3f-51c4de0ec6ab",
+            "action": "delete",
+            "state": "COMPLETED",
+            "role": "gateway"
+          }
+        ],
+        "relatedParty": [
+          {
+            "id": "contract.0005",
+            "role": "customer"
+          }
+        ],
+        "state": "completed"
+      },
+      "request": {
+        "externalId": "SO-CONTRACT-DEL-1",
+        "accountId": "contract.0005",
+        "orderItem": [
+          {
+            "id": "1",
+            "action": "delete",
+            "role": "gateway"
+          }
+        ]
+      },
+      "headers": {
+        "Idempotent-Replayed": "true",
+        "Content-Type": "application/json"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/tmf-api/serviceOrdering/v4/serviceOrder",
+      "status": 409,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrIdempotencyKeyReused",
+        "title": "Idempotency key reused",
+        "status": 409,
+        "detail": "this externalId was already used for a different order",
+        "code": "ErrIdempotencyKeyReused",
+        "error": "ErrIdempotencyKeyReused",
+        "message": "this externalId was already used for a different order"
+      },
+      "request": {
+        "externalId": "SO-CONTRACT-DEL-1",
+        "accountId": "contract.0005",
+        "orderItem": [
+          {
+            "id": "1",
+            "action": "delete",
+            "role": "extender"
+          }
+        ]
+      },
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    }
+  ]
+}

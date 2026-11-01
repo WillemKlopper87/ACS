@@ -1,0 +1,81 @@
+{
+  "name": "acs/tmf641-delete-order",
+  "description": "TMF641 delete without unassignReason: completed at once (the reason recorded is return); the account then lists no active mapping.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c2f68af, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/tmf-api/serviceOrdering/v4/serviceOrder",
+      "status": 201,
+      "mutating": true,
+      "body": {
+        "externalId": "SO-CONTRACT-DEL-1",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/c188c004-ebc9-4c65-8c3f-04c178e9745e",
+        "id": "c188c004-ebc9-4c65-8c3f-04c178e9745e",
+        "orderDate": "2026-11-01T15:25:06.261489Z",
+        "orderItem": [
+          {
+            "id": "e722106b-3e0b-46ae-bf3f-51c4de0ec6ab",
+            "action": "delete",
+            "state": "COMPLETED",
+            "role": "gateway"
+          }
+        ],
+        "relatedParty": [
+          {
+            "id": "contract.0005",
+            "role": "customer"
+          }
+        ],
+        "state": "completed"
+      },
+      "request": {
+        "externalId": "SO-CONTRACT-DEL-1",
+        "accountId": "contract.0005",
+        "orderItem": [
+          {
+            "id": "1",
+            "action": "delete",
+            "role": "gateway"
+          }
+        ]
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/tmf-api/serviceOrdering/v4/serviceOrder/SO-CONTRACT-DEL-1",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "externalId": "SO-CONTRACT-DEL-1",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/c188c004-ebc9-4c65-8c3f-04c178e9745e",
+        "id": "c188c004-ebc9-4c65-8c3f-04c178e9745e",
+        "orderDate": "2026-11-01T15:25:06.261489Z",
+        "orderItem": [
+          {
+            "id": "e722106b-3e0b-46ae-bf3f-51c4de0ec6ab",
+            "action": "delete",
+            "state": "COMPLETED",
+            "role": "gateway"
+          }
+        ],
+        "relatedParty": [
+          {
+            "id": "contract.0005",
+            "role": "customer"
+          }
+        ],
+        "state": "completed"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/mappings/contract.0005",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "items": []
+      }
+    }
+  ]
+}

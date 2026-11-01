@@ -1,0 +1,48 @@
+{
+  "name": "acs/sale-read",
+  "description": "The sale read (GET href from the 202): state, reason_code, plan_matched, expires_at while PLANNED, UTC timestamps; then an unknown sale as a problem (404, Accept: application/problem+json).",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c2f68af, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "GET",
+      "path": "/bss/v1/onboardings/0ac6b704-0ce1-4dc4-aab6-be3b27d653b1",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "id": "0ac6b704-0ce1-4dc4-aab6-be3b27d653b1",
+        "href": "/bss/v1/onboardings/0ac6b704-0ce1-4dc4-aab6-be3b27d653b1",
+        "account_id": "contract.0002",
+        "oui": "A4FC77",
+        "serial_number": "CONTRACT02",
+        "role": "gateway",
+        "service_plan": "HOME-5G",
+        "plan_matched": true,
+        "state": "PLANNED",
+        "created_at": "2026-11-01T15:25:06.049508Z",
+        "updated_at": "2026-11-01T15:25:06.049508Z",
+        "expires_at": "2026-12-01T15:25:06.049508Z"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/onboardings/00000000-0000-0000-0000-000000000000",
+      "status": 404,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrNotFound",
+        "title": "Not found",
+        "status": 404,
+        "detail": "resource not found",
+        "code": "ErrNotFound",
+        "error": "ErrNotFound",
+        "message": "resource not found"
+      },
+      "request_headers": {
+        "Accept": "application/problem+json"
+      },
+      "headers": {
+        "Content-Type": "application/problem+json"
+      }
+    }
+  ]
+}

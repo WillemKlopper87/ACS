@@ -1,7 +1,7 @@
 {
   "name": "acs/mapping-create",
   "description": "First write to a new account claims it for the client's customer; the device joins that customer.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit dd81ba9+I2-fixes, 2026-10-31. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c2f68af, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
@@ -10,11 +10,12 @@
       "mutating": true,
       "body": {
         "account_id": "contract.0001",
-        "device_uuid": "db529d8d-3454-463c-a014-c99e0ebc1126",
+        "device_uuid": "28001188-5e98-431c-b2d0-70224ece542d",
         "oui_serial": "A4FC77+3TG02241+CONTRACT01",
         "service_plan": "HOME-5G",
         "status": "ACTIVE",
-        "role": "gateway"
+        "role": "gateway",
+        "plan_matched": true
       },
       "request": {
         "account_id": "contract.0001",

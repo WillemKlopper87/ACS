@@ -1,0 +1,40 @@
+{
+  "name": "acs/mapping-unknown-plan",
+  "description": "A plan code that matches no ACS plan: accepted, with plan_matched false and a PLAN_NOT_FOUND warning.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c2f68af, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/bss/v1/mappings",
+      "status": 202,
+      "mutating": true,
+      "body": {
+        "account_id": "contract.0006",
+        "href": "/bss/v1/onboardings/4c81e7c7-b98e-4da9-8b25-9b65b0965a86",
+        "onboarding_id": "4c81e7c7-b98e-4da9-8b25-9b65b0965a86",
+        "onboarding_state": "PLANNED",
+        "oui_serial": "A4FC77+3TG02241+CONTRACT06",
+        "plan_matched": false,
+        "role": "gateway",
+        "service_plan": "NO-SUCH-PLAN",
+        "status": "AWAITING_DEVICE",
+        "warnings": [
+          {
+            "code": "PLAN_NOT_FOUND",
+            "message": "service plan \"NO-SUCH-PLAN\" matches no ACS service plan; the CPE is mapped but nothing is configured on it"
+          }
+        ]
+      },
+      "request": {
+        "account_id": "contract.0006",
+        "oui_serial": "A4FC77+3TG02241+CONTRACT06",
+        "service_plan": "NO-SUCH-PLAN",
+        "pre_provision": true
+      },
+      "headers": {
+        "Location": "/bss/v1/onboardings/4c81e7c7-b98e-4da9-8b25-9b65b0965a86",
+        "Content-Type": "application/json"
+      }
+    }
+  ]
+}

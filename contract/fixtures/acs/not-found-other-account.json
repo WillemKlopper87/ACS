@@ -1,7 +1,7 @@
 {
   "name": "acs/not-found-other-account",
   "description": "An account this customer does not own reads as 404, never 403.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit dd81ba9+I2-fixes, 2026-10-31. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c2f68af, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "GET",
@@ -9,6 +9,11 @@
       "status": 404,
       "mutating": false,
       "body": {
+        "type": "urn:acs:problem:v1:ErrNotFound",
+        "title": "Not found",
+        "status": 404,
+        "detail": "resource not found",
+        "code": "ErrNotFound",
         "error": "ErrNotFound",
         "message": "resource not found"
       }

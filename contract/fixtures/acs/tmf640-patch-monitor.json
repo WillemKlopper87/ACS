@@ -1,18 +1,18 @@
 {
   "name": "acs/tmf640-patch-monitor",
   "description": "TMF640 PATCH with X-Idempotency-Key, its replay (same Monitor, nothing dispatched again), the Monitor, and an unknown Monitor (404).",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit dd81ba9+I2-fixes, 2026-10-31. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c2f68af, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "PATCH",
-      "path": "/tmf-api/serviceActivationAndConfiguration/v4/service/56ed178d-cccb-4334-9f61-31fef65cfbf9",
+      "path": "/tmf-api/serviceActivationAndConfiguration/v4/service/c3a7a35d-c03a-47a9-aac5-93ea3fb5e45d",
       "status": 202,
       "mutating": true,
       "body": {
         "id": "intent-contract-1",
         "href": "/tmf-api/serviceActivationAndConfiguration/v4/monitor/intent-contract-1",
         "state": "InProgress",
-        "sourceHref": "/tmf-api/serviceActivationAndConfiguration/v4/service/56ed178d-cccb-4334-9f61-31fef65cfbf9"
+        "sourceHref": "/tmf-api/serviceActivationAndConfiguration/v4/service/c3a7a35d-c03a-47a9-aac5-93ea3fb5e45d"
       },
       "request": {
         "state": "inactive"
@@ -20,14 +20,14 @@
     },
     {
       "method": "PATCH",
-      "path": "/tmf-api/serviceActivationAndConfiguration/v4/service/56ed178d-cccb-4334-9f61-31fef65cfbf9",
+      "path": "/tmf-api/serviceActivationAndConfiguration/v4/service/c3a7a35d-c03a-47a9-aac5-93ea3fb5e45d",
       "status": 202,
       "mutating": false,
       "body": {
         "id": "intent-contract-1",
         "href": "/tmf-api/serviceActivationAndConfiguration/v4/monitor/intent-contract-1",
         "state": "InProgress",
-        "sourceHref": "/tmf-api/serviceActivationAndConfiguration/v4/service/56ed178d-cccb-4334-9f61-31fef65cfbf9"
+        "sourceHref": "/tmf-api/serviceActivationAndConfiguration/v4/service/c3a7a35d-c03a-47a9-aac5-93ea3fb5e45d"
       },
       "request": {
         "state": "inactive"
@@ -42,7 +42,7 @@
         "id": "intent-contract-1",
         "href": "/tmf-api/serviceActivationAndConfiguration/v4/monitor/intent-contract-1",
         "state": "InProgress",
-        "sourceHref": "/tmf-api/serviceActivationAndConfiguration/v4/service/56ed178d-cccb-4334-9f61-31fef65cfbf9"
+        "sourceHref": "/tmf-api/serviceActivationAndConfiguration/v4/service/c3a7a35d-c03a-47a9-aac5-93ea3fb5e45d"
       }
     },
     {
@@ -51,6 +51,11 @@
       "status": 404,
       "mutating": false,
       "body": {
+        "type": "urn:acs:problem:v1:ErrNotFound",
+        "title": "Not found",
+        "status": 404,
+        "detail": "no such monitor",
+        "code": "ErrNotFound",
         "error": "ErrNotFound",
         "message": "no such monitor"
       }

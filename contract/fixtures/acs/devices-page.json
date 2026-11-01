@@ -1,0 +1,46 @@
+{
+  "name": "acs/devices-page",
+  "description": "The customer's devices with their account, role, mapping status and reachability, two per page; next_cursor is absent on the last page.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c2f68af, 2026-11-01. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "GET",
+      "path": "/bss/v1/devices?limit=2",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "items": [
+          {
+            "id": "28001188-5e98-431c-b2d0-70224ece542d",
+            "oui_serial": "A4FC77+3TG02241+CONTRACT01",
+            "account_id": "contract.0001",
+            "role": "gateway",
+            "mapping_status": "ACTIVE",
+            "online_status": "OFFLINE"
+          },
+          {
+            "id": "174331de-a5bc-4a05-b5f8-2bcc6d5c378c",
+            "oui_serial": "A4FC77+3TG02241+CONTRACT05",
+            "online_status": "OFFLINE"
+          }
+        ],
+        "next_cursor": "QTRGQzc3KzNURzAyMjQxK0NPTlRSQUNUMDU"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/devices?limit=2&cursor=QTRGQzc3KzNURzAyMjQxK0NPTlRSQUNUMDU",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "items": [
+          {
+            "id": "75b00e03-8ab1-41e8-823b-7db2da2d463c",
+            "oui_serial": "A4FC77+3TG02241+CONTRACT07",
+            "online_status": "OFFLINE"
+          }
+        ]
+      }
+    }
+  ]
+}
