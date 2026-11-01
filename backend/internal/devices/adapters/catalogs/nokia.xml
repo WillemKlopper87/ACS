@@ -1,25 +1,61 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<cwmp:cwmpDataModel vendor="Nokia" model="FastMile 5G" specVersion="TR-181 i2">
+<!--
+  Nokia FastMile 5G Gateway 2 (ProductClass 3TG02241, HardwareVersion 3TG02241AAAA).
+  Every path below was returned by parameter discovery on SoftwareVersion
+  1.2501.00.0798 (field test 2026-10-30, 2,878 names) and read successfully by
+  ci/compatibility/nokia-read-only.json. Earlier guessed X_NOKIA_* paths do not
+  exist on this firmware (9005); Nokia's TR-181 extension prefix is X_ALU-COM_.
+  Types are inferred from observed values. LTE fields report -32768 /
+  4294967295 when the CPE is not attached to an LTE cell.
+  Not marked qualified: write and reboot stages are still outstanding.
+-->
+<cwmp:cwmpDataModel vendor="Nokia" model="3TG02241" specVersion="TR-181 i2 a12">
   <object name="Device." access="readOnly">
     <object name="DeviceInfo." access="readOnly">
       <parameter name="Manufacturer" type="string" access="readOnly"/>
+      <parameter name="ModelName" type="string" access="readOnly"/>
       <parameter name="ProductClass" type="string" access="readOnly"/>
       <parameter name="SerialNumber" type="string" access="readOnly"/>
+      <parameter name="HardwareVersion" type="string" access="readOnly"/>
+      <parameter name="SoftwareVersion" type="string" access="readOnly"/>
+      <parameter name="ProvisioningCode" type="string" access="readWrite"/>
     </object>
 
-    <!-- Nokia Extended RF Diagnostics & Beam Alignment -->
-    <object name="X_NOKIA_5G_Diagnostics." access="readOnly">
-      <parameter name="SS_RSRP" type="int" access="readOnly"/>
-      <parameter name="SS_RSRQ" type="int" access="readOnly"/>
-      <parameter name="SS_SINR" type="int" access="readOnly"/>
-      <parameter name="BeamID" type="unsignedInt" access="readOnly"/>
-      <parameter name="GNB_ID" type="unsignedInt" access="readOnly"/>
-      <parameter name="NR_ARFCN" type="unsignedInt" access="readOnly"/>
-    </object>
+    <object name="Cellular." access="readOnly">
+      <object name="Interface.1." access="readOnly">
+        <parameter name="RSSI" type="int" access="readOnly"/>
 
-    <object name="X_NOKIA_COM_Cellular." access="readOnly">
-      <parameter name="NetworkMode" type="string" access="readWrite"/> <!-- Auto / 5G Only / 4G Only -->
-      <parameter name="APN_5G" type="string" access="readWrite"/>
+        <!-- Serving 5G NR cell -->
+        <object name="X_ALU-COM_Attached5GCellStat." access="readOnly">
+          <parameter name="Band" type="string" access="readOnly"/> <!-- e.g. n78 -->
+          <parameter name="Cellid" type="string" access="readOnly"/>
+          <parameter name="Downlink-NR-ARFCN" type="unsignedInt" access="readOnly"/>
+          <parameter name="PhysicalCellID" type="unsignedInt" access="readOnly"/>
+          <parameter name="RSRPCurrent" type="int" access="readOnly"/>
+          <parameter name="RSRQCurrent" type="int" access="readOnly"/>
+          <parameter name="RSSICurrent" type="int" access="readOnly"/>
+          <parameter name="RSRPStrengthIndexCurrent" type="unsignedInt" access="readOnly"/>
+          <parameter name="AvgRSRPMonth" type="int" access="readOnly"/>
+          <parameter name="MinRSRPMonth" type="int" access="readOnly"/>
+          <parameter name="MaxRSRPMonth" type="int" access="readOnly"/>
+          <parameter name="AvgRSRQMonth" type="int" access="readOnly"/>
+          <parameter name="MinRSRQMonth" type="int" access="readOnly"/>
+          <parameter name="MaxRSRQMonth" type="int" access="readOnly"/>
+        </object>
+
+        <!-- Serving LTE cell (anchor / fallback) -->
+        <object name="X_ALU-COM_AttachedLteCellStat." access="readOnly">
+          <parameter name="Band" type="string" access="readOnly"/>
+          <parameter name="Bandwidth" type="string" access="readOnly"/>
+          <parameter name="Cellid" type="string" access="readOnly"/>
+          <parameter name="DownlinkEarfcn" type="unsignedInt" access="readOnly"/>
+          <parameter name="PhysicalCellID" type="unsignedInt" access="readOnly"/>
+          <parameter name="RSRPCurrent" type="int" access="readOnly"/>
+          <parameter name="RSRQCurrent" type="int" access="readOnly"/>
+          <parameter name="RSSICurrent" type="int" access="readOnly"/>
+          <parameter name="RSRPStrengthIndexCurrent" type="unsignedInt" access="readOnly"/>
+        </object>
+      </object>
     </object>
   </object>
 </cwmp:cwmpDataModel>

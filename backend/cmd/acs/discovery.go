@@ -24,6 +24,7 @@ import (
 
 	"acs/internal/cwmp"
 	"acs/internal/devices"
+	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
 	"acs/internal/parameters"
 )
@@ -46,6 +47,13 @@ func (h *handler) autoDiscoverParameters(ctx context.Context, device *devices.De
 			firmware = values["InternetGatewayDevice.DeviceInfo.SoftwareVersion"].Value
 		}
 	}
+	if active, err := h.jobs.ActiveDiscovery(ctx, device.ID); err != nil {
+		h.logger.Error("check active parameter discovery", "err", err, "device_id", device.ID)
+		return
+	} else if active != nil {
+		h.logger.Info("parameter discovery already active; not queuing another", "device_id", device.ID, "command_key", active.CommandKey)
+		return
+	}
 	job, err := h.jobs.CreateWithMaxAttempts(ctx, device.ID, jobs.TypeParameterDiscovery,
 		jobs.ParameterDiscoveryPayload{Root: root, FallbackRoot: fallback, Incremental: true, Firmware: firmware}, "system:bootstrap-discovery", jobs.DiscoveryMaxObjects)
 	if err != nil {
@@ -60,9 +68,10 @@ func (h *handler) autoDiscoverParameters(ctx context.Context, device *devices.De
 // to fold this into (unlike SET_PARAMETER's), so it has nowhere else to
 // live.
 type discoveryResultDetail struct {
-	Root           string `json:"root"`
-	ParameterCount int    `json:"parameter_count"`
-	WritableCount  int    `json:"writable_count"`
+	Root           string   `json:"root"`
+	ParameterCount int      `json:"parameter_count"`
+	WritableCount  int      `json:"writable_count"`
+	Skipped        []string `json:"skipped,omitempty"`
 }
 
 // completeParameterDiscovery handles PARAMETER_DISCOVERY's response
@@ -75,6 +84,14 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 	var payload jobs.ParameterDiscoveryPayload
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
 		h.logger.Error("failed to unmarshal parameter discovery payload", "err", err, "job_id", job.ID)
+		return
+	}
+
+	// A fault on one object deep in an incremental walk says that subtree is
+	// unservable on this firmware, not that the root is wrong: skip it and
+	// keep walking. Root-level faults still take the fallback path below.
+	if payload.Incremental && payload.Cursor != "" && body.Fault != nil {
+		h.skipDiscoveryObject(ctx, deviceID, job, payload, "fault "+body.Fault.CWMPCode()+": "+body.Fault.CWMPMessage())
 		return
 	}
 
@@ -110,13 +127,12 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 
 	list := body.GetParameterNamesResponse.ParameterList
 	writableByName := make(map[string]bool, len(list))
-	writableCount := 0
 	for _, p := range list {
-		writable := p.Writable == "1" || p.Writable == "true"
-		writableByName[p.Name] = writable
-		if writable {
-			writableCount++
-		}
+		writableByName[p.Name] = p.Writable == "1" || p.Writable == "true"
+	}
+	if payload.Merge {
+		h.finishSubtreeMerge(ctx, deviceID, job, payload, writableByName)
+		return
 	}
 	if payload.Incremental {
 		done, err := jobs.AdvanceDiscovery(&payload, writableByName)
@@ -131,11 +147,19 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 			return
 		}
 		writableByName = payload.Names
-		writableCount = 0
-		for _, writable := range writableByName {
-			if writable {
-				writableCount++
-			}
+	}
+
+	h.finishParameterDiscovery(ctx, deviceID, job, payload, writableByName)
+}
+
+// finishParameterDiscovery persists a completed walk: the snapshot, the
+// confirmed data-model root, the job result (including any objects skipped
+// because the CPE could not serve them) and the audit record.
+func (h *handler) finishParameterDiscovery(ctx context.Context, deviceID string, job *jobs.Job, payload jobs.ParameterDiscoveryPayload, writableByName map[string]bool) {
+	writableCount := 0
+	for _, writable := range writableByName {
+		if writable {
+			writableCount++
 		}
 	}
 
@@ -157,7 +181,7 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 	}
 
 	if err := h.jobs.MarkSuccessWithDetail(ctx, job.ID, discoveryResultDetail{
-		Root: payload.Root, ParameterCount: len(writableByName), WritableCount: writableCount,
+		Root: payload.Root, ParameterCount: len(writableByName), WritableCount: writableCount, Skipped: payload.Skipped,
 	}); err != nil {
 		h.logger.Error("failed to mark discovery job success", "err", err, "job_id", job.ID)
 	}
@@ -165,10 +189,98 @@ func (h *handler) completeParameterDiscovery(ctx context.Context, deviceID strin
 
 	if err := h.auditor.Record(ctx, "system", deviceID, "ParameterDiscoveryCompleted", map[string]any{
 		"job_id": job.ID, "command_key": job.CommandKey, "root": payload.Root,
-		"parameter_count": len(writableByName), "writable_count": writableCount,
+		"parameter_count": len(writableByName), "writable_count": writableCount, "skipped": payload.Skipped,
 	}); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
 	h.logger.Info("parameter discovery completed", "device_id", deviceID, "root", payload.Root,
+		"parameter_count", len(writableByName), "writable_count", writableCount, "skipped", len(payload.Skipped), "command_key", job.CommandKey)
+
+	// Read the non-secret Wi-Fi values (SSID names, guest flags, AccessPoint
+	// references, radio bands) once the tree is known, so the resolved Wi-Fi
+	// network view is complete before an operator or BSS order needs it.
+	if payload.Root == rootDevice2 {
+		if paths := adapters.WiFiNetworkReadPaths(writableByName); len(paths) > 0 {
+			if _, err := h.jobs.Create(ctx, deviceID, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, "system:wifi-state"); err != nil {
+				h.logger.Error("failed to queue Wi-Fi state read", "err", err, "device_id", deviceID)
+			}
+		}
+		// A mesh satellite names its gateway via TR-111 GatewayInfo; read
+		// it so the satellite is linked to that gateway (see mesh.go).
+		h.queueGatewayInfoRead(ctx, deviceID, writableByName)
+	}
+}
+
+// finishSubtreeMerge completes a Merge discovery (see
+// jobs.ParameterDiscoveryPayload.Merge): the names under payload.Root
+// replace that subtree in the device's existing tree. Unlike a full walk it
+// publishes no new snapshot and leaves data_model_root alone.
+func (h *handler) finishSubtreeMerge(ctx context.Context, deviceID string, job *jobs.Job, payload jobs.ParameterDiscoveryPayload, writableByName map[string]bool) {
+	if err := h.params.MergeDiscoveredSubtree(ctx, deviceID, payload.Root, writableByName); err != nil {
+		h.logger.Error("failed to merge discovered subtree", "err", err, "device_id", deviceID, "root", payload.Root)
+		_ = h.jobs.MarkFailed(ctx, job.ID, "", "failed to merge discovered subtree: "+err.Error())
+		return
+	}
+	writableCount := 0
+	for _, writable := range writableByName {
+		if writable {
+			writableCount++
+		}
+	}
+	if err := h.jobs.MarkSuccessWithDetail(ctx, job.ID, discoveryResultDetail{
+		Root: payload.Root, ParameterCount: len(writableByName), WritableCount: writableCount,
+	}); err != nil {
+		h.logger.Error("failed to mark subtree discovery success", "err", err, "job_id", job.ID)
+	}
+	h.metrics.JobsCompletedTotal.WithLabelValues(job.Type, jobs.StatusSuccess).Inc()
+	h.logger.Info("subtree discovery merged", "device_id", deviceID, "root", payload.Root,
 		"parameter_count", len(writableByName), "writable_count", writableCount, "command_key", job.CommandKey)
+}
+
+// skipDiscoveryObject defers (first failure) or abandons (second failure)
+// the object the walk is on (see jobs.SkipDiscoveryCursor) and either
+// requeues the walk at the next object or, when nothing is left, completes
+// discovery with what was found.
+func (h *handler) skipDiscoveryObject(ctx context.Context, deviceID string, job *jobs.Job, payload jobs.ParameterDiscoveryPayload, reason string) {
+	object := payload.Cursor
+	done, skipped, err := jobs.SkipDiscoveryCursor(&payload)
+	if err != nil {
+		_ = h.jobs.MarkFailed(ctx, job.ID, "", err.Error())
+		h.logger.Warn("parameter discovery abandoned", "device_id", deviceID, "command_key", job.CommandKey, "err", err)
+		return
+	}
+	if skipped {
+		h.logger.Warn("parameter discovery skipped an object the CPE could not serve",
+			"device_id", deviceID, "object", object, "reason", reason, "attempt", 2, "command_key", job.CommandKey)
+	} else {
+		h.logger.Info("parameter discovery deferred an object for one retry",
+			"device_id", deviceID, "object", object, "reason", reason, "command_key", job.CommandKey)
+	}
+	if done {
+		h.finishParameterDiscovery(ctx, deviceID, job, payload, payload.Names)
+		return
+	}
+	if err := h.jobs.RequeueDiscovery(ctx, job, payload); err != nil {
+		h.logger.Error("persist discovery progress", "err", err, "job_id", job.ID)
+	}
+}
+
+// recoverAbandonedDiscovery runs on every Inform. A CPE has one session at a
+// time, so a new Inform means any GetParameterNames still RPC_SENT from an
+// earlier session was never answered: the CPE dropped the session on that
+// object. Skip it now rather than letting the 15-minute lease expire and the
+// reaper resend the same object, which would stall discovery indefinitely.
+func (h *handler) recoverAbandonedDiscovery(ctx context.Context, deviceID string) {
+	inFlight, err := h.jobs.InFlightDiscoveries(ctx, deviceID)
+	if err != nil {
+		h.logger.Error("load in-flight discovery", "err", err, "device_id", deviceID)
+		return
+	}
+	for _, job := range inFlight {
+		var payload jobs.ParameterDiscoveryPayload
+		if err := json.Unmarshal(job.Payload, &payload); err != nil || !payload.Incremental || payload.Cursor == "" {
+			continue // root-level or legacy full-tree walks keep the lease/reaper path
+		}
+		h.skipDiscoveryObject(ctx, deviceID, job, payload, "CPE ended the session without responding")
+	}
 }

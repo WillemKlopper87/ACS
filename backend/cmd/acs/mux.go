@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"acs/internal/auth"
 	"acs/internal/cwmp"
@@ -250,6 +251,11 @@ func bootstrapCWMPGuardWithDeps(
 // the shared bootstrap credential outright.
 func bootstrapDeviceIsEstablished(device *devices.Device) bool {
 	if device == nil {
+		return false
+	}
+	// An operator-opened re-enrolment window (factory-reset CPE) lets this
+	// one device graduate again through the bootstrap path.
+	if device.ReenrollmentOpen(time.Now()) {
 		return false
 	}
 	if device.LastInformAt != nil {

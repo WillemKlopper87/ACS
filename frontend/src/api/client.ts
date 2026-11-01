@@ -54,7 +54,7 @@ import type {
 } from "./types";
 import { getAuthState, clearAuth, markAuthRequired } from "../auth/tokenStore";
 import { markApiReachable } from "../lib/apiHealth";
-import type { paths } from "./generated";
+import type { components, paths } from "./generated";
 
 // Generated contract (audit P2.5): src/api/generated.ts is produced from
 // backend/openapi.yaml by `npm run generate:api`, and CI fails if it
@@ -64,6 +64,21 @@ import type { paths } from "./generated";
 // legacy to be migrated over time.
 type LoginResponse =
   paths["/api/v1/auth/login"]["post"]["responses"]["200"]["content"]["application/json"];
+type DeviceSatellitesResponse =
+  paths["/api/v1/devices/{id}/satellites"]["get"]["responses"]["200"]["content"]["application/json"];
+type DiagnosticQueueResponse =
+  paths["/api/v1/devices/{id}/diagnostics/ping"]["post"]["responses"]["202"]["content"]["application/json"];
+export type WiFiInsightsData =
+  paths["/api/v1/devices/{id}/wifi/insights"]["get"]["responses"]["200"]["content"]["application/json"];
+export type WiFiInsightsWindow = "2h" | "1d" | "1w" | "1m";
+export type SIMView = paths["/api/v1/devices/{id}/sim"]["get"]["responses"]["200"]["content"]["application/json"];
+export type DeviceXMPPState = components["schemas"]["DeviceXMPPState"];
+export type XMPPProvisioning = components["schemas"]["XMPPProvisioning"];
+export type XMPPProvisionRequest = NonNullable<
+  paths["/api/v1/devices/{id}/xmpp/provision"]["post"]["requestBody"]
+>["content"]["application/json"];
+export type DiagnosticsCapabilities =
+  paths["/api/v1/devices/{id}/diagnostics-capabilities"]["get"]["responses"]["200"]["content"]["application/json"];
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -184,8 +199,16 @@ export const api = {
 
   bulkAction: (
     deviceIds: string[],
-    action: "SET_PARAMETER" | "CONNECTION_REQUEST" | "REFRESH_CELLULAR",
-    opts?: { parameters?: { name: string; value: string; type?: string }[]; timeoutSeconds?: number },
+    action: "SET_PARAMETER" | "SET_WIFI" | "CONNECTION_REQUEST" | "REFRESH_CELLULAR",
+    opts?: {
+      parameters?: { name: string; value: string; type?: string }[];
+      timeoutSeconds?: number;
+      // SET_WIFI: applied server-side to every primary Wi-Fi network each
+      // device resolves (never a fixed Device.WiFi.SSID.1).
+      wifiSsid?: string;
+      wifiPassword?: string;
+      wifiEnabled?: boolean;
+    },
   ) =>
     request<BulkActionResponse>("/api/v1/devices/bulk-actions", {
       method: "POST",
@@ -194,10 +217,20 @@ export const api = {
         action,
         parameters: opts?.parameters,
         timeout_seconds: opts?.timeoutSeconds,
+        wifi_ssid: opts?.wifiSsid || undefined,
+        wifi_password: opts?.wifiPassword || undefined,
+        wifi_enabled: opts?.wifiEnabled,
       }),
     }),
 
   getDevice: (id: string) => request<Device>(`/api/v1/devices/${id}`),
+
+  /** Mesh satellites linked to this gateway (via their TR-111 GatewayInfo). */
+  listDeviceSatellites: (id: string) =>
+    request<DeviceSatellitesResponse>(`/api/v1/devices/${id}/satellites`).then((r) => ({
+      items: r.items as Device[],
+      total: r.total,
+    })),
 
   startDeviceCapture: (deviceId: string, protocol: CaptureProtocol) =>
     request<CaptureSession>(`/api/v1/devices/${deviceId}/captures`, {
@@ -258,16 +291,21 @@ export const api = {
     }),
 
   createDiagnosticsPing: (id: string, host: string) =>
-    request<QueueResponse>(`/api/v1/devices/${id}/diagnostics/ping`, {
+    request<DiagnosticQueueResponse>(`/api/v1/devices/${id}/diagnostics/ping`, {
       method: "POST",
       body: JSON.stringify({ host }),
     }),
 
   createDiagnosticsTraceroute: (id: string, host: string) =>
-    request<QueueResponse>(`/api/v1/devices/${id}/diagnostics/traceroute`, {
+    request<DiagnosticQueueResponse>(`/api/v1/devices/${id}/diagnostics/traceroute`, {
       method: "POST",
       body: JSON.stringify({ host }),
     }),
+
+  // Which diagnostics the device's discovered data model supports — the
+  // same rules the create endpoints enforce with a 409.
+  getDiagnosticsCapabilities: (id: string) =>
+    request<DiagnosticsCapabilities>(`/api/v1/devices/${id}/diagnostics-capabilities`),
 
   getParameterHistory: (id: string, name: string) =>
     request<{ name: string; items: ParameterHistoryEntry[] }>(`/api/v1/devices/${id}/parameters/history?name=${encodeURIComponent(name)}`),
@@ -290,6 +328,34 @@ export const api = {
 
   getConnectionDiagnostics: (id: string) =>
       request<paths["/api/v1/devices/{id}/connection-diagnostics"]["get"]["responses"]["200"]["content"]["application/json"]>(`/api/v1/devices/${id}/connection-diagnostics`),
+
+  getWiFiNetworks: (id: string) =>
+    request<paths["/api/v1/devices/{id}/wifi/networks"]["get"]["responses"]["200"]["content"]["application/json"]>(`/api/v1/devices/${id}/wifi/networks`),
+
+  /** Sampled Wi-Fi bandwidth, clients and SSID usage over a window (spec §3.3a). */
+  getWiFiInsights: (id: string, window: WiFiInsightsWindow) =>
+    request<WiFiInsightsData>(`/api/v1/devices/${id}/wifi/insights?window=${window}`),
+
+  /** SIM / subscriber identifiers, masked for every role. */
+  getSIM: (id: string) => request<SIMView>(`/api/v1/devices/${id}/sim`),
+
+  /** XMPP Connection Request state: the ACS's session, the CPE's view, provisioning progress. */
+  getDeviceXMPP: (id: string) => request<DeviceXMPPState>(`/api/v1/devices/${id}/xmpp`),
+
+  /** Starts (or, with restart, re-runs) zero-touch XMPP provisioning; idempotent while a run is active. */
+  provisionXMPP: (id: string, body: XMPPProvisionRequest) =>
+    request<components["schemas"]["XMPPProvisionResponse"]>(`/api/v1/devices/${id}/xmpp/provision`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** Full SIM identifiers: human superadmin only, reason required, audited server-side. */
+  revealSIM: (id: string, reason: string, reference: string) =>
+    request<SIMView>(`/api/v1/devices/${id}/sim/reveal`, {
+      method: "POST",
+      body: JSON.stringify({ reason, reference }),
+      cache: "no-store",
+    }),
 
   getParameterNames: (id: string) =>
     request<{ names: Record<string, boolean>; discovered_at: string | null }>(`/api/v1/devices/${id}/parameter-names`),

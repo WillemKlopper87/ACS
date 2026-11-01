@@ -76,8 +76,9 @@ func ProjectFiveG(dictionary *datamodel.Dictionary, names map[string]bool, cache
 					metric.Value = integer
 				}
 			}
-			leaf := lastPathSegment(path)
-			if standard && (leaf == "RSRP" || leaf == "RSRQ") && value.Value == "2147483647" {
+			// Integer-range extremes are "no value" placeholders, not readings
+			// (TR-181 2147483647; Nokia LTE -32768 / 4294967295 when only on 5G).
+			if IsCellularSentinel(value.Value) {
 				metric.Value = nil
 				metric.State = "unavailable"
 			}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"acs/internal/parameters"
 	"acs/internal/scheduler"
 )
 
@@ -30,7 +31,7 @@ type scheduledJobResponse struct {
 func toScheduledJobResponse(sj *scheduler.ScheduledJob) scheduledJobResponse {
 	resp := scheduledJobResponse{
 		ID: sj.ID, Name: sj.Name, JobType: sj.JobType, TargetType: sj.TargetType, TargetID: sj.TargetID,
-		Payload: sj.Payload, IntervalSeconds: sj.IntervalSeconds, Enabled: sj.Enabled, CustomerID: sj.CustomerID,
+		Payload: parameters.RedactPayloadSecrets(sj.Payload), IntervalSeconds: sj.IntervalSeconds, Enabled: sj.Enabled, CustomerID: sj.CustomerID,
 		NextRunAt: sj.NextRunAt.Format(time.RFC3339), CreatedAt: sj.CreatedAt.Format(time.RFC3339),
 	}
 	if sj.LastRunAt != nil {

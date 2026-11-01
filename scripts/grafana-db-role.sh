@@ -51,6 +51,14 @@ READ_GRANTS=(
   "jobs:id,command_key,device_id,type,status,attempts,max_attempts,created_by,created_at,updated_at,started_at,completed_at,fault_code,fault_string"
   "webhook_subscriptions:id,account_id,target_url,event_types,created_at"
   "webhook_deliveries:id,subscription_id,event_type,status,attempts,last_attempt_at,created_at"
+  # Alerting/escalation dashboard; details JSONB deliberately excluded.
+  "alert_incidents:id,tenant_id,device_id,condition_key,priority,summary,state,escalation_stage,first_seen_at,last_seen_at,next_escalation_at,acknowledged_at,acknowledged_by,recovered_at"
+  # CWMP session duration / close reason (CPE session drops).
+  "cwmp_sessions:id,device_id,state,inform_event_codes,opened_at,closed_at,close_reason"
+  # Credential graduation state; the password column is never granted.
+  "device_credentials:id,device_id,credential_type,version,status,created_at,activated_at,revoked_at"
+  # Discovery history; names/capabilities/evidence (evidence holds a serial) excluded.
+  "device_discovery_snapshots:id,device_id,command_key,protocol,root,discovered_at"
 )
 
 grants=""

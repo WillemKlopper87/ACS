@@ -27,5 +27,6 @@ pkill -f "scripts/spa-server.py" 2>/dev/null && echo "Killed a stray frontend se
 pkill -f "http.server 5173" 2>/dev/null && echo "Killed a stray old-style frontend server" || true
 
 # Durable state/monitoring containers are deliberately left running.
-echo "Done. (Postgres + Prometheus/Alertmanager/Grafana containers left running;"
-echo " 'cd infra && docker compose stop' stops those as well.)"
+echo "Done. (Postgres + Prometheus/Alertmanager/Grafana containers — and Prosody"
+echo " when XMPP is enabled — left running; 'cd infra && docker compose --profile xmpp stop'"
+echo " stops those as well.)"

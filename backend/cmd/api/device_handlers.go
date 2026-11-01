@@ -45,6 +45,14 @@ type deviceResponse struct {
 	Location                    *string  `json:"location,omitempty"`
 	Latitude                    *float64 `json:"latitude,omitempty"`
 	Longitude                   *float64 `json:"longitude,omitempty"`
+	ReenrollUntil               *string  `json:"reenroll_until,omitempty"`
+	RebootRequestedAt           *string  `json:"reboot_requested_at,omitempty"`
+	LastRebootDurationSeconds   *int     `json:"last_reboot_duration_seconds,omitempty"`
+	// GatewayDeviceID is set on a mesh satellite linked (via TR-111
+	// GatewayInfo) to its gateway; GatewayOUISerial is the gateway
+	// identity it reported, kept even when that gateway is not registered.
+	GatewayDeviceID  *string `json:"gateway_device_id,omitempty"`
+	GatewayOUISerial *string `json:"gateway_oui_serial,omitempty"`
 }
 
 func toResponse(d devices.Device) deviceResponse {
@@ -70,6 +78,17 @@ func toResponse(d devices.Device) deviceResponse {
 		Location:                    d.Location,
 		Latitude:                    d.Latitude,
 		Longitude:                   d.Longitude,
+		GatewayDeviceID:             d.GatewayDeviceID,
+		GatewayOUISerial:            d.GatewayOUISerial,
+	}
+	if d.RebootRequestedAt != nil {
+		v := d.RebootRequestedAt.UTC().Format(time.RFC3339)
+		resp.RebootRequestedAt = &v
+	}
+	resp.LastRebootDurationSeconds = d.LastRebootDurationSeconds
+	if d.ReenrollUntil != nil {
+		v := d.ReenrollUntil.UTC().Format(time.RFC3339)
+		resp.ReenrollUntil = &v
 	}
 	if d.LastInformAt != nil {
 		s := d.LastInformAt.Format(time.RFC3339)
@@ -300,6 +319,32 @@ func (h *handler) getDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toResponse(*d))
 }
 
+// listDeviceSatellites returns the mesh satellites linked to a gateway
+// (devices whose gateway_device_id is this device), filtered to the
+// caller's tenancy scope like every other device read.
+func (h *handler) listDeviceSatellites(w http.ResponseWriter, r *http.Request) {
+	d, ok := h.getScopedDevice(w, r, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	satellites, err := h.devices.ListSatellites(r.Context(), d.ID, customerIDs, scoped)
+	if err != nil {
+		h.logger.Error("failed to list mesh satellites", "err", err, "device_id", d.ID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	items := make([]deviceResponse, 0, len(satellites))
+	for _, s := range satellites {
+		items = append(items, toResponse(s))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items)})
+}
+
 func deviceInScope(deviceCustomerID *string, accessibleCustomerIDs []string) bool {
 	if deviceCustomerID == nil {
 		return false // unassigned devices are invisible to a scoped operator, not implicitly shared
@@ -352,6 +397,10 @@ func (h *handler) getParameters(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Subscriber identifiers (IMSI/ICCID/MSISDN/IMEI/EID) are masked for
+	// every caller here, superadmin included: the full values are disclosed
+	// only through the audited GET /devices/{id}/sim (superadmin-only).
+	cached = parameters.RedactSubscriberIdentifiers(cached, false)
 	out := make(map[string]cachedValueResponse, len(cached))
 	for name, v := range cached {
 		if wanted != nil && !wanted[name] {
@@ -384,10 +433,11 @@ func (h *handler) getParameterHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	kind := parameters.SubscriberIdentifierKind(name)
 	items := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		items = append(items, map[string]any{
-			"value": e.Value, "type": e.Type, "source": e.Source, "recorded_at": e.RecordedAt.Format(time.RFC3339),
+			"value": parameters.MaskSubscriberIdentifier(kind, e.Value), "type": e.Type, "source": e.Source, "recorded_at": e.RecordedAt.Format(time.RFC3339),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"name": name, "items": items})
@@ -538,15 +588,25 @@ const maxBulkDevices = 500
 type bulkActionRequest struct {
 	DeviceIDs      []string         `json:"device_ids,omitempty"`
 	GroupID        string           `json:"group_id,omitempty"` // alternative to device_ids — targets a device_groups member set (build plan §4 Phase 7)
-	Action         string           `json:"action"`             // SET_PARAMETER | CONNECTION_REQUEST | REFRESH_CELLULAR
+	Action         string           `json:"action"`             // SET_PARAMETER | SET_WIFI | CONNECTION_REQUEST | REFRESH_CELLULAR
 	Parameters     []parameterInput `json:"parameters,omitempty"`
 	TimeoutSeconds int              `json:"timeout_seconds,omitempty"`
+	// SET_WIFI only: written to every primary Wi-Fi network each device
+	// resolves (see planWiFiWrites); at least one is required.
+	WiFiSSID     string `json:"wifi_ssid,omitempty"`
+	WiFiPassword string `json:"wifi_password,omitempty"`
+	WiFiEnabled  *bool  `json:"wifi_enabled,omitempty"`
 }
 
 type bulkActionResult struct {
 	DeviceID   string `json:"device_id"`
 	CommandKey string `json:"command_key,omitempty"`
 	Error      string `json:"error,omitempty"`
+	// SET_WIFI: the networks written ("SSID 1 (2.4GHz) + SSID 5 (5GHz)"),
+	// or — when the device's Wi-Fi roles were not cached yet — the read
+	// queued instead of a write (Error is set in that case).
+	Detail            string `json:"detail,omitempty"`
+	RefreshCommandKey string `json:"refresh_command_key,omitempty"`
 }
 
 // bulkAction is the "mass unit control" capability a fleet-scale review
@@ -582,6 +642,7 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var setParamPayload jobs.SetParameterPayload
+	var wifi wifiSettings
 	if req.Action == jobs.TypeSetParameter {
 		payload, err := buildSetParameterPayload(req.Parameters)
 		if err != nil {
@@ -589,6 +650,12 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		setParamPayload = payload
+	} else if req.Action == bulkActionSetWiFi {
+		wifi = wifiSettings{SSID: req.WiFiSSID, Password: req.WiFiPassword, Enabled: req.WiFiEnabled}
+		if err := wifi.validate(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	} else if req.Action != jobs.TypeConnectionRequest && req.Action != "REFRESH_CELLULAR" {
 		http.Error(w, fmt.Sprintf("unsupported bulk action %q", req.Action), http.StatusBadRequest)
 		return
@@ -632,6 +699,9 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 				result.CommandKey = job.CommandKey
 			}
 
+		case bulkActionSetWiFi:
+			result = h.bulkSetWiFi(r.Context(), deviceID, wifi, operator)
+
 		case jobs.TypeConnectionRequest:
 			job, err := h.jobs.Create(r.Context(), deviceID, jobs.TypeConnectionRequest,
 				jobs.ConnectionRequestPayload{TimeoutSeconds: req.TimeoutSeconds}, operator)
@@ -648,6 +718,12 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			_, paths, _ := h.cellularDiagnosticPaths(r.Context(), device)
+			if len(paths) == 0 {
+				// e.g. a mesh satellite with no cellular radio: do not queue an
+				// empty GetParameterValues and report it as success.
+				result.Error = "no discovered cellular parameters for this device"
+				break
+			}
 			job, err := h.jobs.Create(r.Context(), deviceID, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, operator)
 			if err != nil {
 				result.Error = err.Error()

@@ -1,0 +1,34 @@
+{
+  "name": "nokia-beacon31-read-only",
+  "identity_fields": [
+    "Manufacturer",
+    "ModelName",
+    "ProductClass",
+    "HardwareVersion",
+    "SoftwareVersion"
+  ],
+  "expected_identity": {
+    "HardwareVersion": [
+      "3TN00512BABA"
+    ],
+    "SoftwareVersion": [
+      "3TN00626IJLJ03"
+    ]
+  },
+  "reads": [
+    "Device.DeviceInfo.ModelNumber",
+    "Device.DeviceInfo.UpTime",
+    "Device.GatewayInfo.ManufacturerOUI",
+    "Device.GatewayInfo.ProductClass",
+    "Device.GatewayInfo.SerialNumber",
+    "Device.X_ALU-COM_Wifi.WorkMode",
+    "Device.X_ALU-COM_Wifi.WorkRole",
+    "Device.IP.Interface.1.IPv4Address.1.IPAddress",
+    "Device.ManagementServer.ConnectionRequestURL",
+    "Device.ManagementServer.PeriodicInformInterval",
+    "Device.SoftwareModules.ExecEnv.1.Name"
+  ],
+  "read_discovered_5g": false,
+  "writes": [],
+  "reboot": false
+}

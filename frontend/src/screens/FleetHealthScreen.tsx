@@ -19,8 +19,10 @@ const STATUS_TONE: Record<string, string> = {
   UNKNOWN: "neutral",
   DIRECT_IPV4: "ok",
   DIRECT_IPV6: "ok",
+  XMPP: "ok",
   PERIODIC_FALLBACK_ONLY: "warn",
   UNREACHABLE: "danger",
+  REBOOTING: "pending",
   SUCCESS: "ok",
   FAILED: "danger",
   TIMEOUT: "danger",
@@ -28,6 +30,7 @@ const STATUS_TONE: Record<string, string> = {
   RPC_SENT: "pending",
   IN_PROGRESS: "pending",
   AWAITING_TRANSFER_COMPLETE: "pending",
+  AWAITING_DIAGNOSTICS_COMPLETE: "pending",
 };
 
 const RECENCY_LABEL: Record<string, string> = {

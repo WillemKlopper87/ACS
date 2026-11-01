@@ -39,8 +39,11 @@ func validateCWMPTransportStartup(profile string) error {
 	if profile == acsDeploymentProfileLab {
 		certFile := strings.TrimSpace(os.Getenv("ACS_TLS_CERT"))
 		keyFile := strings.TrimSpace(os.Getenv("ACS_TLS_KEY"))
-		if (certFile == "" || keyFile == "") && !envBool("ACS_CWMP_ALLOW_PLAINTEXT") {
-			return errors.New("ACS_CWMP_ALLOW_PLAINTEXT=true is required in the lab profile when CWMP TLS is not configured")
+		// ACS_TLS_ADDR serves TLS on a second listener and keeps ACS_ADDR
+		// on plain HTTP, so it needs the same explicit opt-in.
+		plaintext := certFile == "" || keyFile == "" || strings.TrimSpace(os.Getenv("ACS_TLS_ADDR")) != ""
+		if plaintext && !envBool("ACS_CWMP_ALLOW_PLAINTEXT") {
+			return errors.New("ACS_CWMP_ALLOW_PLAINTEXT=true is required in the lab profile when ACS_ADDR serves plain HTTP (no CWMP TLS, or ACS_TLS_ADDR set)")
 		}
 		return nil
 	}

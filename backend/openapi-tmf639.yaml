@@ -99,6 +99,25 @@ components:
         "@type":
           type: string
           enum: [StringCharacteristic, StringArrayCharacteristic, NumberCharacteristic]
+    ResourceRelationship:
+      type: object
+      description: >-
+        Mesh topology: a satellite (e.g. Nokia WiFi Beacon 3.1) carries
+        isMeshSatelliteOf -> its gateway (from TR-111 Device.GatewayInfo); the
+        gateway carries hasMeshSatellite -> each satellite. Only resources
+        visible to the caller are referenced.
+      required: [relationshipType, resource, "@type"]
+      properties:
+        relationshipType: { type: string, enum: [isMeshSatelliteOf, hasMeshSatellite] }
+        resource:
+          type: object
+          required: [id, href]
+          properties:
+            id: { type: string }
+            href: { type: string, format: uri }
+            "@referredType": { type: string, enum: [PhysicalResource] }
+            "@type": { type: string, enum: [ResourceRef] }
+        "@type": { type: string, enum: [ResourceRelationship] }
     Resource:
       type: object
       required: [id, href, "@type"]
@@ -113,5 +132,8 @@ components:
         resourceCharacteristic:
           type: array
           items: { $ref: "#/components/schemas/ResourceCharacteristic" }
+        resourceRelationship:
+          type: array
+          items: { $ref: "#/components/schemas/ResourceRelationship" }
         "@baseType": { type: string, enum: [Resource] }
         "@type": { type: string, enum: [PhysicalResource] }

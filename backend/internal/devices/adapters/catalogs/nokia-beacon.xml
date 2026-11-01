@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Nokia Beacon 3.1 Wi-Fi mesh unit. It reports Manufacturer "ALCL"
+  (Alcatel-Lucent's vendor code), not "Nokia", so it needs its own catalog
+  entry to be recognised. Paths are from parameter discovery (field test
+  2026-10-30, 101 names). The CWMP tree is management-only: there is no
+  Device.WiFi. — Wi-Fi is configured by the gateway's EasyMesh controller —
+  and no cellular radio, so this catalog contributes no RF diagnostics.
+-->
+<cwmp:cwmpDataModel vendor="ALCL" model="Beacon 3.1" specVersion="TR-181 i2">
+  <object name="Device." access="readOnly">
+    <object name="DeviceInfo." access="readOnly">
+      <parameter name="Manufacturer" type="string" access="readOnly"/>
+      <parameter name="ModelName" type="string" access="readOnly"/>
+      <parameter name="ProductClass" type="string" access="readOnly"/>
+      <parameter name="SerialNumber" type="string" access="readOnly"/>
+      <parameter name="HardwareVersion" type="string" access="readOnly"/>
+      <parameter name="SoftwareVersion" type="string" access="readOnly"/>
+      <parameter name="UpTime" type="unsignedInt" access="readOnly"/>
+      <parameter name="ProvisioningCode" type="string" access="readWrite"/>
+    </object>
+
+    <!-- TR-111: identity of the gateway this unit is behind -->
+    <object name="GatewayInfo." access="readOnly">
+      <parameter name="ManufacturerOUI" type="string" access="readOnly"/>
+      <parameter name="ProductClass" type="string" access="readOnly"/>
+      <parameter name="SerialNumber" type="string" access="readOnly"/>
+    </object>
+
+    <!-- Mesh role reported over CWMP -->
+    <object name="X_ALU-COM_Wifi." access="readOnly">
+      <parameter name="WorkMode" type="string" access="readOnly"/>
+      <parameter name="WorkRole" type="string" access="readOnly"/>
+    </object>
+  </object>
+</cwmp:cwmpDataModel>

@@ -108,7 +108,15 @@ func ResolveCellularReadPath(root string, field CellularField, instance string, 
 	for path := range discovered {
 		paths = append(paths, path)
 	}
-	sort.Strings(paths)
+	// Prefer the 5G NR serving-cell object over LTE when a CPE exposes both
+	// (e.g. Nokia X_ALU-COM_Attached5GCellStat vs ..AttachedLteCellStat),
+	// explicitly rather than by accident of sort order.
+	sort.Slice(paths, func(i, j int) bool {
+		if ri, rj := ratPreference(paths[i]), ratPreference(paths[j]); ri != rj {
+			return ri < rj
+		}
+		return paths[i] < paths[j]
+	})
 	for _, path := range paths {
 		if _, isStandard := standard[path]; isStandard {
 			continue
@@ -161,6 +169,13 @@ func MatchCellularStatePath(path string) (CellularField, bool) {
 			}
 		}
 	}
+	// The leaf-alias fallback is only meaningful inside a cellular subtree;
+	// without this guard every Wi-Fi/Ethernet/IP *.Status change was
+	// published as a CellularStateChanged event (also for radio-less mesh
+	// satellites such as the Nokia Beacon).
+	if !isCellularPath(path) {
+		return "", false
+	}
 	leaf := lastPathSegment(path)
 	for _, field := range CellularStateFields {
 		if cellularLeafMatches(field, leaf) {
@@ -180,8 +195,14 @@ func cellularLeafMatches(field CellularField, leaf string) bool {
 		CellularOperator: {"OPERATOR", "CARRIER", "NETWORKNAME", "PLMN"},
 		CellularCellID:   {"CELLID", "CELLIDENTITY", "ECGI", "NRCELLID"},
 		CellularRAT:      {"RAT", "RADIOACCESS", "CURRENTACCESSTECHNOLOGY", "NETWORKTYPE"},
-		CellularBand:     {"BAND", "BANDNUMBER"}, CellularChannel: {"CHANNEL", "ARFCN"},
-		CellularRSSI: {"RSSI", "SIGNALSTRENGTH"}, CellularRSRP: {"RSRP"}, CellularRSRQ: {"RSRQ"},
+		CellularBand:     {"BAND", "BANDNUMBER"},
+		// Vendor channel leaves: Nokia X_ALU-COM_ uses Downlink-NR-ARFCN (5G)
+		// and DownlinkEarfcn (LTE).
+		CellularChannel: {"CHANNEL", "ARFCN", "NRARFCN", "EARFCN", "DOWNLINKNRARFCN", "DOWNLINKEARFCN"},
+		// "...Current" leaves are Nokia's live readings; Avg/Min/Max...Month
+		// aggregates deliberately do not match.
+		CellularRSSI: {"RSSI", "SIGNALSTRENGTH", "RSSICURRENT"},
+		CellularRSRP: {"RSRP", "RSRPCURRENT"}, CellularRSRQ: {"RSRQ", "RSRQCURRENT"},
 		CellularBytesSent: {"BYTESSENT"}, CellularBytesReceived: {"BYTESRECEIVED"},
 	}
 	for _, alias := range aliases[field] {
@@ -208,6 +229,9 @@ func NormalizeCellularValue(raw any) CellularValue {
 	switch v := raw.(type) {
 	case string:
 		s := strings.TrimSpace(v)
+		if IsCellularSentinel(s) {
+			return CellularValue{Value: nil, Raw: raw}
+		}
 		if n, err := strconv.ParseFloat(s, 64); err == nil {
 			return CellularValue{Value: n, Raw: raw}
 		}
@@ -216,5 +240,44 @@ func NormalizeCellularValue(raw any) CellularValue {
 		return NormalizeCellularValue(string(v))
 	default:
 		return CellularValue{Value: raw, Raw: raw}
+	}
+}
+
+// cellularSentinels are the integer-range extremes CPEs report when a radio
+// metric has no current value (e.g. Nokia FastMile reports LTE
+// RSRP/RSRQ/RSSI as -32768 and DownlinkEarfcn as 4294967295 while attached
+// only to 5G; TR-181 itself uses 2147483647). They are never real readings.
+var cellularSentinels = map[string]struct{}{
+	"-32768": {}, "32767": {}, "-2147483648": {}, "2147483647": {}, "4294967295": {},
+}
+
+// IsCellularSentinel reports whether a raw cellular value is a "no value"
+// placeholder rather than a measurement.
+func IsCellularSentinel(value string) bool {
+	_, ok := cellularSentinels[strings.TrimSpace(value)]
+	return ok
+}
+
+// isCellularPath reports whether a path belongs to a cellular/mobile subtree
+// (standard Device.Cellular. or a vendor *Cellular*/*Mobile* object).
+func isCellularPath(path string) bool {
+	if strings.HasPrefix(path, "Device.Cellular.") {
+		return true
+	}
+	lower := strings.ToLower(path)
+	return strings.Contains(lower, "cellular") || strings.Contains(lower, "mobile")
+}
+
+// ratPreference ranks a discovered path by radio access technology: 5G NR
+// objects first, then LTE, then anything else.
+func ratPreference(path string) int {
+	lower := strings.ToLower(path)
+	switch {
+	case strings.Contains(lower, "5g") || strings.Contains(lower, ".nr") || strings.Contains(lower, "_nr"):
+		return 0
+	case strings.Contains(lower, "lte") || strings.Contains(lower, "4g"):
+		return 1
+	default:
+		return 2
 	}
 }

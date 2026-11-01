@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"testing"
+	"time"
 
 	"acs/internal/devices"
 	"acs/internal/jobs"
@@ -145,5 +146,63 @@ func TestLeaseForTypesFiltersByType(t *testing.T) {
 	}
 	if gotUpload.Status != jobs.StatusQueued {
 		t.Errorf("Upload job status = %s, want QUEUED (untouched by a GetParameter-only lease)", gotUpload.Status)
+	}
+}
+
+// TestDiagnosticsAwaitLifecycle is the C1 regression: an acknowledged
+// diagnostic trigger must not be leasable again in the same session; the
+// next Inform releases it for exactly one poll, and the reaper times it out
+// by deadline rather than by attempts.
+func TestDiagnosticsAwaitLifecycle(t *testing.T) {
+	repo, db, deviceID := newLeaseTestDB(t)
+	ctx := context.Background()
+
+	job, err := repo.CreateWithMaxAttempts(ctx, deviceID, jobs.TypeDiagnosticsPing,
+		jobs.DiagnosticsPingPayload{Host: "8.8.8.8", NumberOfRepetitions: 4, Timeout: 5000}, "test", jobs.DiagnosticsMaxAttempts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leased, err := repo.Lease(ctx, deviceID)
+	if err != nil || leased == nil || leased.ID != job.ID {
+		t.Fatalf("lease trigger: %+v %v", leased, err)
+	}
+	if jobs.DiagnosticsTriggered(leased) {
+		t.Fatal("fresh job must render the trigger")
+	}
+	if ok, err := repo.MarkAwaitingDiagnostics(ctx, leased, jobs.DiagnosticsWindow(leased)); err != nil || !ok {
+		t.Fatalf("mark awaiting: %v %v", ok, err)
+	}
+	// Same session: nothing to lease.
+	if again, err := repo.Lease(ctx, deviceID); err != nil || again != nil {
+		t.Fatalf("same-session lease returned %+v %v, want nothing", again, err)
+	}
+	// Next Inform releases it once.
+	if n, err := repo.ReleaseAwaitingDiagnostics(ctx, deviceID); err != nil || n != 1 {
+		t.Fatalf("release: %d %v", n, err)
+	}
+	poll, err := repo.Lease(ctx, deviceID)
+	if err != nil || poll == nil || !jobs.DiagnosticsTriggered(poll) {
+		t.Fatalf("lease poll: %+v %v, want a triggered job", poll, err)
+	}
+	firstDeadline := *poll.DiagnosticsDeadline
+	if ok, err := repo.MarkAwaitingDiagnostics(ctx, poll, time.Hour); err != nil || !ok {
+		t.Fatalf("re-park: %v %v", ok, err)
+	}
+	reloaded, _ := repo.ByID(ctx, job.ID)
+	if reloaded.Status != jobs.StatusAwaitingDiagnosticsComplete || !reloaded.DiagnosticsDeadline.Equal(firstDeadline) {
+		t.Fatalf("re-park changed state/deadline: %s %v (first %v)", reloaded.Status, reloaded.DiagnosticsDeadline, firstDeadline)
+	}
+
+	// Deadline passes without another Inform -> reaper times it out.
+	if _, err := db.ExecContext(ctx, `UPDATE jobs SET diagnostics_deadline = now() - interval '1 second' WHERE id = $1`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := repo.RecoverExpiredLeases(ctx)
+	if err != nil || res.DiagnosticsTimedOut != 1 {
+		t.Fatalf("reaper: %+v %v, want one diagnostics timeout", res, err)
+	}
+	final, _ := repo.ByID(ctx, job.ID)
+	if final.Status != jobs.StatusTimeout {
+		t.Fatalf("status = %s, want TIMEOUT", final.Status)
 	}
 }

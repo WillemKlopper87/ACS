@@ -7,7 +7,7 @@ import { useAuth } from "../auth/useAuth";
 // looking at the screen that prompted them.
 //
 // Everything here is written against the behaviour the code actually has,
-// not the design documents — where the two differ (TR-098 writes, XMPP,
+// not the design documents — where the two differ (TR-098 writes,
 // per-session SOAP transcripts) the limitation is stated plainly instead of
 // being left for someone to discover during an incident.
 
@@ -257,6 +257,7 @@ const SECTIONS: Section[] = [
         </p>
         <ul className="help-list">
           <li><Term>DIRECT_IPV4</Term> / <Term>DIRECT_IPV6</Term> — the ACS can dial the device directly. Connection Requests work.</li>
+          <li><Term>XMPP</Term> — the device holds an XMPP session to the ACS (TR-069 Annex K), so Connection Requests reach it even behind CGNAT. It is set up over TR-069 by the XMPP provisioning API (see docs/XMPP-CONNECTION-REQUEST.md).</li>
           <li><Term>PERIODIC_FALLBACK_ONLY</Term> — the device is behind NAT/CGNAT with no usable path in. You wait for its periodic Inform.</li>
           <li><Term>UNKNOWN</Term> — not yet established.</li>
         </ul>
@@ -648,7 +649,7 @@ const SECTIONS: Section[] = [
         <p>Worth knowing before you go looking for something that is not there:</p>
         <ul className="help-list">
           <li><strong>TR-098 writes are not supported.</strong> Legacy devices can be read but not configured.</li>
-          <li><strong>XMPP connection requests are not implemented.</strong></li>
+          <li><strong>XMPP connection requests (TR-069 Annex K) are implemented but not yet validated</strong> against real hardware, and are provisioned through the API only — there is no console button yet.</li>
           <li><strong>There is no per-session SOAP transcript.</strong> When a device behaves oddly, the exact request and response are not retrievable from the console afterwards — only the parsed result. Vendor interoperability problems currently need server-side logs.</li>
           <li><strong>Failed CPE authentication leaves no trace in the console.</strong> See <a href="#device-not-appearing">A device is not appearing</a>.</li>
           <li><strong>Annex G UDP connection requests are unvalidated</strong> against real hardware.</li>

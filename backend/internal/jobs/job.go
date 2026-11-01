@@ -45,9 +45,14 @@ const (
 	StatusRPCSent                  = "RPC_SENT"
 	StatusInProgress               = "IN_PROGRESS"
 	StatusAwaitingTransferComplete = "AWAITING_TRANSFER_COMPLETE"
-	StatusSuccess                  = "SUCCESS"
-	StatusFailed                   = "FAILED"
-	StatusTimeout                  = "TIMEOUT"
+	// StatusAwaitingDiagnosticsComplete: a CWMP diagnostic's trigger was
+	// acknowledged and the CPE runs the test after the session ends. Lease
+	// never hands it out; the device's next Inform requeues it for one poll
+	// (see diagnostics.go).
+	StatusAwaitingDiagnosticsComplete = "AWAITING_DIAGNOSTICS_COMPLETE"
+	StatusSuccess                     = "SUCCESS"
+	StatusFailed                      = "FAILED"
+	StatusTimeout                     = "TIMEOUT"
 )
 
 // sessionDispatchableTypes are the job types cmd/acs's per-device Lease
@@ -92,6 +97,10 @@ type Job struct {
 	ResultDetail   json.RawMessage
 	IdempotencyKey *string
 	RequestHash    *string
+	// DiagnosticsDeadline is set once a CWMP diagnostic's trigger has been
+	// acknowledged: non-nil means "triggered, poll for the result", and the
+	// time bounds how long the ACS waits for the CPE to finish.
+	DiagnosticsDeadline *time.Time
 }
 
 type Repository struct {
@@ -104,7 +113,7 @@ func NewRepository(db *sql.DB) *Repository {
 
 const jobColumns = `id, command_key, device_id, type, status, payload, attempts, max_attempts,
 	created_by, created_at, updated_at, started_at, completed_at, fault_code, fault_string, result_detail,
-	idempotency_key, request_hash`
+	idempotency_key, request_hash, diagnostics_deadline`
 
 var ErrIdempotencyConflict = errors.New("idempotency key was already used with a different request")
 
@@ -311,12 +320,16 @@ func (r *Repository) ByCommandKey(ctx context.Context, commandKey string) (*Job,
 // the operator's tenancy scope (audit P0.2) — pass scoped=false for the
 // unrestricted fleet-wide view.
 func (r *Repository) StatusCountsSince(ctx context.Context, since time.Time, customerIDs []string, scoped bool) (map[string]int, error) {
-	query := `SELECT status, COUNT(*) FROM jobs WHERE created_at >= $1 GROUP BY status`
+	// Connection Request jobs are wake-up attempts, not CPE RPCs: behind
+	// CGNAT they cannot succeed by design, so counting them made every NAT'd
+	// fleet look unhealthy. They are reported separately via
+	// devices.connection_request_mode / last_connection_request_status.
+	query := `SELECT status, COUNT(*) FROM jobs WHERE created_at >= $1 AND type <> 'CONNECTION_REQUEST' GROUP BY status`
 	args := []any{since}
 	if scoped {
 		query = `SELECT j.status, COUNT(*) FROM jobs j
 			JOIN devices d ON d.id = j.device_id
-			WHERE j.created_at >= $1 AND d.customer_id::text = ANY($2)
+			WHERE j.created_at >= $1 AND j.type <> 'CONNECTION_REQUEST' AND d.customer_id::text = ANY($2)
 			GROUP BY j.status`
 		args = append(args, store.StringArray(customerIDs))
 	}
@@ -392,14 +405,14 @@ type scanner interface {
 func scanJob(s scanner) (*Job, error) {
 	var j Job
 	var createdBy sql.NullString
-	var startedAt, completedAt sql.NullTime
+	var startedAt, completedAt, diagnosticsDeadline sql.NullTime
 	var faultCode, faultString sql.NullString
 	var idempotencyKey, requestHash sql.NullString
 	var resultDetail []byte
 
 	if err := s.Scan(&j.ID, &j.CommandKey, &j.DeviceID, &j.Type, &j.Status, &j.Payload,
 		&j.Attempts, &j.MaxAttempts, &createdBy, &j.CreatedAt, &j.UpdatedAt,
-		&startedAt, &completedAt, &faultCode, &faultString, &resultDetail, &idempotencyKey, &requestHash); err != nil {
+		&startedAt, &completedAt, &faultCode, &faultString, &resultDetail, &idempotencyKey, &requestHash, &diagnosticsDeadline); err != nil {
 		return nil, fmt.Errorf("scan job: %w", err)
 	}
 	if resultDetail != nil {
@@ -428,6 +441,10 @@ func scanJob(s scanner) (*Job, error) {
 	}
 	if requestHash.Valid {
 		j.RequestHash = &requestHash.String
+	}
+	if diagnosticsDeadline.Valid {
+		t := diagnosticsDeadline.Time
+		j.DiagnosticsDeadline = &t
 	}
 	return &j, nil
 }

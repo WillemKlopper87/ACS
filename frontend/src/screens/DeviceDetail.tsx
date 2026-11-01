@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
+import type { DiagnosticsCapabilities } from "../api/client";
 import type { Credential, Device, FirmwareImage, Job, ParameterCache, ParameterHistoryEntry, UploadedFile } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { DeviceConsole } from "../components/DeviceConsole";
@@ -14,8 +15,16 @@ import { fmtBytes, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { useLive } from "../lib/useLive";
+import { ParameterBrowser } from "../components/ParameterBrowser";
 import { useEscape } from "../lib/hotkeys";
 import { toast } from "../lib/toast";
+import { MeshTopology } from "../components/MeshTopology";
+import { SimPanel } from "../components/SimPanel";
+import { WiFiInsights } from "../components/WiFiInsights";
+import { XmppPanel } from "../components/XmppPanel";
+import { useMeshTopology } from "../lib/useMeshTopology";
+import { deviceLink, gatewayName, isMeshSatellite, satelliteReachabilityNote, satelliteRebootWarning } from "../lib/mesh";
+import { skippedNote, unsupportedReason } from "../lib/diagnostics";
 
 export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const navigate = useNavigate();
@@ -46,6 +55,11 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   const [historyPath, setHistoryPath] = useState<string | null>(null);
   const [historyEntries, setHistoryEntries] = useState<ParameterHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  // Discovered names -> writable, for the parameter browser's RW marks/filter.
+  const [paramNames, setParamNames] = useState<Record<string, boolean> | null>(null);
+  // null until loaded (or if the read fails): controls stay enabled and the
+  // server's own 409 still gates the request.
+  const [diagCaps, setDiagCaps] = useState<DiagnosticsCapabilities | null>(null);
   const [tagsInput, setTagsInput] = useState("");
   const [tagsDirty, setTagsDirty] = useState(false);
   const tagsDirtyRef = useRef(tagsDirty);
@@ -106,6 +120,20 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // Discovery evidence changes only when discovery reruns; fetch it once per
+  // device rather than on every 5-second poll.
+  useEffect(() => {
+    setParamNames(null);
+    api.getParameterNames(id).then(
+      (r) => setParamNames(r.names && Object.keys(r.names).length > 0 ? r.names : null),
+      () => setParamNames(null),
+    );
+    setDiagCaps(null);
+    api.getDiagnosticsCapabilities(id).then(setDiagCaps, () => setDiagCaps(null));
+  }, [id]);
+  const pingUnsupported = unsupportedReason(diagCaps?.ping);
+  const tracerouteUnsupported = unsupportedReason(diagCaps?.traceroute);
+
   // The image catalogue is small and slow-changing, so it's fetched once
   // per panel rather than on every poll like the device state above.
   useEffect(() => {
@@ -130,6 +158,9 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
 
   const [live, setLive] = useLive(() => load(true), 5000);
   useEscape(onClose, true);
+  const mesh = useMeshTopology(device);
+  const satellite = isMeshSatellite(device);
+  const meshGatewayName = device ? gatewayName(mesh.gateway, device) : "";
 
   async function withBusy(fn: () => Promise<string>) {
     setBusy(true);
@@ -159,11 +190,24 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
   const handleSetSsid = () =>
     withBusy(async () => {
       if (!ssidInput.trim()) throw new ApiError(400, "SSID cannot be empty");
-      const res = await api.putDeviceParameters(id, [
-        { name: "Device.WiFi.SSID.1.SSID", value: ssidInput.trim(), type: "string" },
-      ]);
+      // Resolve every primary (non-guest, AP-bound) SSID from discovery
+      // instead of assuming Device.WiFi.SSID.1, which on multi-SSID CPEs
+      // renamed one band only or a guest network.
+      const wifi = await api.getWiFiNetworks(id);
+      if (!wifi.supported) throw new ApiError(409, wifi.reason || "No Wi-Fi networks resolved for this device");
+      if (!wifi.complete) {
+        const read = await api.getParametersLive(id, wifi.refresh_paths ?? []);
+        throw new ApiError(409, `Wi-Fi roles not known yet — queued ${read.command_key} to read them; retry after the device's next check-in`);
+      }
+      const targets = (wifi.primary ?? []).filter((n) => n.name_path && n.name_writable);
+      if (targets.length === 0) throw new ApiError(409, "No writable primary Wi-Fi network on this device");
+      const res = await api.putDeviceParameters(
+        id,
+        targets.map((n) => ({ name: n.name_path as string, value: ssidInput.trim(), type: "string" })),
+      );
       setSsidInput("");
-      return `Queued ${res.command_key} — applies on the device's next session`;
+      const bands = targets.map((n) => n.band || `SSID ${n.instance}`).join(" + ");
+      return `Queued ${res.command_key} — renames ${bands}; applies on the device's next session`;
     });
 
   const handleSaveTags = () =>
@@ -215,14 +259,14 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
     withBusy(async () => {
       if (!pingHost.trim()) throw new ApiError(400, "Host cannot be empty");
       const res = await api.createDiagnosticsPing(id, pingHost.trim());
-      return `Ping queued: ${res.command_key} — polls to completion, watch Recent jobs`;
+      return `Ping queued: ${res.command_key}${skippedNote(res.skipped_inputs)} — result read on the device's next session, watch Recent jobs`;
     });
 
   const handleTraceroute = () =>
     withBusy(async () => {
       if (!tracerouteHost.trim()) throw new ApiError(400, "Host cannot be empty");
       const res = await api.createDiagnosticsTraceroute(id, tracerouteHost.trim());
-      return `Traceroute queued: ${res.command_key} — polls to completion, watch Recent jobs`;
+      return `Traceroute queued: ${res.command_key}${skippedNote(res.skipped_inputs)} — result read on the device's next session, watch Recent jobs`;
     });
 
   const handleStartCapture = () =>
@@ -349,14 +393,19 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
     }
   }
 
-  const handleReboot = () =>
-    withBusy(async () => {
+  const handleReboot = () => {
+    // A mesh satellite comes back only once its backhaul rejoins (8–11 min
+    // for a Beacon 3.1 in the field test, once needing manual recovery).
+    if (satellite && !window.confirm(`Reboot ${device?.label || device?.oui_serial}?\n\n${satelliteRebootWarning(meshGatewayName)}`)) return;
+    return withBusy(async () => {
       const res = await api.rebootDevice(id);
       return `Reboot queued: ${res.command_key} — watch for a fresh Inform once it comes back up`;
     });
+  };
 
   const handleFactoryReset = () => {
-    if (!window.confirm(`Factory reset ${device?.oui_serial}? This wipes the device back to defaults and cannot be undone.`)) return;
+    const meshWarning = satellite ? `\n\n${satelliteRebootWarning(meshGatewayName)} A reset satellite may also need re-pairing with the gateway.` : "";
+    if (!window.confirm(`Factory reset ${device?.oui_serial}? This wipes the device back to defaults and cannot be undone.${meshWarning}`)) return;
     withBusy(async () => {
       const res = await api.factoryResetDevice(id);
       return `Factory reset queued: ${res.command_key}`;
@@ -458,27 +507,43 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
           <button className="btn" onClick={handleRefreshCellular} disabled={busy || !writable}>
             Refresh cellular diagnostics
           </button>
-          <button className="btn" onClick={handleReboot} disabled={busy || !writable} title="Queues Reboot — the device drops and reconnects">
+          <button
+            className="btn"
+            onClick={handleReboot}
+            disabled={busy || !writable}
+            title={satellite ? "Queues Reboot — a mesh satellite returns only after its backhaul rejoins (8–11 min in testing)" : "Queues Reboot — the device drops and reconnects"}
+          >
             Reboot
           </button>
           <button className="btn danger" onClick={handleFactoryReset} disabled={busy || !writable} title="Queues FactoryReset — wipes the device back to defaults">
             Factory reset
           </button>
         </div>
+        {satellite && (
+          <p className="dim" role="note" style={{ fontSize: "0.76rem", margin: "0.5rem 0 0" }}>
+            {satelliteReachabilityNote(device, meshGatewayName)}
+          </p>
+        )}
 
         <DeviceCompatibility id={id} writable={writable} />
 
-        <div className="form-row">
-          <input aria-label="New WiFi SSID"
-            placeholder="New WiFi SSID…"
-            value={ssidInput}
-            onChange={(e) => setSsidInput(e.target.value)}
-            disabled={busy || !writable}
-          />
-          <button className="btn" onClick={handleSetSsid} disabled={busy || !writable || !ssidInput.trim()}>
-            Set SSID
-          </button>
-        </div>
+        {satellite ? (
+          // No Device.WiFi tree over CWMP on a satellite: the mesh SSIDs are
+          // set on the gateway and propagated by EasyMesh.
+          <p className="muted">Wi-Fi name and password for this mesh are set on its gateway ({meshGatewayName}).</p>
+        ) : (
+          <div className="form-row">
+            <input aria-label="New WiFi SSID"
+              placeholder="New WiFi SSID…"
+              value={ssidInput}
+              onChange={(e) => setSsidInput(e.target.value)}
+              disabled={busy || !writable}
+            />
+            <button className="btn" onClick={handleSetSsid} disabled={busy || !writable || !ssidInput.trim()}>
+              Set SSID
+            </button>
+          </div>
+        )}
 
         <div className="form-row">
           <input
@@ -568,6 +633,11 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
         </div>
       </div>
 
+      <MeshTopology device={device} mesh={mesh} />
+      <SimPanel deviceId={id} role={role} writable={writable} />
+      <XmppPanel deviceId={id} writable={writable} />
+      <WiFiInsights deviceId={id} satelliteOf={satellite ? meshGatewayName : undefined} />
+
       <div className="panel">
         <h3>Parameter cache{paramEntries.length === 0 ? " — empty" : ""}</h3>
         {paramEntries.length === 0 ? (
@@ -575,33 +645,28 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
             No parameters read from this device yet — the cache populates from Inform and GET_PARAMETER jobs.
           </p>
         ) : (
-          paramEntries.map(([path, v]) => (
-            <div key={path}>
-              <div className="param-row" style={{ cursor: "pointer" }} onClick={() => toggleHistory(path)} title="Click to view value history">
-                <span className="path">{path}</span>
-                <span className="val">{v.value}</span>
-                <span className="src">
-                  {v.source} · {timeAgo(v.updated_at)} · {historyPath === path ? "hide history ▲" : "history ▼"}
-                </span>
+          <ParameterBrowser
+            params={params}
+            writable={paramNames}
+            selectedPath={historyPath}
+            onSelect={toggleHistory}
+            renderDetail={() => (
+              <div style={{ padding: "0.4rem 0 0.6rem 0.75rem", borderBottom: "1px solid var(--border)" }}>
+                {historyLoading ? (
+                  <span className="dim" style={{ fontSize: "0.76rem" }}>Loading history…</span>
+                ) : historyEntries.length === 0 ? (
+                  <span className="dim" style={{ fontSize: "0.76rem" }}>No recorded changes yet — history only records when a value actually changes.</span>
+                ) : (
+                  historyEntries.map((entry, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.76rem", fontFamily: "var(--font-mono)", padding: "0.15rem 0" }}>
+                      <span>{entry.value}</span>
+                      <span className="dim">{entry.source} · {timeAgo(entry.recorded_at)}</span>
+                    </div>
+                  ))
+                )}
               </div>
-              {historyPath === path && (
-                <div style={{ padding: "0.4rem 0 0.6rem 0.75rem", borderBottom: "1px solid var(--border)" }}>
-                  {historyLoading ? (
-                    <span className="dim" style={{ fontSize: "0.76rem" }}>Loading history…</span>
-                  ) : historyEntries.length === 0 ? (
-                    <span className="dim" style={{ fontSize: "0.76rem" }}>No recorded changes yet — history only records when a value actually changes.</span>
-                  ) : (
-                    historyEntries.map((entry, i) => (
-                      <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.76rem", fontFamily: "var(--font-mono)", padding: "0.15rem 0" }}>
-                        <span>{entry.value}</span>
-                        <span className="dim">{entry.source} · {timeAgo(entry.recorded_at)}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-          ))
+            )}
+          />
         )}
 
         <h3 style={{ marginTop: "1.4rem" }}>Recent jobs</h3>
@@ -723,30 +788,48 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
             placeholder="Ping host (e.g. 8.8.8.8)"
             value={pingHost}
             onChange={(e) => setPingHost(e.target.value)}
-            disabled={busy || !writable}
+            disabled={busy || !writable || pingUnsupported !== null}
           />
-          <button className="btn" onClick={handlePing} disabled={busy || !writable || !pingHost.trim()}>
+          <button className="btn" onClick={handlePing} disabled={busy || !writable || !pingHost.trim() || pingUnsupported !== null}
+            title={pingUnsupported ?? undefined}>
             Ping
           </button>
         </div>
+        {pingUnsupported && <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", margin: "0.3rem 0 0" }}>Ping unavailable: {pingUnsupported}</p>}
         <div className="form-row">
           <input aria-label="Traceroute host"
             placeholder="Traceroute host"
             value={tracerouteHost}
             onChange={(e) => setTracerouteHost(e.target.value)}
-            disabled={busy || !writable}
+            disabled={busy || !writable || tracerouteUnsupported !== null}
           />
-          <button className="btn" onClick={handleTraceroute} disabled={busy || !writable || !tracerouteHost.trim()}>
+          <button className="btn" onClick={handleTraceroute} disabled={busy || !writable || !tracerouteHost.trim() || tracerouteUnsupported !== null}
+            title={tracerouteUnsupported ?? undefined}>
             Traceroute
           </button>
         </div>
+        {tracerouteUnsupported && <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", margin: "0.3rem 0 0" }}>Traceroute unavailable: {tracerouteUnsupported}</p>}
         <div className="form-row">
-          <button className="btn" onClick={handleRefreshWifiClients} disabled={busy || !writable} style={{ width: "100%", justifyContent: "center" }}>
-            Refresh WiFi clients
-          </button>
+          {satellite ? (
+            // A satellite has no Device.WiFi tree of its own: its clients are
+            // reported by the gateway's EasyMesh controller.
+            mesh.gateway ? (
+              <Link className="btn" to={deviceLink(mesh.gateway.id)} style={{ width: "100%", justifyContent: "center" }}>
+                Refresh WiFi clients on {meshGatewayName}
+              </Link>
+            ) : (
+              <span className="dim" style={{ fontSize: "0.78rem" }}>
+                WiFi clients of this mesh are reported by its gateway ({meshGatewayName}), not by the satellite.
+              </span>
+            )
+          ) : (
+            <button className="btn" onClick={handleRefreshWifiClients} disabled={busy || !writable} style={{ width: "100%", justifyContent: "center" }}>
+              Refresh WiFi clients
+            </button>
+          )}
         </div>
         <p style={{ color: "var(--ink-faint)", fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
-          Ping/Traceroute poll to completion — watch Recent jobs for the outcome; results land in the parameter cache above under Device.IP.Diagnostics.*.
+          The device runs Ping/Traceroute after the current session and reports back on its next Inform (8 DIAGNOSTICS COMPLETE) — watch Recent jobs for the outcome; results land in the parameter cache above under Device.IP.Diagnostics.*.
         </p>
       </div>
 
@@ -837,7 +920,7 @@ export function DeviceDetail({ id, onClose }: { id: string; onClose: () => void 
       <DeviceTenancy deviceId={id} customerId={device.customer_id} writable={writable} />
       <DeviceConsole id={id} writable={writable} />
       <RemoteShell id={id} writable={writable} />
-      <DeviceWebGUI id={id} writable={writable} />
+      <DeviceWebGUI id={id} writable={writable} unreachableNote={satellite ? satelliteReachabilityNote(device, meshGatewayName) : undefined} />
       <VPNTunnel id={id} writable={writable} />
 
       <div className="panel">

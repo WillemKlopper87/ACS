@@ -1,8 +1,9 @@
 import type { Credential, Device, Job, ParameterCache } from "../api/types";
+import { vendorFamilyOf, type VendorFamily } from "./vendorFamily";
 
 export type OnboardingCheckStatus = "pass" | "warn" | "fail" | "pending";
 export type TroubleshootingSeverity = "info" | "warning" | "critical";
-export type VendorFamily = "Huawei" | "Nokia" | "Other";
+export type { VendorFamily } from "./vendorFamily";
 
 export interface OnboardingCheck {
   id: string;
@@ -37,8 +38,22 @@ function normalized(value?: string) {
   return (value ?? "").trim().toLowerCase();
 }
 
+// The API reports devices.data_model_root as its stored enum ("DEVICE2",
+// "IGD1", "UNKNOWN"); the dotted path forms are accepted too. Comparing only
+// against "Device."/"InternetGatewayDevice." marked every device's root as
+// unknown in the onboarding panel.
+function rootModel(root?: string): "TR-181" | "TR-098" | undefined {
+  if (root === "DEVICE2" || root === "Device.") return "TR-181";
+  if (root === "IGD1" || root === "InternetGatewayDevice.") return "TR-098";
+  return undefined;
+}
+
 function isKnownRoot(root?: string) {
-  return root === "Device." || root === "InternetGatewayDevice.";
+  return rootModel(root) !== undefined;
+}
+
+function rootLabel(root?: string) {
+  return rootModel(root) === "TR-181" ? "Device. (TR-181)" : "InternetGatewayDevice. (TR-098)";
 }
 
 function privateConnectionRequest(url?: string) {
@@ -129,10 +144,11 @@ export function assessDeviceOnboarding(
 ): DeviceOnboardingAssessment {
   const manufacturer = normalized(device.manufacturer);
   const model = normalized(device.product_class);
-  const isHuawei = manufacturer.includes("huawei") || model.includes("huawei");
+  // "ALCL" (Nokia WiFi Beacon) is Nokia family; see lib/vendorFamily.
+  const vendorFamily: VendorFamily = vendorFamilyOf(manufacturer, model);
+  const isHuawei = vendorFamily === "Huawei";
   const isHuaweiN5368X = isHuawei && /n5368x?|5g\s*cpe\s*pro/.test(model);
-  const isNokia = manufacturer.includes("nokia") || model.includes("nokia") || model.includes("fastmile");
-  const vendorFamily: VendorFamily = isHuawei ? "Huawei" : isNokia ? "Nokia" : "Other";
+  const isNokia = vendorFamily === "Nokia";
   const recentFailures = jobs.filter((job) => FAILURE_STATUSES.has(job.status)).slice(0, 5);
   const lastCR = (device.last_connection_request_status ?? "").trim().toUpperCase();
   const parameterCount = Object.keys(params).length;
@@ -183,7 +199,7 @@ export function assessDeviceOnboarding(
       label: "Data model root",
       status: isKnownRoot(device.data_model_root) ? "pass" : "warn",
       detail: isKnownRoot(device.data_model_root)
-        ? device.data_model_root
+        ? rootLabel(device.data_model_root)
         : "Root is unknown/non-standard. Discover the parameter model before any write.",
     },
     {
@@ -258,7 +274,7 @@ export function assessDeviceOnboarding(
     });
   }
 
-  if (isHuawei && device.data_model_root === "InternetGatewayDevice.") {
+  if (isHuawei && rootModel(device.data_model_root) === "TR-098") {
     hints.push({
       id: "huawei-tr098-wifi",
       severity: "warning",
@@ -274,12 +290,14 @@ export function assessDeviceOnboarding(
       title: "Nokia: keep the first qualification read-only",
       detail: "Use parameter discovery and the Device Compatibility evidence before any vendor-specific write. Read only paths that this exact firmware exposes; do not promote guessed Nokia 5G paths from another model or build.",
     });
-    if (privateConnectionRequest(device.connection_request_url)) {
+    // A mesh satellite's URL is on its gateway's LAN by design; the mesh
+    // panel explains that instead (field test 2026-10-30, Beacon 3.1).
+    if (privateConnectionRequest(device.connection_request_url) && !(device.gateway_device_id || device.gateway_oui_serial)) {
       hints.push({
         id: "nokia-private-cr",
         severity: "warning",
         title: "Nokia Connection Request URL is private",
-        detail: `${device.connection_request_url} is not directly reachable from a public cloud ACS. Prove normal periodic Inform first, then qualify NAT/STUN/Annex-G or another reachable Connection Request path instead of rewriting the URL blindly.`,
+        detail: `${device.connection_request_url} is not directly reachable from a public cloud ACS (carrier CGNAT). FastMile 1.2501.00.0798 has no STUN/Annex G; it supports XMPP Connection Request (Annex K), so use that or rely on the periodic Inform instead of rewriting the URL.`,
       });
     }
   }

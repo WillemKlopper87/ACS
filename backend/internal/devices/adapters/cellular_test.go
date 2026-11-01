@@ -131,3 +131,63 @@ func TestNormalizeCellularValue(t *testing.T) {
 		})
 	}
 }
+
+// Nokia FastMile 1.2501.00.0798 field evidence (2026-10-30).
+func TestNokiaCellularFieldsResolveToFiveGCurrentLeaves(t *testing.T) {
+	discovered := map[string]bool{
+		"Device.Cellular.Interface.1.RSSI":                                           false,
+		"Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.RSRPCurrent":       false,
+		"Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.RSRQCurrent":       false,
+		"Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.AvgRSRPMonth":      false,
+		"Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.Downlink-NR-ARFCN": false,
+		"Device.Cellular.Interface.1.X_ALU-COM_AttachedLteCellStat.RSRPCurrent":      false,
+		"Device.Cellular.Interface.1.X_ALU-COM_AttachedLteCellStat.DownlinkEarfcn":   false,
+	}
+	want := map[CellularField]string{
+		CellularRSRP:    "Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.RSRPCurrent",
+		CellularRSRQ:    "Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.RSRQCurrent",
+		CellularChannel: "Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.Downlink-NR-ARFCN",
+		CellularRSSI:    "Device.Cellular.Interface.1.RSSI",
+	}
+	for field, path := range want {
+		got, ok := ResolveCellularReadPath("DEVICE2", field, "1", discovered)
+		if !ok || got.Path != path {
+			t.Errorf("%s resolved to %q (ok=%v), want %q", field, got.Path, ok, path)
+		}
+	}
+}
+
+func TestCellularSentinelsAreUnavailable(t *testing.T) {
+	for _, raw := range []string{"-32768", "4294967295", "2147483647", " -2147483648 "} {
+		if v := NormalizeCellularValue(raw); v.Value != nil {
+			t.Errorf("NormalizeCellularValue(%q) = %v, want nil (no value)", raw, v.Value)
+		}
+	}
+	if v := NormalizeCellularValue("-92"); v.Value != float64(-92) {
+		t.Errorf("real reading -92 normalised to %v", v.Value)
+	}
+}
+
+func TestCellularStateEventsIgnoreNonCellularStatus(t *testing.T) {
+	for _, path := range []string{"Device.WiFi.SSID.1.Status", "Device.IP.Interface.2.Status", "Device.Ethernet.Link.1.Status"} {
+		if field, ok := MatchCellularStatePath(path); ok {
+			t.Errorf("MatchCellularStatePath(%q) = %s; non-cellular status must not raise cellular events", path, field)
+		}
+	}
+	if _, ok := MatchCellularStatePath("Device.Cellular.Interface.1.Status"); !ok {
+		t.Error("standard cellular Status must still match")
+	}
+}
+
+func TestCellularDiagnosticParamsFromNamesStaysInCellularSubtree(t *testing.T) {
+	names := map[string]bool{
+		"Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.RSRPCurrent":         false,
+		"Device.WiFi.Radio.1.OperatingFrequencyBand":                                   true,
+		"Device.WiFi.DataElements.Network.Device.1.Radio.1.BSS.1.STA.1.SignalStrength": false,
+		"Device.Hosts.Host.1.X_ALU-COM_WifiRSSI":                                       false,
+	}
+	got := CellularDiagnosticParamsFromNames(names)
+	if len(got) != 1 || got[0] != "Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.RSRPCurrent" {
+		t.Fatalf("cellular refresh paths = %v, want only the cellular RSRP leaf", got)
+	}
+}

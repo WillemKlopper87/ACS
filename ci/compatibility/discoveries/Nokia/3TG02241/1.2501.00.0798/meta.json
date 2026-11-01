@@ -1,0 +1,25 @@
+{
+  "acs_commit": "37e51a8",
+  "exported_at": "2026-10-30T10:36:51Z",
+  "hardware_versions": [
+    "3TG02241AAAA"
+  ],
+  "last_discovered_at": "2026-10-30T10:31:38.398085Z",
+  "manufacturer": "Nokia",
+  "merged_command_keys": [
+    "discover_20261030_5c456173"
+  ],
+  "model_name": "FastMile 5G Gateway 2",
+  "never_observed": [],
+  "object_count": 831,
+  "oui": "A4FC77",
+  "parameter_count": 2071,
+  "product_class": "3TG02241",
+  "protocol": "CWMP",
+  "root": "Device.",
+  "root_data_model_version": "2.12",
+  "scope": "Names and access metadata only. Runtime tables (hosts, Wi-Fi clients/events, scans, alarms) are walked at their lowest instance; other tables at most 32 instances.",
+  "snapshots_merged": 1,
+  "software_version": "1.2501.00.0798",
+  "writable_count": 670
+}

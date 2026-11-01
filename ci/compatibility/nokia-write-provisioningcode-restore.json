@@ -1,0 +1,11 @@
+{
+  "name": "nokia-fastmile-reversible-write-restore",
+  "identity_fields": ["Manufacturer", "ModelName", "ProductClass", "HardwareVersion", "SoftwareVersion"],
+  "expected_identity": {
+    "HardwareVersion": ["3TG02241AAAA"],
+    "SoftwareVersion": ["1.2501.00.0798", "5GGW2-OMNI-2_R250100BiwT0301E0798"]
+  },
+  "reads": ["Device.DeviceInfo.ProvisioningCode"],
+  "writes": [{"name": "Device.DeviceInfo.ProvisioningCode", "value": "", "type": ""}],
+  "reboot": false
+}

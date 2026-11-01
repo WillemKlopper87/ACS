@@ -230,13 +230,30 @@ func TestIntegration_CPESession(t *testing.T) {
 	if leased.Status != jobs.StatusRPCSent {
 		t.Errorf("job status after dispatch = %s, want RPC_SENT", leased.Status)
 	}
-	code, _ = cpe.post(fixture(t, "set_parameter_values_response.xml"))
+	code, body = cpe.post(fixture(t, "set_parameter_values_response.xml"))
 	if code != 200 && code != 204 {
 		t.Fatalf("SPV response → %d", code)
 	}
 	done, _ := h.jobs.ByID(ctx, job.ID)
 	if done.Status != jobs.StatusSuccess {
 		t.Errorf("job status after SetParameterValuesResponse = %s, want SUCCESS (fault=%v)", done.Status, done.FaultString)
+	}
+	// A successful write queues a system:confirm read-back, sent in the same
+	// session. Answer it as a real CPE would: an unanswered RPC is now
+	// recovered (requeued) on the next Inform, ahead of later queued work.
+	if !strings.Contains(body, "GetParameterValues") || !strings.Contains(body, "PeriodicInformInterval") {
+		t.Fatalf("expected the system:confirm read-back after the SPV response, got %d %s", code, body)
+	}
+	readback := strings.NewReplacer(
+		"Device.WiFi.SSID.1.SSID", "Device.ManagementServer.PeriodicInformInterval",
+		`xsi:type="xsd:string">CorpWiFi`, `xsi:type="xsd:unsignedInt">300`,
+	).Replace(fixture(t, "get_parameter_values_response.xml"))
+	if code, body = cpe.post(readback); code != 200 && code != 204 {
+		t.Fatalf("read-back response → %d %s", code, body)
+	}
+	cached, _ = h.params.Get(ctx, device.ID)
+	if v, ok := cached["Device.ManagementServer.PeriodicInformInterval"]; !ok || v.Value != "300" {
+		t.Errorf("read-back not cached: %+v", v)
 	}
 
 	bad, _ := h.jobs.Create(ctx, device.ID, jobs.TypeSetParameter,

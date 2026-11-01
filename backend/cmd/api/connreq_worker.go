@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"acs/internal/connreq"
@@ -16,6 +17,7 @@ import (
 	"acs/internal/jobs"
 	"acs/internal/netguard"
 	"acs/internal/observability"
+	"acs/internal/parameters"
 )
 
 const (
@@ -57,6 +59,14 @@ type connectionRequestWorker struct {
 	// point (audit H-2/P1.2) — same policy the web-GUI proxy and CLI
 	// bridge already enforce.
 	netPolicy netguard.Policy
+	// params (optional) supplies the cached PeriodicInformInterval so the
+	// CGNAT fallback never loosens an already short interval, and the
+	// cached ConnReqJabberID the XMPP path addresses.
+	params *parameters.Repository
+	// xmpp (optional) is the ACS's XMPP client for TR-069 Annex K
+	// Connection Requests (connreq_xmpp.go); nil when ACS_XMPP_* is unset,
+	// which leaves the worker's behaviour exactly as before.
+	xmpp xmppConnectionRequester
 }
 
 // attemptGET checks the target against the device-network policy (audit
@@ -154,6 +164,14 @@ func (w *connectionRequestWorker) process(ctx context.Context, job *jobs.Job) {
 		udpAddr = *device.UDPConnectionRequestAddress
 	}
 
+	in := w.connReqInputsFor(ctx, device, udpAddr)
+	if selectConnReqPath(in) == connReqPathXMPP {
+		if w.attemptXMPP(ctx, device, job, in.JabberID, username, password, wait) {
+			return
+		}
+		in.XMPPConfigured = false // fall back to the paths below
+	}
+
 	if device.ConnectionRequestURL == nil || *device.ConnectionRequestURL == "" {
 		if udpAddr != "" {
 			// No TCP path at all, but STUN gave us a reflexive address —
@@ -165,6 +183,19 @@ func (w *connectionRequestWorker) process(ctx context.Context, job *jobs.Job) {
 		_ = w.jobs.MarkFailed(ctx, job.ID, "", connreq.OutcomeUnavailable)
 		_ = w.devices.RecordConnectionRequestAttempt(ctx, device.ID, connreq.OutcomeUnavailable, "")
 		w.audit(ctx, device.ID, job, connreq.OutcomeUnavailable)
+		return
+	}
+
+	if selectConnReqPath(in) == connReqPathBehindNAT {
+		// Classified behind NAT on Inform with no STUN address: a direct
+		// GET to the advertised (private/CGNAT) URL cannot arrive. Do not
+		// spend the dial timeout; queued work runs at the next Inform.
+		// (Also reached by an XMPP-mode NAT'd device whose XMPP attempt
+		// just failed — see selectConnReqPath.)
+		_ = w.devices.RecordConnectionRequestAttempt(ctx, device.ID, connreq.OutcomeBehindNAT, "")
+		_ = w.jobs.MarkFailed(ctx, job.ID, connreq.OutcomeBehindNAT,
+			"device is behind NAT and has no STUN/Annex G address; queued work runs at its next periodic Inform")
+		w.audit(ctx, device.ID, job, connreq.OutcomeBehindNAT)
 		return
 	}
 
@@ -278,6 +309,15 @@ func (w *connectionRequestWorker) tightenPeriodicInform(ctx context.Context, dev
 	path := "Device.ManagementServer.PeriodicInformInterval"
 	if device.DataModelRoot == devices.DataModelRootIGD1 {
 		path = "InternetGatewayDevice.ManagementServer.PeriodicInformInterval"
+	}
+	// Only ever tighten: a device already informing at or below the target
+	// (the Nokia FastMile was at 60 s) must not be loosened to 300 s.
+	if w.params != nil {
+		if cached, err := w.params.Get(ctx, device.ID); err == nil {
+			if current, err := strconv.Atoi(strings.TrimSpace(cached[path].Value)); err == nil && current > 0 && current <= cgnatPeriodicInformTarget {
+				return
+			}
+		}
 	}
 	payload := jobs.SetParameterPayload{Parameters: []jobs.ParameterWrite{
 		{Name: path, Value: strconv.Itoa(cgnatPeriodicInformTarget), Type: "xsd:unsignedInt"},

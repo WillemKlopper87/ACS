@@ -80,6 +80,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("PUT", "/api/v1/dashboard/layout", ro, h.setDashboardLayout)
 	routePerm("POST", "/api/v1/devices/bulk-actions", operators.PermBulkActions, h.bulkAction)
 	route("GET", "/api/v1/devices/{id}", ro, h.getDevice)
+	route("GET", "/api/v1/devices/{id}/satellites", ro, h.listDeviceSatellites)
 	// TMF639 Resource Inventory projects the tenant-scoped device inventory.
 	route("GET", "/tmf-api/resourceInventoryManagement/v5/resource", ro, h.listTMF639Resources)
 	route("GET", "/tmf-api/resourceInventoryManagement/v5/resource/{id}", ro, h.getTMF639Resource)
@@ -117,9 +118,14 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	routePerm("POST", "/api/v1/device-groups/{id}/members", operators.PermGroupManage, h.addDeviceGroupMembers)
 	routePerm("DELETE", "/api/v1/device-groups/{id}/members/{device_id}", operators.PermGroupManage, h.removeDeviceGroupMember)
 	routePerm("POST", "/api/v1/devices/{id}/credentials/rotate", operators.PermCredentialManage, h.rotateDeviceCredential)
+	routePerm("POST", "/api/v1/devices/{id}/re-enroll", operators.PermCredentialManage, h.openReenrollment)
 	route("GET", "/api/v1/devices/{id}/credentials", ro, h.listDeviceCredentials)
 	routePerm("POST", "/api/v1/devices/{id}/credentials/{credential_id}/activate", operators.PermCredentialManage, h.activateDeviceCredential)
 	routePerm("POST", "/api/v1/devices/{id}/credentials/{credential_id}/revoke", operators.PermCredentialManage, h.revokeDeviceCredential)
+	// TR-069 Annex K XMPP Connection Request: zero-touch provisioning
+	// creates a per-device XMPP credential, so it is credential.manage.
+	routePerm("POST", "/api/v1/devices/{id}/xmpp/provision", operators.PermCredentialManage, h.provisionXMPP)
+	route("GET", "/api/v1/devices/{id}/xmpp", ro, h.getDeviceXMPP)
 	routePerm("POST", "/api/v1/scheduled-jobs", operators.PermScheduleManage, h.createScheduledJob)
 	route("GET", "/api/v1/scheduled-jobs", ro, h.listScheduledJobs)
 	routePerm("DELETE", "/api/v1/scheduled-jobs/{id}", operators.PermScheduleManage, h.deleteScheduledJob)
@@ -164,6 +170,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("GET", "/api/v1/devices/{id}/standards-assessment", ro, h.getStandardsAssessment)
 	route("GET", "/api/v1/devices/{id}/connection-diagnostics", ro, h.getConnectionDiagnostics)
 	route("GET", "/api/v1/devices/{id}/wifi-topology", ro, h.getWiFiTopology)
+	route("GET", "/api/v1/devices/{id}/wifi/networks", ro, h.getWiFiNetworks)
 	route("GET", "/api/v1/standards/dictionary", ro, h.getStandardDictionary)
 	routePerm("POST", "/api/v1/devices/{id}/bulk-data/configure", operators.PermDevicesWrite, h.configureBulkData)
 	routePerm("POST", "/api/v1/devices/{id}/discover-instances", operators.PermDiagnosticsRun, h.discoverInstances)
@@ -176,6 +183,9 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	routePerm("DELETE", "/api/v1/devices/{id}/bulk-data/receivers/{receiver_id}", operators.PermDevicesWrite, h.revokeBulkData)
 	mux.HandleFunc("POST /api/v1/bulk-data/{id}/receive", metrics.InstrumentHTTP("POST /api/v1/bulk-data/{id}/receive", h.receiveBulkData))
 	route("GET", "/api/v1/devices/{id}/cellular-capabilities", ro, h.getCellularCapabilities)
+	route("GET", "/api/v1/devices/{id}/wifi/insights", ro, h.getWiFiInsights)
+	route("GET", "/api/v1/devices/{id}/sim", ro, h.getSIM)               // identifiers masked for every role
+	route("POST", "/api/v1/devices/{id}/sim/reveal", admin, h.revealSIM) // human superadmin only, reason required, audited
 	route("GET", "/api/v1/devices/{id}/diagnostics-capabilities", ro, h.getDiagnosticsCapabilities)
 	routePerm("POST", "/api/v1/devices/{id}/cli/credentials", operators.PermCLIAccess, h.createCLICredential)
 	route("GET", "/api/v1/devices/{id}/cli/credentials", ro, h.listCLICredentials)

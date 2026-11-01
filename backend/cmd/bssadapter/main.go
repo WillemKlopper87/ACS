@@ -866,6 +866,15 @@ func (h *handler) translateActionForDevice(ctx context.Context, action string, i
 	if err != nil {
 		return nil, err
 	}
+	if dev.DataModelRoot == "DEVICE2" {
+		// TR-181: write every primary SSID the ACS resolved from discovery
+		// and cached values, never a fixed Device.WiFi.SSID.1.
+		view, err := h.acs.GetWiFiNetworks(ctx, deviceID)
+		if err != nil {
+			return nil, err
+		}
+		return bss.TranslateModifyWifiNetworks(input, view)
+	}
 	discovered, err := h.acs.GetParameterNames(ctx, deviceID)
 	if err != nil {
 		return nil, err

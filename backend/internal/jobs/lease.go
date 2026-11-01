@@ -220,6 +220,9 @@ type RecoveryResult struct {
 	// on lease expiry regardless of remaining attempts (audit P1.7).
 	DeadLetteredUnsafeRetry int
 	TimedOut                int // AWAITING_TRANSFER_COMPLETE past the transfer deadline -> FAILED
+	// DiagnosticsTimedOut counts AWAITING_DIAGNOSTICS_COMPLETE jobs past
+	// their diagnostics_deadline -> TIMEOUT (the CPE never informed again).
+	DiagnosticsTimedOut int
 }
 
 // RecoverExpiredLeases is the stale-lease reaper (audit P1.1). A job
@@ -301,6 +304,12 @@ func (r *Repository) RecoverExpiredLeases(ctx context.Context) (RecoveryResult, 
 	if n, err := timedOut.RowsAffected(); err == nil {
 		res.TimedOut = int(n)
 	}
+
+	diagTimedOut, err := r.timeOutAwaitingDiagnostics(ctx)
+	if err != nil {
+		return res, err
+	}
+	res.DiagnosticsTimedOut = diagTimedOut
 	return res, nil
 }
 

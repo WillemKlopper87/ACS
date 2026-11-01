@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -40,6 +41,14 @@ type bootstrapGraduationDeps struct {
 	ensurePending  bootstrapEnsurePendingCredential
 	credentialByID bootstrapCredentialByID
 	deviceByID     bootstrapDeviceByID
+	logger         *slog.Logger
+}
+
+func (d bootstrapGraduationDeps) log() *slog.Logger {
+	if d.logger != nil {
+		return d.logger
+	}
+	return slog.Default()
 }
 
 // bootstrapCWMPGraduationGuard owns the production bootstrap->unique-credential
@@ -107,6 +116,12 @@ func bootstrapCWMPGraduationGuardWithDeps(next http.HandlerFunc, deps bootstrapG
 
 		ok, stale, _ := deps.bootstrapAuth.Verify(r)
 		if !ok {
+			// The normal handler logs its own auth failures; without this line a
+			// wrong bootstrap password is invisible in acs.log.
+			deps.log().Warn("bootstrap credential authentication failed", "stale", stale, "remote", r.RemoteAddr)
+			if deps.metrics != nil {
+				deps.metrics.CWMPAuthTotal.WithLabelValues("bootstrap_failed").Inc()
+			}
 			_, _ = io.Copy(io.Discard, r.Body)
 			if stale {
 				deps.bootstrapAuth.ChallengeStale(w)
@@ -114,6 +129,9 @@ func bootstrapCWMPGraduationGuardWithDeps(next http.HandlerFunc, deps bootstrapG
 				deps.bootstrapAuth.Challenge(w)
 			}
 			return
+		}
+		if deps.metrics != nil {
+			deps.metrics.CWMPAuthTotal.WithLabelValues("bootstrap_ok").Inc()
 		}
 
 		raw, err := readCWMPBody(w, r)
@@ -149,6 +167,17 @@ func bootstrapCWMPGraduationGuardWithDeps(next http.HandlerFunc, deps bootstrapG
 			return
 		}
 
+		// A CPE-initiated request (e.g. GetRPCMethods on 0 BOOTSTRAP) must get
+		// its own response; the credential-install SPV waits for the
+		// following empty POST.
+		respID := env.Header.ID
+		if respID == "" {
+			respID = cwmp.NewID()
+		}
+		if _, ok := writeCPEInitiatedReply(w, env.Body, respID, cwmp.DetectCWMPNamespace(raw)); ok {
+			return
+		}
+
 		switch {
 		case env.Body.IsEmpty():
 			handleBootstrapCredentialInstall(w, r, cred, device, ns)
@@ -162,6 +191,9 @@ func bootstrapCWMPGraduationGuardWithDeps(next http.HandlerFunc, deps bootstrapG
 			// A vendor that cannot rewrite ManagementServer credentials remains
 			// safely PENDING for explicit operator/manual recovery. Never fall
 			// back to shared normal-management credentials.
+			deps.log().Warn("bootstrap credential install faulted; device stays PENDING",
+				"device_id", device.ID, "oui_serial", device.OUISerial,
+				"fault_code", env.Body.Fault.CWMPCode(), "fault", env.Body.Fault.CWMPMessage(), "remote", r.RemoteAddr)
 			clearBootstrapCredentialCookie(w, r)
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -248,7 +280,7 @@ func handleBootstrapCredentialInstall(w http.ResponseWriter, r *http.Request, cr
 	rpc := cwmp.RenderSetParameterValues(cwmp.NewID(), []cwmp.ParameterValueStruct{
 		{Name: usernamePath, Value: cred.Username},
 		{Name: passwordPath, Value: cred.Password},
-	}, cred.CommandKey)
+	}, cwmp.ClampParameterKey(cred.CommandKey))
 	rpc = cwmp.RewriteCWMPNamespace(rpc, ns)
 	w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
 	w.WriteHeader(http.StatusOK)

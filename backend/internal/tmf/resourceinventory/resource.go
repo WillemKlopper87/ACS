@@ -16,24 +16,48 @@ type Characteristic struct {
 	Type      string `json:"@type"`
 }
 
+// Mesh relationship types (TMF639 relationshipType is free text). A mesh
+// satellite (e.g. Nokia WiFi Beacon 3.1) points at the gateway it reported via
+// TR-111 Device.GatewayInfo; the gateway lists each satellite in turn.
+const (
+	RelationshipMeshSatelliteOf  = "isMeshSatelliteOf"
+	RelationshipHasMeshSatellite = "hasMeshSatellite"
+)
+
+// ResourceRef is the TMF v5 reference to another resource in this inventory.
+type ResourceRef struct {
+	ID           string `json:"id"`
+	Href         string `json:"href"`
+	ReferredType string `json:"@referredType"`
+	Type         string `json:"@type"`
+}
+
+// ResourceRelationship links this resource to another one.
+type ResourceRelationship struct {
+	RelationshipType string      `json:"relationshipType"`
+	Resource         ResourceRef `json:"resource"`
+	Type             string      `json:"@type"`
+}
+
 // Resource is the read model projected from an ACS-managed physical CPE. It is
 // not a second resource database: the devices table remains authoritative and
 // this shape is rebuilt on every read.
 type Resource struct {
-	ID                     string           `json:"id"`
-	Href                   string           `json:"href"`
-	Name                   string           `json:"name,omitempty"`
-	Description            string           `json:"description,omitempty"`
-	Category               string           `json:"category,omitempty"`
-	SerialNumber           string           `json:"serialNumber,omitempty"`
-	ModelNumber            string           `json:"modelNumber,omitempty"`
-	OperationalState       string           `json:"operationalState,omitempty"`
-	LifecycleState         string           `json:"lifecycleState,omitempty"`
-	AvailabilityStatus     string           `json:"availabilityStatus,omitempty"`
-	LastUpdate             string           `json:"lastUpdate,omitempty"`
-	ResourceCharacteristic []Characteristic `json:"resourceCharacteristic,omitempty"`
-	BaseType               string           `json:"@baseType,omitempty"`
-	Type                   string           `json:"@type"`
+	ID                     string                 `json:"id"`
+	Href                   string                 `json:"href"`
+	Name                   string                 `json:"name,omitempty"`
+	Description            string                 `json:"description,omitempty"`
+	Category               string                 `json:"category,omitempty"`
+	SerialNumber           string                 `json:"serialNumber,omitempty"`
+	ModelNumber            string                 `json:"modelNumber,omitempty"`
+	OperationalState       string                 `json:"operationalState,omitempty"`
+	LifecycleState         string                 `json:"lifecycleState,omitempty"`
+	AvailabilityStatus     string                 `json:"availabilityStatus,omitempty"`
+	LastUpdate             string                 `json:"lastUpdate,omitempty"`
+	ResourceCharacteristic []Characteristic       `json:"resourceCharacteristic,omitempty"`
+	ResourceRelationship   []ResourceRelationship `json:"resourceRelationship,omitempty"`
+	BaseType               string                 `json:"@baseType,omitempty"`
+	Type                   string                 `json:"@type"`
 }
 
 // AllowedFields is the projection allow-list accepted by ?fields=. Identity
@@ -52,6 +76,7 @@ var AllowedFields = []string{
 	"availabilityStatus",
 	"lastUpdate",
 	"resourceCharacteristic",
+	"resourceRelationship",
 	"@baseType",
 	"@type",
 }

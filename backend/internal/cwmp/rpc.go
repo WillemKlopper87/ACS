@@ -22,6 +22,37 @@ func RenderGetRPCMethods(id string) []byte {
 	return renderEnvelope(id, `<cwmp:GetRPCMethods></cwmp:GetRPCMethods>`)
 }
 
+// ACSSupportedMethods is what the ACS advertises in GetRPCMethodsResponse:
+// the CPE-initiated methods it actually answers (TR-069 Table 4 lists
+// Inform as required; TransferComplete and GetRPCMethods are handled too).
+var ACSSupportedMethods = []string{"Inform", "GetRPCMethods", "TransferComplete"}
+
+// RenderGetRPCMethodsResponseNS answers a CPE-initiated GetRPCMethods. The
+// id must echo the request's cwmp:ID and ns the CPE's namespace version.
+func RenderGetRPCMethodsResponseNS(id, ns string) []byte {
+	var sb strings.Builder
+	sb.WriteString(`<cwmp:GetRPCMethodsResponse><MethodList soap-enc:arrayType="xsd:string[`)
+	sb.WriteString(strconv.Itoa(len(ACSSupportedMethods)))
+	sb.WriteString(`]">`)
+	for _, m := range ACSSupportedMethods {
+		sb.WriteString(`<string>`)
+		sb.WriteString(m)
+		sb.WriteString(`</string>`)
+	}
+	sb.WriteString(`</MethodList></cwmp:GetRPCMethodsResponse>`)
+	return renderEnvelopeNS(id, sb.String(), ns)
+}
+
+// RenderMethodNotSupportedFaultNS answers a CPE-initiated method the ACS
+// does not implement with ACS fault 8000 "Method not supported" (TR-069
+// §A.5.1, a Server fault).
+func RenderMethodNotSupportedFaultNS(id, ns string) []byte {
+	body := `<soap-env:Fault><faultcode>Server</faultcode><faultstring>CWMP fault</faultstring>` +
+		`<detail><cwmp:Fault><FaultCode>8000</FaultCode><FaultString>Method not supported</FaultString></cwmp:Fault></detail>` +
+		`</soap-env:Fault>`
+	return renderEnvelopeNS(id, body, ns)
+}
+
 // GetParameterNamesResponse lists parameter names/writability under the
 // requested path.
 type GetParameterNamesResponse struct {
@@ -80,6 +111,21 @@ type SetParameterValuesResponse struct {
 // resulting "4 VALUE CHANGE" event, letting a later phase correlate that
 // event to the job that caused it — Phase 2 sets it (to the job's
 // CommandKey) but does not yet consume it on the Inform side.
+// MaxParameterKeyLength is TR-069's string(32) limit on the ParameterKey
+// argument of SetParameterValues/AddObject/DeleteObject.
+const MaxParameterKeyLength = 32
+
+// ClampParameterKey trims a key to MaxParameterKeyLength. Keys are ASCII
+// (generated hex/identifier strings), so byte truncation is safe. It exists
+// for keys persisted before the 32-character limit was enforced, e.g. legacy
+// "cwmp-bootstrap-<uuid>" credential keys still held by PENDING rows.
+func ClampParameterKey(key string) string {
+	if len(key) > MaxParameterKeyLength {
+		return key[:MaxParameterKeyLength]
+	}
+	return key
+}
+
 func RenderSetParameterValues(id string, params []ParameterValueStruct, parameterKey string) []byte {
 	var sb strings.Builder
 	sb.WriteString(`<cwmp:SetParameterValues><ParameterList soap-enc:arrayType="cwmp:ParameterValueStruct[`)
@@ -89,6 +135,12 @@ func RenderSetParameterValues(id string, params []ParameterValueStruct, paramete
 		sb.WriteString(`<ParameterValueStruct><Name>`)
 		sb.WriteString(escapeXML(p.Name))
 		valueType := p.Type
+		if valueType != "" && !strings.HasPrefix(valueType, "xsd:") {
+			// Callers (BSS MODIFY_WIFI, config templates) pass bare "boolean"
+			// or "unsignedInt"; without the prefix they fell through to
+			// xsd:string and strict CPEs fault 9006.
+			valueType = "xsd:" + valueType
+		}
 		switch valueType {
 		case "xsd:string", "xsd:boolean", "xsd:int", "xsd:unsignedInt", "xsd:long", "xsd:unsignedLong", "xsd:dateTime", "xsd:base64Binary", "xsd:hexBinary":
 		default:

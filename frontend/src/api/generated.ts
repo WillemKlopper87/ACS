@@ -157,6 +157,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/wifi/networks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolved TR-181 Wi-Fi networks (SSID + AccessPoint + Radio) with role primary/guest/unbound
+         * @description Built from the device's discovered names and cached values instead of assuming Device.WiFi.SSID.1. Never includes passphrases. When complete is false, GET refresh_paths before writing; read_paths refreshes the whole view.
+         */
+        get: operations["WiFiNetworks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/wifi-topology": {
         parameters: {
             query?: never;
@@ -1539,10 +1559,16 @@ export interface paths {
                         /** @description Alternative to device_ids — resolves a device_groups member set */
                         group_id?: string;
                         /** @enum {string} */
-                        action: "SET_PARAMETER" | "CONNECTION_REQUEST" | "REFRESH_CELLULAR";
+                        action: "SET_PARAMETER" | "SET_WIFI" | "CONNECTION_REQUEST" | "REFRESH_CELLULAR";
                         /** @description Required when action is SET_PARAMETER */
                         parameters?: components["schemas"]["ParameterInput"][];
                         timeout_seconds?: number;
+                        /** @description SET_WIFI: new network name, written to every primary (enabled, non-guest, AccessPoint-bound) SSID the device resolves — never guest, unbound or disabled SSIDs. TR-098 devices keep WLANConfiguration.1. */
+                        wifi_ssid?: string;
+                        /** @description SET_WIFI: WPA passphrase for the same primary networks */
+                        wifi_password?: string;
+                        /** @description SET_WIFI: Enable flag of the same primary networks. Disabled networks are no longer primary, so re-enable them per device. */
+                        wifi_enabled?: boolean;
                     };
                 };
             };
@@ -1591,6 +1617,58 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Device"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/satellites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the mesh satellites linked to this gateway (tenancy-scoped)
+         * @description Devices whose gateway_device_id is this device, i.e. mesh satellites (e.g. Nokia WiFi Beacon 3.1) that reported this gateway's identity via TR-111 Device.GatewayInfo.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["Device"][];
+                            total: number;
+                        };
                     };
                 };
                 /** @description Not found */
@@ -2185,6 +2263,179 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/wifi/insights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Controller-style Wi-Fi overview (bandwidth, client counts, top SSIDs/clients, new/returning clients, vendors, inferred OS)
+         * @description Built from samples cmd/acs takes on periodic Informs (ACS_WIFI_INSIGHTS_INTERVAL, default 5m). Rates are differences between consecutive cumulative counters; counter resets are dropped. There is no backfill: the CPE keeps no history.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    window?: "2h" | "1d" | "1w" | "1m";
+                };
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WiFiInsights"];
+                    };
+                };
+                /** @description Unknown window */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Device not found or outside the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/sim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SIM / subscriber identity view with IMSI, ICCID, MSISDN, IMEI and EID masked for every role; SIM PIN never returned */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SIMView"];
+                    };
+                };
+                /** @description Device not found or outside the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/sim/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disclose full subscriber identifiers (human superadmin only; reason required; audited as SubscriberIdentityRevealed) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Why the identity is needed, e.g. RICA subscriber verification or a lawful-interception directive */
+                        reason: string;
+                        /** @description Optional case or directive reference */
+                        reference?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Full identifiers (Cache-Control no-store) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SIMView"];
+                    };
+                };
+                /** @description Missing or too-short reason */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Caller is not a human superadmin (the BSS service token is refused) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The audit record could not be written */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/cellular-capabilities": {
         parameters: {
             query?: never;
@@ -2288,6 +2539,8 @@ export interface paths {
                                 download_path?: string;
                                 upload_path?: string;
                             };
+                            ping?: components["schemas"]["DiagnosticCapability"];
+                            traceroute?: components["schemas"]["DiagnosticCapability"];
                         };
                     };
                 };
@@ -2331,13 +2584,7 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description Accepted */
-                202: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
+                202: components["responses"]["DiagnosticQueueResponse"];
                 /** @description Invalid or disallowed target URL */
                 400: {
                     headers: {
@@ -2369,7 +2616,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Queue DIAGNOSTICS_PING — trigger + poll cycle, resolves to SUCCESS/FAILED/TIMEOUT (diagnostics.run permission) */
+        /**
+         * Queue DIAGNOSTICS_PING — trigger, wait for the CPE's next session (8 DIAGNOSTICS COMPLETE), poll; resolves to SUCCESS/FAILED/TIMEOUT (diagnostics.run permission)
+         * @description Requires a discovered, writable IPPing object; only inputs discovery proved writable are sent.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -2393,7 +2643,14 @@ export interface paths {
                 };
             };
             responses: {
-                202: components["responses"]["QueueResponse"];
+                202: components["responses"]["DiagnosticQueueResponse"];
+                /** @description Diagnostic not supported by the device's discovered data model, or discovery has not run */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         delete?: never;
@@ -2436,7 +2693,14 @@ export interface paths {
                 };
             };
             responses: {
-                202: components["responses"]["QueueResponse"];
+                202: components["responses"]["DiagnosticQueueResponse"];
+                /** @description Diagnostic not supported by the device's discovered data model, or discovery has not run */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         delete?: never;
@@ -3350,6 +3614,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/re-enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open a time-limited window in which this already-graduated device may use the bootstrap identity again (credential.manage permission)
+         * @description For a CPE that was factory-reset and lost its device-bound CWMP Digest credential: it returns with the constrained bootstrap identity, which is otherwise refused for established devices. During the window the device graduates to a new unique credential as on first contact; activation closes the window. The previous credential stays valid until the new one activates. Audited as DeviceReenrollmentOpened.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @default 60 */
+                        minutes?: number;
+                        /** @description Free text recorded in the audit log */
+                        reason?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Window opened */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            device_id?: string;
+                            /** Format: date-time */
+                            reenroll_until?: string;
+                        };
+                    };
+                };
+                /** @description minutes out of range or invalid body */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/credentials": {
         parameters: {
             query?: never;
@@ -3479,6 +3805,137 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/xmpp/provision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start zero-touch XMPP Connection Request provisioning over TR-069 (credential.manage permission)
+         * @description Generates a per-device XMPP credential (stored encrypted, type XMPP), creates the account on the ACS's XMPP server, then drives the CPE through a persisted, resumable state machine: AddObject Device.XMPP.Connection. (and its Server. sub-object if the CPE did not create one), subtree GetParameterNames to learn the new instance's writable leaves, SetParameterValues for the account/domain/resource/TLS/keepalive/server, then ManagementServer.ConnReqXMPPConnection and ConnReqAllowedJabberIDs, and finally reads ConnReqJabberID until the CPE has logged in (which activates the credential). Idempotent: a run in progress is returned with 202, a finished one with 200 unless restart is set. Audited as XMPPProvisioning; secrets never appear in the response or the audit log.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /**
+                         * @description Set the vendor's Device.XMPP.X_*_CertificateVerificationRequired to false (lab self-signed server certificate only).
+                         * @default false
+                         */
+                        relax_certificate_verification?: boolean;
+                        /**
+                         * @description Set the vendor's Device.XMPP.X_*_BypassHostnameCheck to true (server reached by IP).
+                         * @default false
+                         */
+                        bypass_hostname_check?: boolean;
+                        /**
+                         * @description Re-provision a device whose last run is DONE or FAILED, with a fresh credential.
+                         * @default false
+                         */
+                        restart?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Already provisioned (restart not requested) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["XMPPProvisionResponse"];
+                    };
+                };
+                /** @description Started */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["XMPPProvisionResponse"];
+                    };
+                };
+                /** @description Device has no discovered writable Device.XMPP.Connection. table */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The XMPP server refused to create the device account */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description XMPP is not configured on this ACS */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/devices/{id}/xmpp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** XMPP Connection Request state — the ACS's XMPP session, what the CPE reports, provisioning progress */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DeviceXMPPState"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5938,6 +6395,114 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        WiFiInsights: {
+            device_id: string;
+            window: string;
+            /** Format: date-time */
+            since: string;
+            bucket_seconds: number;
+            /** Format: date-time */
+            last_sample_at?: string | null;
+            /** Format: int64 */
+            total_bytes_down: number;
+            /** Format: int64 */
+            total_bytes_up: number;
+            bandwidth: {
+                /** Format: date-time */
+                at: string;
+                /** Format: int64 */
+                bytes_down: number;
+                /** Format: int64 */
+                bytes_up: number;
+                bps_down: number;
+                bps_up: number;
+            }[];
+            client_counts: {
+                /** Format: date-time */
+                at: string;
+                wireless: number;
+                wired: number;
+                guest: number;
+            }[];
+            top_ssids: {
+                instance: number;
+                name: string;
+                role: string;
+                /** Format: int64 */
+                bytes_down: number;
+                /** Format: int64 */
+                bytes_up: number;
+            }[];
+            top_clients: {
+                mac: string;
+                hostname: string;
+                vendor: string;
+                /** Format: int64 */
+                bytes_down: number;
+                /** Format: int64 */
+                bytes_up: number;
+            }[];
+            client_stats: {
+                new: number;
+                returning: number;
+                /** @description Clients with a randomised (locally administered) MAC; their vendor cannot be resolved */
+                private_mac: number;
+                /** Format: int64 */
+                average_session_seconds: number;
+            };
+            vendors: components["schemas"]["WiFiInsightsShare"][];
+            /** @description Guessed from DHCP hostnames; no DHCP fingerprint is available over CWMP */
+            os_inferred: components["schemas"]["WiFiInsightsShare"][];
+            clients: {
+                mac: string;
+                hostname: string;
+                ip_address: string;
+                ssid_instance?: number;
+                ssid_name: string;
+                band: string;
+                /** @description EasyMesh DataElements Network.Device instance (e.g. 2 = a Beacon satellite) */
+                mesh_node?: number;
+                wireless: boolean;
+                guest: boolean;
+                private_mac: boolean;
+                vendor: string;
+                os_inferred: string;
+                signal_dbm: number | null;
+                /** Format: date-time */
+                first_seen_at: string;
+                /** Format: date-time */
+                last_seen_at: string;
+                connected: boolean;
+                sessions: number;
+                /** Format: int64 */
+                connected_seconds: number;
+            }[];
+        };
+        WiFiInsightsShare: {
+            name: string;
+            count: number;
+        };
+        SIMField: {
+            /** @enum {string} */
+            kind: "imsi" | "iccid" | "msisdn" | "imei" | "eid" | "context";
+            path: string;
+            value: string;
+            masked: boolean;
+            /** Format: date-time */
+            updated_at: string;
+            source: string;
+        };
+        SIMView: {
+            device_id: string;
+            supported: boolean;
+            reason?: string;
+            revealed: boolean;
+            identifiers: components["schemas"]["SIMField"][];
+            /** @description Non-identifying SIM state: USIM status, MCC/MNC/PLMN/SPN, eSIM status */
+            context: components["schemas"]["SIMField"][];
+            /** @description Discovered SIM paths without a cached value; read them with POST /parameters/get */
+            refresh_paths: string[];
+        };
         /**
          * @description Rank order readonly < noc < manager < superadmin (build plan §9's RBAC tier expansion)
          * @enum {string}
@@ -6008,6 +6573,7 @@ export interface components {
             last_inform_at?: string;
             last_inform_event_codes?: string[];
             connection_request_url?: string;
+            /** @description DIRECT_IPV4, DIRECT_IPV6, STUN_ANNEX_G, XMPP, PERIODIC_FALLBACK_ONLY or UNKNOWN */
             connection_request_mode?: string;
             /** Format: date-time */
             last_connection_request_at?: string;
@@ -6025,6 +6591,43 @@ export interface components {
             latitude?: number | null;
             /** Format: double */
             longitude?: number | null;
+            /**
+             * Format: date-time
+             * @description Open operator re-enrolment window (bootstrap allowed until this time)
+             */
+            reenroll_until?: string;
+            /**
+             * Format: date-time
+             * @description Set while an ACS-requested reboot/reset is in progress (online_status REBOOTING)
+             */
+            reboot_requested_at?: string;
+            /** @description Seconds from the last acknowledged reboot/reset until the device informed again */
+            last_reboot_duration_seconds?: number;
+            /** @description Mesh satellites only: the gateway device this unit sits behind, resolved from TR-111 Device.GatewayInfo (unset when unknown or the gateway is not registered) */
+            gateway_device_id?: string;
+            /** @description Mesh satellites only: the gateway identity (OUI+ProductClass+SerialNumber natural key) reported in Device.GatewayInfo */
+            gateway_oui_serial?: string;
+        };
+        WiFiNetwork: {
+            instance: number;
+            ssid_object: string;
+            access_point?: string;
+            radio?: string;
+            name?: string;
+            enabled?: boolean;
+            advertised?: boolean;
+            guest?: boolean;
+            band?: string;
+            security_mode?: string;
+            /** @enum {string} */
+            role: "primary" | "guest" | "unbound" | "disabled";
+            name_path?: string;
+            enable_path?: string;
+            passphrase_path?: string;
+            name_writable: boolean;
+            enable_writable: boolean;
+            passphrase_writable: boolean;
+            ap_inferred?: boolean;
         };
         DeviceGroupCount: {
             Manufacturer?: string;
@@ -6055,6 +6658,12 @@ export interface components {
         QueueResponse: {
             command_key?: string;
             status?: string;
+        };
+        DiagnosticCapability: {
+            supported: boolean;
+            path?: string;
+            /** @description Why discovery rules the diagnostic out */
+            reason?: string;
         };
         /** @description Mirrors cmd/api's captureSessionResponse (design §4/§7). */
         CaptureSession: {
@@ -6109,6 +6718,10 @@ export interface components {
                 device_id?: string;
                 command_key?: string;
                 error?: string;
+                /** @description SET_WIFI: the networks written, e.g. "SSID 1 (2.4GHz) + SSID 5 (5GHz)" */
+                detail?: string;
+                /** @description SET_WIFI: the device's Wi-Fi roles were not cached yet, so this read was queued instead of a write (error is set); retry after the device's next session */
+                refresh_command_key?: string;
             }[];
         };
         Job: {
@@ -6116,7 +6729,7 @@ export interface components {
             device_id?: string;
             type?: string;
             /** @enum {string} */
-            status?: "QUEUED" | "RPC_SENT" | "IN_PROGRESS" | "AWAITING_TRANSFER_COMPLETE" | "SUCCESS" | "FAILED" | "TIMEOUT";
+            status?: "QUEUED" | "RPC_SENT" | "IN_PROGRESS" | "AWAITING_TRANSFER_COMPLETE" | "AWAITING_DIAGNOSTICS_COMPLETE" | "SUCCESS" | "FAILED" | "TIMEOUT";
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */
@@ -6262,11 +6875,73 @@ export interface components {
             failure_rate?: number;
             terminal_count?: number;
         };
+        XMPPProvisioning: {
+            /** @enum {string} */
+            state: "ADD_CONNECTION" | "DISCOVER_CONNECTION" | "ADD_SERVER" | "DISCOVER_SERVER" | "CONFIGURE" | "BIND" | "VERIFY" | "DONE" | "FAILED";
+            /** @description e.g. Device.XMPP.Connection.1. */
+            connection_path?: string;
+            server_path?: string;
+            /** @description The XMPP credential (see /credentials); its password is never returned */
+            credential_id?: string;
+            /** @description The job the current state is waiting on */
+            job_id?: string;
+            attempts: number;
+            domain: string;
+            resource: string;
+            server_address: string;
+            server_port: number;
+            keepalive_interval: number;
+            acs_jid: string;
+            relax_certificate_verification: boolean;
+            bypass_hostname_check: boolean;
+            /** @description ConnReqJabberID read back from the CPE */
+            jabber_id?: string;
+            connection_status?: string;
+            last_error?: string;
+            requested_by?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: date-time */
+            completed_at?: string | null;
+        };
+        XMPPProvisionResponse: {
+            existing?: boolean;
+            provisioning?: components["schemas"]["XMPPProvisioning"];
+        };
+        DeviceXMPPState: {
+            device_id?: string;
+            acs?: {
+                configured?: boolean;
+                connected?: boolean;
+                jid?: string;
+                /** Format: date-time */
+                connected_since?: string | null;
+                last_error?: string;
+                cpe_server_address?: string;
+                cpe_server_port?: number;
+            };
+            cpe?: {
+                conn_req_jabber_id?: string;
+                conn_req_jabber_id_valid?: boolean;
+                supported_conn_req_methods?: string;
+                conn_req_xmpp_connection?: string;
+                connection_request_mode?: string;
+                xmpp_connection_status?: string;
+            };
+            provisioning?: components["schemas"]["XMPPProvisioning"] | null;
+            /** Format: date-time */
+            as_of?: string;
+        };
         Credential: {
             id: string;
             version: number;
-            /** @description Direction of authentication protected by this credential. */
-            credential_type: "CONNECTION_REQUEST" | "CWMP_DIGEST";
+            /**
+             * @description Direction of authentication protected by this credential. XMPP is the CPE's login to the ACS's XMPP server (created only by XMPP provisioning).
+             * @enum {string}
+             */
+            credential_type: "CONNECTION_REQUEST" | "CWMP_DIGEST" | "XMPP";
             username: string;
             /** @enum {string} */
             status: "PENDING" | "ACTIVE" | "GRACE" | "REVOKED";
@@ -6513,6 +7188,20 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["QueueResponse"];
+            };
+        };
+        /** @description Diagnostic job queued */
+        DiagnosticQueueResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": {
+                    command_key: string;
+                    status: string;
+                    /** @description Optional inputs not sent because discovery did not prove them writable (the CPE's defaults apply) */
+                    skipped_inputs?: string[];
+                };
             };
         };
     };
@@ -6902,6 +7591,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    WiFiNetworks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                id: components["parameters"]["DeviceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resolved Wi-Fi networks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        supported?: boolean;
+                        reason?: string;
+                        complete?: boolean;
+                        networks?: components["schemas"]["WiFiNetwork"][];
+                        primary?: components["schemas"]["WiFiNetwork"][];
+                        refresh_paths?: string[];
+                        read_paths?: string[];
+                    };
+                };
             };
         };
     };

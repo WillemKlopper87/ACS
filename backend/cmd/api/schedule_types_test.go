@@ -86,3 +86,20 @@ func TestDestructiveJobTypesAreNotSchedulable(t *testing.T) {
 		}
 	}
 }
+
+// TestScheduledJobResponseRedactsSecrets: a schedule's payload is stored
+// with the values its jobs will write, but GET /schedules must never
+// return a Wi-Fi passphrase or credential (handoff plan 2026-10-30 §3a.5).
+func TestScheduledJobResponseRedactsSecrets(t *testing.T) {
+	sj := &scheduler.ScheduledJob{
+		ID: "s1", JobType: "SET_PARAMETER",
+		Payload: []byte(`{"parameters":[{"name":"Device.WiFi.AccessPoint.1.Security.KeyPassphrase","value":"hunter2hunter2"},{"name":"Device.WiFi.SSID.1.SSID","value":"SENT-5G"}]}`),
+	}
+	got := string(toScheduledJobResponse(sj).Payload)
+	if strings.Contains(got, "hunter2hunter2") || !strings.Contains(got, "SENT-5G") {
+		t.Fatalf("payload = %s, want passphrase redacted and SSID kept", got)
+	}
+	if !strings.Contains(string(sj.Payload), "hunter2hunter2") {
+		t.Fatal("stored payload modified: the worker still needs the value")
+	}
+}

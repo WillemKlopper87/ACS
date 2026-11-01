@@ -49,3 +49,19 @@ func TestNewCommandKeyUniqueAcrossCalls(t *testing.T) {
 		seen[key] = true
 	}
 }
+
+// TR-069 limits ParameterKey (SetParameterValues/AddObject/DeleteObject) to
+// string(32); strict CPEs fault 9003 on a longer job CommandKey.
+func TestNewCommandKeyFitsTR069ParameterKey(t *testing.T) {
+	for _, jobType := range []string{
+		TypeSetParameter, TypeGetParameter, TypeConnectionRequest, TypeFirmwareDownload,
+		TypeDiagnosticsPing, TypeDiagnosticsTraceroute, TypeDiagnosticsDownload, TypeDiagnosticsUpload,
+		TypeAddObject, TypeDeleteObject, TypeReboot, TypeFactoryReset, TypeScheduleInform,
+		TypeSetParameterAttributes, TypeGetParameterAttributes, TypeUpload, TypeParameterDiscovery,
+		"SOME_UNKNOWN_TYPE",
+	} {
+		if key := newCommandKey(jobType); len(key) > 32 {
+			t.Errorf("newCommandKey(%q) = %q is %d chars, TR-069 ParameterKey allows 32", jobType, key, len(key))
+		}
+	}
+}

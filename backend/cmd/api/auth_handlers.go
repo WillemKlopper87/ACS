@@ -204,6 +204,10 @@ func isServiceRoute(r *http.Request) bool {
 		// a valid canonical write path. It remains constrained to one
 		// device's names, rather than gaining general parameter-cache access.
 		return true
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/v1/devices/") && strings.HasSuffix(p, "/wifi/networks") && strings.Count(p, "/") == 6:
+		// MODIFY_WIFI must target every primary SSID (not instance 1); the
+		// resolved view carries names, roles and bands but no secrets.
+		return true
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/v1/jobs/"):
 		return true
 	}

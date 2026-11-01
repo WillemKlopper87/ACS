@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -68,7 +69,7 @@ func (r *Repository) EnsurePendingCWMPDigest(ctx context.Context, deviceID strin
 	}
 
 	id := uuid.New().String()
-	commandKey := "cwmp-bootstrap-" + id
+	commandKey := bootstrapCommandKey(id)
 	row = tx.QueryRowContext(ctx, `
 		INSERT INTO device_credentials (id, device_id, credential_type, version, username, password, command_key)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -82,4 +83,12 @@ func (r *Repository) EnsurePendingCWMPDigest(ctx context.Context, deviceID strin
 		return nil, fmt.Errorf("commit pending CWMP credential tx: %w", err)
 	}
 	return cred, nil
+}
+
+// bootstrapCommandKey derives the credential-install ParameterKey from the
+// credential ID. TR-069 limits ParameterKey to string(32) and strict CPEs
+// (Nokia FastMile/Beacon) fault 9003 on longer keys, so this is
+// "bootstrap-" + 22 hex digits of the UUID: exactly 32 characters.
+func bootstrapCommandKey(id string) string {
+	return "bootstrap-" + strings.ReplaceAll(id, "-", "")[:22]
 }

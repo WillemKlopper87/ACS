@@ -8,6 +8,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -274,4 +275,50 @@ func (h *handler) revokeDeviceCredential(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, toCredentialResponse(cred))
+}
+
+// Re-enrolment window bounds: long enough to factory-reset a CPE and let it
+// rejoin (a Nokia Beacon took ~10 minutes just to rejoin its mesh after a
+// reboot), short enough that the bootstrap identity is not left open.
+const (
+	defaultReenrollMinutes = 60
+	maxReenrollMinutes     = 24 * 60
+)
+
+// openReenrollment lets one already-graduated device use the bootstrap
+// identity again for a limited time, so a factory-reset CPE (which lost its
+// device-bound credential and returns with the bootstrap pair) can graduate
+// to a new credential instead of being locked out. Graduation closes the
+// window; the previous credential stays valid until the new one activates.
+func (h *handler) openReenrollment(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.getScopedDevice(w, r, id); !ok {
+		return
+	}
+	req := struct {
+		Minutes int    `json:"minutes"`
+		Reason  string `json:"reason"`
+	}{Minutes: defaultReenrollMinutes}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+	}
+	if req.Minutes <= 0 || req.Minutes > maxReenrollMinutes {
+		http.Error(w, fmt.Sprintf("minutes must be between 1 and %d", maxReenrollMinutes), http.StatusBadRequest)
+		return
+	}
+	until := time.Now().UTC().Add(time.Duration(req.Minutes) * time.Minute)
+	if err := h.devices.OpenReenrollment(r.Context(), id, until); err != nil {
+		h.logger.Error("failed to open re-enrolment", "err", err, "device_id", id)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if err := h.auditor.Record(r.Context(), operatorFromRequest(r), id, "DeviceReenrollmentOpened", map[string]any{
+		"until": until.Format(time.RFC3339), "minutes": req.Minutes, "reason": req.Reason,
+	}); err != nil {
+		h.logger.Error("failed to write audit record", "err", err)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"device_id": id, "reenroll_until": until.Format(time.RFC3339)})
 }

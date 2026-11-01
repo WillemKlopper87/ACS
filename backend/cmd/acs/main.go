@@ -38,6 +38,7 @@ import (
 	"acs/internal/stun"
 	"acs/internal/templates"
 	"acs/internal/tmf/telemetry"
+	"acs/internal/wifiinsights"
 )
 
 // maxBodyBytes guards against the "oversized XML" chaos scenario (design
@@ -59,6 +60,9 @@ const (
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: levelFromEnv()}))
+	// Handlers built without an injected logger (the bootstrap graduation
+	// guard) fall back to slog.Default; keep them on the same output/format.
+	slog.SetDefault(logger)
 	devicePlane, err := loadDevicePlaneConfig(os.Getenv)
 	if err != nil {
 		logger.Error("refusing to start", "err", err)
@@ -143,6 +147,9 @@ func main() {
 				return
 			}
 			logger.Info("per-device CWMP Digest credential activated on first use", "device_id", cred.DeviceID, "version", cred.Version)
+			if err := devices.NewRepository(db).CloseReenrollment(ctx, cred.DeviceID); err != nil {
+				logger.Error("failed to close re-enrolment window", "err", err, "device_id", cred.DeviceID)
+			}
 			_ = observability.NewAuditor(db).Record(ctx, "system", cred.DeviceID, "CredentialRotation", map[string]any{
 				"credential_id": cred.ID, "version": cred.Version, "type": credentials.TypeCWMPDigest, "phase": "activated-on-first-use",
 			})
@@ -218,6 +225,11 @@ func main() {
 		ipLimiter:          ratelimit.New(ipRate, ipBurst, rateLimitIdleTTL),
 		deviceLimiter:      ratelimit.New(deviceRate, deviceBurst, rateLimitIdleTTL),
 		onboardingListener: newOnboardingListener(envOr("ACS_ONBOARDING_LISTENER", "off"), logger),
+		// Wi-Fi insights sampling cadence; 0 disables it.
+		wifiInsights: &wifiInsightsSampler{
+			repo:     wifiinsights.NewRepository(db, wifiinsights.DefaultOUIRegistry()),
+			interval: envOrDuration("ACS_WIFI_INSIGHTS_INTERVAL", 5*time.Minute),
+		},
 	}
 	h.sharedCredentialBootstrapOnly = sharedCredentialBootstrapOnly
 	logger.Info("rate limits configured", "ip_per_second", ipRate, "ip_burst", ipBurst,
@@ -231,18 +243,22 @@ func main() {
 	mux := newACSMux(h.handleCWMP, metrics, db)
 
 	addr := devicePlane.Addr
-	server := &http.Server{
-		Addr:    addr,
-		Handler: restrictRemoteCIDRs(mux, devicePlane.AllowedCIDRs),
-		// CPE HTTP stacks are slow and often on lossy last-mile links —
-		// generous per-request timeouts, but never unbounded, so a stalled
-		// connection can't hold a socket forever. IdleTimeout covers the
-		// keep-alive gap between envelopes within a CWMP session.
-		ReadHeaderTimeout: 30 * time.Second,
-		ReadTimeout:       2 * time.Minute,
-		WriteTimeout:      2 * time.Minute,
-		IdleTimeout:       5 * time.Minute,
+	handler := restrictRemoteCIDRs(mux, devicePlane.AllowedCIDRs)
+	newServer := func(addr string) *http.Server {
+		return &http.Server{
+			Addr:    addr,
+			Handler: handler,
+			// CPE HTTP stacks are slow and often on lossy last-mile links —
+			// generous per-request timeouts, but never unbounded, so a stalled
+			// connection can't hold a socket forever. IdleTimeout covers the
+			// keep-alive gap between envelopes within a CWMP session.
+			ReadHeaderTimeout: 30 * time.Second,
+			ReadTimeout:       2 * time.Minute,
+			WriteTimeout:      2 * time.Minute,
+			IdleTimeout:       5 * time.Minute,
+		}
 	}
+	server := newServer(addr)
 
 	certFile := devicePlane.TLSCert
 	keyFile := devicePlane.TLSKey
@@ -322,6 +338,16 @@ func main() {
 	}
 	server.TLSConfig = tlsCfg
 
+	// ACS_TLS_ADDR (lab only, see loadDevicePlaneConfig): TLS on a second
+	// listener while ACS_ADDR stays plain HTTP, so a CPE whose ACS URL is
+	// moved to HTTPS and fails the handshake can still be recovered over
+	// HTTP. Same handler, CIDR allowlist and TLS settings.
+	var tlsServer *http.Server
+	if devicePlane.TLSAddr != "" {
+		tlsServer = newServer(devicePlane.TLSAddr)
+		tlsServer.TLSConfig = tlsCfg
+	}
+
 	ctx2, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -342,9 +368,18 @@ func main() {
 		logger.Info("stun server disabled (ACS_STUN_ADDR=off)")
 	}
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	if tlsServer != nil {
+		go func() {
+			logger.Info("CWMP gateway listening (TLS, second listener)", "addr", devicePlane.TLSAddr, "path", "/cwmp")
+			errCh <- tlsServer.ListenAndServeTLS(certFile, keyFile)
+		}()
+	}
 	go func() {
-		if certFile != "" && keyFile != "" {
+		if tlsServer != nil {
+			logger.Warn("CWMP gateway listening WITHOUT TLS beside the TLS listener (ACS_TLS_ADDR migration mode)", "addr", addr, "tls_addr", devicePlane.TLSAddr, "path", "/cwmp")
+			errCh <- server.ListenAndServe()
+		} else if certFile != "" && keyFile != "" {
 			logger.Info("CWMP gateway listening (TLS)", "addr", addr, "path", "/cwmp")
 			errCh <- server.ListenAndServeTLS(certFile, keyFile)
 		} else {
@@ -364,6 +399,9 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
+		if tlsServer != nil {
+			_ = tlsServer.Shutdown(shutdownCtx)
+		}
 	}
 }
 
@@ -398,6 +436,23 @@ func envOrInt(key string, fallback int) int {
 	return v
 }
 
+// envOrDuration parses a Go duration ("5m"); "0" disables the feature it
+// configures.
+func envOrDuration(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	if raw == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		return fallback
+	}
+	return d
+}
+
 func levelFromEnv() slog.Level {
 	if os.Getenv("ACS_DEBUG") != "" {
 		return slog.LevelDebug
@@ -425,6 +480,7 @@ type handler struct {
 	ipLimiter          *ratelimit.Limiter
 	deviceLimiter      *ratelimit.Limiter
 	onboardingListener *onboardingListener
+	wifiInsights       *wifiInsightsSampler
 
 	// sharedCredentialBootstrapOnly prevents the legacy fleet credential
 	// from authenticating an identity that already exists or continuing a

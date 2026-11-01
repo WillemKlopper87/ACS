@@ -29,7 +29,9 @@ const deviceColumns = `id, oui_serial, manufacturer, oui, product_class, serial_
 	first_seen_at, last_updated_at, tags, cwmp_auth_mode, data_model_root_confirmed_at,
 	udp_connection_request_address, nat_detected, customer_id, location,
 	latitude, longitude, label, profile_id, profile_matched_by, profile_qualified,
-	profile_evidence, profile_assigned_at`
+	profile_evidence, profile_assigned_at, reenroll_until,
+	reboot_requested_at, last_reboot_duration_seconds,
+	gateway_oui_serial, gateway_device_id`
 
 // AssignProfile persists deterministic profile-match provenance. It does not
 // authorize parameter writes or replace per-operation capability checks.
@@ -84,6 +86,9 @@ func (r *Repository) UpsertFromInform(ctx context.Context, id cwmp.DeviceID, eve
 			-- so on a real conflict they cannot legitimately differ.
 			manufacturer = CASE WHEN COALESCE(devices.manufacturer, '') = '' THEN EXCLUDED.manufacturer ELSE devices.manufacturer END,
 			online_status = 'ONLINE',
+			last_reboot_duration_seconds = CASE WHEN devices.reboot_requested_at IS NOT NULL
+				THEN EXTRACT(EPOCH FROM now() - devices.reboot_requested_at)::int ELSE devices.last_reboot_duration_seconds END,
+			reboot_requested_at = NULL,
 			last_inform_at = now(),
 			last_inform_event_codes = EXCLUDED.last_inform_event_codes,
 			last_updated_at = now(),
@@ -158,10 +163,11 @@ func (r *Repository) RefreshLiveness(ctx context.Context, onlineThreshold, unrea
 		END,
 		last_updated_at = now()
 		WHERE (last_inform_at IS NULL OR last_inform_at <= now() - $1::interval OR last_inform_at <= now() - $2::interval)
+		AND NOT (online_status = 'REBOOTING' AND reboot_requested_at > now() - $3::interval)
 		AND (management_protocols IS NULL OR NOT ('USP' = ANY(management_protocols)) OR NOT EXISTS (
 			SELECT 1 FROM usp_agents ua WHERE ua.device_id = devices.id AND ua.connected
 		))
-	`, formatInterval(onlineThreshold), formatInterval(unreachableThreshold))
+	`, formatInterval(onlineThreshold), formatInterval(unreachableThreshold), formatInterval(RebootGrace))
 	if err != nil {
 		return 0, 0, fmt.Errorf("refresh liveness: %w", err)
 	}
@@ -376,6 +382,10 @@ func scanDevice(s scanner) (*Device, error) {
 	var profileID, profileMatchedBy sql.NullString
 	var profileEvidence []byte
 	var profileAssignedAt sql.NullTime
+	var reenrollUntil sql.NullTime
+	var rebootRequestedAt sql.NullTime
+	var lastRebootDuration sql.NullInt64
+	var gatewayOUISerial, gatewayDeviceID sql.NullString
 
 	if err := s.Scan(&d.ID, &d.OUISerial, &d.Manufacturer, &d.OUI, &d.ProductClass, &d.SerialNumber,
 		&d.DataModelRoot, &d.OnlineStatus, &lastInformAt, &eventCodes,
@@ -384,7 +394,9 @@ func scanDevice(s scanner) (*Device, error) {
 		&d.FirstSeenAt, &d.LastUpdatedAt, &tags, &d.CWMPAuthMode, &dataModelRootConfirmedAt,
 		&udpConnectionRequestAddress, &natDetected, &customerID, &location,
 		&latitude, &longitude, &label, &profileID, &profileMatchedBy, &d.ProfileQualified,
-		&profileEvidence, &profileAssignedAt); err != nil {
+		&profileEvidence, &profileAssignedAt, &reenrollUntil,
+		&rebootRequestedAt, &lastRebootDuration,
+		&gatewayOUISerial, &gatewayDeviceID); err != nil {
 		return nil, fmt.Errorf("scan device: %w", err)
 	}
 	if customerID.Valid {
@@ -408,6 +420,24 @@ func scanDevice(s scanner) (*Device, error) {
 	if profileAssignedAt.Valid {
 		t := profileAssignedAt.Time
 		d.ProfileAssignedAt = &t
+	}
+	if reenrollUntil.Valid {
+		t := reenrollUntil.Time
+		d.ReenrollUntil = &t
+	}
+	if rebootRequestedAt.Valid {
+		t := rebootRequestedAt.Time
+		d.RebootRequestedAt = &t
+	}
+	if lastRebootDuration.Valid {
+		v := int(lastRebootDuration.Int64)
+		d.LastRebootDurationSeconds = &v
+	}
+	if gatewayOUISerial.Valid {
+		d.GatewayOUISerial = &gatewayOUISerial.String
+	}
+	if gatewayDeviceID.Valid {
+		d.GatewayDeviceID = &gatewayDeviceID.String
 	}
 	if latitude.Valid {
 		d.Latitude = &latitude.Float64

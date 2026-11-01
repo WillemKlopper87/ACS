@@ -23,6 +23,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -138,7 +139,15 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 	} else if h.auth.Enabled() {
 		ok, stale, identity := h.auth.Verify(r)
 		if !ok {
-			h.logger.Warn("authentication failed or missing", "remote", r.RemoteAddr)
+			result := "bad_credentials"
+			switch {
+			case strings.TrimSpace(r.Header.Get("Authorization")) == "":
+				result = "challenge" // normal first request of every Digest session
+			case stale:
+				result = "stale"
+			}
+			h.metrics.CWMPAuthTotal.WithLabelValues(result).Inc()
+			h.logger.Warn("authentication failed or missing", "remote", r.RemoteAddr, "result", result)
 			h.captureAuthFailure(r.Context(), remoteIP(r))
 			// Drain the unauthenticated encoded body before the challenge so
 			// keep-alive survives on CPEs that retry the same connection.
@@ -150,6 +159,7 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		h.metrics.CWMPAuthTotal.WithLabelValues("ok").Inc()
 		bound.credentialDeviceID = identity.BoundDeviceID
 		bound.credentialUsername = identity.Username
 		bound.sharedCredential = identity.SharedCredential
@@ -208,7 +218,36 @@ func (h *handler) handleCWMP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if method, ok := writeCPEInitiatedReply(w, env.Body, respID, ns); ok {
+		h.logger.Info("answered CPE-initiated RPC", "method", method, "remote", r.RemoteAddr)
+		return
+	}
+
 	h.dispatch(ctx, w, r, env.Body, bound)
+}
+
+// writeCPEInitiatedReply answers a CPE-initiated request other than Inform
+// and TransferComplete: GetRPCMethods gets its response, any other request
+// method gets Fault 8000. Without this, such a request parsed as an empty
+// POST and the ACS replied with an unrelated RPC, which strict CPE stacks
+// treat as a protocol error and abort the session. It reports the method
+// name and whether it wrote a reply.
+func writeCPEInitiatedReply(w http.ResponseWriter, body cwmp.InboundBody, respID, ns string) (string, bool) {
+	var out []byte
+	method := "GetRPCMethods"
+	switch {
+	case body.GetRPCMethods != nil:
+		out = cwmp.RenderGetRPCMethodsResponseNS(respID, ns)
+	case body.UnsupportedRequest() != "":
+		method = body.UnsupportedRequest()
+		out = cwmp.RenderMethodNotSupportedFaultNS(respID, ns)
+	default:
+		return "", false
+	}
+	w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
+	return method, true
 }
 
 // captureAuthFailure records only the fact that a CWMP request failed
@@ -324,6 +363,11 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 			if err := h.devices.UpdateConnectionRequestURL(ctx, device.ID, url); err != nil {
 				h.logger.Error("failed to update connection request url", "err", err, "device_id", device.ID)
 			}
+			if behind, known := connectionRequestBehindNAT(url, remoteIP(r)); known {
+				if err := h.devices.ClassifyConnectionRequestNAT(ctx, device.ID, behind); err != nil {
+					h.logger.Error("failed to classify connection request reachability", "err", err, "device_id", device.ID)
+				}
+			}
 		}
 
 		if addr, natDetected, ok := extractSTUNStatus(inform.ParameterList); ok {
@@ -340,6 +384,9 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	if inform.HasEventCode("0") {
 		h.applyAutoProvisioningTemplates(ctx, device)
 		h.autoDiscoverParameters(ctx, device)
+		h.adoptMeshSatellites(ctx, device)
+	} else if informHasEvent(inform, "1 BOOT") {
+		h.refreshGatewayInfoOnBoot(ctx, device.ID)
 	}
 
 	if inform.HasEventCode("6") {
@@ -373,6 +420,10 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 		"cwmp_namespace", ns,
 	)
 	h.onboardingListener.onboarded(device.ID, r.RemoteAddr)
+	h.recoverAbandonedDiscovery(ctx, device.ID)
+	h.recoverDroppedSessionJobs(ctx, device.ID, inform.Event)
+	h.releaseAwaitingDiagnostics(ctx, device.ID, inform.HasEventCode(cwmp.EventDiagnosticsComplete))
+	h.maybeQueueWiFiInsights(ctx, device.ID)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "acs_session",
@@ -701,7 +752,13 @@ func (h *handler) handleTransferComplete(ctx context.Context, w http.ResponseWri
 		}
 	}
 
-	if job.Status != jobs.StatusAwaitingTransferComplete && job.Status != jobs.StatusRPCSent {
+	if jobs.LateTransferReconcilable(job) {
+		// The ACS had given up on this transfer (lease/session lost or
+		// deadline passed) but the device is now reporting its real outcome:
+		// apply it rather than leaving a possibly successful flash FAILED.
+		h.logger.Info("reconciling late TransferComplete for a transfer the ACS had given up on",
+			"command_key", tc.CommandKey, "job_id", job.ID, "previous_fault", *job.FaultCode)
+	} else if job.Status != jobs.StatusAwaitingTransferComplete && job.Status != jobs.StatusRPCSent {
 		h.logger.Info("duplicate or late TransferComplete ignored", "command_key", tc.CommandKey, "job_id", job.ID, "status", job.Status)
 		w.Header().Set("Content-Type", `text/xml; charset="utf-8"`)
 		w.WriteHeader(http.StatusOK)
@@ -749,6 +806,9 @@ func (h *handler) cacheParameterValues(ctx context.Context, deviceID string, lis
 		return
 	}
 	h.publishCellularStateChanges(ctx, deviceID, changes, now)
+	if hasGatewayInfo(list) {
+		h.refreshGatewayLink(ctx, deviceID)
+	}
 }
 
 // detectCellularStateChanges compares reported cellular state paths against
@@ -780,15 +840,27 @@ func (h *handler) detectCellularStateChanges(ctx context.Context, deviceID strin
 		return nil
 	}
 	var changes map[string]telemetry.CellularStateChange
+	// Sentinel "no value" placeholders compare as empty, so a value that is
+	// merely absent on both sides is not reported as a state change.
+	stateValue := func(v string) string {
+		if adapters.IsCellularSentinel(v) {
+			return ""
+		}
+		return v
+	}
 	for path, p := range candidates {
 		old, existed := cached[path]
-		if existed && old.Value == p.Value {
+		oldValue, newValue := stateValue(old.Value), stateValue(p.Value)
+		if existed && oldValue == newValue {
+			continue
+		}
+		if !existed && newValue == "" {
 			continue
 		}
 		if changes == nil {
 			changes = make(map[string]telemetry.CellularStateChange)
 		}
-		changes[path] = telemetry.CellularStateChange{Old: old.Value, New: p.Value}
+		changes[path] = telemetry.CellularStateChange{Old: oldValue, New: newValue}
 	}
 	return changes
 }
@@ -808,6 +880,72 @@ func (h *handler) publishCellularStateChanges(ctx context.Context, deviceID stri
 	}
 	if err := telemetry.PublishCellularStateChanged(ctx, h.tmfEvents, account, deviceID, "CWMP", changes, at); err != nil {
 		h.logger.Warn("failed to publish cellular state event", "error", err, "device_id", deviceID)
+	}
+}
+
+// connectionRequestBehindNAT compares the host of a CPE's advertised
+// ConnectionRequestURL with the source address of its Inform. known is
+// false when the URL host is a name rather than an IP literal (no safe
+// comparison) or either address is unparsable.
+func connectionRequestBehindNAT(rawURL, informSource string) (behind, known bool) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.Hostname() == "" {
+		return false, false
+	}
+	advertised := net.ParseIP(u.Hostname())
+	source := net.ParseIP(informSource)
+	if advertised == nil || source == nil {
+		return false, false
+	}
+	return !advertised.Equal(source), true
+}
+
+// recoverDroppedSessionJobs runs on every Inform. A CPE has one CWMP session
+// at a time, so any session-dispatched job still RPC_SENT was sent in an
+// earlier session the CPE ended without answering (Nokia FastMile drops
+// sessions mid-exchange without a fault). Without this, such jobs waited for
+// the 15-minute lease, and Download/Upload/Reboot were then dead-lettered as
+// LEASE_EXPIRED_UNSAFE_RETRY even when they had executed — a successful
+// firmware flash could be counted as failed and trigger a rollout rollback.
+func (h *handler) recoverDroppedSessionJobs(ctx context.Context, deviceID string, events []cwmp.EventStruct) {
+	dropped, err := h.jobs.DroppedSessionJobs(ctx, deviceID)
+	if err != nil {
+		h.logger.Error("load dropped-session jobs", "err", err, "device_id", deviceID)
+		return
+	}
+	if len(dropped) == 0 {
+		return
+	}
+	methodKeys := map[string]map[string]bool{}
+	for _, e := range events {
+		if method, ok := strings.CutPrefix(strings.TrimSpace(e.EventCode), "M "); ok {
+			if methodKeys[method] == nil {
+				methodKeys[method] = map[string]bool{}
+			}
+			methodKeys[method][e.CommandKey] = true
+		}
+	}
+	diagnosticsComplete := cwmp.Inform{Event: events}.HasEventCode(cwmp.EventDiagnosticsComplete)
+	for _, job := range dropped {
+		action := jobs.ClassifyDroppedSessionJob(job, methodKeys, diagnosticsComplete)
+		applied, err := h.jobs.ApplyDroppedSessionAction(ctx, job, action)
+		if err != nil {
+			h.logger.Error("recover dropped-session job", "err", err, "job_id", job.ID)
+			continue
+		}
+		if !applied {
+			continue
+		}
+		outcome := map[jobs.DroppedSessionAction]string{
+			jobs.DroppedRequeue: "requeued", jobs.DroppedSucceeded: "succeeded (confirmed by Inform event)",
+			jobs.DroppedAwaitTransfer: "awaiting TransferComplete", jobs.DroppedFailed: "failed: outcome unknown, needs review",
+			jobs.DroppedDiagnosticsTriggered: "diagnostic trigger confirmed by 8 DIAGNOSTICS COMPLETE; polling for the result",
+		}[action]
+		h.logger.Warn("recovered job from a CWMP session the CPE dropped", "device_id", deviceID, "job_id", job.ID,
+			"command_key", job.CommandKey, "type", job.Type, "outcome", outcome)
+		if action == jobs.DroppedSucceeded {
+			h.metrics.JobsCompletedTotal.WithLabelValues(job.Type, jobs.StatusSuccess).Inc()
+		}
 	}
 }
 

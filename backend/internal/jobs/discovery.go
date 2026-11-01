@@ -2,9 +2,13 @@ package jobs
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -46,6 +50,7 @@ func AdvanceDiscovery(p *ParameterDiscoveryPayload, names map[string]bool) (bool
 		}
 	}
 	sort.Strings(objects)
+	objects = collapseRuntimeInstances(objects)
 	queued := map[string]bool{}
 	for _, path := range p.Pending {
 		queued[path] = true
@@ -64,6 +69,68 @@ func AdvanceDiscovery(p *ParameterDiscoveryPayload, names map[string]bool) (bool
 	}
 	p.Cursor, p.Pending = p.Pending[0], p.Pending[1:]
 	return false, nil
+}
+
+// DiscoveryMaxSkipped bounds how many objects one walk may skip before the
+// device is treated as unable to serve discovery at all.
+const DiscoveryMaxSkipped = 32
+
+// SkipDiscoveryCursor handles an object the CPE faulted on or dropped the
+// session for instead of answering. Nokia FastMile 1.2501.00.0798 drops
+// sessions mid-walk at objects that differ from run to run, so the first
+// failure only defers the object to the end of the walk (retried in a later
+// session); a second failure records it in Skipped. Either way the walk
+// advances, because resending the same object immediately could stall it
+// forever. It reports done when nothing is left to walk, and skipped when
+// the object was given up on rather than deferred. Skipping is safe because
+// discovery is read-only.
+func SkipDiscoveryCursor(p *ParameterDiscoveryPayload) (done, skipped bool, err error) {
+	if p.Cursor == "" {
+		return false, false, fmt.Errorf("discovery has no object in progress to skip")
+	}
+	if p.Retried == nil {
+		p.Retried = map[string]bool{}
+	}
+	if !p.Retried[p.Cursor] {
+		p.Retried[p.Cursor] = true
+		p.Pending = append(p.Pending, p.Cursor)
+		p.Cursor, p.Pending = p.Pending[0], p.Pending[1:]
+		return false, false, nil
+	}
+	if len(p.Skipped) >= DiscoveryMaxSkipped {
+		return false, false, fmt.Errorf("discovery skipped more than %d objects the device could not serve", DiscoveryMaxSkipped)
+	}
+	if p.Visited == nil {
+		p.Visited = map[string]bool{}
+	}
+	p.Visited[p.Cursor] = true
+	p.Skipped = append(p.Skipped, p.Cursor)
+	if len(p.Pending) == 0 {
+		p.Cursor = ""
+		return true, true, nil
+	}
+	p.Cursor, p.Pending = p.Pending[0], p.Pending[1:]
+	return false, true, nil
+}
+
+// InFlightDiscoveries returns the device's PARAMETER_DISCOVERY jobs whose
+// GetParameterNames is still awaiting a response.
+func (r *Repository) InFlightDiscoveries(ctx context.Context, deviceID string) ([]*Job, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE device_id=$1 AND type=$2 AND status=$3 ORDER BY created_at`,
+		deviceID, TypeParameterDiscovery, StatusRPCSent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Job
+	for rows.Next() {
+		job, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, job)
+	}
+	return out, rows.Err()
 }
 
 func (r *Repository) RequeueDiscovery(ctx context.Context, job *Job, payload ParameterDiscoveryPayload) error {
@@ -92,4 +159,133 @@ func (r *Repository) RecordDiscoveryFallback(ctx context.Context, id, commandKey
 	}
 	_, err = r.db.ExecContext(ctx, `UPDATE jobs SET result_detail=$2,updated_at=now() WHERE id=$1 AND type='PARAMETER_DISCOVERY'`, id, raw)
 	return err
+}
+
+// runtimeTableTemplates are multi-instance tables whose rows describe live
+// network state (connected clients, processes, sockets, routes) rather than
+// configuration. Every row has the same parameters, so discovery walks only
+// the lowest-numbered instance: walking all of them inflated the Nokia
+// FastMile walk past the object budget (22+ Hosts.Host rows, each with its
+// own IPv4Address/IPv6Address sub-tables) without adding capability
+// information. Configuration tables (WiFi.SSID.{i}, IP.Interface.{i}, ...)
+// are still walked per instance because writes need per-instance evidence.
+var runtimeTableTemplates = []string{
+	"Hosts.Host.",
+	"AssociatedDevice.",
+	"DHCPv4.Server.Pool.{i}.Client.",
+	"DHCPv6.Server.Pool.{i}.Client.",
+	"DeviceInfo.ProcessStatus.Process.",
+	"IP.ActivePort.",
+	"IPv4Forwarding.",
+	"IPv6Forwarding.",
+	"ManagementServer.ManageableDevice.",
+	"NeighboringWiFiDiagnostic.Result.",
+	"DeviceInfo.VendorLogFile.",
+	// EasyMesh Data Elements (TR-181 Device.WiFi.DataElements.): event logs
+	// and per-station rows grow with every Wi-Fi association.
+	"AssociationEvent.AssociationEventData.",
+	"DisassociationEvent.DisassociationEventData.",
+	"FailedConnectionEvent.FailedConnectionEventData.",
+	"BSS.{i}.STA.",
+	// Neighbour scans nest four runtime tables deep
+	// (ScanResult.{i}.OpClassScan.{i}.ChannelScan.{i}.NeighborBSS.{i}).
+	"ScanResult.",
+	"OpClassScan.",
+	"ChannelScan.",
+	"NeighborBSS.",
+	"UnassociatedSTA.",
+	"CapableOperatingClassProfile.",
+	"CurrentOperatingClassProfile.",
+	// Alarm catalogues/logs and the derived interface-layering table.
+	"FaultMgmt.SupportedAlarm.",
+	"FaultMgmt.CurrentAlarm.",
+	"FaultMgmt.HistoryEvent.",
+	"FaultMgmt.ExpeditedEvent.",
+	"FaultMgmt.QueuedEvent.",
+	"InterfaceStack.",
+}
+
+// DiscoveryMaxInstancesPerTable caps how many instances of any one table a
+// walk descends into (lowest numbers first), so a runtime table missing from
+// runtimeTableTemplates cannot consume the whole object budget on its own.
+// Configuration tables (SSIDs, interfaces, bridges) stay well below it.
+const DiscoveryMaxInstancesPerTable = 32
+
+var (
+	instanceObjectRE  = regexp.MustCompile(`^(.*\.)(\d+)\.$`)
+	instanceSegmentRE = regexp.MustCompile(`\.\d+\.`)
+)
+
+// isRuntimeTable reports whether a table path such as
+// "Device.DHCPv4.Server.Pool.1.Client." is one of runtimeTableTemplates.
+func isRuntimeTable(table string) bool {
+	template := table
+	for instanceSegmentRE.MatchString(template) {
+		template = instanceSegmentRE.ReplaceAllString(template, ".{i}.")
+	}
+	for _, suffix := range runtimeTableTemplates {
+		if strings.HasSuffix(template, "."+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// collapseRuntimeInstances limits which instance objects of a table the walk
+// descends into: only the lowest-numbered instance of a runtime table, and at
+// most DiscoveryMaxInstancesPerTable (lowest first) of any other table. One
+// GetParameterNames response lists the instances of one table, so the
+// ordering here is the table's own.
+func collapseRuntimeInstances(objects []string) []string {
+	instances := map[string][]int{}
+	for _, path := range objects {
+		if m := instanceObjectRE.FindStringSubmatch(path); m != nil {
+			if n, err := strconv.Atoi(m[2]); err == nil {
+				instances[m[1]] = append(instances[m[1]], n)
+			}
+		}
+	}
+	if len(instances) == 0 {
+		return objects
+	}
+	allowed := map[string]map[int]bool{}
+	for table, numbers := range instances {
+		sort.Ints(numbers)
+		limit := DiscoveryMaxInstancesPerTable
+		if isRuntimeTable(table) {
+			limit = 1
+		}
+		if len(numbers) > limit {
+			numbers = numbers[:limit]
+		}
+		allowed[table] = map[int]bool{}
+		for _, n := range numbers {
+			allowed[table][n] = true
+		}
+	}
+	kept := objects[:0]
+	for _, path := range objects {
+		if m := instanceObjectRE.FindStringSubmatch(path); m != nil {
+			if n, err := strconv.Atoi(m[2]); err == nil && !allowed[m[1]][n] {
+				continue
+			}
+		}
+		kept = append(kept, path)
+	}
+	return kept
+}
+
+// ActiveDiscovery returns the device's QUEUED or RPC_SENT discovery job, or
+// nil when none is active. Concurrent walks of the same tree only compete
+// for the device's sessions, so callers reuse the active one.
+func (r *Repository) ActiveDiscovery(ctx context.Context, deviceID string) (*Job, error) {
+	// Subtree merges (ParameterDiscoveryPayload.Merge) are single RPCs, not
+	// tree walks, and must not block or masquerade as one.
+	row := r.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE device_id=$1 AND type=$2 AND status IN ($3,$4) AND COALESCE((payload->>'merge')::boolean, false) = false ORDER BY created_at LIMIT 1`,
+		deviceID, TypeParameterDiscovery, StatusQueued, StatusRPCSent)
+	job, err := scanJob(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return job, err
 }

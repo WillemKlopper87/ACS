@@ -44,6 +44,24 @@ type Device struct {
 	ProfileQualified  bool
 	ProfileEvidence   json.RawMessage
 	ProfileAssignedAt *time.Time
+	// ReenrollUntil is an operator-opened window in which this device may
+	// use the bootstrap identity again (e.g. after a factory reset).
+	ReenrollUntil *time.Time
+	// RebootRequestedAt is set while an ACS-requested reboot/reset is in
+	// progress (online_status REBOOTING); LastRebootDurationSeconds is how
+	// long the last one took until the device informed again.
+	RebootRequestedAt         *time.Time
+	LastRebootDurationSeconds *int
+	// GatewayOUISerial is the upstream gateway identity a mesh satellite
+	// last reported via TR-111 Device.GatewayInfo (natural-key form);
+	// GatewayDeviceID is the registered device it resolved to, if any.
+	GatewayOUISerial *string
+	GatewayDeviceID  *string
+}
+
+// ReenrollmentOpen reports whether an operator re-enrolment window is open.
+func (d *Device) ReenrollmentOpen(now time.Time) bool {
+	return d != nil && d.ReenrollUntil != nil && now.Before(*d.ReenrollUntil)
 }
 
 // Data model root values (design doc v3 §7.1's data_model_root check
@@ -67,9 +85,13 @@ const (
 
 // Connection request reachability modes (design doc v3 §12.2).
 const (
-	ModeDirectIPv4       = "DIRECT_IPV4"
-	ModeDirectIPv6       = "DIRECT_IPV6"
-	ModeSTUNAnnexG       = "STUN_ANNEX_G"
+	ModeDirectIPv4 = "DIRECT_IPV4"
+	ModeDirectIPv6 = "DIRECT_IPV6"
+	ModeSTUNAnnexG = "STUN_ANNEX_G"
+	// ModeXMPP: an XMPP Connection Request (TR-069 Annex K) provoked a
+	// "6 CONNECTION REQUEST" Inform — the device holds an outbound XMPP
+	// session to the ACS's server, so CGNAT no longer matters.
+	ModeXMPP             = "XMPP"
 	ModePeriodicFallback = "PERIODIC_FALLBACK_ONLY"
 	ModeUnknown          = "UNKNOWN"
 )

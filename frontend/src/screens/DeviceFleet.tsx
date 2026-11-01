@@ -9,6 +9,7 @@ import { timeAgo, fmtTime } from "../lib/format";
 import { DeviceDetail } from "./DeviceDetail";
 import { useLive } from "../lib/useLive";
 import { useEscape, useSlashFocus } from "../lib/hotkeys";
+import { vendorGroup, vendorLabel } from "../lib/vendorFamily";
 
 // The backend's own maxPageSize (internal/devices/repository.go). This
 // screen deliberately loads a single page of it — it's the "review a
@@ -69,14 +70,16 @@ export function DeviceFleet() {
   useSlashFocus(searchRef);
   useEscape(() => setSelectedId(null), selectedId !== null);
 
-  const vendors = useMemo(() => [...new Set(devices.map((d) => d.manufacturer))].sort(), [devices]);
+  // Grouped by vendor family so a Beacon reporting "ALCL" files under Nokia
+  // with the FastMile it sits behind; the stored manufacturer is unchanged.
+  const vendors = useMemo(() => [...new Set(devices.map((d) => vendorGroup(d.manufacturer)))].sort(), [devices]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return devices.filter(
       (d) =>
         (!q || `${d.label ?? ""} ${d.oui_serial} ${d.manufacturer} ${d.product_class}`.toLowerCase().includes(q)) &&
-        (!vendorFilter || d.manufacturer === vendorFilter),
+        (!vendorFilter || vendorGroup(d.manufacturer) === vendorFilter),
     );
   }, [devices, search, vendorFilter]);
 
@@ -114,10 +117,10 @@ export function DeviceFleet() {
       {
         id: "vendor",
         header: "Vendor / Model",
-        accessorFn: (d) => `${d.manufacturer} ${d.product_class}`,
+        accessorFn: (d) => `${vendorLabel(d.manufacturer)} ${d.product_class}`,
         cell: ({ row }) => (
           <span className="dim" style={{ fontFamily: "var(--font-ui)" }}>
-            {row.original.manufacturer} <span style={{ color: "var(--ink-faint)" }}>·</span> {row.original.product_class}
+            {vendorLabel(row.original.manufacturer)} <span style={{ color: "var(--ink-faint)" }}>·</span> {row.original.product_class}
           </span>
         ),
       },

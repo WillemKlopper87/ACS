@@ -260,3 +260,65 @@ func TestInferBootstrapDataModelRoot(t *testing.T) {
 		})
 	}
 }
+
+func TestBootstrapGraduationAnswersCPEInitiatedGetRPCMethodsBeforeInstall(t *testing.T) {
+	deps, cred, _ := bootstrapGraduationTestDeps(t, devices.DataModelRootDevice2)
+	guard := bootstrapCWMPGraduationGuardWithDeps(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("normal handler entered during bootstrap graduation")
+	}, deps)
+	cookie := runBootstrapGraduationInform(t, guard, "Device")
+
+	getRPC := `<soap-env:Envelope xmlns:soap-env="http://schemas.xmlsoap.org/soap/envelope/" xmlns:cwmp="urn:dslforum-org:cwmp-1-2">` +
+		`<soap-env:Header><cwmp:ID soap-env:mustUnderstand="1">cpe-rpc-7</cwmp:ID></soap-env:Header>` +
+		`<soap-env:Body><cwmp:GetRPCMethods/></soap-env:Body></soap-env:Envelope>`
+	req := authenticatedBootstrapRequest(t, deps.bootstrapAuth, getRPC)
+	req.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+	guard(recorder, req)
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || !strings.Contains(body, "GetRPCMethodsResponse") {
+		t.Fatalf("GetRPCMethods reply status=%d body=%q, want 200 GetRPCMethodsResponse", recorder.Code, body)
+	}
+	if !strings.Contains(body, ">cpe-rpc-7</cwmp:ID>") || !strings.Contains(body, "cwmp-1-2") {
+		t.Fatalf("GetRPCMethodsResponse must echo the request ID and namespace: %s", body)
+	}
+	if strings.Contains(body, cred.Password) || strings.Contains(body, "SetParameterValues") {
+		t.Fatalf("credential install must wait for the empty POST, got: %s", body)
+	}
+
+	// The following empty POST still receives the credential-install SPV.
+	req = authenticatedBootstrapRequest(t, deps.bootstrapAuth, "")
+	req.AddCookie(cookie)
+	recorder = httptest.NewRecorder()
+	guard(recorder, req)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Device.ManagementServer.Password") {
+		t.Fatalf("empty POST after GetRPCMethods status=%d body=%q, want credential install", recorder.Code, recorder.Body.String())
+	}
+}
+
+// A PENDING credential created before the ParameterKey limit was enforced
+// still carries a 51-character "cwmp-bootstrap-<uuid>" key; the install SPV
+// must clamp it to TR-069's string(32) or Nokia CPEs fault 9003.
+func TestBootstrapGraduationClampsLegacyParameterKey(t *testing.T) {
+	deps, cred, _ := bootstrapGraduationTestDeps(t, devices.DataModelRootDevice2)
+	cred.CommandKey = "cwmp-bootstrap-0d6f0a52-8a51-4c0b-9b8e-6f3a2f1c9e77"
+	guard := bootstrapCWMPGraduationGuardWithDeps(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("normal handler entered during bootstrap graduation")
+	}, deps)
+	cookie := runBootstrapGraduationInform(t, guard, "Device")
+
+	req := authenticatedBootstrapRequest(t, deps.bootstrapAuth, "")
+	req.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+	guard(recorder, req)
+	body := recorder.Body.String()
+	start := strings.Index(body, "<ParameterKey>")
+	end := strings.Index(body, "</ParameterKey>")
+	if start < 0 || end < start {
+		t.Fatalf("credential install has no ParameterKey: %s", body)
+	}
+	key := body[start+len("<ParameterKey>") : end]
+	if len(key) > cwmp.MaxParameterKeyLength || !strings.HasPrefix(cred.CommandKey, key) {
+		t.Fatalf("ParameterKey = %q (%d chars), want the stored key clamped to %d", key, len(key), cwmp.MaxParameterKeyLength)
+	}
+}

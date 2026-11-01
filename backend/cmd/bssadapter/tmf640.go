@@ -8,8 +8,10 @@ package main
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"acs/internal/bss"
+	"acs/internal/devices"
 	"acs/internal/devices/adapters"
 )
 
@@ -36,9 +38,15 @@ type tmfService struct {
 	RelatedParty          []tmfRelatedParty          `json:"relatedParty"`
 }
 
-// serviceFromMapping builds a Service resource for one mapping, resolving
-// SSID's current value via ACSClient.GetParameters. WiFiPassword is
-// deliberately never read back: it remains write-only credential material.
+// serviceFromMapping builds a Service resource for one mapping. On TR-181
+// devices the SSID characteristic is the name of the device's primary
+// Wi-Fi network(s) from the ACS resolver (GET /devices/{id}/wifi/networks),
+// not Device.WiFi.SSID.1, which on a Nokia FastMile is one band of several
+// SSIDs. Distinct per-band names are joined with " / ". When no name can
+// be reported (no Wi-Fi of its own, e.g. a Beacon mesh satellite; roles
+// not read yet) SSID is "" and SSIDStatus carries the reason. TR-098 keeps
+// the canonical WLANConfiguration.1 path. WiFiPassword is deliberately
+// never read back: it remains write-only credential material.
 func (h *handler) serviceFromMapping(r *http.Request, m *bss.AccountDeviceMapping) (tmfService, error) {
 	svc := tmfService{
 		ID:           m.ID,
@@ -52,17 +60,38 @@ func (h *handler) serviceFromMapping(r *http.Request, m *bss.AccountDeviceMappin
 	if err != nil {
 		return tmfService{}, err
 	}
-	ssidPath, ssidOK := adapters.ResolvePath(dev.DataModelRoot, adapters.WiFiSSID)
-	if !ssidOK {
+	if dev.DataModelRoot == devices.DataModelRootIGD1 {
+		ssidPath, ssidOK := adapters.ResolvePath(dev.DataModelRoot, adapters.WiFiSSID)
+		if !ssidOK {
+			return svc, nil
+		}
+		cached, err := h.acs.GetParameters(r.Context(), m.DeviceID, []string{ssidPath})
+		if err != nil {
+			return tmfService{}, err
+		}
+		if v, ok := cached[ssidPath]; ok {
+			svc.ServiceCharacteristic = append(svc.ServiceCharacteristic, tmfServiceCharacteristic{Name: "SSID", Value: v.Value})
+		}
 		return svc, nil
 	}
 
-	cached, err := h.acs.GetParameters(r.Context(), m.DeviceID, []string{ssidPath})
-	if err != nil {
+	var names []string
+	var reason string
+	view, err := h.acs.GetWiFiNetworks(r.Context(), m.DeviceID)
+	switch {
+	case errors.Is(err, bss.ErrACSUnreachable):
 		return tmfService{}, err
+	case err != nil:
+		if h.logger != nil {
+			h.logger.Error("failed to resolve Wi-Fi networks for service", "err", err, "device_id", m.DeviceID)
+		}
+		reason = "unavailable: the ACS could not resolve the device's Wi-Fi networks"
+	default:
+		names, reason = bss.PrimarySSIDNames(view)
 	}
-	if v, ok := cached[ssidPath]; ok {
-		svc.ServiceCharacteristic = append(svc.ServiceCharacteristic, tmfServiceCharacteristic{Name: "SSID", Value: v.Value})
+	svc.ServiceCharacteristic = append(svc.ServiceCharacteristic, tmfServiceCharacteristic{Name: "SSID", Value: strings.Join(names, " / ")})
+	if reason != "" {
+		svc.ServiceCharacteristic = append(svc.ServiceCharacteristic, tmfServiceCharacteristic{Name: "SSIDStatus", Value: reason})
 	}
 	return svc, nil
 }

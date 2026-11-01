@@ -281,6 +281,33 @@ paths:
         "500":
           description: Persistence failed
 
+  /api/v1/devices/{id}/wifi/networks:
+    get:
+      tags: [Diagnostics]
+      operationId: WiFiNetworks
+      summary: Resolved TR-181 Wi-Fi networks (SSID + AccessPoint + Radio) with role primary/guest/unbound
+      description: >
+        Built from the device's discovered names and cached values instead of assuming Device.WiFi.SSID.1.
+        Never includes passphrases. When complete is false, GET refresh_paths before writing; read_paths
+        refreshes the whole view.
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+      responses:
+        "200":
+          description: Resolved Wi-Fi networks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  supported: { type: boolean }
+                  reason: { type: string }
+                  complete: { type: boolean }
+                  networks: { type: array, items: { $ref: "#/components/schemas/WiFiNetwork" } }
+                  primary: { type: array, items: { $ref: "#/components/schemas/WiFiNetwork" } }
+                  refresh_paths: { type: array, items: { type: string } }
+                  read_paths: { type: array, items: { type: string } }
+
   /api/v1/devices/{id}/wifi-topology:
     get:
       tags: [Diagnostics]
@@ -908,12 +935,15 @@ paths:
               properties:
                 device_ids: { type: array, items: { type: string }, description: "Alternative to group_id" }
                 group_id: { type: string, description: "Alternative to device_ids — resolves a device_groups member set" }
-                action: { type: string, enum: [SET_PARAMETER, CONNECTION_REQUEST, REFRESH_CELLULAR] }
+                action: { type: string, enum: [SET_PARAMETER, SET_WIFI, CONNECTION_REQUEST, REFRESH_CELLULAR] }
                 parameters:
                   type: array
                   items: { $ref: "#/components/schemas/ParameterInput" }
                   description: "Required when action is SET_PARAMETER"
                 timeout_seconds: { type: integer }
+                wifi_ssid: { type: string, maxLength: 32, description: "SET_WIFI: new network name, written to every primary (enabled, non-guest, AccessPoint-bound) SSID the device resolves — never guest, unbound or disabled SSIDs. TR-098 devices keep WLANConfiguration.1." }
+                wifi_password: { type: string, minLength: 8, maxLength: 63, writeOnly: true, description: "SET_WIFI: WPA passphrase for the same primary networks" }
+                wifi_enabled: { type: boolean, description: "SET_WIFI: Enable flag of the same primary networks. Disabled networks are no longer primary, so re-enable them per device." }
       responses:
         "202": { description: Per-device outcome (one failure doesn't block the rest), content: { application/json: { schema: { $ref: "#/components/schemas/BulkActionResponse" } } } }
 
@@ -924,6 +954,28 @@ paths:
       parameters: [{ $ref: "#/components/parameters/DeviceId" }]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
+        "404": { description: Not found }
+
+  /api/v1/devices/{id}/satellites:
+    get:
+      tags: [Devices]
+      summary: List the mesh satellites linked to this gateway (tenancy-scoped)
+      description: >-
+        Devices whose gateway_device_id is this device, i.e. mesh satellites
+        (e.g. Nokia WiFi Beacon 3.1) that reported this gateway's identity
+        via TR-111 Device.GatewayInfo.
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Device" } }
+                  total: { type: integer }
         "404": { description: Not found }
 
   /api/v1/devices/{id}/tags:
@@ -1155,6 +1207,63 @@ paths:
                   names: { type: object, additionalProperties: { type: boolean } }
                   discovered_at: { type: string, format: date-time, nullable: true }
 
+  /api/v1/devices/{id}/wifi/insights:
+    get:
+      tags: [Devices]
+      summary: Controller-style Wi-Fi overview (bandwidth, client counts, top SSIDs/clients, new/returning clients, vendors, inferred OS)
+      description: >
+        Built from samples cmd/acs takes on periodic Informs (ACS_WIFI_INSIGHTS_INTERVAL, default 5m).
+        Rates are differences between consecutive cumulative counters; counter resets are dropped.
+        There is no backfill: the CPE keeps no history.
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - name: window
+          in: query
+          schema: { type: string, enum: ["2h", "1d", "1w", "1m"], default: "2h" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WiFiInsights" }
+        "400": { description: Unknown window }
+        "404": { description: Device not found or outside the caller's scope }
+  /api/v1/devices/{id}/sim:
+    get:
+      tags: [Diagnostics]
+      summary: SIM / subscriber identity view with IMSI, ICCID, MSISDN, IMEI and EID masked for every role; SIM PIN never returned
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SIMView" }
+        "404": { description: Device not found or outside the caller's scope }
+  /api/v1/devices/{id}/sim/reveal:
+    post:
+      tags: [Diagnostics]
+      summary: Disclose full subscriber identifiers (human superadmin only; reason required; audited as SubscriberIdentityRevealed)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 10, description: "Why the identity is needed, e.g. RICA subscriber verification or a lawful-interception directive" }
+                reference: { type: string, description: "Optional case or directive reference" }
+      responses:
+        "200":
+          description: Full identifiers (Cache-Control no-store)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SIMView" }
+        "400": { description: Missing or too-short reason }
+        "403": { description: Caller is not a human superadmin (the BSS service token is refused) }
+        "503": { description: The audit record could not be written, so nothing was disclosed }
   /api/v1/devices/{id}/cellular-capabilities:
     get:
       tags: [Diagnostics]
@@ -1221,6 +1330,8 @@ paths:
                     properties:
                       download_path: { type: string }
                       upload_path: { type: string }
+                  ping: { $ref: "#/components/schemas/DiagnosticCapability" }
+                  traceroute: { $ref: "#/components/schemas/DiagnosticCapability" }
 
   /api/v1/devices/{id}/diagnostics/tr143/{direction}:
     post:
@@ -1242,15 +1353,16 @@ paths:
               properties:
                 url: { type: string, format: uri }
       responses:
-        "202": { description: Accepted }
+        "202": { $ref: "#/components/responses/DiagnosticQueueResponse" }
         "400": { description: Invalid or disallowed target URL }
-        "409": { description: Device capability not discovered }
+        "409": { description: Device capability not discovered, or its URL/DiagnosticsState leaves are not discovered writable }
 
   # --- Diagnostics ---
   /api/v1/devices/{id}/diagnostics/ping:
     post:
       tags: [Diagnostics]
-      summary: Queue DIAGNOSTICS_PING — trigger + poll cycle, resolves to SUCCESS/FAILED/TIMEOUT (diagnostics.run permission)
+      summary: Queue DIAGNOSTICS_PING — trigger, wait for the CPE's next session (8 DIAGNOSTICS COMPLETE), poll; resolves to SUCCESS/FAILED/TIMEOUT (diagnostics.run permission)
+      description: Requires a discovered, writable IPPing object; only inputs discovery proved writable are sent.
       parameters: [{ $ref: "#/components/parameters/DeviceId" }]
       requestBody:
         required: true
@@ -1266,7 +1378,8 @@ paths:
                 data_block_size: { type: integer }
                 dscp: { type: integer }
       responses:
-        "202": { $ref: "#/components/responses/QueueResponse" }
+        "202": { $ref: "#/components/responses/DiagnosticQueueResponse" }
+        "409": { description: "Diagnostic not supported by the device's discovered data model, or discovery has not run" }
 
   /api/v1/devices/{id}/diagnostics/traceroute:
     post:
@@ -1288,7 +1401,8 @@ paths:
                 dscp: { type: integer }
                 max_hop_count: { type: integer }
       responses:
-        "202": { $ref: "#/components/responses/QueueResponse" }
+        "202": { $ref: "#/components/responses/DiagnosticQueueResponse" }
+        "409": { description: "Diagnostic not supported by the device's discovered data model, or discovery has not run" }
 
   # --- Captures ---
   /api/v1/devices/{id}/captures:
@@ -1571,6 +1685,37 @@ paths:
         "202": { description: Queued, content: { application/json: { schema: { $ref: "#/components/schemas/Credential" } } } }
         "409": { description: A CWMP_DIGEST rotation is already pending or the required credential path cannot be safely written }
 
+  /api/v1/devices/{id}/re-enroll:
+    post:
+      tags: [Credentials]
+      summary: Open a time-limited window in which this already-graduated device may use the bootstrap identity again (credential.manage permission)
+      description: >
+        For a CPE that was factory-reset and lost its device-bound CWMP Digest credential: it returns with the
+        constrained bootstrap identity, which is otherwise refused for established devices. During the window the
+        device graduates to a new unique credential as on first contact; activation closes the window. The previous
+        credential stays valid until the new one activates. Audited as DeviceReenrollmentOpened.
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                minutes: { type: integer, minimum: 1, maximum: 1440, default: 60 }
+                reason: { type: string, description: Free text recorded in the audit log }
+      responses:
+        "200":
+          description: Window opened
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device_id: { type: string }
+                  reenroll_until: { type: string, format: date-time }
+        "400": { description: minutes out of range or invalid body }
+
   /api/v1/devices/{id}/credentials:
     get:
       tags: [Credentials]
@@ -1600,6 +1745,55 @@ paths:
       responses:
         "200": { description: Revoked, content: { application/json: { schema: { $ref: "#/components/schemas/Credential" } } } }
         "404": { description: Not in a revocable state }
+
+  # --- XMPP Connection Request (TR-069 Annex K) ---
+  /api/v1/devices/{id}/xmpp/provision:
+    post:
+      tags: [Credentials]
+      summary: Start zero-touch XMPP Connection Request provisioning over TR-069 (credential.manage permission)
+      description: >
+        Generates a per-device XMPP credential (stored encrypted, type XMPP), creates the account on the ACS's XMPP
+        server, then drives the CPE through a persisted, resumable state machine: AddObject Device.XMPP.Connection.
+        (and its Server. sub-object if the CPE did not create one), subtree GetParameterNames to learn the new
+        instance's writable leaves, SetParameterValues for the account/domain/resource/TLS/keepalive/server, then
+        ManagementServer.ConnReqXMPPConnection and ConnReqAllowedJabberIDs, and finally reads ConnReqJabberID until
+        the CPE has logged in (which activates the credential). Idempotent: a run in progress is returned with 202,
+        a finished one with 200 unless restart is set. Audited as XMPPProvisioning; secrets never appear in the
+        response or the audit log.
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                relax_certificate_verification:
+                  type: boolean
+                  default: false
+                  description: Set the vendor's Device.XMPP.X_*_CertificateVerificationRequired to false (lab self-signed server certificate only).
+                bypass_hostname_check:
+                  type: boolean
+                  default: false
+                  description: Set the vendor's Device.XMPP.X_*_BypassHostnameCheck to true (server reached by IP).
+                restart:
+                  type: boolean
+                  default: false
+                  description: Re-provision a device whose last run is DONE or FAILED, with a fresh credential.
+      responses:
+        "200": { description: Already provisioned (restart not requested), content: { application/json: { schema: { $ref: "#/components/schemas/XMPPProvisionResponse" } } } }
+        "202": { description: Started, or already in progress, content: { application/json: { schema: { $ref: "#/components/schemas/XMPPProvisionResponse" } } } }
+        "409": { description: Device has no discovered writable Device.XMPP.Connection. table, is not TR-181, does not support XMPP, or ACS_XMPP_CPE_SERVER_ADDRESS is unset }
+        "502": { description: The XMPP server refused to create the device account }
+        "503": { description: XMPP is not configured on this ACS, or its XMPP session is down }
+
+  /api/v1/devices/{id}/xmpp:
+    get:
+      tags: [Devices]
+      summary: XMPP Connection Request state — the ACS's XMPP session, what the CPE reports, provisioning progress
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceXMPPState" } } } }
 
   # --- Scheduled Jobs ---
   /api/v1/scheduled-jobs:
@@ -2352,8 +2546,137 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/QueueResponse" }
+    DiagnosticQueueResponse:
+      description: Diagnostic job queued
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [command_key, status]
+            properties:
+              command_key: { type: string }
+              status: { type: string }
+              skipped_inputs:
+                type: array
+                items: { type: string }
+                description: Optional inputs not sent because discovery did not prove them writable (the CPE's defaults apply)
 
   schemas:
+    WiFiInsights:
+      type: object
+      required: [device_id, window, since, bucket_seconds, total_bytes_down, total_bytes_up, bandwidth, client_counts, top_ssids, top_clients, client_stats, vendors, os_inferred, clients]
+      properties:
+        device_id: { type: string }
+        window: { type: string }
+        since: { type: string, format: date-time }
+        bucket_seconds: { type: integer }
+        last_sample_at: { type: string, format: date-time, nullable: true }
+        total_bytes_down: { type: integer, format: int64 }
+        total_bytes_up: { type: integer, format: int64 }
+        bandwidth:
+          type: array
+          items:
+            type: object
+            required: [at, bytes_down, bytes_up, bps_down, bps_up]
+            properties:
+              at: { type: string, format: date-time }
+              bytes_down: { type: integer, format: int64 }
+              bytes_up: { type: integer, format: int64 }
+              bps_down: { type: number }
+              bps_up: { type: number }
+        client_counts:
+          type: array
+          items:
+            type: object
+            required: [at, wireless, wired, guest]
+            properties:
+              at: { type: string, format: date-time }
+              wireless: { type: integer }
+              wired: { type: integer }
+              guest: { type: integer }
+        top_ssids:
+          type: array
+          items:
+            type: object
+            required: [instance, name, role, bytes_down, bytes_up]
+            properties:
+              instance: { type: integer }
+              name: { type: string }
+              role: { type: string }
+              bytes_down: { type: integer, format: int64 }
+              bytes_up: { type: integer, format: int64 }
+        top_clients:
+          type: array
+          items:
+            type: object
+            required: [mac, hostname, vendor, bytes_down, bytes_up]
+            properties:
+              mac: { type: string }
+              hostname: { type: string }
+              vendor: { type: string }
+              bytes_down: { type: integer, format: int64 }
+              bytes_up: { type: integer, format: int64 }
+        client_stats:
+          type: object
+          required: [new, returning, private_mac, average_session_seconds]
+          properties:
+            new: { type: integer }
+            returning: { type: integer }
+            private_mac: { type: integer, description: "Clients with a randomised (locally administered) MAC; their vendor cannot be resolved" }
+            average_session_seconds: { type: integer, format: int64 }
+        vendors: { type: array, items: { $ref: "#/components/schemas/WiFiInsightsShare" } }
+        os_inferred: { type: array, items: { $ref: "#/components/schemas/WiFiInsightsShare" }, description: "Guessed from DHCP hostnames; no DHCP fingerprint is available over CWMP" }
+        clients:
+          type: array
+          items:
+            type: object
+            required: [mac, hostname, ip_address, ssid_name, band, wireless, guest, private_mac, vendor, os_inferred, signal_dbm, first_seen_at, last_seen_at, connected, sessions, connected_seconds]
+            properties:
+              mac: { type: string }
+              hostname: { type: string }
+              ip_address: { type: string }
+              ssid_instance: { type: integer }
+              ssid_name: { type: string }
+              band: { type: string }
+              mesh_node: { type: integer, description: "EasyMesh DataElements Network.Device instance (e.g. 2 = a Beacon satellite)" }
+              wireless: { type: boolean }
+              guest: { type: boolean }
+              private_mac: { type: boolean }
+              vendor: { type: string }
+              os_inferred: { type: string }
+              signal_dbm: { type: integer, nullable: true }
+              first_seen_at: { type: string, format: date-time }
+              last_seen_at: { type: string, format: date-time }
+              connected: { type: boolean }
+              sessions: { type: integer }
+              connected_seconds: { type: integer, format: int64 }
+    WiFiInsightsShare:
+      type: object
+      required: [name, count]
+      properties:
+        name: { type: string }
+        count: { type: integer }
+    SIMField:
+      type: object
+      required: [kind, path, value, masked, updated_at, source]
+      properties:
+        kind: { type: string, enum: [imsi, iccid, msisdn, imei, eid, context] }
+        path: { type: string }
+        value: { type: string }
+        masked: { type: boolean }
+        updated_at: { type: string, format: date-time }
+        source: { type: string }
+    SIMView:
+      type: object
+      required: [device_id, supported, revealed, identifiers, context, refresh_paths]
+      properties:
+        device_id: { type: string }
+        supported: { type: boolean }
+        reason: { type: string }
+        revealed: { type: boolean }
+        identifiers: { type: array, items: { $ref: "#/components/schemas/SIMField" } }
+        context: { type: array, items: { $ref: "#/components/schemas/SIMField" }, description: "Non-identifying SIM state: USIM status, MCC/MNC/PLMN/SPN, eSIM status" }
+        refresh_paths: { type: array, items: { type: string }, description: "Discovered SIM paths without a cached value; read them with POST /parameters/get" }
     Role:
       type: string
       enum: [readonly, noc, manager, superadmin]
@@ -2445,7 +2768,7 @@ components:
         last_inform_at: { type: string, format: date-time }
         last_inform_event_codes: { type: array, items: { type: string } }
         connection_request_url: { type: string }
-        connection_request_mode: { type: string }
+        connection_request_mode: { type: string, description: "DIRECT_IPV4, DIRECT_IPV6, STUN_ANNEX_G, XMPP, PERIODIC_FALLBACK_ONLY or UNKNOWN" }
         last_connection_request_at: { type: string, format: date-time }
         last_connection_request_status: { type: string }
         tags: { type: array, items: { type: string } }
@@ -2457,6 +2780,34 @@ components:
         location: { type: string }
         latitude: { type: number, format: double, nullable: true }
         longitude: { type: number, format: double, nullable: true }
+        reenroll_until: { type: string, format: date-time, description: Open operator re-enrolment window (bootstrap allowed until this time) }
+        reboot_requested_at: { type: string, format: date-time, description: Set while an ACS-requested reboot/reset is in progress (online_status REBOOTING) }
+        last_reboot_duration_seconds: { type: integer, description: Seconds from the last acknowledged reboot/reset until the device informed again }
+        gateway_device_id: { type: string, description: "Mesh satellites only: the gateway device this unit sits behind, resolved from TR-111 Device.GatewayInfo (unset when unknown or the gateway is not registered)" }
+        gateway_oui_serial: { type: string, description: "Mesh satellites only: the gateway identity (OUI+ProductClass+SerialNumber natural key) reported in Device.GatewayInfo" }
+
+    WiFiNetwork:
+      type: object
+      required: [instance, ssid_object, role, name_writable, enable_writable, passphrase_writable]
+      properties:
+        instance: { type: integer }
+        ssid_object: { type: string }
+        access_point: { type: string }
+        radio: { type: string }
+        name: { type: string }
+        enabled: { type: boolean }
+        advertised: { type: boolean }
+        guest: { type: boolean }
+        band: { type: string }
+        security_mode: { type: string }
+        role: { type: string, enum: [primary, guest, unbound, disabled] }
+        name_path: { type: string }
+        enable_path: { type: string }
+        passphrase_path: { type: string }
+        name_writable: { type: boolean }
+        enable_writable: { type: boolean }
+        passphrase_writable: { type: boolean }
+        ap_inferred: { type: boolean }
 
     DeviceGroupCount:
       type: object
@@ -2495,6 +2846,14 @@ components:
       properties:
         command_key: { type: string }
         status: { type: string }
+
+    DiagnosticCapability:
+      type: object
+      required: [supported]
+      properties:
+        supported: { type: boolean }
+        path: { type: string }
+        reason: { type: string, description: Why discovery rules the diagnostic out }
 
     CaptureSession:
       type: object
@@ -2538,6 +2897,8 @@ components:
               device_id: { type: string }
               command_key: { type: string }
               error: { type: string }
+              detail: { type: string, description: "SET_WIFI: the networks written, e.g. \"SSID 1 (2.4GHz) + SSID 5 (5GHz)\"" }
+              refresh_command_key: { type: string, description: "SET_WIFI: the device's Wi-Fi roles were not cached yet, so this read was queued instead of a write (error is set); retry after the device's next session" }
 
     Job:
       type: object
@@ -2545,7 +2906,7 @@ components:
         command_key: { type: string }
         device_id: { type: string }
         type: { type: string }
-        status: { type: string, enum: [QUEUED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, SUCCESS, FAILED, TIMEOUT] }
+        status: { type: string, enum: [QUEUED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, AWAITING_DIAGNOSTICS_COMPLETE, SUCCESS, FAILED, TIMEOUT] }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         completed_at: { type: string, format: date-time, nullable: true }
@@ -2689,6 +3050,66 @@ components:
             failure_rate: { type: number }
             terminal_count: { type: integer }
 
+    XMPPProvisioning:
+      type: object
+      required: [state, attempts, domain, resource, server_address, server_port, keepalive_interval, acs_jid, relax_certificate_verification, bypass_hostname_check, created_at, updated_at]
+      properties:
+        state: { type: string, enum: [ADD_CONNECTION, DISCOVER_CONNECTION, ADD_SERVER, DISCOVER_SERVER, CONFIGURE, BIND, VERIFY, DONE, FAILED] }
+        connection_path: { type: string, description: "e.g. Device.XMPP.Connection.1." }
+        server_path: { type: string }
+        credential_id: { type: string, description: The XMPP credential (see /credentials); its password is never returned }
+        job_id: { type: string, description: The job the current state is waiting on }
+        attempts: { type: integer }
+        domain: { type: string }
+        resource: { type: string }
+        server_address: { type: string }
+        server_port: { type: integer }
+        keepalive_interval: { type: integer }
+        acs_jid: { type: string }
+        relax_certificate_verification: { type: boolean }
+        bypass_hostname_check: { type: boolean }
+        jabber_id: { type: string, description: ConnReqJabberID read back from the CPE }
+        connection_status: { type: string }
+        last_error: { type: string }
+        requested_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time, nullable: true }
+
+    XMPPProvisionResponse:
+      type: object
+      properties:
+        existing: { type: boolean }
+        provisioning: { $ref: "#/components/schemas/XMPPProvisioning" }
+
+    DeviceXMPPState:
+      type: object
+      properties:
+        device_id: { type: string }
+        acs:
+          type: object
+          properties:
+            configured: { type: boolean }
+            connected: { type: boolean }
+            jid: { type: string }
+            connected_since: { type: string, format: date-time, nullable: true }
+            last_error: { type: string }
+            cpe_server_address: { type: string }
+            cpe_server_port: { type: integer }
+        cpe:
+          type: object
+          properties:
+            conn_req_jabber_id: { type: string }
+            conn_req_jabber_id_valid: { type: boolean }
+            supported_conn_req_methods: { type: string }
+            conn_req_xmpp_connection: { type: string }
+            connection_request_mode: { type: string }
+            xmpp_connection_status: { type: string }
+        provisioning:
+          allOf: [{ $ref: "#/components/schemas/XMPPProvisioning" }]
+          nullable: true
+        as_of: { type: string, format: date-time }
+
     Credential:
       type: object
       required: [id, version, credential_type, username, status, created_at]
@@ -2697,8 +3118,8 @@ components:
         version: { type: integer }
         credential_type:
           type: string
-          enum: [CONNECTION_REQUEST, CWMP_DIGEST]
-          description: Direction of authentication protected by this credential.
+          enum: [CONNECTION_REQUEST, CWMP_DIGEST, XMPP]
+          description: Direction of authentication protected by this credential. XMPP is the CPE's login to the ACS's XMPP server (created only by XMPP provisioning).
         username: { type: string }
         status: { type: string, enum: [PENDING, ACTIVE, GRACE, REVOKED] }
         command_key: { type: string }

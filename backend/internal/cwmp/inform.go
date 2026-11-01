@@ -1,5 +1,7 @@
 package cwmp
 
+import "strings"
+
 // Inform is the RPC every CWMP session begins with.
 type Inform struct {
 	DeviceId      DeviceID               `xml:"DeviceId"`
@@ -20,11 +22,18 @@ func (i Inform) EventCodes() []string {
 	return codes
 }
 
-// HasEventCode reports whether the Inform carries the given numeric event
-// code, e.g. HasEventCode("6") for CONNECTION REQUEST.
+// EventDiagnosticsComplete is the event code a CPE informs with once an
+// ACS-requested diagnostic (IPPing, TraceRoute, TR-143 ...) has finished.
+const EventDiagnosticsComplete = "8"
+
+// HasEventCode reports whether the Inform carries the given event code,
+// e.g. HasEventCode("6") for CONNECTION REQUEST or HasEventCode("M") for any
+// "M <method>" event. It compares the code's leading token, so "1" (BOOT)
+// does not match "10 AUTONOMOUS TRANSFER COMPLETE".
 func (i Inform) HasEventCode(code string) bool {
 	for _, e := range i.Event {
-		if len(e.EventCode) > 0 && e.EventCode[0:1] == code {
+		token, _, _ := strings.Cut(strings.TrimSpace(e.EventCode), " ")
+		if token != "" && token == code {
 			return true
 		}
 	}

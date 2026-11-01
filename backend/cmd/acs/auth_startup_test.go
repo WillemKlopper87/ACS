@@ -39,6 +39,7 @@ func clearCWMPTransportEnv(t *testing.T) {
 	t.Setenv("ACS_DEPLOYMENT_PROFILE", "")
 	t.Setenv("ACS_TLS_CERT", "")
 	t.Setenv("ACS_TLS_KEY", "")
+	t.Setenv("ACS_TLS_ADDR", "")
 	t.Setenv("ACS_TLS_MIN_VERSION", "")
 	t.Setenv("ACS_AUTH_ALLOW_BASIC", "")
 	t.Setenv("ACS_CWMP_ALLOW_PLAINTEXT", "true")
@@ -279,5 +280,26 @@ func TestPerDeviceOnlyDigestRejectsUnknownCredential(t *testing.T) {
 	}
 	if identity.BoundDeviceID != "" || identity.Username != "" {
 		t.Fatalf("rejected credential returned identity %+v", identity)
+	}
+}
+
+// TestValidateCWMPTransportStartupSecondListener: with ACS_TLS_ADDR the
+// main listener stays plain HTTP even though a TLS pair is configured, so
+// the lab plaintext opt-in is still required.
+func TestValidateCWMPTransportStartupSecondListener(t *testing.T) {
+	clearCWMPTransportEnv(t)
+	t.Setenv("ACS_TLS_CERT", "/tmp/cert.pem")
+	t.Setenv("ACS_TLS_KEY", "/tmp/key.pem")
+	t.Setenv("ACS_CWMP_ALLOW_PLAINTEXT", "")
+	if err := validateCWMPTransportStartup(acsDeploymentProfileLab); err != nil {
+		t.Fatalf("TLS-only lab config rejected: %v", err)
+	}
+	t.Setenv("ACS_TLS_ADDR", ":7548")
+	if err := validateCWMPTransportStartup(acsDeploymentProfileLab); err == nil {
+		t.Fatal("plain HTTP kept on ACS_ADDR without ACS_CWMP_ALLOW_PLAINTEXT")
+	}
+	t.Setenv("ACS_CWMP_ALLOW_PLAINTEXT", "true")
+	if err := validateCWMPTransportStartup(acsDeploymentProfileLab); err != nil {
+		t.Fatalf("second listener with plaintext opt-in rejected: %v", err)
 	}
 }
