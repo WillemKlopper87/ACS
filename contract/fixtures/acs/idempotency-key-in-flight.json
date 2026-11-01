@@ -1,7 +1,7 @@
 {
   "name": "acs/idempotency-key-in-flight",
   "description": "A retry while the first request with the key is still running (that state is set in the database): 409 ErrIdempotencyKeyInFlight with Retry-After.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0520101, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",

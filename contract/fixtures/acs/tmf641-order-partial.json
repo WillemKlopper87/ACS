@@ -1,7 +1,7 @@
 {
   "name": "acs/tmf641-order-partial",
   "description": "A delete that completes (ouiSerial in the Annex form matches), then a modify of the role it emptied, which fails: the order is partial. Items after a failed one are SKIPPED and do not make an order partial.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 78cf3bb, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0520101, 2026-11-01. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
@@ -10,18 +10,18 @@
       "mutating": true,
       "body": {
         "externalId": "SO-CONTRACT-PARTIAL",
-        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/92686b31-0803-4a06-a7c4-b3075fa7a57b",
-        "id": "92686b31-0803-4a06-a7c4-b3075fa7a57b",
-        "orderDate": "2026-11-01T18:25:24.088871Z",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/cd9e8120-036d-48f4-9f69-e55a56ec5165",
+        "id": "cd9e8120-036d-48f4-9f69-e55a56ec5165",
+        "orderDate": "2026-11-01T19:10:47.413479Z",
         "orderItem": [
           {
-            "id": "6792e716-2376-4efd-b82d-3d096b0e81c9",
+            "id": "2dbf15ea-f15f-468b-ba42-aff71f1748ee",
             "action": "delete",
             "state": "COMPLETED",
             "role": "gateway"
           },
           {
-            "id": "1c519bf7-1c52-4ed1-a87a-61a0553759d3",
+            "id": "63ad0fb3-fb43-4ef9-9b13-021b59995ca7",
             "action": "modify",
             "state": "FAILED",
             "role": "gateway"
