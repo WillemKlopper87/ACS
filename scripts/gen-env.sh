@@ -286,7 +286,11 @@ chmod 600 "$COMPOSE_ENV"
   echo "ACS_BOOTSTRAP_ADMIN_PASSWORD=$ACS_BOOTSTRAP_ADMIN_PASSWORD"
   echo "ACS_JWT_SIGNING_SECRET=$ACS_JWT_SIGNING_SECRET"
   echo "ACS_CREDENTIAL_ENCRYPTION_KEY=$ACS_CREDENTIAL_ENCRYPTION_KEY"
-  echo "ACS_BSS_SECRET_KEY=$ACS_BSS_SECRET_KEY"
+  # Absent from secrets files written before it existed: leave it out
+  # (the BSS secret store stays disabled) rather than fail under set -u.
+  if [ -n "${ACS_BSS_SECRET_KEY:-}" ]; then
+    echo "ACS_BSS_SECRET_KEY=$ACS_BSS_SECRET_KEY"
+  fi
   echo "ACS_INTERNAL_SERVICE_TOKEN=$ACS_INTERNAL_SERVICE_TOKEN"
   echo "ACS_BSS_OAUTH_SIGNING_SECRET=$ACS_BSS_OAUTH_SIGNING_SECRET"
   echo "ACS_ADDR=$ACS_ADDR"
