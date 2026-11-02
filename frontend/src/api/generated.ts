@@ -360,6 +360,165 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/grafana/ticket": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a 30-second ticket that opens Grafana through the gate (ACS_GRAFANA_GATE=1)
+         * @description Only a platform operator gets one: a superadmin, or a role with monitoring.view and no customer scope, because Grafana's dashboards span every customer. Open the returned url in a new tab; the proxy at Grafana's origin exchanges the ticket for an HttpOnly session cookie there.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Ticket issued */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description <ACS_GRAFANA_URL>/acs-gate/enter?ticket=... */
+                            url?: string;
+                            /** @example 30 */
+                            expires_in?: number;
+                        };
+                    };
+                };
+                /** @description Not a platform operator (missing monitoring.view, or customer-scoped) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The gate is not configured (ACS_GRAFANA_GATE, ACS_GRAFANA_URL) */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/grafana/enter": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Exchange a Grafana ticket for the gate's session cookie and redirect to Grafana (called through the proxy at Grafana's origin) */
+        get: {
+            parameters: {
+                query: {
+                    ticket: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Cookie acs_grafana_gate set (HttpOnly, Secure over HTTPS, SameSite=Lax, 1 hour); Location / */
+                303: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Ticket missing, expired, revoked or not a Grafana ticket */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The gate is off */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/grafana/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The proxy's auth_request for every Grafana request
+         * @description Checks the acs_grafana_gate cookie, the operator's current session version and access rule.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Allowed */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description No valid gate session */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The gate is off */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/ticket": {
         parameters: {
             query?: never;

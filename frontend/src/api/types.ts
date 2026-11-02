@@ -276,7 +276,9 @@ export type Permission =
   | "credential.manage"
   | "cli.access"
   | "bulk_actions"
-  | "upload.request";
+  | "upload.request"
+  | "tenancy.manage"
+  | "monitoring.view";
 
 export interface RolePermissionsMatrix {
   roles: Role[];

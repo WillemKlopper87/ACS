@@ -24,6 +24,8 @@ const PERMISSION_LABEL: Record<Permission, string> = {
   "cli.access": "SSH/Telnet console & web GUI access",
   bulk_actions: "Bulk device actions",
   "upload.request": "Request config backup / log upload",
+  "tenancy.manage": "Assign device customers and projects",
+  "monitoring.view": "Open Grafana (only operators with no customer scope)",
 };
 
 // Closes the build plan's Phase 6 gap (creating operators had no UI) and
