@@ -337,8 +337,9 @@ func tmf641OrderResponse(order *bss.ServiceOrder, items []bss.ServiceOrderItem) 
 }
 
 func (h *handler) getTMF641Order(w http.ResponseWriter, r *http.Request) {
+	// {id} is the order's id (its href) or the BSS's externalId.
 	id := strings.TrimSpace(r.PathValue("id"))
-	order, err := h.mappings.FindServiceOrder(r.Context(), id)
+	order, err := h.mappings.FindServiceOrderByRef(r.Context(), id)
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
@@ -391,7 +392,7 @@ func (h *handler) cancelTMF641Order(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "ErrInvalidRequest", "only state=cancelled is supported")
 		return
 	}
-	order, err := h.mappings.FindServiceOrder(r.Context(), id)
+	order, err := h.mappings.FindServiceOrderByRef(r.Context(), id)
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
@@ -403,11 +404,12 @@ func (h *handler) cancelTMF641Order(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeTMF(w, r, bss.ScopeTMFExecute, order.AccountID) {
 		return
 	}
+	id = order.ID
 	if err := h.mappings.CancelServiceOrder(r.Context(), id); err != nil {
 		writeError(w, 409, "ErrConflict", "service order cannot be cancelled after execution begins")
 		return
 	}
-	order, err = h.mappings.FindServiceOrder(r.Context(), id)
+	order, err = h.mappings.FindServiceOrderByRef(r.Context(), id)
 	if err != nil || order == nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return

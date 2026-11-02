@@ -86,6 +86,26 @@ func (r *Repository) FindServiceOrder(ctx context.Context, externalID string) (*
 	return &order, nil
 }
 
+// FindServiceOrderByRef resolves the {id} of a TMF641 order path: the
+// order's own id (what its href carries) or the BSS's externalId. An
+// externalId wins if a value is both.
+func (r *Repository) FindServiceOrderByRef(ctx context.Context, ref string) (*ServiceOrder, error) {
+	order, err := r.FindServiceOrder(ctx, ref)
+	if order != nil || err != nil {
+		return order, err
+	}
+	var o ServiceOrder
+	err = r.db.QueryRowContext(ctx, `SELECT id, external_id, account_id, raw_request, created_at, cancelled_at FROM service_orders WHERE id::text=$1`, ref).
+		Scan(&o.ID, &o.ExternalID, &o.AccountID, &o.RawRequest, &o.CreatedAt, &o.CancelledAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find service order: %w", err)
+	}
+	return &o, nil
+}
+
 func (r *Repository) ServiceOrderItems(ctx context.Context, orderID string) ([]ServiceOrderItem, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, order_id, seq, action, COALESCE(role,''), COALESCE(mapping_id::text,''), COALESCE(external_order_id,''), status, COALESCE(last_error,''), completed_at, claimed_at FROM service_order_items WHERE order_id=$1 ORDER BY seq`, orderID)
 	if err != nil {
