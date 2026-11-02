@@ -2,6 +2,12 @@ module acs
 
 go 1.26.10
 
+// Listen with plain TCP, not multipath TCP (Go's default since 1.24):
+// CVE-2026-98432, a Linux kernel use-after-free in IPv4 connection setup,
+// was exploited for remote root through MPTCP listeners. A patched kernel
+// is the fix; this narrows the exposure until every host has one.
+godebug multipathtcp=0
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.5
 	github.com/aws/aws-sdk-go-v2/config v1.33.12
