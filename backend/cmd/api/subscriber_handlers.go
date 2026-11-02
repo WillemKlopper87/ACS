@@ -145,7 +145,48 @@ func (h *handler) putAccountProfile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
-// attachSubscribers adds each device's subscriber summary to a response.
+// revealDeviceSubscriber is POST /api/v1/devices/{id}/subscriber/reveal:
+// the device's subscriber with the full site address, which device reads
+// leave out. Every reveal is audited (who, which device and account,
+// never the details themselves).
+func (h *handler) revealDeviceSubscriber(w http.ResponseWriter, r *http.Request) {
+	d, ok := h.getScopedDevice(w, r, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	sums, err := h.subscribers.Summaries(r.Context(), []string{d.ID})
+	if err != nil {
+		h.logger.Error("failed to read subscriber summary", "err", err, "device_id", d.ID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	s, ok := sums[d.ID]
+	if !ok || s.AccountID == "" {
+		http.Error(w, "this device is not linked to an account", http.StatusNotFound)
+		return
+	}
+	if err := h.auditor.Record(r.Context(), operatorFromRequest(r), d.ID, "SubscriberDetailsRevealed", map[string]any{
+		"account_id": s.AccountID,
+	}); err != nil {
+		h.logger.Error("failed to write audit record", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, s)
+}
+
+// withoutAddress keeps the suburb and city of a site, which identify the
+// area, and drops what identifies the home (site name, street, postal
+// code); those come only from the audited reveal.
+func withoutAddress(s *subscribers.Site) *subscribers.Site {
+	if s == nil || (s.Suburb == "" && s.City == "") {
+		return nil
+	}
+	return &subscribers.Site{Suburb: s.Suburb, City: s.City}
+}
+
+// attachSubscribers adds each device's subscriber summary to a response,
+// without the street address (see withoutAddress).
 func (h *handler) attachSubscribers(r *http.Request, items []deviceResponse) {
 	if h.subscribers == nil || len(items) == 0 {
 		return
@@ -161,7 +202,7 @@ func (h *handler) attachSubscribers(r *http.Request, items []deviceResponse) {
 	}
 	for i := range items {
 		if s, ok := sums[items[i].ID]; ok {
-			s := s
+			s.Site = withoutAddress(s.Site)
 			items[i].Subscriber = &s
 		}
 	}

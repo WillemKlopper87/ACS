@@ -204,6 +204,10 @@ export const api = {
     return request<{ items: SubscriberHit[]; count: number }>(`/api/v1/lookup?${qs}`);
   },
 
+  /** The device's subscriber with the full address; audited (SubscriberDetailsRevealed). */
+  revealDeviceSubscriber: (id: string) =>
+    request<components["schemas"]["SubscriberSummary"]>(`/api/v1/devices/${id}/subscriber/reveal`, { method: "POST" }),
+
   getAccountProfile: (accountId: string) => request<AccountProfile>(`/api/v1/accounts/${encodeURIComponent(accountId)}/profile`),
 
   updateAccountProfile: (accountId: string, body: { subscriber_name?: string; vip?: boolean }) =>
@@ -708,6 +712,12 @@ export const api = {
 
   // --- BSS integration admin panel (admin-platform backlog) ---
   listBSSMappings: () => request<{ items: BSSMapping[] }>("/api/v1/bss/mappings"),
+  /** Ends the account's active assignment in that role; audited with the reason. */
+  unassignBSSMapping: (accountId: string, role: string, reason: string) =>
+    request<void>(`/api/v1/bss/mappings/${encodeURIComponent(accountId)}/${encodeURIComponent(role)}?reason=${encodeURIComponent(reason)}`, {
+      method: "DELETE",
+    }),
+
   createBSSMapping: (accountId: string, ouiSerial: string, servicePlan?: string) =>
     request<BSSMapping>("/api/v1/bss/mappings", {
       method: "POST",

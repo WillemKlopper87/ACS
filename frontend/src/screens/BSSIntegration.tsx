@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { BSSAdapterCallResult, BSSHealth, BSSMapping, BSSOAuthClient, BSSStats, BSSWebhookSubscription } from "../api/types";
+import type { BSSAdapterCallResult, BSSHealth, BSSMapping, BSSOAuthClient, BSSStats, BSSUnassignReason, BSSWebhookSubscription } from "../api/types";
 import { toast } from "../lib/toast";
 import { customerName, useCustomers } from "../lib/useCustomers";
 
@@ -17,6 +17,15 @@ import { customerName, useCustomers } from "../lib/useCustomers";
 type Tab = "setup" | "health" | "troubleshoot";
 
 const TMF_OAUTH_SCOPES = ["tmf:read", "tmf:write", "tmf:execute", "tmf:acknowledge"] as const;
+
+// Why an assignment ended; the API requires one and audits it.
+const UNASSIGN_REASONS: { value: BSSUnassignReason; label: string }[] = [
+  { value: "corrected", label: "Mapped by mistake" },
+  { value: "return", label: "Customer returned the device" },
+  { value: "rma", label: "Faulty, sent for repair (RMA)" },
+  { value: "upgrade", label: "Replaced by a newer device" },
+  { value: "moved", label: "Moved to another account" },
+];
 
 function statusPillClass(status: string) {
   if (status === "ACTIVE") return "pill pill-ok";
@@ -185,6 +194,21 @@ export function BSSIntegration() {
     loadHealth();
   }, []);
 
+  const [removing, setRemoving] = useState<BSSMapping | null>(null);
+  const [removeReason, setRemoveReason] = useState<BSSUnassignReason>("corrected");
+
+  async function removeMapping() {
+    if (!removing) return;
+    try {
+      await api.unassignBSSMapping(removing.account_id, removing.role, removeReason);
+      toast(`Removed ${removing.oui_serial} from ${removing.account_id}`, "success");
+      setRemoving(null);
+      await loadSetup();
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Failed to remove mapping", "error");
+    }
+  }
+
   async function createMapping(e: React.FormEvent) {
     e.preventDefault();
     try {
@@ -311,6 +335,34 @@ export function BSSIntegration() {
                     <span className="path">{m.account_id} <span className="dim">→</span> {m.oui_serial}</span>
                     <span className={statusPillClass(m.status)}>{m.status}</span>
                     {m.service_plan && <span className="src">{m.service_plan}</span>}
+                    {removing?.id === m.id ? (
+                      <span className="form-row" style={{ margin: 0 }}>
+                        <select aria-label="Reason for removing" value={removeReason} onChange={(e) => setRemoveReason(e.target.value as BSSUnassignReason)}>
+                          {UNASSIGN_REASONS.map((r) => (
+                            <option key={r.value} value={r.value}>
+                              {r.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button className="btn sm danger" onClick={removeMapping}>
+                          Remove
+                        </button>
+                        <button className="btn sm" onClick={() => setRemoving(null)}>
+                          Cancel
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        className="btn sm"
+                        aria-label={`Remove ${m.oui_serial} from ${m.account_id}`}
+                        onClick={() => {
+                          setRemoving(m);
+                          setRemoveReason("corrected");
+                        }}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

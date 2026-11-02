@@ -428,7 +428,11 @@ export interface BSSMapping {
   oui_serial: string;
   service_plan?: string;
   status: "PENDING_ACTIVE" | "ACTIVE" | "SUSPENDED" | "TERMINATED";
+  role: string;
 }
+
+/** Why an assignment ended (internal/bss Reason*, migration 0052). */
+export type BSSUnassignReason = "rma" | "upgrade" | "return" | "moved" | "corrected";
 
 export interface BSSWebhookSubscription {
   id: string;

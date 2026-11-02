@@ -1795,6 +1795,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/subscriber/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Show the device's subscriber with the full address (audited)
+         * @description Device reads give the subscriber's name, account, VIP flag, suburb and city, but not the site name, street or postal code. This call returns them and records SubscriberDetailsRevealed (who, which device and account; never the details).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SubscriberSummary"];
+                    };
+                };
+                /** @description Device not found in the caller's scope, or not linked to an account */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lookup": {
         parameters: {
             query?: never;
@@ -7820,6 +7869,7 @@ export interface components {
             gateway_device_id?: string;
             /** @description Mesh satellites only: the gateway identity (OUI+ProductClass+SerialNumber natural key) reported in Device.GatewayInfo */
             gateway_oui_serial?: string;
+            /** @description In device reads, site holds only suburb and city; POST /api/v1/devices/{id}/subscriber/reveal gives the full address (audited). */
             subscriber?: components["schemas"]["SubscriberSummary"];
         };
         SubscriberSite: {

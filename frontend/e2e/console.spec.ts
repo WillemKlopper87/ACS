@@ -303,3 +303,62 @@ test("an in-service sale is ended or its device swapped from Onboarding", async 
   await page.getByRole("dialog").getByRole("button", { name: "Swap device" }).click();
   expect(sent[1]).toEqual({ path: "/api/v1/onboardings/ob-1/swap", body: { reason: "rma", serial: "S2" } });
 });
+
+// Removing an account-device mapping from the BSS screen asks why (the
+// API requires and audits a reason) and calls the unassign endpoint.
+test("an admin removes an account-device mapping with a reason", async ({ page }) => {
+  let removed = "";
+  let items = [{ id: "m-1", account_id: "TEST-0001", device_id: "dev-1", oui_serial: DEVICE.oui_serial, status: "ACTIVE", role: "gateway" }];
+  await page.route(`${API}/api/v1/bss/mappings**`, (route) => {
+    const req = route.request();
+    if (req.method() === "DELETE") {
+      removed = new URL(req.url()).pathname + new URL(req.url()).search;
+      items = [];
+      return route.fulfill({ status: 204 });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items }) });
+  });
+  await signIn(page);
+  await page.getByRole("button", { name: "BSS / NaaS" }).click();
+  await page.getByRole("button", { name: `Remove ${DEVICE.oui_serial} from TEST-0001` }).click();
+  await page.getByLabel("Reason for removing").selectOption("return");
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(page.getByText("No mappings yet.")).toBeVisible();
+  expect(removed).toBe("/api/v1/bss/mappings/TEST-0001/gateway?reason=return");
+});
+
+// Ownership shows who the device serves with the name masked and the
+// street left out; Show details fetches them (audited server-side). The
+// page header's Back returns through the console's own history.
+test("ownership masks the subscriber until Show, and Back returns to the previous page", async ({ page }) => {
+  const sub = { device_id: "dev-1", account_id: "ACC-1001", subscriber_name: "Thandi Nkosi", vip: true, site: { suburb: "Sandton", city: "Johannesburg" },
+    display_name: "Thandi Nkosi · ACC-1001 · Sandton · NR7101 …1-S1" };
+  let reveals = 0;
+  await page.route(`${API}/api/v1/devices/dev-1`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...DEVICE, subscriber: sub }) }));
+  await page.route(`${API}/api/v1/devices/dev-1/subscriber/reveal`, (route) => {
+    reveals++;
+    return route.fulfill({ status: 200, contentType: "application/json",
+      body: JSON.stringify({ ...sub, site: { name: "Home", street: "12 Rivonia Rd", suburb: "Sandton", city: "Johannesburg", postal_code: "2196" } }) });
+  });
+  await page.route(`${API}/api/v1/accounts/ACC-1001/profile`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ account_id: "ACC-1001", display_name: "Thandi Nkosi", name_source: "bss", vip: true }) }));
+
+  await signIn(page);
+  await page.goto("/devices/dev-1/ownership");
+  await expect(page.getByRole("button", { name: "← Back" })).toHaveCount(0);
+  const panel = page.locator(".panel").filter({ has: page.getByRole("heading", { name: /^Subscriber/ }) });
+  await expect(panel.getByText("T*** N***")).toBeVisible();
+  await expect(panel.getByText("Sandton, Johannesburg (street hidden)")).toBeVisible();
+  await expect(panel.getByText("Rivonia")).toHaveCount(0);
+  await panel.getByRole("button", { name: "Show details" }).click();
+  await expect(panel.getByText("Home, 12 Rivonia Rd, Sandton, Johannesburg, 2196")).toBeVisible();
+  await expect(panel.getByText(/^Thandi Nkosi · from the BSS$/)).toBeVisible();
+  expect(reveals).toBe(1);
+  await expectNoSeriousA11y(page, "ownership");
+  await page.screenshot({ path: "test-results/ownership-revealed.png" });
+
+  await page.getByRole("button", { name: "Inventory" }).click();
+  await page.getByRole("button", { name: "Back to the previous page" }).click();
+  await expect(page).toHaveURL(/\/devices\/dev-1\/ownership$/);
+});
