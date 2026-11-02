@@ -1068,7 +1068,7 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: "#/components/schemas/SubscriberHit" } }
                   count: { type: integer }
-        "400": { description: Neither q nor vip, or q too long }
+        "400": { description: "Neither q nor vip, or q too long" }
 
   /api/v1/accounts/{account_id}/profile:
     parameters:

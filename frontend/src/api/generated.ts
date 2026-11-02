@@ -1832,7 +1832,7 @@ export interface paths {
                         };
                     };
                 };
-                /** @description Neither q nor vip */
+                /** @description Neither q nor vip, or q too long */
                 400: {
                     headers: {
                         [name: string]: unknown;
