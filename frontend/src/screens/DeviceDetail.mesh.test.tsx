@@ -43,6 +43,7 @@ vi.mock("../components/VPNTunnel", () => ({ VPNTunnel: () => null }));
 vi.mock("../components/DeviceTenancy", () => ({ DeviceTenancy: () => null }));
 vi.mock("../components/DeviceCompatibility", () => ({ DeviceCompatibility: () => null }));
 vi.mock("../components/DeviceOnboardingPanel", () => ({ DeviceOnboardingPanel: () => null }));
+vi.mock("../components/WiFiNetworksPanel", () => ({ WiFiNetworksPanel: () => <p>Wi-Fi networks editor</p> }));
 vi.mock("../auth/useAuth", () => ({ useAuth: () => ({ role: "superadmin" }) }));
 vi.mock("../api/client", () => {
   const known: Record<string, (...args: string[]) => Promise<unknown>> = {
@@ -97,7 +98,7 @@ describe("DeviceDetail for a mesh satellite", () => {
     );
     await waitFor(() => expect(screen.getByText("Refresh WiFi clients on Lab FastMile")).toBeTruthy());
     expect(screen.queryByText("Refresh WiFi clients")).toBeNull();
-    expect(screen.queryByText("Set SSID")).toBeNull();
+    expect(screen.queryByText("Wi-Fi networks editor")).toBeNull();
     expect(screen.getByText(/Wi-Fi name and password for this mesh are set on its gateway/)).toBeTruthy();
   });
 
@@ -120,6 +121,6 @@ describe("DeviceDetail for a mesh satellite", () => {
       </MemoryRouter>,
     );
     await waitFor(() => expect(screen.getByText("Refresh WiFi clients")).toBeTruthy());
-    expect(screen.getByText("Set SSID")).toBeTruthy();
+    expect(screen.getByText("Wi-Fi networks editor")).toBeTruthy();
   });
 });

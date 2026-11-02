@@ -28,6 +28,7 @@ vi.mock("../components/DeviceTenancy", () => ({ DeviceTenancy: () => null }));
 vi.mock("../components/DeviceCompatibility", () => ({ DeviceCompatibility: () => null }));
 vi.mock("../components/DeviceOnboardingPanel", () => ({ DeviceOnboardingPanel: () => <div>onboarding checks</div> }));
 vi.mock("../components/WiFiInsights", () => ({ WiFiInsights: () => <div>wifi insights</div> }));
+vi.mock("../components/WiFiNetworksPanel", () => ({ WiFiNetworksPanel: () => <div>wifi networks</div> }));
 vi.mock("../components/SimPanel", () => ({ SimPanel: () => <div>sim panel</div> }));
 vi.mock("../components/XmppPanel", () => ({ XmppPanel: () => <div>xmpp panel</div> }));
 vi.mock("../auth/useAuth", () => ({ useAuth: () => ({ role: "noc" }) }));
@@ -97,7 +98,7 @@ describe("device workspace", () => {
   it("shows each sub-page's own tools only", async () => {
     let view = open("wifi");
     expect(await screen.findByText("wifi insights")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Set SSID" })).toBeTruthy();
+    expect(screen.getByText("wifi networks")).toBeTruthy();
     expect(screen.queryByText("sim panel")).toBeNull();
     view.unmount();
 

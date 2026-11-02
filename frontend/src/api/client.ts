@@ -338,6 +338,13 @@ export const api = {
   getConnectionDiagnostics: (id: string) =>
       request<paths["/api/v1/devices/{id}/connection-diagnostics"]["get"]["responses"]["200"]["content"]["application/json"]>(`/api/v1/devices/${id}/connection-diagnostics`),
 
+  /** Change one Wi-Fi network (SSID instance) on one CPE (components/WiFiNetworksPanel.tsx). */
+  updateWiFiNetwork: (id: string, instance: number, body: Record<string, unknown>) =>
+    request<{ command_key: string; status: string; instances: number[]; writes: string[]; disconnects: boolean }>(
+      `/api/v1/devices/${id}/wifi/networks/${instance}`,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
+
   getWiFiNetworks: (id: string) =>
     request<paths["/api/v1/devices/{id}/wifi/networks"]["get"]["responses"]["200"]["content"]["application/json"]>(`/api/v1/devices/${id}/wifi/networks`),
 

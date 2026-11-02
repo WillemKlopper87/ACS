@@ -181,9 +181,9 @@ Consequences for the Nokia WiFi Cloud Controller (NWCC):
 | `GET /devices/{id}/wifi` | Projection: radios, SSIDs, APs, security (secrets redacted), guest WLANs, policies, each with `supported`/`writable` from discovery and `as_of` |
 | `GET /devices/{id}/wifi/clients` | Merged client table (§3.3) incl. mesh node; extends `ProjectWiFiTopology` |
 | `POST /devices/{id}/wifi/refresh` | One targeted GPV job (table roots), returns command key |
-| `PUT /devices/{id}/wifi/networks/{k}` | Canonical → discovered paths, one SET job, verified |
+| `PUT /devices/{id}/wifi/networks/{k}` | **Built** (`cmd/api/wifi_edit.go`). One network (plus optional `also_instances`, e.g. the other band) per change: name, passphrase, security mode, broadcast, on/off in one verified SET job. Refuses an open network without `allow_open`, a network turned on without its passphrase, and turning every network off. "Add a network" in the console turns on a spare slot (the FastMile's disabled SSIDs) the same way. `GET .../wifi/networks` adds the AccessPoint paths, `modes_supported` and `clients_by_instance` from the latest insights sample, which the console shows as who would disconnect. |
 | `POST /devices/{id}/wifi/guest` | Guest WLAN enable/duration/rotation |
-| `POST /devices/{id}/wifi/networks` | AddObject SSID+AP (only where §9 proved it) |
+| `POST /devices/{id}/wifi/networks` | AddObject SSID+AP (only where §9 proved it). Not built: spare slots cover the FastMile until field test 1 is done. |
 | Fleet: `GET /wifi/clients?q=` | Cross-fleet client search |
 
 Canonical model extension in `adapters/canonical.go`: replace instance-1 constants with resolvers over discovered instances (`wifi.ssid[k].name`, `wifi.ap[i].security.mode`, …), vendor extensions via the catalog (`nokia.xml`: `X_ALU-COM_IsGuestSSID`, `X_ALU-COM_WLANForGuest`).

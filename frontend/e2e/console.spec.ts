@@ -155,3 +155,51 @@ test("fleet and dashboard have no critical accessibility violations", async ({ p
   await expect(page.getByText("job success rate")).toBeVisible();
   await expectNoSeriousA11y(page, "dashboard");
 });
+
+// The per-network Wi-Fi editor: one network at a time, the impact shown
+// before sending, a typed confirmation for a primary network, and exactly
+// the changed fields in the request.
+test("Wi-Fi editor changes one network and warns who disconnects", async ({ page }) => {
+  const network = (n: number, name: string, band: string, role: string, enabled = true) => ({
+    instance: n, ssid_object: `Device.WiFi.SSID.${n}.`, access_point: `Device.WiFi.AccessPoint.${n}.`, radio: "", name, band, role, enabled,
+    advertised: true, security_mode: "WPA2-Personal", modes_supported: ["None", "WPA2-Personal", "WPA3-Personal"],
+    name_writable: true, enable_writable: true, passphrase_writable: true, security_mode_writable: true, advertised_writable: true, ap_enable_writable: true,
+  });
+  let sent: { url: string; body: unknown } | null = null;
+  await page.route(`${API}/api/v1/devices/dev-1/wifi/networks**`, async (route) => {
+    if (route.request().method() === "PUT") {
+      sent = { url: route.request().url(), body: route.request().postDataJSON() };
+      return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ command_key: "setparam_e2e", status: "QUEUED", instances: [1, 5], writes: [], disconnects: true }) });
+    }
+    return route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({
+        supported: true, complete: true, refresh_paths: [], read_paths: [],
+        networks: [network(1, "Home", "2.4GHz", "primary"), network(2, "Guest", "2.4GHz", "guest"), network(3, "NOKIA-3", "2.4GHz", "disabled", false), network(5, "Home", "5GHz", "primary")],
+        clients_by_instance: { "1": 9, "5": 4 }, clients_sampled_at: new Date().toISOString(),
+      }),
+    });
+  });
+  await signIn(page);
+  await page.goto("/devices/dev-1/wifi");
+
+  const table = page.getByRole("table", { name: "Wi-Fi networks" });
+  await expect(table.getByText("Home").first()).toBeVisible();
+  await expect(page.getByText("1 spare slot on this device.", { exact: false })).toBeVisible();
+
+  await table.getByRole("row").filter({ hasText: "SSID 1" }).getByRole("button", { name: "Edit" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Network name (SSID)").fill("Smith Home");
+  await dialog.getByText("Also apply to SSID 5", { exact: false }).click();
+  await expect(dialog.getByText('13 connected devices will disconnect and must rejoin "Smith Home".')).toBeVisible();
+
+  const apply = dialog.getByRole("button", { name: "Apply change" });
+  await expect(apply).toBeDisabled();
+  await dialog.getByLabel(/Type the current network name/).fill("Home");
+  await apply.click();
+  await expect(dialog).toBeHidden();
+
+  expect(sent).not.toBeNull();
+  expect(sent!.url).toMatch(/\/wifi\/networks\/1$/);
+  expect(sent!.body).toEqual({ name: "Smith Home", also_instances: [5] });
+});

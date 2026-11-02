@@ -42,6 +42,15 @@ type WiFiNetwork struct {
 	NameWritable    bool    `json:"name_writable"`
 	EnableWritable  bool    `json:"enable_writable"`
 	PassphraseWrite bool    `json:"passphrase_writable"`
+	// The AccessPoint's own switches, for the per-network editor: its
+	// Enable (turned on with the SSID), broadcast and security mode.
+	APEnablePath         string   `json:"ap_enable_path,omitempty"`
+	APEnableWritable     bool     `json:"ap_enable_writable"`
+	AdvertisedPath       string   `json:"advertised_path,omitempty"`
+	AdvertisedWritable   bool     `json:"advertised_writable"`
+	SecurityModePath     string   `json:"security_mode_path,omitempty"`
+	SecurityModeWritable bool     `json:"security_mode_writable"`
+	ModesSupported       []string `json:"modes_supported,omitempty"`
 	// APInferred is true when the AccessPoint was paired by equal instance
 	// number because its SSIDReference value is not cached yet.
 	APInferred bool `json:"ap_inferred,omitempty"`
@@ -159,14 +168,28 @@ func ResolveWiFiNetworks(names map[string]bool, cache map[string]parameters.Cach
 			if p := ap + "Security.KeyPassphrase"; present(p) {
 				net.PassphrasePath, net.PassphraseWrite = p, names[p]
 			}
+			if p := ap + "Enable"; present(p) {
+				net.APEnablePath, net.APEnableWritable = p, names[p]
+			}
 			if p := ap + "SSIDAdvertisementEnabled"; present(p) {
+				net.AdvertisedPath, net.AdvertisedWritable = p, names[p]
 				need(p)
 				net.Advertised = boolValue(value(p))
 			}
 			if p := ap + "Security.ModeEnabled"; present(p) {
+				net.SecurityModePath, net.SecurityModeWritable = p, names[p]
 				need(p)
 				if v, ok := value(p); ok {
 					net.SecurityMode = v
+				}
+			}
+			if p := ap + "Security.ModesSupported"; present(p) {
+				if v, ok := value(p); ok && v != "" {
+					for _, m := range strings.Split(v, ",") {
+						if m = strings.TrimSpace(m); m != "" {
+							net.ModesSupported = append(net.ModesSupported, m)
+						}
+					}
 				}
 			}
 		}
@@ -216,7 +239,7 @@ func WiFiNetworkReadPaths(names map[string]bool) []string {
 			continue
 		case ssidLeafRE.MatchString(path), apRefRE.MatchString(path), guestRefRE.MatchString(path):
 		case strings.HasPrefix(path, "Device.WiFi.SSID.") && (leaf == "Enable" || leaf == "LowerLayers" || leaf == "Status" || strings.HasSuffix(leaf, "IsGuestSSID")):
-		case strings.HasPrefix(path, "Device.WiFi.AccessPoint.") && (leaf == "SSIDAdvertisementEnabled" || leaf == "Enable" || strings.HasSuffix(path, ".Security.ModeEnabled")):
+		case strings.HasPrefix(path, "Device.WiFi.AccessPoint.") && (leaf == "SSIDAdvertisementEnabled" || leaf == "Enable" || strings.HasSuffix(path, ".Security.ModeEnabled") || strings.HasSuffix(path, ".Security.ModesSupported")):
 		case strings.HasPrefix(path, "Device.WiFi.Radio.") && (leaf == "OperatingFrequencyBand" || leaf == "Channel"):
 		default:
 			continue

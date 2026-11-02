@@ -583,6 +583,10 @@ td.ellipsis { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; }
 }
 .banner.error { color: var(--danger); background: var(--danger-bg); border-color: color-mix(in srgb, var(--danger) 32%, transparent); }
 .banner.info { color: var(--ink-dim); background: var(--surface-2); border-color: var(--border); }
+.banner.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+/* Per-network Wi-Fi editor (components/WiFiNetworksPanel.tsx). */
+.wifi-form { display: flex; flex-direction: column; gap: 0.7rem; }
+.wifi-check { display: flex; align-items: center; gap: 0.45rem; font-size: 0.82rem; color: var(--ink); }
 
 .loading { color: var(--ink-faint); font-family: var(--font-mono); font-size: 0.84rem; padding: 1rem 0; }
 

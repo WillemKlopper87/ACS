@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"acs/internal/devices"
 	"acs/internal/devices/adapters"
 	"acs/internal/wifiinsights"
 )
@@ -19,8 +18,14 @@ func (h *handler) getWiFiNetworks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if device.DataModelRoot == devices.DataModelRootIGD1 {
-		writeJSON(w, http.StatusOK, map[string]any{"supported": false, "reason": "TR-098 (InternetGatewayDevice) Wi-Fi networks are not resolved per instance yet", "networks": []any{}})
+	view, reason, err := h.resolveWiFiView(r, device)
+	if err != nil {
+		h.logger.Error("failed to resolve Wi-Fi networks", "err", err, "device_id", device.ID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if reason != "" {
+		writeJSON(w, http.StatusOK, map[string]any{"supported": false, "reason": reason, "networks": []any{}})
 		return
 	}
 	discovered, err := h.params.GetNames(r.Context(), device.ID)
@@ -29,17 +34,7 @@ func (h *handler) getWiFiNetworks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if discovered == nil || len(discovered.Names) == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{"supported": false, "reason": "run parameter discovery first", "networks": []any{}})
-		return
-	}
-	cache, err := h.params.Get(r.Context(), device.ID)
-	if err != nil {
-		h.logger.Error("failed to read parameter cache", "err", err, "device_id", device.ID)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	view := adapters.ResolveWiFiNetworks(discovered.Names, cache)
+	clients, clientsAt := h.wifiClientCounts(r, device.ID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"supported":     len(view.Networks) > 0,
 		"complete":      view.Complete,
@@ -47,6 +42,10 @@ func (h *handler) getWiFiNetworks(w http.ResponseWriter, r *http.Request) {
 		"primary":       adapters.PrimaryWiFiNetworks(view),
 		"refresh_paths": view.RefreshPaths,
 		"read_paths":    adapters.WiFiNetworkReadPaths(discovered.Names),
+		// Connected clients per SSID instance from the latest Wi-Fi
+		// insights sample; absent when there is no recent sample.
+		"clients_by_instance": clients,
+		"clients_sampled_at":  clientsAt,
 	})
 }
 

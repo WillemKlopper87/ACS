@@ -188,6 +188,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("GET", "/api/v1/devices/{id}/connection-diagnostics", ro, h.getConnectionDiagnostics)
 	route("GET", "/api/v1/devices/{id}/wifi-topology", ro, h.getWiFiTopology)
 	route("GET", "/api/v1/devices/{id}/wifi/networks", ro, h.getWiFiNetworks)
+	routePerm("PUT", "/api/v1/devices/{id}/wifi/networks/{instance}", operators.PermDevicesWrite, h.updateWiFiNetwork) // one network at a time (wifi_edit.go)
 	route("GET", "/api/v1/standards/dictionary", ro, h.getStandardDictionary)
 	routePerm("POST", "/api/v1/devices/{id}/bulk-data/configure", operators.PermDevicesWrite, h.configureBulkData)
 	routePerm("POST", "/api/v1/devices/{id}/discover-instances", operators.PermDiagnosticsRun, h.discoverInstances)

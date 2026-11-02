@@ -283,6 +283,52 @@ paths:
         "500":
           description: Persistence failed
 
+  /api/v1/devices/{id}/wifi/networks/{instance}:
+    put:
+      tags: [Diagnostics]
+      operationId: UpdateWiFiNetwork
+      summary: Change one Wi-Fi network (SSID instance) on one CPE (devices.write permission)
+      description: >
+        Absent fields stay as they are. All of a network's changes go out in one verified SetParameterValues, so a
+        name and passphrase change together. also_instances applies the same change to more networks (e.g. the
+        paired band). Turning on a spare network (adding a network) needs its passphrase. Refused when it would
+        leave the network open without allow_open, or turn off every network on the device. The passphrase is
+        never stored after the job, never returned and only marked as changed in the audit log.
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - { name: instance, in: path, required: true, schema: { type: integer, minimum: 1 }, description: "Device.WiFi.SSID.{instance}" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string, minLength: 1, maxLength: 32 }
+                passphrase: { type: string, writeOnly: true, description: "8-63 printable ASCII characters, or 64 hex digits" }
+                security_mode: { type: string, description: "One of the network's modes_supported, e.g. WPA2-Personal" }
+                enabled: { type: boolean }
+                advertised: { type: boolean, description: "Broadcast the network name" }
+                also_instances: { type: array, items: { type: integer } }
+                allow_open: { type: boolean, description: "Confirms a network with security mode None" }
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  command_key: { type: string }
+                  status: { type: string }
+                  instances: { type: array, items: { type: integer } }
+                  writes: { type: array, items: { type: string }, description: Parameter paths written }
+                  disconnects: { type: boolean, description: "True when clients on an enabled network must reconnect" }
+        "400": { description: "Invalid value, unsupported security mode, open network without allow_open, or a network turned on without its passphrase" }
+        "404": { description: "No such device or network" }
+        "409": { description: "Wi-Fi not resolved yet (refresh_paths), field not writable on this device, or every network would be off" }
+
   /api/v1/devices/{id}/wifi/networks:
     get:
       tags: [Diagnostics]
@@ -309,6 +355,8 @@ paths:
                   primary: { type: array, items: { $ref: "#/components/schemas/WiFiNetwork" } }
                   refresh_paths: { type: array, items: { type: string } }
                   read_paths: { type: array, items: { type: string } }
+                  clients_by_instance: { type: object, nullable: true, additionalProperties: { type: integer }, description: "Connected clients per SSID instance in the latest Wi-Fi insights sample (at most 30 minutes old)" }
+                  clients_sampled_at: { type: string, format: date-time, nullable: true }
 
   /api/v1/devices/{id}/wifi-topology:
     get:
@@ -2958,6 +3006,13 @@ components:
         enable_writable: { type: boolean }
         passphrase_writable: { type: boolean }
         ap_inferred: { type: boolean }
+        ap_enable_path: { type: string }
+        ap_enable_writable: { type: boolean }
+        advertised_path: { type: string }
+        advertised_writable: { type: boolean }
+        security_mode_path: { type: string }
+        security_mode_writable: { type: boolean }
+        modes_supported: { type: array, items: { type: string } }
 
     DeviceGroupCount:
       type: object
