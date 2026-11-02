@@ -83,7 +83,7 @@ if [ "$PROFILE" = "production" ]; then
   # ingress, host control listeners, monitoring exposure, TLS floors and
   # plaintext compatibility flags. Running it here means direct production use
   # of start.sh cannot bypass the checks that start-production.sh relies on.
-  "$ROOT/scripts/security-preflight.sh"
+  bash "$ROOT/scripts/security-preflight.sh"
 else
   FRONTEND_PUBLIC_URL=""
   API_PUBLIC_URL=""
@@ -164,7 +164,7 @@ echo "Postgres is up."
 # --- Monitoring stack -------------------------------------------------
 echo "=== Grafana's read-only database role ==="
 if command -v psql >/dev/null; then
-  "$ROOT/scripts/grafana-db-role.sh" || echo "WARNING: grafana-db-role.sh failed — Postgres-backed dashboards will show auth errors."
+  bash "$ROOT/scripts/grafana-db-role.sh" || echo "WARNING: grafana-db-role.sh failed — Postgres-backed dashboards will show auth errors."
 else
   echo "WARNING: psql not found, skipping the grafana_ro role."
 fi
