@@ -25,6 +25,7 @@ import { WiFiInsights } from "../components/WiFiInsights";
 import { XmppPanel } from "../components/XmppPanel";
 import { VipBadge } from "../components/SubscriberLookup";
 import { SubscriberProfileEditor } from "../components/SubscriberProfileEditor";
+import { DeviceSubscriberPanel } from "../components/DeviceSubscriberPanel";
 import { useMeshTopology } from "../lib/useMeshTopology";
 import { deviceLink, gatewayName, isMeshSatellite, satelliteReachabilityNote, satelliteRebootWarning } from "../lib/mesh";
 import { skippedNote, unsupportedReason } from "../lib/diagnostics";
@@ -959,12 +960,16 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
 
         {section === "ownership" && (
           <>
+            <DeviceSubscriberPanel device={device} canEdit={canManage(role)} onChanged={() => void load()} />
             <DeviceSale device={device} />
             <div className="panel">
-              <h3>Name, tags and location</h3>
+              <h3>Device nickname, tags and location</h3>
+              <p className="dim" style={{ margin: "0 0 0.5rem", fontSize: "0.78rem" }}>
+                About the unit itself. The subscriber&apos;s name and address are under Subscriber above.
+              </p>
               <div className="form-row">
-                <input aria-label="Device name (shown instead of the identifier everywhere in the console)"
-                  placeholder="Name this device — e.g. Mrs Dlamini, 14 Oak Ave"
+                <input aria-label="Device nickname (shown instead of the identifier everywhere in the console)"
+                  placeholder="Nickname for this unit, e.g. Lounge router or Upstairs mesh"
                   value={labelInput}
                   onChange={(e) => {
                     setLabelInput(e.target.value);
@@ -973,7 +978,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
                   disabled={busy || !writable}
                 />
                 <button className="btn" onClick={handleSaveLabel} disabled={busy || !writable}>
-                  Save name
+                  Save nickname
                 </button>
               </div>
 

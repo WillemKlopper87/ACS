@@ -59,6 +59,31 @@ func TestIntegration_SubscriberLookup(t *testing.T) {
 		t.Fatalf("device = %s", r.body)
 	}
 
+	// Device reads give the area, not the home; the street comes only from
+	// the audited reveal, and only for a device in the caller's scope.
+	if _, err := e.db.ExecContext(e.ctx, `WITH s AS (INSERT INTO sites (id, customer_id, name, street, suburb, city)
+		VALUES (gen_random_uuid(), $1, 'Home', '12 Rivonia Rd', 'Sandton', 'Johannesburg') RETURNING id)
+		UPDATE devices SET site_id = (SELECT id FROM s) WHERE id = $2`, custA, devA); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.call("noc-a", "GET", "/api/v1/devices/"+devA, nil); !strings.Contains(r.body, "Sandton") || strings.Contains(r.body, "Rivonia") {
+		t.Fatalf("device read shows the street: %s", r.body)
+	}
+	if r := e.call("noc-a", "GET", "/api/v1/devices", nil); strings.Contains(r.body, "Rivonia") {
+		t.Fatalf("device list shows the street: %s", r.body)
+	}
+	revealed := func() int {
+		var n int
+		_ = e.db.QueryRowContext(e.ctx, `SELECT count(*) FROM audit_log WHERE action = 'SubscriberDetailsRevealed'`).Scan(&n)
+		return n
+	}
+	if r := e.call("noc-a", "POST", "/api/v1/devices/"+devA+"/subscriber/reveal", nil); r.code != 200 || !strings.Contains(r.body, "12 Rivonia Rd") {
+		t.Fatalf("reveal = %d %s", r.code, r.body)
+	}
+	if revealed() != 1 {
+		t.Fatalf("a reveal was not audited")
+	}
+
 	// Profiles: NOC may read, not write; a manager sets VIP but cannot
 	// replace the BSS name; another customer's account is invisible.
 	if r := e.call("noc-a", "PUT", "/api/v1/accounts/ACC-A1/profile", map[string]any{"vip": true}); r.code != 403 {
@@ -93,6 +118,12 @@ func TestIntegration_SubscriberLookup(t *testing.T) {
 	}
 	if r := e.call("mgr-b", "GET", "/api/v1/devices/"+devB2, nil); r.code != 200 || strings.Contains(r.body, "Thandi") || strings.Contains(r.body, `"vip":true`) {
 		t.Fatalf("B's device shows A's subscriber: %d %s", r.code, r.body)
+	}
+	if r := e.call("mgr-b", "POST", "/api/v1/devices/"+devA+"/subscriber/reveal", nil); r.code != 404 || revealed() != 1 {
+		t.Fatalf("B reveals A's device = %d", r.code)
+	}
+	if r := e.call("mgr-b", "POST", "/api/v1/devices/"+devB2+"/subscriber/reveal", nil); strings.Contains(r.body, "Thandi") {
+		t.Fatalf("B's reveal shows A's subscriber: %s", r.body)
 	}
 	if r := e.call("mgr-b", "GET", "/api/v1/lookup?q=e5f6", nil); strings.Contains(r.body, "Thandi") {
 		t.Fatalf("B's lookup shows A's subscriber: %s", r.body)

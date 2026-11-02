@@ -1010,3 +1010,7 @@ input:focus, select.chip:focus {
 .lookup-hit-sub { grid-column: 1; font-size: 0.78rem; }
 .lookup-hit-match { grid-column: 2; grid-row: 1 / span 2; align-self: center; display: flex; gap: 0.25rem; }
 @media (max-width: 600px) { .lookup-hit { grid-template-columns: 1fr; } .lookup-hit-match { grid-column: 1; grid-row: auto; } }
+
+/* Page header with the console's Back button (App.tsx). */
+.page-title-row { display: flex; align-items: center; gap: 0.6rem; margin: 0 0 0.85rem; }
+.page-title-row .page-title { margin: 0; }

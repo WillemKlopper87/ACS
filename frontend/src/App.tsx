@@ -287,7 +287,17 @@ function AppShell() {
               with nothing naming them but the sidebar's highlighted row,
               which is gone the moment the sidebar collapses on a narrow
               viewport. */}
-          <h1 className="page-title">{screen === "devices" ? "Device" : NAV.find((item) => item.id === screen)?.label}</h1>
+          <div className="page-title-row">
+            {/* Back through the console's own history (React Router keeps
+                its position in history.state.idx); hidden on the first
+                page, where Back would leave the console. */}
+            {(window.history.state?.idx ?? 0) > 0 && (
+              <button className="btn sm" onClick={() => navigate(-1)} aria-label="Back to the previous page">
+                ← Back
+              </button>
+            )}
+            <h1 className="page-title">{screen === "devices" ? "Device" : NAV.find((item) => item.id === screen)?.label}</h1>
+          </div>
           <ErrorBoundary key={screen}>
             <Suspense fallback={<p className="dim">Loading…</p>}>
               <ActiveScreen />
