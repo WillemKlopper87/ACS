@@ -51,6 +51,14 @@ type Claims struct {
 // AudienceBrowserTicket marks a ticket minted by POST /auth/ticket.
 const AudienceBrowserTicket = "browser-ticket"
 
+// AudienceGrafanaTicket and AudienceGrafanaSession mark the Grafana gate's
+// one-step ticket and its session cookie (cmd/api/grafana_gate.go). Neither
+// is accepted anywhere else.
+const (
+	AudienceGrafanaTicket  = "grafana-ticket"
+	AudienceGrafanaSession = "grafana-session"
+)
+
 type jwtPayload struct {
 	Subject      string   `json:"sub"`
 	Role         string   `json:"role"`

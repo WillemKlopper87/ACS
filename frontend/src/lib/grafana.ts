@@ -34,3 +34,34 @@ export function grafanaLink(configured: string | undefined, apiBase: string | un
   const port = url.port || (url.protocol === "https:" ? "443" : "80");
   return { href: url.href, tunnelHint: `ssh -L ${port}:127.0.0.1:${port} ubuntu@${host}` };
 }
+
+// With the Grafana gate on (VITE_GRAFANA_GATE=1, from ACS_GRAFANA_GATE),
+// the link is a button: the console mints a 30-second ticket and opens
+// Grafana's origin with it, where the proxy turns it into a session
+// cookie. The tab is opened before the request so the click still counts
+// as a user gesture for the pop-up blocker, and its opener is cleared.
+export interface TabLike {
+  opener: unknown;
+  location: { href: string };
+  close: () => void;
+}
+
+export async function openGatedGrafana(
+  mintTicket: () => Promise<{ url: string }>,
+  openTab: () => TabLike | null,
+): Promise<string | null> {
+  const tab = openTab();
+  try {
+    const { url } = await mintTicket();
+    if (!tab) return "Your browser blocked the new tab; allow pop-ups for the console and try again.";
+    tab.opener = null;
+    tab.location.href = url;
+    return null;
+  } catch (err) {
+    tab?.close();
+    const status = (err as { status?: number }).status;
+    if (status === 403) return "Grafana is open to platform operators only (monitoring.view, no customer scope).";
+    if (status === 404) return "Grafana access is not configured on this ACS.";
+    return "Could not open Grafana; try again.";
+  }
+}

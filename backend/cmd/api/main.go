@@ -265,6 +265,8 @@ func main() {
 			From: os.Getenv("ACS_SMTP_FROM"),
 		}, logger),
 		frontendBaseURL: envOr("ACS_FRONTEND_BASE_URL", "http://localhost:5173"),
+		grafanaURL:      os.Getenv("ACS_GRAFANA_URL"),
+		grafanaGate:     os.Getenv("ACS_GRAFANA_GATE") == "1",
 		tenancy:         tenancy.NewRepository(db),
 		onboarding:      onboarding.NewRepository(db),
 		dashboards:      dashboard.NewRepository(db),
@@ -488,9 +490,14 @@ type handler struct {
 	permissions     *operators.PermissionRepository
 	mailer          *mailer.Mailer
 	frontendBaseURL string
-	tenancy         *tenancy.Repository
-	onboarding      *onboarding.Repository
-	dashboards      *dashboard.Repository
+	// grafanaURL is Grafana's public origin (ACS_GRAFANA_URL); with
+	// grafanaGate (ACS_GRAFANA_GATE=1) the console reaches it through the
+	// ticket gate in grafana_gate.go.
+	grafanaURL  string
+	grafanaGate bool
+	tenancy     *tenancy.Repository
+	onboarding  *onboarding.Repository
+	dashboards  *dashboard.Repository
 
 	bssMappings     *bss.Repository
 	bssWebhooks     *bss.WebhookRepository

@@ -539,6 +539,50 @@ paths:
                   expires_at: { type: string, format: date-time }
         "401": { description: Wrong username or password, content: { text/plain: { schema: { type: string } } } }
 
+  /api/v1/grafana/ticket:
+    post:
+      tags: [Auth]
+      summary: Mint a 30-second ticket that opens Grafana through the gate (ACS_GRAFANA_GATE=1)
+      description: >
+        Only a platform operator gets one: a superadmin, or a role with monitoring.view and no customer
+        scope, because Grafana's dashboards span every customer. Open the returned url in a new tab; the
+        proxy at Grafana's origin exchanges the ticket for an HttpOnly session cookie there.
+      responses:
+        "200":
+          description: Ticket issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string, description: "<ACS_GRAFANA_URL>/acs-gate/enter?ticket=..." }
+                  expires_in: { type: integer, example: 30 }
+        "403": { description: "Not a platform operator (missing monitoring.view, or customer-scoped)" }
+        "404": { description: "The gate is not configured (ACS_GRAFANA_GATE, ACS_GRAFANA_URL)" }
+
+  /api/v1/grafana/enter:
+    get:
+      tags: [Auth]
+      summary: Exchange a Grafana ticket for the gate's session cookie and redirect to Grafana (called through the proxy at Grafana's origin)
+      security: []
+      parameters:
+        - { name: ticket, in: query, required: true, schema: { type: string } }
+      responses:
+        "303": { description: "Cookie acs_grafana_gate set (HttpOnly, Secure over HTTPS, SameSite=Lax, 1 hour); Location /" }
+        "401": { description: "Ticket missing, expired, revoked or not a Grafana ticket" }
+        "404": { description: The gate is off }
+
+  /api/v1/grafana/check:
+    get:
+      tags: [Auth]
+      summary: The proxy's auth_request for every Grafana request
+      description: Checks the acs_grafana_gate cookie, the operator's current session version and access rule.
+      security: []
+      responses:
+        "204": { description: Allowed }
+        "401": { description: No valid gate session }
+        "404": { description: The gate is off }
+
   /api/v1/auth/ticket:
     post:
       tags: [Auth]
