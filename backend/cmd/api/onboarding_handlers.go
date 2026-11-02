@@ -84,6 +84,7 @@ type onboardingResponse struct {
 	UpdatedAt       time.Time  `json:"updated_at"`
 	ContactedAt     *time.Time `json:"contacted_at"`
 	InServiceAt     *time.Time `json:"in_service_at"`
+	EndedAt         *time.Time `json:"ended_at,omitempty"`
 }
 
 func toOnboardingResponse(o *onboarding.Onboarding) onboardingResponse {
@@ -98,7 +99,7 @@ func toOnboardingResponse(o *onboarding.Onboarding) onboardingResponse {
 		ExpectedICCID: mask(parameters.SubscriberICCID, o.ExpectedICCID), ExpectedIMSI: mask(parameters.SubscriberIMSI, o.ExpectedIMSI),
 		AccountRef: o.AccountRef, SiteID: o.SiteID, ServicePlanID: o.ServicePlanID, Role: o.Role, CommercialModel: o.CommercialModel,
 		Source: o.Source, ExternalRef: o.ExternalRef, State: o.State, StateReason: o.StateReason, ConfigJobs: nonNil(o.ConfigJobs),
-		RequestedBy: o.RequestedBy, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt, ContactedAt: o.ContactedAt, InServiceAt: o.InServiceAt}
+		RequestedBy: o.RequestedBy, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt, ContactedAt: o.ContactedAt, InServiceAt: o.InServiceAt, EndedAt: o.EndedAt}
 }
 
 func nonNil(s []string) []string {

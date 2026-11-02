@@ -243,14 +243,14 @@ func isPLMN(s string) bool {
 const onboardingColumns = `id, customer_id, device_id, COALESCE(expected_oui,''), expected_serial, COALESCE(expected_imei,''),
 	COALESCE(expected_iccid,''), COALESCE(expected_imsi,''), COALESCE(account_ref,''), site_id, service_plan_id, role,
 	commercial_model, source, COALESCE(external_ref,''), state, COALESCE(state_reason,''), COALESCE(state_code,''), config_jobs,
-	COALESCE(requested_by,''), COALESCE(bss_role,''), COALESCE(bss_service_plan,''), created_at, updated_at, contacted_at, in_service_at`
+	COALESCE(requested_by,''), COALESCE(bss_role,''), COALESCE(bss_service_plan,''), created_at, updated_at, contacted_at, in_service_at, ended_at`
 
 func scanOnboarding(row interface{ Scan(...any) error }) (*Onboarding, error) {
 	var o Onboarding
 	var jobs store.StringArray
 	err := row.Scan(&o.ID, &o.CustomerID, &o.DeviceID, &o.ExpectedOUI, &o.ExpectedSerial, &o.ExpectedIMEI, &o.ExpectedICCID,
 		&o.ExpectedIMSI, &o.AccountRef, &o.SiteID, &o.ServicePlanID, &o.Role, &o.CommercialModel, &o.Source, &o.ExternalRef,
-		&o.State, &o.StateReason, &o.StateCode, &jobs, &o.RequestedBy, &o.BSSRole, &o.BSSServicePlan, &o.CreatedAt, &o.UpdatedAt, &o.ContactedAt, &o.InServiceAt)
+		&o.State, &o.StateReason, &o.StateCode, &jobs, &o.RequestedBy, &o.BSSRole, &o.BSSServicePlan, &o.CreatedAt, &o.UpdatedAt, &o.ContactedAt, &o.InServiceAt, &o.EndedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -324,7 +324,7 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]Onboarding, erro
 // one exists: onboardings_open_serial_idx).
 func (r *Repository) OpenBySerial(ctx context.Context, serial string) (*Onboarding, error) {
 	return scanOnboarding(r.db.QueryRowContext(ctx, `SELECT `+onboardingColumns+` FROM onboardings
-		WHERE expected_serial = $1 AND state NOT IN ('IN_SERVICE', 'CANCELLED')`, strings.TrimSpace(serial)))
+		WHERE expected_serial = $1 AND state NOT IN ('IN_SERVICE', 'CANCELLED', 'ENDED')`, strings.TrimSpace(serial)))
 }
 
 // OpenForDevice finds the open onboarding for an informing device: the one
@@ -332,7 +332,7 @@ func (r *Repository) OpenBySerial(ctx context.Context, serial string) (*Onboardi
 // sale named one).
 func (r *Repository) OpenForDevice(ctx context.Context, deviceID, oui, serial string) (*Onboarding, error) {
 	return scanOnboarding(r.db.QueryRowContext(ctx, `SELECT `+onboardingColumns+` FROM onboardings
-		WHERE state NOT IN ('IN_SERVICE', 'CANCELLED')
+		WHERE state NOT IN ('IN_SERVICE', 'CANCELLED', 'ENDED')
 		  AND (device_id = $1 OR (device_id IS NULL AND expected_serial = $3 AND (expected_oui IS NULL OR expected_oui = upper($2))))
 		ORDER BY device_id NULLS LAST LIMIT 1`, deviceID, oui, serial))
 }
@@ -394,7 +394,7 @@ func (r *Repository) Retry(ctx context.Context, id string) error {
 // an account in a role.
 func (r *Repository) OpenBSSSales(ctx context.Context, accountRef, role string) ([]Onboarding, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT `+onboardingColumns+` FROM onboardings
-		WHERE source = 'bss' AND account_ref = $1 AND bss_role = $2 AND state NOT IN ('IN_SERVICE', 'CANCELLED')
+		WHERE source = 'bss' AND account_ref = $1 AND bss_role = $2 AND state NOT IN ('IN_SERVICE', 'CANCELLED', 'ENDED')
 		ORDER BY created_at`, accountRef, role)
 	if err != nil {
 		return nil, fmt.Errorf("open BSS sales: %w", err)
@@ -414,7 +414,7 @@ func (r *Repository) OpenBSSSales(ctx context.Context, accountRef, role string) 
 // CancelWithReason cancels an open onboarding and says why.
 func (r *Repository) CancelWithReason(ctx context.Context, id, reason string) error {
 	return r.exec2(ctx, `UPDATE onboardings SET state = 'CANCELLED', state_code = NULL, state_reason = $2, updated_at = now()
-		WHERE id = $1 AND state NOT IN ('IN_SERVICE', 'CANCELLED')`, id, reason)
+		WHERE id = $1 AND state NOT IN ('IN_SERVICE', 'CANCELLED', 'ENDED')`, id, reason)
 }
 
 func (r *Repository) exec2(ctx context.Context, query, id, arg string) error {
@@ -433,7 +433,7 @@ func (r *Repository) exec2(ctx context.Context, query, id, arg string) error {
 
 func (r *Repository) Cancel(ctx context.Context, id string) error {
 	return r.exec(ctx, `UPDATE onboardings SET state = 'CANCELLED', updated_at = now()
-		WHERE id = $1 AND state NOT IN ('IN_SERVICE', 'CANCELLED')`, id)
+		WHERE id = $1 AND state NOT IN ('IN_SERVICE', 'CANCELLED', 'ENDED')`, id)
 }
 
 // ExpireUncontacted cancels up to limit sales from source that no CPE has
@@ -532,7 +532,7 @@ func (r *Repository) Unclaimed(ctx context.Context, limit int) ([]UnclaimedDevic
 			COALESCE(d.online_status,''), d.last_inform_at
 		FROM devices d
 		WHERE NOT EXISTS (SELECT 1 FROM onboardings o WHERE o.device_id = d.id
-				OR (o.device_id IS NULL AND o.state NOT IN ('IN_SERVICE','CANCELLED') AND o.expected_serial = d.serial_number))
+				OR (o.device_id IS NULL AND o.state NOT IN ('IN_SERVICE','CANCELLED','ENDED') AND o.expected_serial = d.serial_number))
 		ORDER BY d.last_inform_at DESC NULLS LAST LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list unclaimed devices: %w", err)

@@ -26,6 +26,9 @@ const (
 	StateOnHold      = "ON_HOLD"
 	StateFailed      = "FAILED"
 	StateCancelled   = "CANCELLED"
+	// StateEnded: a sale that was in service and whose service an operator
+	// ended (internal/lifecycle); the device was released.
+	StateEnded = "ENDED"
 )
 
 // Facts are what the gateway knows about the device on this Inform.
@@ -76,7 +79,7 @@ type Decision struct {
 // Evaluate advances an onboarding as far as the facts allow.
 func Evaluate(o Onboarding, plan *ServicePlan, f Facts) Decision {
 	switch o.State {
-	case StateInService, StateCancelled, StateFailed, StateOnHold:
+	case StateInService, StateCancelled, StateEnded, StateFailed, StateOnHold:
 		// Terminal, or waiting for an operator (Retry).
 		return Decision{State: o.State, Reason: o.StateReason, Code: o.StateCode}
 	}

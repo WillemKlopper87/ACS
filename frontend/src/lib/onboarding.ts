@@ -4,13 +4,14 @@
 // only reads them.
 import type { Onboarding, OnboardingState } from "../api/client";
 
-export type OnboardingTabId = "attention" | "progress" | "planned" | "completed";
+export type OnboardingTabId = "attention" | "progress" | "planned" | "completed" | "closed";
 
 export const ONBOARDING_TABS: { id: OnboardingTabId; label: string; states: OnboardingState[] }[] = [
   { id: "attention", label: "Needs attention", states: ["ON_HOLD", "FAILED"] },
   { id: "progress", label: "In progress", states: ["CONTACTED", "SECURED", "DISCOVERED", "CONFIGURING"] },
   { id: "planned", label: "Planned", states: ["PLANNED"] },
-  { id: "completed", label: "Completed", states: ["IN_SERVICE", "CANCELLED"] },
+  { id: "completed", label: "In service", states: ["IN_SERVICE"] },
+  { id: "closed", label: "Ended & cancelled", states: ["ENDED", "CANCELLED"] },
 ];
 
 export function onboardingTab(state: OnboardingState): OnboardingTabId {
@@ -27,6 +28,7 @@ export const STATE_LABEL: Record<OnboardingState, string> = {
   ON_HOLD: "On hold",
   FAILED: "Failed",
   CANCELLED: "Cancelled",
+  ENDED: "Service ended",
 };
 
 export function stateTone(state: OnboardingState): string {
@@ -39,6 +41,7 @@ export function stateTone(state: OnboardingState): string {
       return "pill-danger";
     case "PLANNED":
     case "CANCELLED":
+    case "ENDED":
       return "pill-neutral";
     default:
       return "pill-pending";
@@ -80,6 +83,7 @@ function position(o: Onboarding): number {
       // Held before binding (another customer's device) or at the SIM check.
       return o.contacted_at ? 2 : 1;
     case "IN_SERVICE":
+    case "ENDED":
       return STEPS.length;
     case "CANCELLED":
       return o.contacted_at ? 2 : 1;

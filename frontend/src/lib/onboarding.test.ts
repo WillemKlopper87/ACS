@@ -24,7 +24,8 @@ describe("onboardingTab", () => {
     expect(onboardingTab("CONFIGURING")).toBe("progress");
     expect(onboardingTab("PLANNED")).toBe("planned");
     expect(onboardingTab("IN_SERVICE")).toBe("completed");
-    expect(onboardingTab("CANCELLED")).toBe("completed");
+    expect(onboardingTab("CANCELLED")).toBe("closed");
+    expect(onboardingTab("ENDED")).toBe("closed");
   });
   it("colours by what the operator must do", () => {
     expect(stateTone("IN_SERVICE")).toBe("pill-ok");

@@ -28,11 +28,41 @@ A single pass advances as far as the facts allow.
 | SECURED | The parameter tree is discovered, if the plan needs it (always, when it has a cellular profile) | |
 | DISCOVERED | Passed through in the same pass; the plan's configuration is queued | |
 | CONFIGURING | Every configuration job succeeded and was read back | A job failed → **FAILED** with the fault |
-| IN_SERVICE | | |
+| IN_SERVICE | An operator ends the service, swaps the device, or gives the sale a plan that writes configuration (back to DISCOVERED) | |
+| ENDED | | |
 
 **ON_HOLD** and **FAILED** wait for an operator: *Retry* re-runs every check from
 CONTACTED (or from PLANNED, if no device was bound). *Cancel* closes the onboarding;
 the serial can then be sold again.
+
+## After service
+
+A sale in service can be changed from the console (*In service* tab) or the API
+(`internal/lifecycle`; all need `tenancy.manage`, all are audited):
+
+- **End service** (`POST /api/v1/onboardings/{id}/end`, reason `return`, `rma`,
+  `upgrade`, `moved` or `corrected`). The sale becomes **ENDED** and every active
+  account mapping of the device ends with that reason. The device goes back to the
+  unassigned pool: no customer, site, projects, nickname or location. When an account
+  has no device left, its subscriber profile (name, VIP) moves to an archive and is
+  deleted after `ACS_RETENTION_SUBSCRIBER_ARCHIVE_DAYS` (default 1095, three years);
+  `keep_subscriber` skips that. `factory_reset` (also needs `devices.write` and
+  `credential.manage`) queues a factory reset and opens a 24-hour re-enrolment window
+  so the reset unit can connect with the bootstrap credential. Audit
+  `OnboardingEnded`; emits an `OnboardingStateChangeEvent`.
+- **Swap device** (`POST /api/v1/onboardings/{id}/swap`, reason `rma` or `upgrade`).
+  The old sale ends as above but the subscriber stays, and a PLANNED sale for the
+  replacement serial is recorded with the same customer, account, site and plan.
+  If the old device had an account mapping, the replacement is mapped to the account
+  in the same role when it connects. Audit `OnboardingDeviceSwapped`.
+- **Change site** (`PUT …/site`) moves the sale and the device to another site of
+  the same customer. Audit `OnboardingSiteChanged`.
+- **Change plan** (`PUT …/plan`). A plan that writes configuration sends the sale back
+  to DISCOVERED: the device is configured on its next check-in and returns to
+  IN_SERVICE. A plan that writes nothing takes effect at once. Audit
+  `OnboardingPlanChanged`.
+
+An ENDED or CANCELLED sale frees its serial for a new sale.
 
 **A sale never moves a device between tenants.** Creating a sale for a serial already
 in the inventory is refused (409) if that device belongs to another customer or is
@@ -89,7 +119,7 @@ curl -X POST "$ACS/api/v1/onboardings" -H "Authorization: Bearer $TOKEN" -H 'Con
 
 **Devices → Onboarding** (`/onboarding/<tab>`):
 
-- **Needs attention** (ON_HOLD, FAILED), **In progress**, **Planned**, **Completed**, with counts. Selecting a sale shows its step-by-step timeline, the reason it is waiting or stopped, the masked SIM, and *Retry checks*, *Cancel* and *Open device*.
+- **Needs attention** (ON_HOLD, FAILED), **In progress**, **Planned**, **In service**, **Ended & cancelled**, with counts. An in-service sale offers *Change site*, *Change plan*, *Swap device* and *End service* (which asks for the serial typed out). Selecting a sale shows its step-by-step timeline, the reason it is waiting or stopped, the masked SIM, and *Retry checks*, *Cancel* and *Open device*.
 - **Unclaimed**: CPEs that checked in with no sale, each with *Claim*.
 - **Setup → Sites** and **Service plans**: lists and create forms. The plan form checks MCC+MNC codes before sending and forces discovery when a cellular profile is set.
 - **New sale** wizard: Device (serial, optional OUI, ICCID, IMSI, IMEI, role) → Who (customer, BSS account reference, commercial model) → Where (existing site of that customer, a new site, or none) → What (plan, with a summary of what it writes) → Review.
@@ -177,4 +207,5 @@ also raises `IdentityMismatch`. Follow them on a webhook or replay them; see
 
 - Strict mode (`ACS_ONBOARDING_REQUIRE_PLAN`): unclaimed CPEs kept on the bootstrap credential.
 - Bulk import of account, site and plan columns, and the `label` import bug.
-- Replacement (RMA) hand-over, SIM-swap alarms after IN_SERVICE.
+- SIM-swap alarms after IN_SERVICE.
+- A console view of the subscriber archive (it is kept for the retention period only to answer questions about a past customer).

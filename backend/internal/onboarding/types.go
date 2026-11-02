@@ -101,9 +101,10 @@ type Onboarding struct {
 	UpdatedAt      time.Time
 	ContactedAt    *time.Time
 	InServiceAt    *time.Time
+	EndedAt        *time.Time
 }
 
 // Open reports whether the onboarding can still progress or be retried.
 func (o Onboarding) Open() bool {
-	return o.State != StateInService && o.State != StateCancelled
+	return o.State != StateInService && o.State != StateCancelled && o.State != StateEnded
 }
