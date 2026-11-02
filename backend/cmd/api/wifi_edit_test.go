@@ -137,6 +137,7 @@ func TestIntegration_WiFiNetworkEdit(t *testing.T) {
 		"nothing to change":         {1, map[string]any{}, 400},
 		"unknown field":             {1, map[string]any{"ssid": "x"}, 400},
 		"no such network":           {9, map[string]any{"name": "x"}, 404},
+		"too many also_instances":   {1, map[string]any{"name": "x", "also_instances": make([]int, 17)}, 400},
 		"every network off":         {1, map[string]any{"enabled": false, "also_instances": []int{2, 5, 6}}, 409},
 	} {
 		if r := e.call("root", "PUT", path(tc.n), tc.body); r.code != tc.code {

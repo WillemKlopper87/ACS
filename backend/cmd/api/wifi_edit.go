@@ -24,6 +24,9 @@ import (
 // device already has (the Nokia FastMile ships eight), with a name and a
 // passphrase.
 
+// maxWiFiEditInstances bounds also_instances.
+const maxWiFiEditInstances = 16
+
 // wifiNetworkEdit is the request body; absent fields stay as they are.
 type wifiNetworkEdit struct {
 	Name         *string `json:"name"`
@@ -107,6 +110,11 @@ func (h *handler) updateWiFiNetwork(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
+	// A CPE has a handful of SSIDs; a longer list is a mistake or abuse.
+	if len(req.AlsoInstances) > maxWiFiEditInstances {
+		http.Error(w, fmt.Sprintf("also_instances may name at most %d networks", maxWiFiEditInstances), http.StatusBadRequest)
+		return
+	}
 	if req.Name == nil && req.Passphrase == nil && req.SecurityMode == nil && req.Enabled == nil && req.Advertised == nil {
 		http.Error(w, "nothing to change: send at least one of name, passphrase, security_mode, enabled, advertised", http.StatusBadRequest)
 		return
@@ -146,8 +154,10 @@ func (h *handler) updateWiFiNetwork(w http.ResponseWriter, r *http.Request) {
 		byInstance[n.Instance] = n
 	}
 	targets := []int{instance}
+	seen := map[int]bool{instance: true}
 	for _, i := range req.AlsoInstances {
-		if !slices.Contains(targets, i) {
+		if !seen[i] {
+			seen[i] = true
 			targets = append(targets, i)
 		}
 	}
