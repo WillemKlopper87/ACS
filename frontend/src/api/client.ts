@@ -707,6 +707,12 @@ export const api = {
 
   // --- BSS integration admin panel (admin-platform backlog) ---
   listBSSMappings: () => request<{ items: BSSMapping[] }>("/api/v1/bss/mappings"),
+  /** Ends the account's active assignment in that role; audited with the reason. */
+  unassignBSSMapping: (accountId: string, role: string, reason: string) =>
+    request<void>(`/api/v1/bss/mappings/${encodeURIComponent(accountId)}/${encodeURIComponent(role)}?reason=${encodeURIComponent(reason)}`, {
+      method: "DELETE",
+    }),
+
   createBSSMapping: (accountId: string, ouiSerial: string, servicePlan?: string) =>
     request<BSSMapping>("/api/v1/bss/mappings", {
       method: "POST",

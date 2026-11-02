@@ -105,9 +105,9 @@ export function DeviceFleet() {
                 {s?.vip && <VipBadge />} {title || <span className="mono">{d.oui_serial}</span>}
               </div>
               <div className="dim" style={{ fontSize: "0.72rem" }}>
-                {[s?.account_id, suburb].filter(Boolean).join(" · ")}
-                {(s?.account_id || suburb) && " · "}
-                <span className="mono">{title ? serialTail(d.oui_serial, 6) : ""}</span>
+                {/* The serial tail only when a name took the title; otherwise
+                    the full serial is already the title above. */}
+                {[s?.account_id, suburb, title ? serialTail(d.oui_serial, 6) : ""].filter(Boolean).join(" · ")}
               </div>
             </div>
           ) : (

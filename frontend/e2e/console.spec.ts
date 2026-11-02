@@ -255,3 +255,26 @@ test("subscriber lookup finds a caller and the device shows who it serves", asyn
   await expect(dialog).toBeHidden();
   expect(profileBody).toEqual({ vip: false });
 });
+
+// Removing an account-device mapping from the BSS screen asks why (the
+// API requires and audits a reason) and calls the unassign endpoint.
+test("an admin removes an account-device mapping with a reason", async ({ page }) => {
+  let removed = "";
+  let items = [{ id: "m-1", account_id: "TEST-0001", device_id: "dev-1", oui_serial: DEVICE.oui_serial, status: "ACTIVE", role: "gateway" }];
+  await page.route(`${API}/api/v1/bss/mappings**`, (route) => {
+    const req = route.request();
+    if (req.method() === "DELETE") {
+      removed = new URL(req.url()).pathname + new URL(req.url()).search;
+      items = [];
+      return route.fulfill({ status: 204 });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items }) });
+  });
+  await signIn(page);
+  await page.getByRole("button", { name: "BSS / NaaS" }).click();
+  await page.getByRole("button", { name: `Remove ${DEVICE.oui_serial} from TEST-0001` }).click();
+  await page.getByLabel("Reason for removing").selectOption("return");
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(page.getByText("No mappings yet.")).toBeVisible();
+  expect(removed).toBe("/api/v1/bss/mappings/TEST-0001/gateway?reason=return");
+});
