@@ -1795,6 +1795,165 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lookup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Find a subscriber's devices by name, address, account number, serial digits, label or the VIP list
+         * @description Every word of q must match (case-insensitive) one of: the serial, the label, the account id, the subscriber name, or the site's name, street, suburb, city or postal code. Ranked exact account or serial suffix first. Limited to the caller's customers. Every lookup is audited (SubscriberLookup: the query, the count and whether it matched a name or address, never the results).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    q?: string;
+                    /** @description Only VIP accounts. q or vip is required. */
+                    vip?: "1" | "true";
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["SubscriberHit"][];
+                            count: number;
+                        };
+                    };
+                };
+                /** @description Neither q nor vip, or q too long */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/{account_id}/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        /** Read an account's subscriber profile (name and VIP) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    account_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountProfile"];
+                    };
+                };
+                /** @description The account is outside the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        /** Fill in a subscriber name the BSS has not sent, or set VIP (subscriber.manage) */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    account_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Empty clears a name an operator typed */
+                        subscriber_name?: string;
+                        vip?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountProfile"];
+                    };
+                };
+                /** @description Invalid body */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Needs subscriber.manage */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The account is outside the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The name came from the BSS and is changed there */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}": {
         parameters: {
             query?: never;
@@ -7365,6 +7524,46 @@ export interface components {
             gateway_device_id?: string;
             /** @description Mesh satellites only: the gateway identity (OUI+ProductClass+SerialNumber natural key) reported in Device.GatewayInfo */
             gateway_oui_serial?: string;
+            subscriber?: components["schemas"]["SubscriberSummary"];
+        };
+        SubscriberSite: {
+            name?: string;
+            street?: string;
+            suburb?: string;
+            city?: string;
+            postal_code?: string;
+        };
+        /** @description Who the device serves: its active account (gateway mapping first), the subscriber's name and VIP flag (account profile) and its site. display_name joins what is known, e.g. "Jane Smith · ACC-1001 · Sandton · FastMile …A1B2". */
+        SubscriberSummary: {
+            device_id: string;
+            account_id?: string;
+            subscriber_name?: string;
+            vip: boolean;
+            site?: components["schemas"]["SubscriberSite"];
+            display_name: string;
+        };
+        SubscriberHit: components["schemas"]["SubscriberSummary"] & {
+            oui_serial: string;
+            manufacturer?: string;
+            model?: string;
+            label?: string;
+            /** @description What the query matched on */
+            matched: ("serial" | "account" | "name" | "label" | "address")[];
+        };
+        AccountProfile: {
+            account_id: string;
+            display_name?: string;
+            /**
+             * @description bss: sent by the BSS and not editable here
+             * @enum {string}
+             */
+            name_source?: "bss" | "operator";
+            vip: boolean;
+            /** @enum {string} */
+            vip_source?: "bss" | "operator";
+            /** Format: date-time */
+            updated_at?: string;
+            updated_by?: string;
         };
         WiFiNetwork: {
             instance: number;

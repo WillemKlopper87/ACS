@@ -8,6 +8,7 @@ import (
 	"acs/internal/jobs"
 	"acs/internal/operators"
 	"acs/internal/parameters"
+	"acs/internal/subscribers"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -53,6 +54,9 @@ type deviceResponse struct {
 	// identity it reported, kept even when that gateway is not registered.
 	GatewayDeviceID  *string `json:"gateway_device_id,omitempty"`
 	GatewayOUISerial *string `json:"gateway_oui_serial,omitempty"`
+	// Subscriber is who the device belongs to (account, name, VIP, site)
+	// and its readable display_name; absent where nothing is known.
+	Subscriber *subscribers.Summary `json:"subscriber,omitempty"`
 }
 
 func toResponse(d devices.Device) deviceResponse {
@@ -190,6 +194,7 @@ func (h *handler) listDevices(w http.ResponseWriter, r *http.Request) {
 	for _, d := range result.Items {
 		items = append(items, toResponse(d))
 	}
+	h.attachSubscribers(r, items)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items": items,
@@ -316,7 +321,9 @@ func (h *handler) getDevice(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, toResponse(*d))
+	one := []deviceResponse{toResponse(*d)}
+	h.attachSubscribers(r, one)
+	writeJSON(w, http.StatusOK, one[0])
 }
 
 // listDeviceSatellites returns the mesh satellites linked to a gateway

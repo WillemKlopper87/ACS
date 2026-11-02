@@ -1048,6 +1048,57 @@ paths:
       responses:
         "202": { description: Per-device outcome (one failure doesn't block the rest), content: { application/json: { schema: { $ref: "#/components/schemas/BulkActionResponse" } } } }
 
+  /api/v1/lookup:
+    get:
+      tags: [Devices]
+      summary: Find a subscriber's devices by name, address, account number, serial digits, label or the VIP list
+      description: "Every word of q must match (case-insensitive) one of: the serial, the label, the account id, the subscriber name, or the site's name, street, suburb, city or postal code. Ranked exact account or serial suffix first. Limited to the caller's customers. Every lookup is audited (SubscriberLookup: the query, the count and whether it matched a name or address, never the results)."
+      parameters:
+        - { name: q, in: query, schema: { type: string, maxLength: 100 } }
+        - { name: vip, in: query, schema: { type: string, enum: ["1", "true"] }, description: "Only VIP accounts. q or vip is required." }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 50 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/SubscriberHit" } }
+                  count: { type: integer }
+        "400": { description: "Neither q nor vip, or q too long" }
+
+  /api/v1/accounts/{account_id}/profile:
+    parameters:
+      - { name: account_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Devices]
+      summary: Read an account's subscriber profile (name and VIP)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AccountProfile" } } } }
+        "404": { description: The account is outside the caller's scope }
+    put:
+      tags: [Devices]
+      summary: Fill in a subscriber name the BSS has not sent, or set VIP (subscriber.manage)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                subscriber_name: { type: string, maxLength: 120, description: "Empty clears a name an operator typed" }
+                vip: { type: boolean }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AccountProfile" } } } }
+        "400": { description: Invalid body }
+        "403": { description: Needs subscriber.manage }
+        "404": { description: The account is outside the caller's scope }
+        "409": { description: The name came from the BSS and is changed there }
+
   /api/v1/devices/{id}:
     get:
       tags: [Devices]
@@ -3027,6 +3078,52 @@ components:
         last_reboot_duration_seconds: { type: integer, description: Seconds from the last acknowledged reboot/reset until the device informed again }
         gateway_device_id: { type: string, description: "Mesh satellites only: the gateway device this unit sits behind, resolved from TR-111 Device.GatewayInfo (unset when unknown or the gateway is not registered)" }
         gateway_oui_serial: { type: string, description: "Mesh satellites only: the gateway identity (OUI+ProductClass+SerialNumber natural key) reported in Device.GatewayInfo" }
+        subscriber: { $ref: "#/components/schemas/SubscriberSummary" }
+
+    SubscriberSite:
+      type: object
+      properties:
+        name: { type: string }
+        street: { type: string }
+        suburb: { type: string }
+        city: { type: string }
+        postal_code: { type: string }
+
+    SubscriberSummary:
+      type: object
+      description: "Who the device serves: its active account (gateway mapping first), the subscriber's name and VIP flag (account profile) and its site. display_name joins what is known, e.g. \"Jane Smith · ACC-1001 · Sandton · FastMile …A1B2\"."
+      required: [device_id, vip, display_name]
+      properties:
+        device_id: { type: string }
+        account_id: { type: string }
+        subscriber_name: { type: string }
+        vip: { type: boolean }
+        site: { $ref: "#/components/schemas/SubscriberSite" }
+        display_name: { type: string }
+
+    SubscriberHit:
+      allOf:
+        - $ref: "#/components/schemas/SubscriberSummary"
+        - type: object
+          required: [oui_serial, matched]
+          properties:
+            oui_serial: { type: string }
+            manufacturer: { type: string }
+            model: { type: string }
+            label: { type: string }
+            matched: { type: array, items: { type: string, enum: [serial, account, name, label, address] }, description: "What the query matched on" }
+
+    AccountProfile:
+      type: object
+      required: [account_id, vip]
+      properties:
+        account_id: { type: string }
+        display_name: { type: string }
+        name_source: { type: string, enum: [bss, operator], description: "bss: sent by the BSS and not editable here" }
+        vip: { type: boolean }
+        vip_source: { type: string, enum: [bss, operator] }
+        updated_at: { type: string, format: date-time }
+        updated_by: { type: string }
 
     WiFiNetwork:
       type: object

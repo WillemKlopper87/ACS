@@ -14,7 +14,7 @@ import { DeviceTenancy } from "../components/DeviceTenancy";
 import { DeviceSale } from "../components/DeviceSale";
 import { fmtBytes, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
-import { canWrite } from "../auth/roles";
+import { canManage, canWrite } from "../auth/roles";
 import { useLive } from "../lib/useLive";
 import { ParameterBrowser } from "../components/ParameterBrowser";
 import { toast } from "../lib/toast";
@@ -23,6 +23,8 @@ import { WiFiNetworksPanel } from "../components/WiFiNetworksPanel";
 import { SimPanel } from "../components/SimPanel";
 import { WiFiInsights } from "../components/WiFiInsights";
 import { XmppPanel } from "../components/XmppPanel";
+import { VipBadge } from "../components/SubscriberLookup";
+import { SubscriberProfileEditor } from "../components/SubscriberProfileEditor";
 import { useMeshTopology } from "../lib/useMeshTopology";
 import { deviceLink, gatewayName, isMeshSatellite, satelliteReachabilityNote, satelliteRebootWarning } from "../lib/mesh";
 import { skippedNote, unsupportedReason } from "../lib/diagnostics";
@@ -53,6 +55,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
   const navigate = useNavigate();
   const { role } = useAuth();
   const writable = canWrite(role);
+  const [editingSubscriber, setEditingSubscriber] = useState(false);
   const [device, setDevice] = useState<Device | null>(null);
   const [params, setParams] = useState<ParameterCache>({});
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -505,11 +508,36 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
       <header className="panel device-head">
         <div className="device-head-top">
           <div>
-            <h2 className="device-title">{device.label || device.oui_serial}</h2>
+            <h2 className="device-title">
+              {device.subscriber?.vip && <VipBadge />} {device.label || device.subscriber?.subscriber_name || device.oui_serial}
+            </h2>
             <p className="device-sub">
               {device.manufacturer} {device.product_class} · <span className="mono">{device.serial_number}</span>
               {device.last_inform_at && <> · last inform {timeAgo(device.last_inform_at)}</>}
             </p>
+            {device.subscriber?.account_id && (
+              <p className="device-sub">
+                {device.subscriber.display_name}
+                {canManage(role) && (
+                  <>
+                    {" "}
+                    <button className="btn sm" onClick={() => setEditingSubscriber(true)}>
+                      Edit subscriber
+                    </button>
+                  </>
+                )}
+              </p>
+            )}
+            {editingSubscriber && device.subscriber?.account_id && (
+              <SubscriberProfileEditor
+                accountId={device.subscriber.account_id}
+                onClose={() => setEditingSubscriber(false)}
+                onSaved={() => {
+                  setEditingSubscriber(false);
+                  void load();
+                }}
+              />
+            )}
           </div>
           <div className="device-head-actions">
             <button

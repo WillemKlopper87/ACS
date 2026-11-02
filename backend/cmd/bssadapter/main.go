@@ -41,6 +41,7 @@ import (
 	"acs/internal/ratelimit"
 	"acs/internal/secretstore"
 	"acs/internal/store"
+	"acs/internal/subscribers"
 )
 
 // bssClientRole is the synthetic role stamped on an OAuth2 client's
@@ -171,6 +172,7 @@ func main() {
 		logger:                logger,
 		mappings:              bss.NewRepository(db),
 		onboarding:            onboarding.NewRepository(db),
+		subscribers:           subscribers.NewRepository(db),
 		acs:                   bss.NewACSClient(acsBaseURL, 10*time.Second, internalServiceToken),
 		auditor:               observability.NewAuditor(db),
 		token:                 token,
@@ -209,6 +211,7 @@ func main() {
 	mux.HandleFunc("POST /bss/v1/onboardings/{id}/retry", metrics.InstrumentHTTP("POST /bss/v1/onboardings/{id}/retry", h.retrySale))
 	mux.HandleFunc("POST /bss/v1/onboardings/{id}/cancel", metrics.InstrumentHTTP("POST /bss/v1/onboardings/{id}/cancel", h.cancelSale))
 	mux.HandleFunc("GET /bss/v1/devices", metrics.InstrumentHTTP("GET /bss/v1/devices", h.listCustomerDevices))
+	mux.HandleFunc("PUT /bss/v1/accounts/{account_id}/subscriber", metrics.InstrumentHTTP("PUT /bss/v1/accounts/{account_id}/subscriber", h.putAccountSubscriber))
 	mux.HandleFunc("GET /bss/v1/events", metrics.InstrumentHTTP("GET /bss/v1/events", h.listEvents))
 	mux.HandleFunc("POST /bss/v1/secrets", metrics.InstrumentHTTP("POST /bss/v1/secrets", h.createSecret))
 	mux.HandleFunc("DELETE /bss/v1/secrets/{handle}", metrics.InstrumentHTTP("DELETE /bss/v1/secrets/{handle}", h.deleteSecret))
@@ -455,6 +458,8 @@ type handler struct {
 	// onboarding records pre-provisioned sales; nil keeps an unknown
 	// device an error, as before.
 	onboarding *onboarding.Repository
+	// subscribers holds account profiles (name, VIP) the BSS sends.
+	subscribers *subscribers.Repository
 	// saleTTL cancels a pre-provisioned sale no CPE contacted in time
 	// (ACS_BSS_SALE_TTL); zero keeps sales open indefinitely.
 	saleTTL time.Duration
@@ -550,11 +555,15 @@ type createMappingRequest struct {
 	// PreProvision: for a device the ACS has not seen, record a sale and
 	// answer 202 instead of 404 (preprovision.go). Opt-in, so integrations
 	// that rely on the 404 keep it.
-	PreProvision bool         `json:"pre_provision"`
-	CustomerID   string       `json:"customer_id"`
-	ICCID        string       `json:"iccid"`
-	IMSI         string       `json:"imsi"`
-	Place        *tmf641Place `json:"place"`
+	PreProvision bool   `json:"pre_provision"`
+	CustomerID   string `json:"customer_id"`
+	// SubscriberName and VIP set the account's subscriber profile for
+	// operator lookup (internal/subscribers); optional, contract 1.2.
+	SubscriberName *string      `json:"subscriber_name,omitempty"`
+	VIP            *bool        `json:"vip,omitempty"`
+	ICCID          string       `json:"iccid"`
+	IMSI           string       `json:"imsi"`
+	Place          *tmf641Place `json:"place"`
 }
 
 type mappingResponse struct {
@@ -623,6 +632,10 @@ func (h *handler) createMappingAuthorized(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "device_uuid does not match the device resolved from oui_serial")
 			return
 		}
+	}
+
+	if !h.applySubscriber(w, r, req.AccountID, req.SubscriberName, req.VIP) {
+		return
 	}
 
 	mapping, err := h.mappings.AssignDevice(r.Context(), req.AccountID, req.OUISerial, roleOrDefault(req.Role), req.ServicePlan)

@@ -26,6 +26,7 @@ const PERMISSION_LABEL: Record<Permission, string> = {
   "upload.request": "Request config backup / log upload",
   "tenancy.manage": "Assign device customers and projects",
   "monitoring.view": "Open Grafana (only operators with no customer scope)",
+  "subscriber.manage": "Set subscriber names the BSS has not sent, and the VIP flag",
 };
 
 // Closes the build plan's Phase 6 gap (creating operators had no UI) and

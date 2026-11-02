@@ -4,6 +4,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { Device } from "../api/types";
 import { DataTable } from "../components/DataTable";
+import { SubscriberLookup, VipBadge } from "../components/SubscriberLookup";
+import { serialTail } from "../lib/subscriber";
 import { StatusBadge } from "../components/StatusBadge";
 import { timeAgo, fmtTime } from "../lib/format";
 import { devicePath } from "../lib/deviceSections";
@@ -67,7 +69,7 @@ export function DeviceFleet() {
     const q = search.toLowerCase();
     return devices.filter(
       (d) =>
-        (!q || `${d.label ?? ""} ${d.oui_serial} ${d.manufacturer} ${d.product_class}`.toLowerCase().includes(q)) &&
+        (!q || `${d.label ?? ""} ${d.subscriber?.display_name ?? ""} ${d.oui_serial} ${d.manufacturer} ${d.product_class}`.toLowerCase().includes(q)) &&
         (!vendorFilter || vendorGroup(d.manufacturer) === vendorFilter),
     );
   }, [devices, search, vendorFilter]);
@@ -87,16 +89,26 @@ export function DeviceFleet() {
       {
         id: "device",
         header: "Device",
-        accessorFn: (d) => d.label || d.oui_serial,
+        accessorFn: (d) => d.label || d.subscriber?.subscriber_name || d.oui_serial,
         cell: ({ row }) => {
           const d = row.original;
-          // The label is what an operator actually calls this unit; the
-          // identifier is still shown, just demoted to a subtitle, so a
-          // device with no label yet still reads exactly as it always did.
-          return d.label ? (
+          // The label or the subscriber's name is what an operator calls
+          // this unit; account, suburb and serial follow so two people
+          // with one name are told apart. A device with neither still
+          // reads exactly as it always did.
+          const s = d.subscriber;
+          const title = d.label || s?.subscriber_name;
+          const suburb = s?.site?.suburb || s?.site?.city;
+          return title || s?.account_id ? (
             <div>
-              <div>{d.label}</div>
-              <div className="dim mono" style={{ fontSize: "0.72rem" }}>{d.oui_serial}</div>
+              <div>
+                {s?.vip && <VipBadge />} {title || <span className="mono">{d.oui_serial}</span>}
+              </div>
+              <div className="dim" style={{ fontSize: "0.72rem" }}>
+                {[s?.account_id, suburb].filter(Boolean).join(" · ")}
+                {(s?.account_id || suburb) && " · "}
+                <span className="mono">{title ? serialTail(d.oui_serial, 6) : ""}</span>
+              </div>
             </div>
           ) : (
             <span className="mono">{d.oui_serial}</span>
@@ -174,15 +186,17 @@ export function DeviceFleet() {
         </div>
       )}
 
+      <SubscriberLookup />
+
       <div className="toolbar">
         <div className="search">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="11" cy="11" r="7" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <input aria-label="Filter by name, serial, model, manufacturer"
+          <input aria-label="Filter the loaded devices"
             ref={searchRef}
-            placeholder="Filter by name, serial, model, manufacturer… (press /)"
+            placeholder="Filter the loaded devices… (press /)"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
