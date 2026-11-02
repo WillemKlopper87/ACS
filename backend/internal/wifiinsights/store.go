@@ -3,6 +3,7 @@ package wifiinsights
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -31,6 +32,36 @@ func (r *Repository) LastSampleAt(ctx context.Context, deviceID string) (time.Ti
 		return time.Time{}, err
 	}
 	return at.Time, nil
+}
+
+// ConnectedBySSID counts the clients on each SSID instance in the device's
+// latest sample, if that sample is no older than maxAge; the Wi-Fi editor
+// shows it as the number of devices a change would disconnect.
+func (r *Repository) ConnectedBySSID(ctx context.Context, deviceID string, maxAge time.Duration) (map[int]int, time.Time, error) {
+	var id int64
+	var at time.Time
+	err := r.db.QueryRowContext(ctx, `SELECT id, sampled_at FROM wifi_samples WHERE device_id = $1 ORDER BY sampled_at DESC LIMIT 1`, deviceID).Scan(&id, &at)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && time.Since(at) > maxAge {
+		return nil, time.Time{}, nil
+	}
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT ssid_instance, count(*) FROM wifi_client_samples
+		WHERE sample_id = $1 AND ssid_instance IS NOT NULL GROUP BY ssid_instance`, id)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	defer rows.Close()
+	out := map[int]int{}
+	for rows.Next() {
+		var inst, n int
+		if err := rows.Scan(&inst, &n); err != nil {
+			return nil, time.Time{}, err
+		}
+		out[inst] = n
+	}
+	return out, at.UTC(), rows.Err()
 }
 
 // Record stores one snapshot taken at `at` and updates the client registry.

@@ -19,6 +19,7 @@ import { useLive } from "../lib/useLive";
 import { ParameterBrowser } from "../components/ParameterBrowser";
 import { toast } from "../lib/toast";
 import { MeshTopology } from "../components/MeshTopology";
+import { WiFiNetworksPanel } from "../components/WiFiNetworksPanel";
 import { SimPanel } from "../components/SimPanel";
 import { WiFiInsights } from "../components/WiFiInsights";
 import { XmppPanel } from "../components/XmppPanel";
@@ -65,7 +66,6 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
   useEffect(() => {
     busyRef.current = busy;
   }, [busy]);
-  const [ssidInput, setSsidInput] = useState("");
   const [pingHost, setPingHost] = useState("");
   const [tracerouteHost, setTracerouteHost] = useState("");
   const [captureProtocol, setCaptureProtocol] = useState<"CWMP" | "USP">("CWMP");
@@ -211,29 +211,6 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
     withBusy(async () => {
       const res = await api.refreshCellularDiagnostics(id);
       return `Queued ${res.command_key} — matched vendor ${res.matched_vendor || "(generic fallback)"}, ${res.parameters.length} parameters`;
-    });
-
-  const handleSetSsid = () =>
-    withBusy(async () => {
-      if (!ssidInput.trim()) throw new ApiError(400, "SSID cannot be empty");
-      // Resolve every primary (non-guest, AP-bound) SSID from discovery
-      // instead of assuming Device.WiFi.SSID.1, which on multi-SSID CPEs
-      // renamed one band only or a guest network.
-      const wifi = await api.getWiFiNetworks(id);
-      if (!wifi.supported) throw new ApiError(409, wifi.reason || "No Wi-Fi networks resolved for this device");
-      if (!wifi.complete) {
-        const read = await api.getParametersLive(id, wifi.refresh_paths ?? []);
-        throw new ApiError(409, `Wi-Fi roles not known yet — queued ${read.command_key} to read them; retry after the device's next check-in`);
-      }
-      const targets = (wifi.primary ?? []).filter((n) => n.name_path && n.name_writable);
-      if (targets.length === 0) throw new ApiError(409, "No writable primary Wi-Fi network on this device");
-      const res = await api.putDeviceParameters(
-        id,
-        targets.map((n) => ({ name: n.name_path as string, value: ssidInput.trim(), type: "string" })),
-      );
-      setSsidInput("");
-      const bands = targets.map((n) => n.band || `SSID ${n.instance}`).join(" + ");
-      return `Queued ${res.command_key} — renames ${bands}; applies on the device's next session`;
     });
 
   const handleSaveTags = () =>
@@ -637,17 +614,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
                 // set on the gateway and propagated by EasyMesh.
                 <p className="muted">Wi-Fi name and password for this mesh are set on its gateway ({meshGatewayName}).</p>
               ) : (
-                <div className="form-row">
-                  <input aria-label="New WiFi SSID"
-                    placeholder="New WiFi SSID…"
-                    value={ssidInput}
-                    onChange={(e) => setSsidInput(e.target.value)}
-                    disabled={busy || !writable}
-                  />
-                  <button className="btn" onClick={handleSetSsid} disabled={busy || !writable || !ssidInput.trim()}>
-                    Set SSID
-                  </button>
-                </div>
+                <WiFiNetworksPanel deviceId={id} writable={writable} />
               )}
               <div className="form-row">
                 {satellite ? (

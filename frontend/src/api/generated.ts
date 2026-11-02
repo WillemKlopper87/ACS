@@ -157,6 +157,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/wifi/networks/{instance}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change one Wi-Fi network (SSID instance) on one CPE (devices.write permission)
+         * @description Absent fields stay as they are. All of a network's changes go out in one verified SetParameterValues, so a name and passphrase change together. also_instances applies the same change to more networks (e.g. the paired band). Turning on a spare network (adding a network) needs its passphrase. Refused when it would leave the network open without allow_open, or turn off every network on the device. The passphrase is never stored after the job, never returned and only marked as changed in the audit log.
+         */
+        put: operations["UpdateWiFiNetwork"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/wifi/networks": {
         parameters: {
             query?: never;
@@ -7366,6 +7386,13 @@ export interface components {
             enable_writable: boolean;
             passphrase_writable: boolean;
             ap_inferred?: boolean;
+            ap_enable_path?: string;
+            ap_enable_writable?: boolean;
+            advertised_path?: string;
+            advertised_writable?: boolean;
+            security_mode_path?: string;
+            security_mode_writable?: boolean;
+            modes_supported?: string[];
         };
         DeviceGroupCount: {
             Manufacturer?: string;
@@ -8452,6 +8479,76 @@ export interface operations {
             };
         };
     };
+    UpdateWiFiNetwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                id: components["parameters"]["DeviceId"];
+                /** @description Device.WiFi.SSID.{instance} */
+                instance: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    /** @description 8-63 printable ASCII characters, or 64 hex digits */
+                    passphrase?: string;
+                    /** @description One of the network's modes_supported, e.g. WPA2-Personal */
+                    security_mode?: string;
+                    enabled?: boolean;
+                    /** @description Broadcast the network name */
+                    advertised?: boolean;
+                    also_instances?: number[];
+                    /** @description Confirms a network with security mode None */
+                    allow_open?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        command_key?: string;
+                        status?: string;
+                        instances?: number[];
+                        /** @description Parameter paths written */
+                        writes?: string[];
+                        /** @description True when clients on an enabled network must reconnect */
+                        disconnects?: boolean;
+                    };
+                };
+            };
+            /** @description Invalid value, unsupported security mode, open network without allow_open, or a network turned on without its passphrase */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such device or network */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Wi-Fi not resolved yet (refresh_paths), field not writable on this device, or every network would be off */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     WiFiNetworks: {
         parameters: {
             query?: never;
@@ -8478,6 +8575,12 @@ export interface operations {
                         primary?: components["schemas"]["WiFiNetwork"][];
                         refresh_paths?: string[];
                         read_paths?: string[];
+                        /** @description Connected clients per SSID instance in the latest Wi-Fi insights sample (at most 30 minutes old) */
+                        clients_by_instance?: {
+                            [key: string]: number;
+                        } | null;
+                        /** Format: date-time */
+                        clients_sampled_at?: string | null;
                     };
                 };
             };
