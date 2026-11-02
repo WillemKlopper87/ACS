@@ -470,6 +470,33 @@ ACS_GRAFANA_PUBLIC=1 ./scripts/start.sh
 That puts a login page on the public internet — open `3000/tcp` to your
 own address only, never `0.0.0.0/0`.
 
+**Grafana for operators, through the console (recommended once TLS is in
+place).** With the gate on, Grafana stays on loopback and operators open it
+from the console's "Grafana" link: the console mints a 30-second,
+single-use ticket, the proxy exchanges it for an HttpOnly cookie on
+Grafana's own origin, and checks that cookie against the operator's
+console session on every request. Grafana's own login still follows. A
+console logout, password change or disabled operator ends Grafana access
+at once.
+
+- Only platform operators pass: a superadmin, or a role granted
+  `monitoring.view` (manager and NOC by default) with **no customer
+  scope**. Grafana's dashboards read every customer's data, so ISP-scoped
+  operators are refused.
+- Grafana keeps its own origin (another port such as `3443`, or
+  `grafana.<domain>`), never a path under the console: a script inside
+  Grafana could otherwise read the console's session token.
+
+```bash
+# in ~/.acs-secrets.env
+export ACS_GRAFANA_GATE="1"
+export ACS_GRAFANA_URL="https://<host>:3443"
+```
+
+Then install `infra/ingress/grafana-gate.nginx.conf` in nginx (certificate
+paths and console address filled in), run `nginx -t`, reload, open
+`3443/tcp` to your operators, and rerun `start.sh`.
+
 Useful checks:
 
 ```bash

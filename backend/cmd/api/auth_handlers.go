@@ -162,8 +162,10 @@ func withJWTAuth(secret []byte, internalServiceToken string, current func(contex
 			return
 		}
 		// Token kind must match how it arrived: tickets only in the query
-		// string on ticket routes, session tokens only in the header.
-		if fromQuery != (claims.Audience == auth.AudienceBrowserTicket) {
+		// string on ticket routes, session tokens (no audience) only in
+		// the header. Any other audience (the Grafana gate's) is never an
+		// API credential.
+		if fromQuery && claims.Audience != auth.AudienceBrowserTicket || !fromQuery && claims.Audience != "" {
 			http.Error(w, "wrong token type for this route", http.StatusUnauthorized)
 			return
 		}
@@ -215,6 +217,9 @@ func isServiceRoute(r *http.Request) bool {
 }
 
 func isPublicRoute(r *http.Request) bool {
+	if r.Method == http.MethodGet && (r.URL.Path == "/api/v1/grafana/enter" || r.URL.Path == "/api/v1/grafana/check") {
+		return true
+	} // the Grafana gate: each checks its own audience-bound token (grafana_gate.go)
 	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/bulk-data/") && strings.HasSuffix(r.URL.Path, "/receive") {
 		return true
 	} // receiver-bound, expiring Basic credential is verified by the handler

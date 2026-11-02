@@ -657,6 +657,10 @@ export const api = {
     return ticket;
   },
 
+  // The Grafana gate (ACS_GRAFANA_GATE): a 30-second ticket URL at
+  // Grafana's own origin, opened in a new tab (lib/grafana.ts).
+  grafanaTicket: () => request<{ url: string; expires_in: number }>("/api/v1/grafana/ticket", { method: "POST" }),
+
   // Not a fetch() call — the caller opens this URL directly as a WebSocket.
   // Async because it first mints a browser ticket for the handshake.
   cliConnectURL: async (deviceId: string, credentialId: string) => {

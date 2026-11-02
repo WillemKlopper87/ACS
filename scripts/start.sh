@@ -141,6 +141,20 @@ fi
 # console's "Grafana" link (which otherwise opens the public port, or
 # localhost:3000 through an SSH tunnel).
 GRAFANA_URL="${ACS_GRAFANA_URL:-$GRAFANA_URL}"
+# ACS_GRAFANA_GATE=1: operators reach Grafana only through the console's
+# sign-in gate (cmd/api/grafana_gate.go, infra/ingress/). Grafana must then
+# stay on loopback behind the proxy, at its own origin.
+if [ "${ACS_GRAFANA_GATE:-}" = "1" ]; then
+  if [ -z "${ACS_GRAFANA_URL:-}" ] || [ "${ACS_GRAFANA_PUBLIC:-}" = "1" ]; then
+    echo "ERROR: ACS_GRAFANA_GATE=1 needs ACS_GRAFANA_URL (Grafana's own origin behind the proxy) and no ACS_GRAFANA_PUBLIC=1." >&2
+    exit 1
+  fi
+  case "$ACS_GRAFANA_URL" in
+    https://*) ;;
+    *) echo "WARNING: ACS_GRAFANA_URL is not https; the gate cookie and Grafana's login travel unencrypted." >&2 ;;
+  esac
+  GRAFANA_BIND="127.0.0.1"
+fi
 set_compose_env GRAFANA_ROOT_URL "$GRAFANA_URL"
 set_compose_env GRAFANA_BIND "$GRAFANA_BIND"
 
@@ -280,6 +294,9 @@ echo "=== Building frontend ==="
 cd "$ROOT/frontend"
 echo "VITE_API_BASE_URL=$API_PUBLIC_URL" > .env.local
 echo "VITE_GRAFANA_URL=$GRAFANA_URL" >> .env.local
+if [ "${ACS_GRAFANA_GATE:-}" = "1" ]; then
+  echo "VITE_GRAFANA_GATE=1" >> .env.local
+fi
 npm install --silent
 npm run build
 
@@ -327,7 +344,9 @@ echo "USP MQTT:    $PUBLIC_IP:1883"
 echo "BSS adapter: http://127.0.0.1:8090 (host-local; use TLS reverse proxy for northbound access)"
 echo "USP health:  http://127.0.0.1:8092/readyz"
 
-if [ -n "${ACS_GRAFANA_URL:-}" ]; then
+if [ "${ACS_GRAFANA_GATE:-}" = "1" ]; then
+  echo "Grafana:     $ACS_GRAFANA_URL (through the console's sign-in gate)"
+elif [ -n "${ACS_GRAFANA_URL:-}" ]; then
   echo "Grafana:     $ACS_GRAFANA_URL"
 elif [ "${ACS_GRAFANA_PUBLIC:-}" = "1" ]; then
   echo "Grafana:     http://$PUBLIC_IP:3000"

@@ -8,7 +8,9 @@ import { canAdmin } from "./auth/roles";
 import { ToastHost } from "./components/Toast";
 import { useApiReachable } from "./lib/apiHealth";
 import { useTheme, type Theme } from "./theme/useTheme";
-import { grafanaLink } from "./lib/grafana";
+import { grafanaLink, openGatedGrafana } from "./lib/grafana";
+import { api } from "./api/client";
+import { toast } from "./lib/toast";
 
 // Shown next to the brand so a console pointed at production is never
 // mistaken for a scratch one. Deliberately absent rather than defaulted:
@@ -19,6 +21,12 @@ const ENV_LABEL = import.meta.env.VITE_ENV_LABEL as string | undefined;
 // Grafana opens on its own origin (lib/grafana.ts); absent when the build
 // has no VITE_GRAFANA_URL.
 const GRAFANA = grafanaLink(import.meta.env.VITE_GRAFANA_URL as string | undefined, import.meta.env.VITE_API_BASE_URL as string | undefined);
+const GRAFANA_GATED = import.meta.env.VITE_GRAFANA_GATE === "1";
+
+async function openGrafana() {
+  const problem = await openGatedGrafana(api.grafanaTicket, () => window.open("about:blank", "_blank"));
+  if (problem) toast(problem, "error");
+}
 
 type Screen = "dashboard" | "fleet" | "devices" | "onboarding" | "control" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help" | "alerting";
 
@@ -221,7 +229,13 @@ function AppShell() {
                       {item.label}
                     </button>
                   ))}
-                  {group === "Monitor" && GRAFANA && (
+                  {group === "Monitor" && GRAFANA && GRAFANA_GATED && (
+                    <button type="button" onClick={() => void openGrafana()} title="Opens Grafana in a new tab after checking your console sign-in">
+                      Grafana <span aria-hidden="true">↗</span>
+                      <span className="sr-only">(opens in a new tab)</span>
+                    </button>
+                  )}
+                  {group === "Monitor" && GRAFANA && !GRAFANA_GATED && (
                     <a
                       className="nav-external"
                       href={GRAFANA.href}
