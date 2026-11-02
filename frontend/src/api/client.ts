@@ -203,6 +203,10 @@ export const api = {
     return request<{ items: SubscriberHit[]; count: number }>(`/api/v1/lookup?${qs}`);
   },
 
+  /** The device's subscriber with the full address; audited (SubscriberDetailsRevealed). */
+  revealDeviceSubscriber: (id: string) =>
+    request<components["schemas"]["SubscriberSummary"]>(`/api/v1/devices/${id}/subscriber/reveal`, { method: "POST" }),
+
   getAccountProfile: (accountId: string) => request<AccountProfile>(`/api/v1/accounts/${encodeURIComponent(accountId)}/profile`),
 
   updateAccountProfile: (accountId: string, body: { subscriber_name?: string; vip?: boolean }) =>

@@ -1048,6 +1048,16 @@ paths:
       responses:
         "202": { description: Per-device outcome (one failure doesn't block the rest), content: { application/json: { schema: { $ref: "#/components/schemas/BulkActionResponse" } } } }
 
+  /api/v1/devices/{id}/subscriber/reveal:
+    post:
+      tags: [Devices]
+      summary: "Show the device's subscriber with the full address (audited)"
+      description: "Device reads give the subscriber's name, account, VIP flag, suburb and city, but not the site name, street or postal code. This call returns them and records SubscriberDetailsRevealed (who, which device and account; never the details)."
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SubscriberSummary" } } } }
+        "404": { description: "Device not found in the caller's scope, or not linked to an account" }
+
   /api/v1/lookup:
     get:
       tags: [Devices]
@@ -3078,7 +3088,9 @@ components:
         last_reboot_duration_seconds: { type: integer, description: Seconds from the last acknowledged reboot/reset until the device informed again }
         gateway_device_id: { type: string, description: "Mesh satellites only: the gateway device this unit sits behind, resolved from TR-111 Device.GatewayInfo (unset when unknown or the gateway is not registered)" }
         gateway_oui_serial: { type: string, description: "Mesh satellites only: the gateway identity (OUI+ProductClass+SerialNumber natural key) reported in Device.GatewayInfo" }
-        subscriber: { $ref: "#/components/schemas/SubscriberSummary" }
+        subscriber:
+          allOf: [{ $ref: "#/components/schemas/SubscriberSummary" }]
+          description: "In device reads, site holds only suburb and city; POST /api/v1/devices/{id}/subscriber/reveal gives the full address (audited)."
 
     SubscriberSite:
       type: object

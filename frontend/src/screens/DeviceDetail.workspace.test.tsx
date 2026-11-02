@@ -120,6 +120,6 @@ describe("device workspace", () => {
     view.unmount();
 
     open("ownership");
-    expect(await screen.findByRole("button", { name: "Save name" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Save nickname" })).toBeTruthy();
   });
 });

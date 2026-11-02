@@ -195,6 +195,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("GET", "/api/v1/devices/{id}/wifi-topology", ro, h.getWiFiTopology)
 	route("GET", "/api/v1/devices/{id}/wifi/networks", ro, h.getWiFiNetworks)
 	// Subscriber lookup and account profiles (subscriber_handlers.go).
+	route("POST", "/api/v1/devices/{id}/subscriber/reveal", ro, h.revealDeviceSubscriber)
 	route("GET", "/api/v1/lookup", ro, h.lookupSubscribers)
 	route("GET", "/api/v1/accounts/{account_id}/profile", ro, h.getAccountProfile)
 	routePerm("PUT", "/api/v1/accounts/{account_id}/profile", operators.PermSubscriberManage, h.putAccountProfile)
