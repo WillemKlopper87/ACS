@@ -164,8 +164,9 @@ func (r *Repository) AccountCustomers(ctx context.Context, accountID string) ([]
 
 // summaryQuery selects one row per device: its active mapping (gateway
 // role first), the account profile and the site. The profile is joined
-// only when the account's BSS owner is the device's customer (or the
-// account has no owner), so a device of one customer mapped to another
+// only when the account's BSS owner is the device's customer, or, for an
+// unowned account, when every device mapped to it is that customer's (the
+// rule accountInScope applies to edits), so a device of one customer mapped to another
 // customer's account never shows that account's subscriber.
 const summaryQuery = `
 	SELECT d.id, d.oui_serial, COALESCE(d.serial_number, ''), COALESCE(d.manufacturer, ''), COALESCE(d.product_class, ''), d.label,
@@ -178,7 +179,11 @@ const summaryQuery = `
 	         ORDER BY (role = 'gateway') DESC, assigned_at DESC LIMIT 1) m ON true
 	  LEFT JOIN bss_accounts b ON b.account_id = m.account_id
 	  LEFT JOIN account_profiles p ON p.account_id = m.account_id
-	        AND (b.customer_id IS NULL OR b.customer_id IS NOT DISTINCT FROM d.customer_id)
+	        AND (b.customer_id = d.customer_id
+	             OR (b.customer_id IS NULL AND NOT EXISTS (
+	                    SELECT 1 FROM account_device_mappings m2 JOIN devices d2 ON d2.id = m2.device_id
+	                     WHERE m2.account_id = m.account_id AND m2.unassigned_at IS NULL
+	                       AND d2.customer_id IS DISTINCT FROM d.customer_id)))
 	  LEFT JOIN sites s ON s.id = d.site_id`
 
 type row struct {

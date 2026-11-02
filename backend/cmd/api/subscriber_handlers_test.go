@@ -97,4 +97,26 @@ func TestIntegration_SubscriberLookup(t *testing.T) {
 	if r := e.call("mgr-b", "GET", "/api/v1/lookup?q=e5f6", nil); strings.Contains(r.body, "Thandi") {
 		t.Fatalf("B's lookup shows A's subscriber: %s", r.body)
 	}
+
+	// The same for an unowned account shared by both customers' devices:
+	// neither sees a name, and neither may edit it.
+	devA2, devB3 := e.device("LK0004AAAA", &custA), e.device("LK0005BBBB", &custB)
+	for _, dev := range []string{devA2, devB3} {
+		if _, err := e.db.ExecContext(e.ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at)
+			SELECT gen_random_uuid(), 'ACC-SHARED', id, oui_serial, CASE WHEN customer_id = $2 THEN 'gateway' ELSE 'extender' END, now() FROM devices WHERE id = $1`, dev, custA); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shared := "Shared Name"
+	if _, err := e.h.subscribers.Set(e.ctx, "ACC-SHARED", subscribers.SourceOperator, "op", &shared, nil); err != nil {
+		t.Fatal(err)
+	}
+	for op, dev := range map[string]string{"mgr-a": devA2, "mgr-b": devB3} {
+		if r := e.call(op, "GET", "/api/v1/devices/"+dev, nil); strings.Contains(r.body, shared) {
+			t.Fatalf("%s sees a shared unowned account's name: %s", op, r.body)
+		}
+		if r := e.call(op, "PUT", "/api/v1/accounts/ACC-SHARED/profile", map[string]any{"vip": true}); r.code != 404 {
+			t.Fatalf("%s edits a shared unowned account = %d", op, r.code)
+		}
+	}
 }
