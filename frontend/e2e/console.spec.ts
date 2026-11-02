@@ -256,6 +256,54 @@ test("subscriber lookup finds a caller and the device shows who it serves", asyn
   expect(profileBody).toEqual({ vip: false });
 });
 
+// A sale in service can be ended (typed serial, archive on by default,
+// reset off) or its device swapped; the console sends exactly that.
+test("an in-service sale is ended or its device swapped from Onboarding", async ({ page }) => {
+  const sale = {
+    id: "ob-1", customer_id: null, device_id: "dev-1", expected_serial: "S1", state: "IN_SERVICE", state_reason: "", role: "gateway",
+    commercial_model: "retail", source: "console", config_jobs: [], account_ref: "ACC-1001", created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(), in_service_at: new Date().toISOString(),
+  };
+  const sent: { path: string; body: unknown }[] = [];
+  await page.route(`${API}/api/v1/onboardings**`, (route) => {
+    const req = route.request();
+    const path = new URL(req.url()).pathname;
+    if (req.method() === "POST" && path.endsWith("/end")) {
+      sent.push({ path, body: req.postDataJSON() });
+      return route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ onboarding_id: "ob-1", device_id: "dev-1", accounts: ["ACC-1001"], subscribers_archived: ["ACC-1001"], factory_reset: "" }) });
+    }
+    if (req.method() === "POST" && path.endsWith("/swap")) {
+      sent.push({ path, body: req.postDataJSON() });
+      return route.fulfill({ status: 200, contentType: "application/json",
+        body: JSON.stringify({ ended_onboarding_id: "ob-1", replacement: { ...sale, id: "ob-2", expected_serial: "S2", state: "PLANNED" } }) });
+    }
+    if (path === "/api/v1/onboardings/unclaimed") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) });
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [sale] }) });
+  });
+  await signIn(page);
+  await page.goto("/onboarding/completed");
+  await page.getByRole("cell", { name: "S1" }).click();
+
+  await page.getByRole("button", { name: "End service" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Reason").selectOption("rma");
+  const confirm = dialog.getByRole("button", { name: "End service" });
+  await expect(confirm).toBeDisabled();
+  await dialog.getByLabel(/Type the serial/).fill("S1");
+  await expectNoSeriousA11y(page, "end service dialog");
+  await page.screenshot({ path: "test-results/end-service.png" });
+  await confirm.click();
+  await expect(dialog).toBeHidden();
+  expect(sent[0]).toEqual({ path: "/api/v1/onboardings/ob-1/end", body: { reason: "rma", keep_subscriber: false, factory_reset: false } });
+
+  await page.getByRole("cell", { name: "S1" }).click();
+  await page.getByRole("button", { name: "Swap device" }).click();
+  await page.getByRole("dialog").getByLabel("Replacement serial").fill("S2");
+  await page.getByRole("dialog").getByRole("button", { name: "Swap device" }).click();
+  expect(sent[1]).toEqual({ path: "/api/v1/onboardings/ob-1/swap", body: { reason: "rma", serial: "S2" } });
+});
+
 // Removing an account-device mapping from the BSS screen asks why (the
 // API requires and audits a reason) and calls the unassign endpoint.
 test("an admin removes an account-device mapping with a reason", async ({ page }) => {

@@ -360,7 +360,7 @@ paths:
       responses:
         "200": { description: The cancelled sale, content: { application/json: { schema: { $ref: "#/components/schemas/Sale" } } } }
         "404": { description: "Unknown, or another customer's, sale", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
-        "409": { description: "ErrSaleWrongState: the sale is IN_SERVICE or already CANCELLED", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "409": { description: "ErrSaleWrongState: the sale is IN_SERVICE, ENDED or already CANCELLED", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
 
   /bss/v1/devices:
     get:
@@ -665,7 +665,7 @@ components:
         role: { type: string }
         service_plan: { type: string }
         plan_matched: { type: boolean }
-        state: { type: string, enum: [PLANNED, CONTACTED, SECURED, DISCOVERED, CONFIGURING, IN_SERVICE, ON_HOLD, FAILED, CANCELLED] }
+        state: { type: string, enum: [PLANNED, CONTACTED, SECURED, DISCOVERED, CONFIGURING, IN_SERVICE, ON_HOLD, FAILED, CANCELLED, ENDED], description: "ENDED (1.2): an operator ended the service or swapped the device" }
         reason_code: { type: string, description: "As OnboardingStateChangeEvent.reasonCode, including TTL_EXPIRED" }
         reason: { type: string }
         device_id: { type: string }

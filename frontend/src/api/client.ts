@@ -87,6 +87,7 @@ export type CellularProfile = components["schemas"]["CellularProfile"];
 export type Onboarding = components["schemas"]["Onboarding"];
 export type OnboardingInput = components["schemas"]["OnboardingInput"];
 export type OnboardingState = components["schemas"]["OnboardingState"];
+export type SaleEndReason = "return" | "rma" | "upgrade" | "moved" | "corrected";
 export type UnclaimedDevice = components["schemas"]["UnclaimedDevice"];
 export type SubscriberHit = components["schemas"]["SubscriberHit"];
 export type AccountProfile = components["schemas"]["AccountProfile"];
@@ -765,6 +766,18 @@ export const api = {
     request<Onboarding>("/api/v1/onboardings", { method: "POST", body: JSON.stringify(input) }),
   cancelOnboarding: (id: string) => request<Onboarding>(`/api/v1/onboardings/${id}/cancel`, { method: "POST" }),
   retryOnboarding: (id: string) => request<Onboarding>(`/api/v1/onboardings/${id}/retry`, { method: "POST" }),
+  /** Ends an in-service sale and releases its device; see POST /api/v1/onboardings/{id}/end. */
+  endService: (id: string, body: { reason: SaleEndReason; keep_subscriber?: boolean; factory_reset?: boolean }) =>
+    request<{ onboarding_id: string; device_id: string; accounts: string[]; subscribers_archived: string[]; factory_reset?: string }>(
+      `/api/v1/onboardings/${id}/end`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  swapDevice: (id: string, body: { reason: "rma" | "upgrade"; serial: string; oui?: string }) =>
+    request<{ ended_onboarding_id: string; replacement: Onboarding }>(`/api/v1/onboardings/${id}/swap`, { method: "POST", body: JSON.stringify(body) }),
+  moveSaleSite: (id: string, siteId: string) =>
+    request<Onboarding>(`/api/v1/onboardings/${id}/site`, { method: "PUT", body: JSON.stringify({ site_id: siteId }) }),
+  changeSalePlan: (id: string, planId: string) =>
+    request<Onboarding>(`/api/v1/onboardings/${id}/plan`, { method: "PUT", body: JSON.stringify({ service_plan_id: planId }) }),
   listUnclaimedDevices: () => request<{ items: UnclaimedDevice[] }>("/api/v1/onboardings/unclaimed"),
 };
 

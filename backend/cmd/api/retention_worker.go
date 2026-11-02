@@ -22,7 +22,8 @@ func runRetention(ctx context.Context, db *sql.DB, logger *slog.Logger) {
 	logger.Info("retention policy", "sessions_days", policy.SessionsDays, "audit_log_days", policy.AuditLogDays,
 		"parameter_history_days", policy.ParameterHistoryDays, "webhook_deliveries_days", policy.WebhookDeliveriesDays,
 		"finished_jobs_days", policy.FinishedJobsDays, "stale_upload_slots_days", policy.StaleUploadSlotsDays,
-		"reset_tokens_days", policy.ResetTokensDays, "tmf_events_days", policy.TMFEventsDays)
+		"reset_tokens_days", policy.ResetTokensDays, "tmf_events_days", policy.TMFEventsDays,
+		"subscriber_archive_days", policy.SubscriberArchiveDays)
 
 	timer := time.NewTimer(2 * time.Minute)
 	defer timer.Stop()

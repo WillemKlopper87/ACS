@@ -9,6 +9,7 @@ import { canManage } from "../auth/roles";
 import { useAuth } from "../auth/useAuth";
 import { DataTable } from "../components/DataTable";
 import { OnboardingTimeline } from "../components/OnboardingTimeline";
+import { SaleLifecycleDialog, type SaleLifecycleMode } from "../components/SaleLifecycleDialog";
 import { OnboardingWizard, PlanSummary, type ClaimTarget } from "../components/OnboardingWizard";
 import { SubNav, type SubNavItem } from "../components/SubNav";
 import { devicePath } from "../lib/deviceSections";
@@ -42,6 +43,7 @@ export function Onboarding() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [wizard, setWizard] = useState<{ device?: ClaimTarget } | null>(null);
+  const [lifecycle, setLifecycle] = useState<{ sale: OnboardingRecord; mode: SaleLifecycleMode } | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -165,7 +167,23 @@ export function Onboarding() {
                           Retry checks
                         </button>
                       )}
-                      {current.state !== "IN_SERVICE" && current.state !== "CANCELLED" && (
+                      {current.state === "IN_SERVICE" && (
+                        <>
+                          <button className="btn" onClick={() => setLifecycle({ sale: current, mode: "site" })} disabled={!manage}>
+                            Change site
+                          </button>
+                          <button className="btn" onClick={() => setLifecycle({ sale: current, mode: "plan" })} disabled={!manage}>
+                            Change plan
+                          </button>
+                          <button className="btn" onClick={() => setLifecycle({ sale: current, mode: "swap" })} disabled={!manage}>
+                            Swap device
+                          </button>
+                          <button className="btn danger" onClick={() => setLifecycle({ sale: current, mode: "end" })} disabled={!manage}>
+                            End service
+                          </button>
+                        </>
+                      )}
+                      {current.state !== "IN_SERVICE" && current.state !== "CANCELLED" && current.state !== "ENDED" && (
                         <button className="btn danger" onClick={() => act(current, "cancel")} disabled={!manage}>
                           Cancel
                         </button>
@@ -174,6 +192,15 @@ export function Onboarding() {
                   </div>
                   <OnboardingTimeline onboarding={current} />
                   <dl className="kv">
+                    {current.state === "ENDED" && (
+                      <>
+                        <dt>Service ended</dt>
+                        <dd>
+                          {current.ended_at ? `${timeAgo(current.ended_at)} · ` : ""}
+                          {current.state_reason}
+                        </dd>
+                      </>
+                    )}
                     <dt>SIM (masked)</dt>
                     <dd>{[current.expected_iccid, current.expected_imsi].filter(Boolean).join(" · ") || "not checked"}</dd>
                     <dt>Role / model</dt>
@@ -217,6 +244,20 @@ export function Onboarding() {
             setSelected(o.id);
             navigate(`/onboarding/${onboardingTab(o.state)}`);
             load();
+          }}
+        />
+      )}
+      {lifecycle && (
+        <SaleLifecycleDialog
+          sale={lifecycle.sale}
+          mode={lifecycle.mode}
+          sites={sites}
+          plans={plans}
+          onClose={() => setLifecycle(null)}
+          onDone={() => {
+            setLifecycle(null);
+            setSelected(null);
+            void load();
           }}
         />
       )}

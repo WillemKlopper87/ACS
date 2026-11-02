@@ -35,6 +35,7 @@ import (
 	"acs/internal/devices/adapters"
 	"acs/internal/firmware"
 	"acs/internal/jobs"
+	"acs/internal/lifecycle"
 	"acs/internal/mailer"
 	"acs/internal/netguard"
 	"acs/internal/objstore"
@@ -270,6 +271,7 @@ func main() {
 		grafanaGate:     os.Getenv("ACS_GRAFANA_GATE") == "1",
 		tenancy:         tenancy.NewRepository(db),
 		subscribers:     subscribers.NewRepository(db),
+		lifecycle:       lifecycle.New(db),
 		onboarding:      onboarding.NewRepository(db),
 		dashboards:      dashboard.NewRepository(db),
 
@@ -500,8 +502,10 @@ type handler struct {
 	tenancy     *tenancy.Repository
 	// subscribers backs the subscriber lookup and account profiles.
 	subscribers *subscribers.Repository
-	onboarding  *onboarding.Repository
-	dashboards  *dashboard.Repository
+	// lifecycle ends, swaps and moves in-service sales.
+	lifecycle  *lifecycle.Service
+	onboarding *onboarding.Repository
+	dashboards *dashboard.Repository
 
 	bssMappings     *bss.Repository
 	bssWebhooks     *bss.WebhookRepository

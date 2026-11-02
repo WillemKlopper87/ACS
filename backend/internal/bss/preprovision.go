@@ -100,7 +100,9 @@ type PreProvisioned struct {
 	MappingStatus   string
 }
 
-// PreProvisionedNeedingSync lists BSS onboardings whose mapping is behind
+// PreProvisionedNeedingSync lists BSS onboardings (and replacement sales
+// recorded by a device swap, which carry the old mapping's role) whose
+// mapping is behind
 // their state: bound to a device but not mapped yet, in service but still
 // PENDING_ACTIVE, or cancelled with the mapping still current.
 func (r *Repository) PreProvisionedNeedingSync(ctx context.Context, limit int) ([]PreProvisioned, error) {
@@ -111,7 +113,7 @@ func (r *Repository) PreProvisionedNeedingSync(ctx context.Context, limit int) (
 		  LEFT JOIN devices d ON d.id = o.device_id
 		  LEFT JOIN account_device_mappings m ON m.id = o.bss_mapping_id
 		 WHERE o.source = 'bss' AND o.account_ref IS NOT NULL
-		   AND ((o.device_id IS NOT NULL AND o.bss_mapping_id IS NULL AND o.state <> 'CANCELLED')
+		   AND ((o.device_id IS NOT NULL AND o.bss_mapping_id IS NULL AND o.state NOT IN ('CANCELLED', 'ENDED'))
 		     OR (o.state = 'IN_SERVICE' AND m.status = $2 AND m.unassigned_at IS NULL)
 		     OR (o.state = 'CANCELLED' AND m.id IS NOT NULL AND m.unassigned_at IS NULL))
 		 ORDER BY o.updated_at LIMIT $1`, limit, StatusPendingActive)

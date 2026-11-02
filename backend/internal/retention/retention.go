@@ -33,6 +33,9 @@ type Policy struct {
 	// TMFEventsDays bounds the integration event stream (tmf_events,
 	// replayed by GET /bss/v1/events); see pruneEvents.
 	TMFEventsDays int
+	// SubscriberArchiveDays is how long an ended subscriber's archived
+	// profile (name, VIP) is kept (internal/lifecycle).
+	SubscriberArchiveDays int
 }
 
 // DefaultPolicy is deliberately conservative: long enough that an
@@ -50,6 +53,7 @@ var DefaultPolicy = Policy{
 	CaptureSessionsDays:   1,
 	WiFiInsightsDays:      30,
 	TMFEventsDays:         90,
+	SubscriberArchiveDays: 3 * 365,
 }
 
 func envDays(key string, fallback int) int {
@@ -75,6 +79,7 @@ func PolicyFromEnv() Policy {
 		CaptureSessionsDays:   envDays("ACS_RETENTION_CAPTURE_SESSIONS_DAYS", d.CaptureSessionsDays),
 		WiFiInsightsDays:      envDays("ACS_RETENTION_WIFI_INSIGHTS_DAYS", d.WiFiInsightsDays),
 		TMFEventsDays:         envDays("ACS_RETENTION_TMF_EVENTS_DAYS", d.TMFEventsDays),
+		SubscriberArchiveDays: envDays("ACS_RETENTION_SUBSCRIBER_ARCHIVE_DAYS", d.SubscriberArchiveDays),
 	}
 }
 
@@ -116,6 +121,8 @@ var rules = []rule{
 		"sampled_at < $1", "id"},
 	{"wifi_clients", func(p Policy) int { return p.WiFiInsightsDays },
 		"last_seen_at < $1", "id"},
+	{"account_profile_archive", func(p Policy) int { return p.SubscriberArchiveDays },
+		"archived_at < $1", "id"},
 }
 
 // Result is per-table rows deleted in one Run.

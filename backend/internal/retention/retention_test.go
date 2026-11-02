@@ -110,3 +110,24 @@ func TestRun_PrunesOldStoppedCaptureSessions(t *testing.T) {
 		t.Errorf("result[\"capture_sessions\"] = %d, want 2", result["capture_sessions"])
 	}
 }
+
+// TestPruneSubscriberArchive: archived subscriber profiles are deleted
+// once older than the archive period, and kept within it.
+func TestPruneSubscriberArchive(t *testing.T) {
+	ctx, db := newMigratedDB(t)
+	for _, age := range []string{"4 years", "1 year"} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO account_profile_archive (account_id, display_name, vip, reason, archived_by, archived_at)
+			VALUES ('ACC-'||$1, 'Someone', false, 'service ended', 'op', now() - $1::interval)`, age); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := Run(ctx, db, Policy{SubscriberArchiveDays: 3 * 365})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left string
+	_ = db.QueryRowContext(ctx, `SELECT string_agg(account_id, ',') FROM account_profile_archive`).Scan(&left)
+	if res["account_profile_archive"] != 1 || left != "ACC-1 year" {
+		t.Fatalf("pruned %d, left %q", res["account_profile_archive"], left)
+	}
+}

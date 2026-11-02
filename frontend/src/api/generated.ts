@@ -5321,7 +5321,7 @@ export interface paths {
                         "application/json": components["schemas"]["Onboarding"];
                     };
                 };
-                /** @description Already IN_SERVICE or CANCELLED */
+                /** @description Already IN_SERVICE, CANCELLED or ENDED */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -5375,6 +5375,302 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/onboardings/{id}/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * End an in-service sale and release its device (tenancy.manage)
+         * @description Ends the sale (ENDED) and every active account mapping of the device, recorded with the reason, and releases the device to the unassigned pool: no customer, site, projects, nickname or location. When an account has no device left, its subscriber profile (name, VIP) moves to the archive, kept for ACS_RETENTION_SUBSCRIBER_ARCHIVE_DAYS (default 1095) and then deleted, unless keep_subscriber is set. factory_reset (also needs devices.write and credential.manage) queues a factory reset and opens a 24-hour re-enrolment window. Audited as OnboardingEnded; publishes OnboardingStateChangeEvent.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        reason: "return" | "rma" | "upgrade" | "moved" | "corrected";
+                        /** @default false */
+                        keep_subscriber?: boolean;
+                        /** @default false */
+                        factory_reset?: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Ended */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            onboarding_id?: string;
+                            device_id?: string;
+                            /** @description Accounts whose mapping of the device ended */
+                            accounts?: string[];
+                            /** @description Accounts whose subscriber profile was archived */
+                            subscribers_archived?: string[];
+                            /** @description queued, or what failed; empty when not asked for */
+                            factory_reset?: string;
+                        };
+                    };
+                };
+                /** @description Unknown reason or field */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Needs tenancy.manage (and devices.write and credential.manage for factory_reset) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not found in the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The sale is not in service */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/onboardings/{id}/swap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace the device of an in-service sale (tenancy.manage)
+         * @description Ends the sale with reason rma or upgrade, keeping the subscriber profile, and records a PLANNED sale for the replacement serial with the same customer, account, site and plan. When the old device had an account mapping, the replacement is mapped to the account in the same role when it connects. Audited as OnboardingDeviceSwapped.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        reason: "rma" | "upgrade";
+                        serial: string;
+                        oui?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Swapped */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            ended_onboarding_id?: string;
+                            replacement?: components["schemas"]["Onboarding"];
+                        };
+                    };
+                };
+                /** @description Reason is not rma or upgrade, or no serial */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not found in the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The sale is not in service, or the replacement serial already has an open sale */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/onboardings/{id}/site": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Move an in-service sale and its device to another site (tenancy.manage) */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        site_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Onboarding"];
+                    };
+                };
+                /** @description Not a site of the sale's customer */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not found in the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The sale is not in service */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/onboardings/{id}/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Give an in-service sale another service plan (tenancy.manage)
+         * @description A plan that writes configuration moves the sale to DISCOVERED; the device is configured on its next check-in and returns to IN_SERVICE. A plan with nothing to write takes effect at once.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        service_plan_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Onboarding"];
+                    };
+                };
+                /** @description Not a plan of the sale's customer */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not found in the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The sale is not in service */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7788,8 +8084,11 @@ export interface components {
             /** Format: date-time */
             created_at?: string;
         };
-        /** @enum {string} */
-        OnboardingState: "PLANNED" | "CONTACTED" | "SECURED" | "DISCOVERED" | "CONFIGURING" | "IN_SERVICE" | "ON_HOLD" | "FAILED" | "CANCELLED";
+        /**
+         * @description ENDED: the sale was in service and an operator ended it (POST /api/v1/onboardings/{id}/end or /swap).
+         * @enum {string}
+         */
+        OnboardingState: "PLANNED" | "CONTACTED" | "SECURED" | "DISCOVERED" | "CONFIGURING" | "IN_SERVICE" | "ON_HOLD" | "FAILED" | "CANCELLED" | "ENDED";
         SiteInput: {
             /** @description Required for a scoped operator. Null = platform-global (visible to unscoped operators only). */
             customer_id?: string | null;
@@ -7892,6 +8191,11 @@ export interface components {
             contacted_at?: string | null;
             /** Format: date-time */
             in_service_at?: string | null;
+            /**
+             * Format: date-time
+             * @description When the service was ended (state ENDED)
+             */
+            ended_at?: string;
         };
         UnclaimedDevice: {
             id: string;

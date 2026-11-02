@@ -29,6 +29,7 @@ import (
 	"acs/internal/devices/adapters"
 	"acs/internal/firmware"
 	"acs/internal/jobs"
+	"acs/internal/lifecycle"
 	"acs/internal/mailer"
 	"acs/internal/observability"
 	"acs/internal/onboarding"
@@ -131,6 +132,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		frontendBaseURL:  "http://console.test",
 		tenancy:          tenancy.NewRepository(db),
 		subscribers:      subscribers.NewRepository(db),
+		lifecycle:        lifecycle.New(db),
 		onboarding:       onboarding.NewRepository(db),
 		dashboards:       dashboard.NewRepository(db),
 		bssMappings:      bss.NewRepository(db),

@@ -84,6 +84,7 @@ type onboardingResponse struct {
 	UpdatedAt       time.Time  `json:"updated_at"`
 	ContactedAt     *time.Time `json:"contacted_at"`
 	InServiceAt     *time.Time `json:"in_service_at"`
+	EndedAt         *time.Time `json:"ended_at,omitempty"`
 }
 
 func toOnboardingResponse(o *onboarding.Onboarding) onboardingResponse {
@@ -98,7 +99,7 @@ func toOnboardingResponse(o *onboarding.Onboarding) onboardingResponse {
 		ExpectedICCID: mask(parameters.SubscriberICCID, o.ExpectedICCID), ExpectedIMSI: mask(parameters.SubscriberIMSI, o.ExpectedIMSI),
 		AccountRef: o.AccountRef, SiteID: o.SiteID, ServicePlanID: o.ServicePlanID, Role: o.Role, CommercialModel: o.CommercialModel,
 		Source: o.Source, ExternalRef: o.ExternalRef, State: o.State, StateReason: o.StateReason, ConfigJobs: nonNil(o.ConfigJobs),
-		RequestedBy: o.RequestedBy, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt, ContactedAt: o.ContactedAt, InServiceAt: o.InServiceAt}
+		RequestedBy: o.RequestedBy, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt, ContactedAt: o.ContactedAt, InServiceAt: o.InServiceAt, EndedAt: o.EndedAt}
 }
 
 func nonNil(s []string) []string {
@@ -363,25 +364,8 @@ func (h *handler) createOnboarding(w http.ResponseWriter, r *http.Request) {
 	// device: the caller must be able to see it, and it must not belong to
 	// another customer (cmd/acs would otherwise move it on first contact).
 	if req.DeviceID == nil {
-		owners, err := h.onboarding.DeviceOwners(r.Context(), req.ExpectedOUI, req.ExpectedSerial)
-		if err != nil {
-			h.writeOnboardingError(w, err, "look up devices by serial")
+		if !h.serialSellable(w, r, req.ExpectedOUI, req.ExpectedSerial, req.CustomerID) {
 			return
-		}
-		customerIDs, scoped, err := h.deviceScope(r)
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		for _, owner := range owners {
-			if scoped && !deviceInScope(owner, customerIDs) {
-				http.Error(w, "a device with this serial exists outside your scope", http.StatusConflict)
-				return
-			}
-			if owner != nil && req.CustomerID != nil && *owner != *req.CustomerID {
-				http.Error(w, "a device with this serial belongs to another customer", http.StatusConflict)
-				return
-			}
 		}
 	} else if device, ok := h.getScopedDevice(w, r, *req.DeviceID); !ok {
 		return
@@ -453,6 +437,35 @@ func (h *handler) listOnboardings(w http.ResponseWriter, r *http.Request) {
 		items = append(items, toOnboardingResponse(&list[i]))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// serialSellable is the rule for a sale by serial (a new sale, or a swap's
+// replacement): every device already registered with that serial must be
+// visible to the caller and must not belong to another customer than the
+// sale's, or cmd/acs would bind a device the seller has no right to. It
+// answers the request itself and reports false when refused.
+func (h *handler) serialSellable(w http.ResponseWriter, r *http.Request, oui, serial string, customerID *string) bool {
+	owners, err := h.onboarding.DeviceOwners(r.Context(), oui, serial)
+	if err != nil {
+		h.writeOnboardingError(w, err, "look up devices by serial")
+		return false
+	}
+	customerIDs, scoped, err := h.deviceScope(r)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return false
+	}
+	for _, owner := range owners {
+		if scoped && !deviceInScope(owner, customerIDs) {
+			http.Error(w, "a device with this serial exists outside your scope", http.StatusConflict)
+			return false
+		}
+		if owner != nil && customerID != nil && *owner != *customerID {
+			http.Error(w, "a device with this serial belongs to another customer", http.StatusConflict)
+			return false
+		}
+	}
+	return true
 }
 
 func (h *handler) scopedOnboarding(w http.ResponseWriter, r *http.Request) (*onboarding.Onboarding, bool) {

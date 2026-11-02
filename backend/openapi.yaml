@@ -2199,7 +2199,7 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Onboarding" } } } }
-        "409": { description: Already IN_SERVICE or CANCELLED }
+        "409": { description: "Already IN_SERVICE, CANCELLED or ENDED" }
 
   /api/v1/onboardings/{id}/retry:
     post:
@@ -2209,6 +2209,107 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Onboarding" } } } }
         "409": { description: Not FAILED or ON_HOLD }
+
+  /api/v1/onboardings/{id}/end:
+    post:
+      tags: [Onboarding]
+      summary: "End an in-service sale and release its device (tenancy.manage)"
+      description: "Ends the sale (ENDED) and every active account mapping of the device, recorded with the reason, and releases the device to the unassigned pool: no customer, site, projects, nickname or location. When an account has no device left, its subscriber profile (name, VIP) moves to the archive, kept for ACS_RETENTION_SUBSCRIBER_ARCHIVE_DAYS (default 1095) and then deleted, unless keep_subscriber is set. factory_reset (also needs devices.write and credential.manage) queues a factory reset and opens a 24-hour re-enrolment window. Audited as OnboardingEnded; publishes OnboardingStateChangeEvent."
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: { type: string, enum: [return, rma, upgrade, moved, corrected] }
+                keep_subscriber: { type: boolean, default: false }
+                factory_reset: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Ended
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  onboarding_id: { type: string }
+                  device_id: { type: string }
+                  accounts: { type: array, items: { type: string }, description: "Accounts whose mapping of the device ended" }
+                  subscribers_archived: { type: array, items: { type: string }, description: "Accounts whose subscriber profile was archived" }
+                  factory_reset: { type: string, description: "queued, or what failed; empty when not asked for" }
+        "400": { description: "Unknown reason or field" }
+        "403": { description: "Needs tenancy.manage (and devices.write and credential.manage for factory_reset)" }
+        "404": { description: "Not found in the caller's scope" }
+        "409": { description: "The sale is not in service" }
+
+  /api/v1/onboardings/{id}/swap:
+    post:
+      tags: [Onboarding]
+      summary: "Replace the device of an in-service sale (tenancy.manage)"
+      description: "Ends the sale with reason rma or upgrade, keeping the subscriber profile, and records a PLANNED sale for the replacement serial with the same customer, account, site and plan. When the old device had an account mapping, the replacement is mapped to the account in the same role when it connects. Audited as OnboardingDeviceSwapped."
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, serial]
+              properties:
+                reason: { type: string, enum: [rma, upgrade] }
+                serial: { type: string }
+                oui: { type: string }
+      responses:
+        "200":
+          description: Swapped
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ended_onboarding_id: { type: string }
+                  replacement: { $ref: "#/components/schemas/Onboarding" }
+        "400": { description: "Reason is not rma or upgrade, or no serial" }
+        "404": { description: "Not found in the caller's scope" }
+        "409": { description: "The sale is not in service, or the replacement serial already has an open sale" }
+
+  /api/v1/onboardings/{id}/site:
+    put:
+      tags: [Onboarding]
+      summary: "Move an in-service sale and its device to another site (tenancy.manage)"
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, required: [site_id], properties: { site_id: { type: string } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Onboarding" } } } }
+        "400": { description: "Not a site of the sale's customer" }
+        "404": { description: "Not found in the caller's scope" }
+        "409": { description: "The sale is not in service" }
+
+  /api/v1/onboardings/{id}/plan:
+    put:
+      tags: [Onboarding]
+      summary: "Give an in-service sale another service plan (tenancy.manage)"
+      description: "A plan that writes configuration moves the sale to DISCOVERED; the device is configured on its next check-in and returns to IN_SERVICE. A plan with nothing to write takes effect at once."
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, required: [service_plan_id], properties: { service_plan_id: { type: string } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Onboarding" } } } }
+        "400": { description: "Not a plan of the sale's customer" }
+        "404": { description: "Not found in the caller's scope" }
+        "409": { description: "The sale is not in service" }
 
   # --- Config Templates ---
   /api/v1/config-templates:
@@ -3305,7 +3406,8 @@ components:
 
     OnboardingState:
       type: string
-      enum: [PLANNED, CONTACTED, SECURED, DISCOVERED, CONFIGURING, IN_SERVICE, ON_HOLD, FAILED, CANCELLED]
+      enum: [PLANNED, CONTACTED, SECURED, DISCOVERED, CONFIGURING, IN_SERVICE, ON_HOLD, FAILED, CANCELLED, ENDED]
+      description: "ENDED: the sale was in service and an operator ended it (POST /api/v1/onboardings/{id}/end or /swap)."
 
     SiteInput:
       type: object
@@ -3406,6 +3508,7 @@ components:
         updated_at: { type: string, format: date-time }
         contacted_at: { type: string, format: date-time, nullable: true }
         in_service_at: { type: string, format: date-time, nullable: true }
+        ended_at: { type: string, format: date-time, description: "When the service was ended (state ENDED)" }
 
     UnclaimedDevice:
       type: object
