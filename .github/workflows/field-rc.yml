@@ -36,6 +36,9 @@ jobs:
       ACS_BOOTSTRAP_ADMIN_USERNAME: admin
       ACS_BOOTSTRAP_ADMIN_PASSWORD: ci-field-admin-password-0123456789
       ACS_ADDR: 127.0.0.1:17547
+      # Lab profile, plain-HTTP CWMP on loopback: cmd/acs refuses this
+      # unless it is acknowledged explicitly.
+      ACS_CWMP_ALLOW_PLAINTEXT: "true"
       ACS_API_ADDR: 127.0.0.1:18080
       ACS_STUN_ADDR: off
       ACS_BSS_ADDR: 127.0.0.1:18090
@@ -134,9 +137,17 @@ jobs:
           docker exec "$cid" psql -U acs -d acs -v ON_ERROR_STOP=1 -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public; CREATE TABLE schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now(), checksum TEXT);'
           mapfile -t files < <(find backend/internal/store/migrations -maxdepth 1 -name '*.sql' -type f | sort)
           test "${#files[@]}" -gt 1
+          # Record everything up to 0066 except 0062 by hand: that is the
+          # late-migration window being rehearsed. Later migrations may
+          # build on 0062 (0089 alters its constraint), so they are left
+          # for the migrate tool, which applies 0062 and then the rest.
           for f in "${files[@]}"; do
             if [ "$f" = "$target" ]; then
               continue
+            fi
+            n=$(basename "$f"); n=$((10#${n%%_*}))
+            if [ "$n" -gt 66 ]; then
+              break
             fi
             docker exec -i "$cid" psql -U acs -d acs -v ON_ERROR_STOP=1 < "$f"
             name=$(basename "$f")

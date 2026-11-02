@@ -1259,7 +1259,12 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Assign a device to a customer (tenancy.manage permission) */
+        /**
+         * Assign a device to a customer (tenancy.manage permission)
+         * @description A scoped operator may assign only a customer within their scope and may not clear the customer (null). A
+         *     device actively mapped to a BSS account is refused (409) for any customer other than the account's owner:
+         *     unassign it from the account first.
+         */
         put: {
             parameters: {
                 query?: never;
@@ -1280,6 +1285,27 @@ export interface paths {
             responses: {
                 /** @description Assigned */
                 204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description customer_id outside the caller's scope (or null for a scoped caller) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description No such device, or outside the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The device is mapped to a BSS account of another customer */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -2421,7 +2447,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description The audit record could not be written */
+                /** @description The audit record could not be written, so nothing was disclosed */
                 503: {
                     headers: {
                         [name: string]: unknown;
@@ -2592,7 +2618,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description Device capability not discovered */
+                /** @description Device capability not discovered, or its URL/DiagnosticsState leaves are not discovered writable */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -3865,7 +3891,7 @@ export interface paths {
                         "application/json": components["schemas"]["XMPPProvisionResponse"];
                     };
                 };
-                /** @description Started */
+                /** @description Started, or already in progress */
                 202: {
                     headers: {
                         [name: string]: unknown;
@@ -3874,7 +3900,7 @@ export interface paths {
                         "application/json": components["schemas"]["XMPPProvisionResponse"];
                     };
                 };
-                /** @description Device has no discovered writable Device.XMPP.Connection. table */
+                /** @description Device has no discovered writable Device.XMPP.Connection. table, is not TR-181, does not support XMPP, or ACS_XMPP_CPE_SERVER_ADDRESS is unset */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -3888,7 +3914,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description XMPP is not configured on this ACS */
+                /** @description XMPP is not configured on this ACS, or its XMPP session is down */
                 503: {
                     headers: {
                         [name: string]: unknown;
@@ -4520,7 +4546,7 @@ export interface paths {
                         "application/json": components["schemas"]["Site"];
                     };
                 };
-                /** @description Invalid */
+                /** @description Invalid, or a scoped operator named no customer within their scope */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -4773,7 +4799,7 @@ export interface paths {
                         "application/json": components["schemas"]["Onboarding"];
                     };
                 };
-                /** @description Invalid */
+                /** @description Invalid, or a site or plan of another customer */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -7190,9 +7216,12 @@ export interface components {
         };
         ParameterInput: {
             name: string;
-            value: string;
+            /** @description Required unless secret_handle is set */
+            value?: string;
             /** @example xsd:string */
             type?: string;
+            /** @description A sealed BSS secret (POST /bss/v1/secrets) in place of value. Accepted only from the BSS adapter's service identity on PUT /devices/{id}/parameters, never on bulk actions; the gateway opens it when it sends the write. */
+            secret_handle?: string;
         };
         CachedParameter: {
             value?: string;

@@ -1272,7 +1272,7 @@ paths:
               schema: { $ref: "#/components/schemas/SIMView" }
         "400": { description: Missing or too-short reason }
         "403": { description: Caller is not a human superadmin (the BSS service token is refused) }
-        "503": { description: The audit record could not be written, so nothing was disclosed }
+        "503": { description: "The audit record could not be written, so nothing was disclosed" }
   /api/v1/devices/{id}/cellular-capabilities:
     get:
       tags: [Diagnostics]
@@ -1364,7 +1364,7 @@ paths:
       responses:
         "202": { $ref: "#/components/responses/DiagnosticQueueResponse" }
         "400": { description: Invalid or disallowed target URL }
-        "409": { description: Device capability not discovered, or its URL/DiagnosticsState leaves are not discovered writable }
+        "409": { description: "Device capability not discovered, or its URL/DiagnosticsState leaves are not discovered writable" }
 
   # --- Diagnostics ---
   /api/v1/devices/{id}/diagnostics/ping:
@@ -1791,10 +1791,10 @@ paths:
                   description: Re-provision a device whose last run is DONE or FAILED, with a fresh credential.
       responses:
         "200": { description: Already provisioned (restart not requested), content: { application/json: { schema: { $ref: "#/components/schemas/XMPPProvisionResponse" } } } }
-        "202": { description: Started, or already in progress, content: { application/json: { schema: { $ref: "#/components/schemas/XMPPProvisionResponse" } } } }
-        "409": { description: Device has no discovered writable Device.XMPP.Connection. table, is not TR-181, does not support XMPP, or ACS_XMPP_CPE_SERVER_ADDRESS is unset }
+        "202": { description: "Started, or already in progress", content: { application/json: { schema: { $ref: "#/components/schemas/XMPPProvisionResponse" } } } }
+        "409": { description: "Device has no discovered writable Device.XMPP.Connection. table, is not TR-181, does not support XMPP, or ACS_XMPP_CPE_SERVER_ADDRESS is unset" }
         "502": { description: The XMPP server refused to create the device account }
-        "503": { description: XMPP is not configured on this ACS, or its XMPP session is down }
+        "503": { description: "XMPP is not configured on this ACS, or its XMPP session is down" }
 
   /api/v1/devices/{id}/xmpp:
     get:
@@ -1950,7 +1950,7 @@ paths:
             schema: { $ref: "#/components/schemas/SiteInput" }
       responses:
         "201": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Site" } } } }
-        "400": { description: Invalid, or a scoped operator named no customer within their scope }
+        "400": { description: "Invalid, or a scoped operator named no customer within their scope" }
         "409": { description: The customer already has a site with this external_ref }
     get:
       tags: [Onboarding]
@@ -2012,7 +2012,7 @@ paths:
             schema: { $ref: "#/components/schemas/OnboardingInput" }
       responses:
         "201": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Onboarding" } } } }
-        "400": { description: Invalid, or a site or plan of another customer }
+        "400": { description: "Invalid, or a site or plan of another customer" }
         "409": { description: An open onboarding already exists for this serial number }
     get:
       tags: [Onboarding]
@@ -3373,6 +3373,7 @@ components:
             connection_request_mode: { type: string }
             xmpp_connection_status: { type: string }
         provisioning:
+          type: object
           allOf: [{ $ref: "#/components/schemas/XMPPProvisioning" }]
           nullable: true
         as_of: { type: string, format: date-time }

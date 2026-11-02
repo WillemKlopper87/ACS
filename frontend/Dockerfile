@@ -24,6 +24,9 @@ ENV VITE_ENV_LABEL=$VITE_ENV_LABEL
 RUN npm run build
 
 FROM nginx:1.31.5-alpine3.24
+# Take Alpine's security fixes as soon as they are published, without
+# waiting for the next nginx tag (Trivy fails CI on fixable HIGH/CRITICAL).
+RUN apk upgrade --no-cache
 # Re-declared: an ARG from an earlier stage is not in scope here. This is
 # deliberately the *same* argument the bundle was built with above,
 # because the CSP below must name exactly the origin that JS will call.
