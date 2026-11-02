@@ -176,6 +176,39 @@ func TestIntegration_SaleLifecycle(t *testing.T) {
 		t.Fatalf("a refused swap ended the sale: %s", s.String)
 	}
 
+	// A replacement serial that is another customer's device is refused,
+	// and the sale stays in service.
+	e.device("LCB001", &custB)
+	if r := e.call("mgr-a", "POST", "/api/v1/onboardings/"+saleS2+"/swap", map[string]any{"reason": "rma", "serial": "LCB001"}); r.code != 409 {
+		t.Fatalf("swap to another customer's device = %d %s", r.code, r.body)
+	}
+	if s := one(`SELECT state FROM onboardings WHERE id = $1`, saleS2); s.String != "IN_SERVICE" {
+		t.Fatalf("a refused swap ended the sale: %s", s.String)
+	}
+
+	// A device reassigned to another customer since the sale is not the
+	// sale's to release, move or reconfigure.
+	saleX, devX := inService("LC0007", "ACC-MOVED")
+	exec(`UPDATE devices SET customer_id = $2 WHERE id = $1`, devX, custB)
+	for _, c := range []struct {
+		method, path string
+		body         map[string]any
+	}{
+		{"POST", "/end", map[string]any{"reason": "return", "factory_reset": true}},
+		{"PUT", "/site", map[string]any{"site_id": siteA}},
+		{"PUT", "/plan", map[string]any{"service_plan_id": planA}},
+	} {
+		if r := e.call("mgr-a", c.method, "/api/v1/onboardings/"+saleX+c.path, c.body); r.code != 409 {
+			t.Fatalf("%s on a moved device = %d %s", c.path, r.code, r.body)
+		}
+	}
+	if s := one(`SELECT customer_id::text = $2 FROM devices WHERE id = $1`, devX, custB); s.String != "true" {
+		t.Fatalf("the moved device was released")
+	}
+	if s := one(`SELECT count(*)::text FROM jobs WHERE device_id = $1`, devX); s.String != "0" {
+		t.Fatalf("a reset was queued on the moved device")
+	}
+
 	// --- Site and plan ------------------------------------------------------
 	saleM, devM := inService("LC0006", "ACC-MOVE")
 	siteA2, siteB := site(custA), site(custB)

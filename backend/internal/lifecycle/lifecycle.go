@@ -35,6 +35,9 @@ var (
 	ErrInvalid = errors.New("invalid request")
 	// ErrSerialInUse: the replacement serial already has an open sale.
 	ErrSerialInUse = errors.New("the replacement serial already has an open sale")
+	// ErrDeviceMoved: the sale's device now belongs to another customer, so
+	// the sale no longer speaks for it.
+	ErrDeviceMoved = errors.New("the device now belongs to another customer than the sale")
 )
 
 func invalidf(format string, a ...any) error {
@@ -102,19 +105,11 @@ func end(ctx context.Context, tx *sql.Tx, req EndRequest) (*EndResult, error) {
 	if !ok {
 		return nil, invalidf("reason must be one of return, rma, upgrade, moved, corrected")
 	}
-	var state string
-	var deviceID sql.NullString
-	err := tx.QueryRowContext(ctx, `SELECT state, device_id::text FROM onboardings WHERE id = $1 FOR UPDATE`, req.OnboardingID).Scan(&state, &deviceID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, onboarding.ErrNotFound
-	}
+	deviceID, err := lockInService(ctx, tx, req.OnboardingID)
 	if err != nil {
-		return nil, fmt.Errorf("lock sale: %w", err)
+		return nil, err
 	}
-	if state != onboarding.StateInService || !deviceID.Valid {
-		return nil, ErrNotInService
-	}
-	res := &EndResult{DeviceID: deviceID.String}
+	res := &EndResult{DeviceID: deviceID}
 
 	if _, err := tx.ExecContext(ctx, `UPDATE onboardings SET state = 'ENDED', state_code = NULL, state_reason = $2, ended_at = now(), updated_at = now()
 		WHERE id = $1`, req.OnboardingID, text); err != nil {
@@ -178,6 +173,35 @@ func end(ctx context.Context, tx *sql.Tx, req EndRequest) (*EndResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// lockInService locks an in-service sale and its device and returns the
+// device. The device must still belong to the sale's customer: a device
+// reassigned to another customer since the sale is not the sale's to
+// release, move or reconfigure (the caller's scope was checked against
+// the sale's customer).
+func lockInService(ctx context.Context, tx *sql.Tx, onboardingID string) (string, error) {
+	var state string
+	var deviceID, saleCustomer sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT state, device_id::text, customer_id::text FROM onboardings WHERE id = $1 FOR UPDATE`, onboardingID).
+		Scan(&state, &deviceID, &saleCustomer)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", onboarding.ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("lock sale: %w", err)
+	}
+	if state != onboarding.StateInService || !deviceID.Valid {
+		return "", ErrNotInService
+	}
+	var deviceCustomer sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT customer_id::text FROM devices WHERE id = $1 FOR UPDATE`, deviceID.String).Scan(&deviceCustomer); err != nil {
+		return "", fmt.Errorf("lock device: %w", err)
+	}
+	if saleCustomer.Valid && deviceCustomer != saleCustomer {
+		return "", ErrDeviceMoved
+	}
+	return deviceID.String, nil
 }
 
 // archiveProfile moves an account's profile, if it holds anything, to the
@@ -252,16 +276,18 @@ func (s *Service) MoveSite(ctx context.Context, onboardingID, siteID string) err
 		return err
 	}
 	defer tx.Rollback()
-	var deviceID string
-	err = tx.QueryRowContext(ctx, `UPDATE onboardings o SET site_id = $2, updated_at = now()
-		WHERE o.id = $1 AND o.state = 'IN_SERVICE' AND o.device_id IS NOT NULL
-		  AND EXISTS (SELECT 1 FROM sites s WHERE s.id = $2 AND (s.customer_id IS NULL OR s.customer_id = o.customer_id))
-		RETURNING o.device_id::text`, onboardingID, siteID).Scan(&deviceID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return s.why(ctx, tx, onboardingID, "site")
+	deviceID, err := lockInService(ctx, tx, onboardingID)
+	if err != nil {
+		return err
 	}
+	res, err := tx.ExecContext(ctx, `UPDATE onboardings o SET site_id = $2, updated_at = now()
+		WHERE o.id = $1 AND EXISTS (SELECT 1 FROM sites s WHERE s.id = $2 AND (s.customer_id IS NULL OR s.customer_id = o.customer_id))`,
+		onboardingID, siteID)
 	if err != nil {
 		return fmt.Errorf("move sale: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return invalidf("that site is not one this sale's customer can use")
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE devices SET site_id = $2, last_updated_at = now() WHERE id = $1`, deviceID, siteID); err != nil {
 		return fmt.Errorf("move device: %w", err)
@@ -279,34 +305,21 @@ func (s *Service) ChangePlan(ctx context.Context, onboardingID, planID string, c
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := lockInService(ctx, tx, onboardingID); err != nil {
+		return err
+	}
 	res, err := tx.ExecContext(ctx, `UPDATE onboardings o SET service_plan_id = $2,
 			state = CASE WHEN $3 THEN 'DISCOVERED' ELSE o.state END,
 			state_reason = CASE WHEN $3 THEN 'service plan changed; configuring on the next check-in' ELSE o.state_reason END,
 			state_code = NULL, config_jobs = '{}', updated_at = now()
-		WHERE o.id = $1 AND o.state = 'IN_SERVICE'
+		WHERE o.id = $1
 		  AND EXISTS (SELECT 1 FROM service_plans p WHERE p.id = $2 AND (p.customer_id IS NULL OR p.customer_id = o.customer_id))`,
 		onboardingID, planID, configures)
 	if err != nil {
 		return fmt.Errorf("change plan: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return s.why(ctx, tx, onboardingID, "service plan")
+		return invalidf("that service plan is not one this sale's customer can use")
 	}
 	return tx.Commit()
-}
-
-// why explains a refused move: the sale is missing, not in service, or
-// the site or plan is not one the sale's customer may use.
-func (s *Service) why(ctx context.Context, tx *sql.Tx, onboardingID, what string) error {
-	var state string
-	err := tx.QueryRowContext(ctx, `SELECT state FROM onboardings WHERE id = $1`, onboardingID).Scan(&state)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return onboarding.ErrNotFound
-	case err != nil:
-		return err
-	case state != onboarding.StateInService:
-		return ErrNotInService
-	}
-	return invalidf("that %s is not one this sale's customer can use", what)
 }

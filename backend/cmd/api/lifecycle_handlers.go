@@ -26,7 +26,7 @@ func (h *handler) writeLifecycleError(w http.ResponseWriter, err error, what str
 	switch {
 	case errors.Is(err, lifecycle.ErrNotInService):
 		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, lifecycle.ErrSerialInUse):
+	case errors.Is(err, lifecycle.ErrSerialInUse), errors.Is(err, lifecycle.ErrDeviceMoved):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, lifecycle.ErrInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -174,6 +174,9 @@ func (h *handler) swapDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	o, ok := h.scopedOnboarding(w, r)
 	if !ok {
+		return
+	}
+	if !h.serialSellable(w, r, req.OUI, req.Serial, o.CustomerID) {
 		return
 	}
 	actor := operatorFromRequest(r)
