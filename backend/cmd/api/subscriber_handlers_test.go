@@ -47,8 +47,8 @@ func TestIntegration_SubscriberLookup(t *testing.T) {
 	if r := e.call("noc-a", "GET", "/api/v1/lookup?q=a1b2", nil); r.code != 200 || !strings.Contains(r.body, devA) {
 		t.Fatalf("serial digits = %d %s", r.code, r.body)
 	}
-	if audits() != 1 {
-		t.Fatalf("a serial lookup was audited")
+	if audits() != 2 {
+		t.Fatalf("a serial lookup was not audited (it returns names too)")
 	}
 	if r := e.call("noc-a", "GET", "/api/v1/lookup", nil); r.code != 400 {
 		t.Fatalf("empty lookup = %d", r.code)
@@ -75,5 +75,26 @@ func TestIntegration_SubscriberLookup(t *testing.T) {
 	}
 	if r := e.call("noc-a", "GET", "/api/v1/lookup?vip=1", nil); !strings.Contains(r.body, devA) || !strings.Contains(r.body, `"vip":true`) {
 		t.Fatalf("vip list = %s", r.body)
+	}
+
+	// A device of customer B mapped onto A's owned account neither shows
+	// A's subscriber to B nor lets B edit A's profile.
+	if _, err := e.db.ExecContext(e.ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('ACC-A1', $1, 'test')`, custA); err != nil {
+		t.Fatal(err)
+	}
+	e.operator("mgr-b", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custB})
+	devB2 := e.device("LK0003E5F6", &custB)
+	if _, err := e.db.ExecContext(e.ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at)
+		SELECT gen_random_uuid(), 'ACC-A1', id, oui_serial, 'extender', now() FROM devices WHERE id = $1`, devB2); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.call("mgr-b", "PUT", "/api/v1/accounts/ACC-A1/profile", map[string]any{"vip": false}); r.code != 404 {
+		t.Fatalf("B edits A's owned account through its own device = %d", r.code)
+	}
+	if r := e.call("mgr-b", "GET", "/api/v1/devices/"+devB2, nil); r.code != 200 || strings.Contains(r.body, "Thandi") || strings.Contains(r.body, `"vip":true`) {
+		t.Fatalf("B's device shows A's subscriber: %d %s", r.code, r.body)
+	}
+	if r := e.call("mgr-b", "GET", "/api/v1/lookup?q=e5f6", nil); strings.Contains(r.body, "Thandi") {
+		t.Fatalf("B's lookup shows A's subscriber: %s", r.body)
 	}
 }

@@ -130,13 +130,22 @@ func (r *Repository) Set(ctx context.Context, accountID, source, actor string, n
 	return r.Get(ctx, accountID)
 }
 
-// AccountCustomers lists the customers an account belongs to: its BSS
-// owner and the customers of devices actively mapped to it.
+// AccountCustomers lists the customers that decide who may see an
+// account's profile: its BSS owner alone when it has one; otherwise the
+// customers of devices actively mapped to it, all of which must be in a
+// caller's scope (a device of another customer mapped to an unowned
+// account must not let that customer edit it).
 func (r *Repository) AccountCustomers(ctx context.Context, accountID string) ([]string, error) {
+	var owner string
+	err := r.db.QueryRowContext(ctx, `SELECT customer_id::text FROM bss_accounts WHERE account_id = $1`, accountID).Scan(&owner)
+	if err == nil {
+		return []string{owner}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("account owner: %w", err)
+	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT customer_id::text FROM bss_accounts WHERE account_id = $1
-		UNION
-		SELECT d.customer_id::text FROM account_device_mappings m JOIN devices d ON d.id = m.device_id
+		SELECT DISTINCT d.customer_id::text FROM account_device_mappings m JOIN devices d ON d.id = m.device_id
 		 WHERE m.account_id = $1 AND m.unassigned_at IS NULL AND d.customer_id IS NOT NULL`, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("account customers: %w", err)
@@ -154,7 +163,10 @@ func (r *Repository) AccountCustomers(ctx context.Context, accountID string) ([]
 }
 
 // summaryQuery selects one row per device: its active mapping (gateway
-// role first), the account profile and the site.
+// role first), the account profile and the site. The profile is joined
+// only when the account's BSS owner is the device's customer (or the
+// account has no owner), so a device of one customer mapped to another
+// customer's account never shows that account's subscriber.
 const summaryQuery = `
 	SELECT d.id, d.oui_serial, COALESCE(d.serial_number, ''), COALESCE(d.manufacturer, ''), COALESCE(d.product_class, ''), d.label,
 	       m.account_id, p.display_name, COALESCE(p.vip, false),
@@ -164,7 +176,9 @@ const summaryQuery = `
 	        SELECT account_id FROM account_device_mappings
 	         WHERE device_id = d.id AND unassigned_at IS NULL
 	         ORDER BY (role = 'gateway') DESC, assigned_at DESC LIMIT 1) m ON true
+	  LEFT JOIN bss_accounts b ON b.account_id = m.account_id
 	  LEFT JOIN account_profiles p ON p.account_id = m.account_id
+	        AND (b.customer_id IS NULL OR b.customer_id IS NOT DISTINCT FROM d.customer_id)
 	  LEFT JOIN sites s ON s.id = d.site_id`
 
 type row struct {

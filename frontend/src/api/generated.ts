@@ -1804,7 +1804,7 @@ export interface paths {
         };
         /**
          * Find a subscriber's devices by name, address, account number, serial digits, label or the VIP list
-         * @description Every word of q must match (case-insensitive) one of: the serial, the label, the account id, the subscriber name, or the site's name, street, suburb, city or postal code. Ranked exact account or serial suffix first. Limited to the caller's customers. A lookup that matched on a name or address, found nothing for a query with letters, or listed VIPs is audited (SubscriberLookup: the query and the count, never the results).
+         * @description Every word of q must match (case-insensitive) one of: the serial, the label, the account id, the subscriber name, or the site's name, street, suburb, city or postal code. Ranked exact account or serial suffix first. Limited to the caller's customers. Every lookup is audited (SubscriberLookup: the query, the count and whether it matched a name or address, never the results).
          */
         get: {
             parameters: {

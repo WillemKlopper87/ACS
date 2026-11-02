@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -15,9 +16,9 @@ import (
 // last digits of a serial, a device label, or the VIP list.
 
 // lookupSubscribers is GET /api/v1/lookup?q=&vip=1&limit=. Results are
-// limited to the caller's customers. A lookup that matched on a name or
-// an address is personal information and is audited (who searched for
-// what, and how many results), never the results themselves.
+// limited to the caller's customers. Every lookup is audited (who
+// searched for what, what it matched on, how many results), never the
+// results themselves: even a serial search returns names and addresses.
 func (h *handler) lookupSubscribers(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	vipOnly := r.URL.Query().Get("vip") == "1" || r.URL.Query().Get("vip") == "true"
@@ -44,12 +45,10 @@ func (h *handler) lookupSubscribers(w http.ResponseWriter, r *http.Request) {
 	if hits == nil {
 		hits = []subscribers.Hit{}
 	}
-	if subscribers.PersonalMatch(hits) || (len(hits) == 0 && strings.IndexFunc(q, func(c rune) bool { return c >= 'A' && c <= 'z' }) >= 0) || vipOnly {
-		if err := h.auditor.Record(r.Context(), operatorFromRequest(r), "", "SubscriberLookup", map[string]any{
-			"query": q, "vip_only": vipOnly, "results": len(hits),
-		}); err != nil {
-			h.logger.Error("failed to write audit record", "err", err)
-		}
+	if err := h.auditor.Record(r.Context(), operatorFromRequest(r), "", "SubscriberLookup", map[string]any{
+		"query": q, "vip_only": vipOnly, "results": len(hits), "personal_match": subscribers.PersonalMatch(hits),
+	}); err != nil {
+		h.logger.Error("failed to write audit record", "err", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": hits, "count": len(hits)})
 }
@@ -71,15 +70,18 @@ func (h *handler) accountInScope(w http.ResponseWriter, r *http.Request, account
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return false
 	}
+	// Every customer that decides access must be in scope; an account
+	// with none (no owner, no mapped device) is visible only unscoped.
+	inScope := len(owners) > 0
 	for _, o := range owners {
-		for _, c := range customerIDs {
-			if o == c {
-				return true
-			}
+		if !slices.Contains(customerIDs, o) {
+			inScope = false
 		}
 	}
-	http.Error(w, "not found", http.StatusNotFound)
-	return false
+	if !inScope {
+		http.Error(w, "not found", http.StatusNotFound)
+	}
+	return inScope
 }
 
 // getAccountProfile is GET /api/v1/accounts/{account_id}/profile.
