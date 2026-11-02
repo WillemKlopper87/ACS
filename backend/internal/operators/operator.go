@@ -55,9 +55,10 @@ const (
 	PermCredentialManage = "credential.manage" // rotate/activate/revoke device Connection Request credentials
 	PermCLIAccess        = "cli.access"        // SSH/Telnet console + web GUI proxy config/connect
 	PermBulkActions      = "bulk_actions"
-	PermUploadRequest    = "upload.request"  // request config backup / log file from a device
-	PermMonitoringView   = "monitoring.view" // Grafana through the console's gate; also needs no customer scope (cmd/api/grafana_gate.go)
-	PermTenancyManage    = "tenancy.manage"  // assign a device's customer/projects (admin-platform backlog: multi-tenancy) — structural tenancy CRUD (regions/customers/projects themselves, operator scope assignment) stays superadmin-only, not part of this matrix
+	PermUploadRequest    = "upload.request"    // request config backup / log file from a device
+	PermSubscriberManage = "subscriber.manage" // set a subscriber name the BSS has not sent, set or clear VIP
+	PermMonitoringView   = "monitoring.view"   // Grafana through the console's gate; also needs no customer scope (cmd/api/grafana_gate.go)
+	PermTenancyManage    = "tenancy.manage"    // assign a device's customer/projects (admin-platform backlog: multi-tenancy) — structural tenancy CRUD (regions/customers/projects themselves, operator scope assignment) stays superadmin-only, not part of this matrix
 )
 
 // AllPermissions lists every configurable permission key, in the order the
@@ -66,7 +67,7 @@ var AllPermissions = []string{
 	PermDevicesWrite, PermConnectionReq, PermDiagnosticsRun, PermFirmwareManage,
 	PermTemplateManage, PermPolicyManage, PermScheduleManage, PermGroupManage,
 	PermCredentialManage, PermCLIAccess, PermBulkActions, PermUploadRequest, PermTenancyManage,
-	PermMonitoringView,
+	PermMonitoringView, PermSubscriberManage,
 }
 
 // defaultPermissions seeds role_permissions on first migration/bootstrap —
@@ -80,19 +81,19 @@ var defaultPermissions = map[string]map[string]bool{
 		PermDevicesWrite: true, PermConnectionReq: true, PermDiagnosticsRun: true, PermFirmwareManage: true,
 		PermTemplateManage: true, PermPolicyManage: true, PermScheduleManage: true, PermGroupManage: true,
 		PermCredentialManage: true, PermCLIAccess: true, PermBulkActions: true, PermUploadRequest: true,
-		PermTenancyManage: true, PermMonitoringView: true,
+		PermTenancyManage: true, PermMonitoringView: true, PermSubscriberManage: true,
 	},
 	RoleNOC: {
 		PermDevicesWrite: true, PermConnectionReq: true, PermDiagnosticsRun: true, PermFirmwareManage: false,
 		PermTemplateManage: false, PermPolicyManage: false, PermScheduleManage: false, PermGroupManage: false,
 		PermCredentialManage: false, PermCLIAccess: true, PermBulkActions: true, PermUploadRequest: true,
-		PermTenancyManage: false, PermMonitoringView: true,
+		PermTenancyManage: false, PermMonitoringView: true, PermSubscriberManage: false,
 	},
 	RoleReadOnly: {
 		PermDevicesWrite: false, PermConnectionReq: false, PermDiagnosticsRun: false, PermFirmwareManage: false,
 		PermTemplateManage: false, PermPolicyManage: false, PermScheduleManage: false, PermGroupManage: false,
 		PermCredentialManage: false, PermCLIAccess: false, PermBulkActions: false, PermUploadRequest: false,
-		PermTenancyManage: false, PermMonitoringView: false,
+		PermTenancyManage: false, PermMonitoringView: false, PermSubscriberManage: false,
 	},
 }
 

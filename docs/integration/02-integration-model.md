@@ -200,11 +200,26 @@ the same rule):
 ## 7. What the ACS does not know
 
 It holds `account_id` as an opaque string and the device identity. It has
-no customer name, address, tariff, billing state or contract.
+no tariff, billing state or contract.
+
+Two exceptions exist so that NOC staff can find a caller's CPE:
+
+- **Subscriber name and VIP flag (contract 1.2, optional).** Send
+  `subscriber_name` and/or `vip` on `POST /bss/v1/mappings`, or on their own
+  with `PUT /bss/v1/accounts/{account_id}/subscriber` (`tmf:write`). The
+  ACS uses them only to build readable device names (for example
+  "Jane Smith · ACC-1001 · Sandton · FastMile …A1B2") and for operator
+  lookup. A name you send replaces any name an operator typed. Operators
+  cannot change a name you sent. An empty `subscriber_name` clears it.
+- **Site address**, from `place` on a pre-provisioned sale.
+
+Both are personal information. Operators see them only for their own
+customers, and every lookup by name or address is written to the audit
+log. Send the minimum: a display name, not ID numbers or contact details.
 
 **Your BSS remains the system of record.** Do not expect the ACS to answer
-questions about customers, and do not store BSS-authoritative data here —
-it will drift.
+questions about customers. Do not store any other BSS-authoritative data
+here: it will drift. When a subscriber's name changes, send the new name.
 
 The `service_plan` field on a mapping is a label the ACS stores and hands
 back. It does not interpret it or change device behaviour based on it.

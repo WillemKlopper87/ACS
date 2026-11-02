@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: ACS BSS/CRM Integration Adapter API
-  version: "1.1.1"
+  version: "1.2.0"
   description: >-
     The external-facing REST API served by cmd/bssadapter (build plan §5,
     bss-integration-guide.md). This is the boundary an external BSS/CRM
@@ -99,6 +99,8 @@ paths:
                 device_uuid: { type: string, description: "Optional — if supplied, must match what oui_serial actually resolves to" }
                 service_plan: { type: string }
                 role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "Optional. Defaults to gateway." }
+                subscriber_name: { type: string, maxLength: 120, description: "Optional (1.2). The subscriber's display name, for operator lookup and readable device names. The BSS is the source of truth: it replaces a name an operator typed. Personal information; operators' name searches are audited." }
+                vip: { type: boolean, description: "Optional (1.2). Puts the account on, or takes it off, the VIP list operators can filter by." }
                 pre_provision: { type: boolean, description: "For a device the ACS has not seen yet: record a sale (a PLANNED onboarding) and answer 202 instead of 404. The mapping is written PENDING_ACTIVE when the CPE first connects and becomes ACTIVE when its onboarding reaches IN_SERVICE. See docs/ONBOARDING.md." }
                 iccid: { type: string, description: "With pre_provision: the SIM sold with the CPE; the onboarding holds if the CPE reports another. Never echoed back." }
                 imsi: { type: string, description: "With pre_provision: as iccid. Its MCC+MNC is also checked against the plan's allowed networks." }
@@ -136,6 +138,37 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "404": { description: "ErrDeviceNotMapped — no device found for that oui_serial (and pre_provision not set)", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
         "409": { description: "ErrRoleAlreadyAssigned — the account already has an active device in that role", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
+  /bss/v1/accounts/{account_id}/subscriber:
+    put:
+      tags: [Mappings]
+      summary: Set the subscriber's display name and VIP flag for an account (1.2)
+      description: "Needs tmf:write on the account. Send subscriber_name, vip or both. An empty subscriber_name clears it. A name sent here replaces one an operator typed in the console."
+      parameters:
+        - { name: account_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                subscriber_name: { type: string, maxLength: 120 }
+                vip: { type: boolean }
+      responses:
+        "200":
+          description: The account's profile after the change
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account_id: { type: string }
+                  subscriber_name: { type: string, nullable: true }
+                  vip: { type: boolean }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { description: "The account belongs to another customer", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
 
   /bss/v1/mappings/{account_id}:
     get:

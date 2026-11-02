@@ -203,3 +203,55 @@ test("Wi-Fi editor changes one network and warns who disconnects", async ({ page
   expect(sent!.url).toMatch(/\/wifi\/networks\/1$/);
   expect(sent!.body).toEqual({ name: "Smith Home", also_instances: [5] });
 });
+
+// Subscriber lookup: find a caller across the fleet by name, tell
+// namesakes apart, open the device, and fill in a name the BSS has not
+// sent (the BSS's own names are read-only).
+test("subscriber lookup finds a caller and the device shows who it serves", async ({ page }) => {
+  const sub = { device_id: "dev-1", account_id: "ACC-1001", subscriber_name: "Thandi Nkosi", vip: true, site: { street: "12 Rivonia Rd", suburb: "Sandton", city: "Johannesburg" },
+    display_name: "Thandi Nkosi · ACC-1001 · Sandton · NR7101 …1-S1" };
+  const hits = [
+    { ...sub, oui_serial: DEVICE.oui_serial, manufacturer: "Zyxel", model: "NR7101", matched: ["name"] },
+    { device_id: "dev-2", account_id: "ACC-2040", subscriber_name: "Thandi Nkosi", vip: false, site: { suburb: "Soweto", city: "Johannesburg" },
+      display_name: "", oui_serial: "001349-NR7101-S9C3D4", manufacturer: "Zyxel", model: "NR7101", matched: ["name"] },
+  ];
+  let lookupQuery = "";
+  let profileBody: unknown = null;
+  await page.route(`${API}/api/v1/lookup**`, (route) => {
+    lookupQuery = new URL(route.request().url()).search;
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: hits, count: hits.length }) });
+  });
+  await page.route(`${API}/api/v1/devices/dev-1`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...DEVICE, subscriber: sub }) }));
+  await page.route(`${API}/api/v1/accounts/ACC-1001/profile`, (route) => {
+    if (route.request().method() === "PUT") {
+      profileBody = route.request().postDataJSON();
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ account_id: "ACC-1001", vip: false }) });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ account_id: "ACC-1001", display_name: "Thandi Nkosi", name_source: "bss", vip: true, vip_source: "bss" }) });
+  });
+
+  await signIn(page);
+  await page.getByLabel("Find a subscriber").fill("thandi");
+  await page.getByRole("button", { name: "Find" }).click();
+  const results = page.getByRole("list", { name: "Lookup results" });
+  await expect(results.getByRole("listitem")).toHaveCount(2);
+  await expect(results.getByText(/12 Rivonia Rd, Sandton/)).toBeVisible();
+  await expect(results.getByText(/…C3D4/)).toBeVisible();
+  expect(lookupQuery).toBe("?q=thandi");
+  await expectNoSeriousA11y(page, "subscriber lookup");
+  await page.screenshot({ path: "test-results/subscriber-lookup.png", fullPage: true });
+
+  await results.getByRole("listitem").first().click();
+  await expect(page.getByRole("heading", { name: /Thandi Nkosi/ })).toBeVisible();
+  await expect(page.getByText(sub.display_name)).toBeVisible();
+  await page.getByRole("button", { name: "Edit subscriber" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("Subscriber name")).toBeDisabled();
+  await expect(dialog.getByText("Sent by the BSS; change it there.")).toBeVisible();
+  await page.screenshot({ path: "test-results/subscriber-editor.png" });
+  await dialog.getByLabel("On the VIP list").uncheck();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog).toBeHidden();
+  expect(profileBody).toEqual({ vip: false });
+});

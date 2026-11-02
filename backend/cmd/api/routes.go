@@ -194,6 +194,10 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("GET", "/api/v1/devices/{id}/connection-diagnostics", ro, h.getConnectionDiagnostics)
 	route("GET", "/api/v1/devices/{id}/wifi-topology", ro, h.getWiFiTopology)
 	route("GET", "/api/v1/devices/{id}/wifi/networks", ro, h.getWiFiNetworks)
+	// Subscriber lookup and account profiles (subscriber_handlers.go).
+	route("GET", "/api/v1/lookup", ro, h.lookupSubscribers)
+	route("GET", "/api/v1/accounts/{account_id}/profile", ro, h.getAccountProfile)
+	routePerm("PUT", "/api/v1/accounts/{account_id}/profile", operators.PermSubscriberManage, h.putAccountProfile)
 	routePerm("PUT", "/api/v1/devices/{id}/wifi/networks/{instance}", operators.PermDevicesWrite, h.updateWiFiNetwork) // one network at a time (wifi_edit.go)
 	route("GET", "/api/v1/standards/dictionary", ro, h.getStandardDictionary)
 	routePerm("POST", "/api/v1/devices/{id}/bulk-data/configure", operators.PermDevicesWrite, h.configureBulkData)

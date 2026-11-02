@@ -35,6 +35,18 @@ export interface Device {
   gateway_device_id?: string;
   /** Mesh satellites: the gateway identity reported, even when that gateway is not registered. */
   gateway_oui_serial?: string;
+  /** Who the device serves: account, subscriber name, VIP, site (account profiles). */
+  subscriber?: SubscriberSummary;
+}
+
+export interface SubscriberSummary {
+  device_id: string;
+  account_id?: string;
+  subscriber_name?: string;
+  vip: boolean;
+  site?: { name?: string; street?: string; suburb?: string; city?: string; postal_code?: string };
+  /** e.g. "Jane Smith · ACC-1001 · Sandton · FastMile …A1B2" */
+  display_name: string;
 }
 
 export type CaptureMatchType = "device" | "identity" | "remote_ip";
@@ -278,7 +290,8 @@ export type Permission =
   | "bulk_actions"
   | "upload.request"
   | "tenancy.manage"
-  | "monitoring.view";
+  | "monitoring.view"
+  | "subscriber.manage";
 
 export interface RolePermissionsMatrix {
   roles: Role[];

@@ -88,6 +88,8 @@ export type Onboarding = components["schemas"]["Onboarding"];
 export type OnboardingInput = components["schemas"]["OnboardingInput"];
 export type OnboardingState = components["schemas"]["OnboardingState"];
 export type UnclaimedDevice = components["schemas"]["UnclaimedDevice"];
+export type SubscriberHit = components["schemas"]["SubscriberHit"];
+export type AccountProfile = components["schemas"]["AccountProfile"];
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
@@ -192,6 +194,19 @@ export const api = {
 
   listDevices: (page = 1, pageSize = 100) =>
     request<{ items: Device[]; total: number }>(`/api/v1/devices?page=${page}&page_size=${pageSize}`),
+
+  /** Server-side subscriber lookup: name, address, account, serial digits, label, or the VIP list. Name/address lookups are audited. */
+  lookupSubscribers: (q: string, vipOnly = false) => {
+    const qs = new URLSearchParams();
+    if (q) qs.set("q", q);
+    if (vipOnly) qs.set("vip", "1");
+    return request<{ items: SubscriberHit[]; count: number }>(`/api/v1/lookup?${qs}`);
+  },
+
+  getAccountProfile: (accountId: string) => request<AccountProfile>(`/api/v1/accounts/${encodeURIComponent(accountId)}/profile`),
+
+  updateAccountProfile: (accountId: string, body: { subscriber_name?: string; vip?: boolean }) =>
+    request<AccountProfile>(`/api/v1/accounts/${encodeURIComponent(accountId)}/profile`, { method: "PUT", body: JSON.stringify(body) }),
 
   getDevicesSummary: () => request<{ groups: DeviceGroupCount[] }>("/api/v1/devices/summary"),
 

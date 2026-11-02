@@ -1000,3 +1000,13 @@ input:focus, select.chip:focus {
   .ob-detail .kv, .ob-wizard .kv, .ob-plan { grid-template-columns: minmax(0, 1fr); gap: 0.1rem; }
   .ob-detail .kv dd, .ob-wizard .kv dd { margin-bottom: 0.4rem; }
 }
+
+/* Subscriber lookup (components/SubscriberLookup.tsx) */
+.pill-vip { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); font-weight: 600; }
+.subscriber-lookup { margin-bottom: 0.75rem; }
+.lookup-results { display: flex; flex-direction: column; gap: 0.25rem; max-height: 40vh; overflow-y: auto; }
+.lookup-hit { display: grid; grid-template-columns: 1fr auto; gap: 0.1rem 0.75rem; text-align: left; padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; font: inherit; }
+.lookup-hit:hover, .lookup-hit:focus-visible { background: var(--surface-3); }
+.lookup-hit-sub { grid-column: 1; font-size: 0.78rem; }
+.lookup-hit-match { grid-column: 2; grid-row: 1 / span 2; align-self: center; display: flex; gap: 0.25rem; }
+@media (max-width: 600px) { .lookup-hit { grid-template-columns: 1fr; } .lookup-hit-match { grid-column: 1; grid-row: auto; } }

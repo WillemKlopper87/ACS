@@ -47,6 +47,7 @@ import (
 	"acs/internal/rollout"
 	"acs/internal/scheduler"
 	"acs/internal/store"
+	"acs/internal/subscribers"
 	"acs/internal/templates"
 	"acs/internal/tenancy"
 	"acs/internal/transfer"
@@ -268,6 +269,7 @@ func main() {
 		grafanaURL:      os.Getenv("ACS_GRAFANA_URL"),
 		grafanaGate:     os.Getenv("ACS_GRAFANA_GATE") == "1",
 		tenancy:         tenancy.NewRepository(db),
+		subscribers:     subscribers.NewRepository(db),
 		onboarding:      onboarding.NewRepository(db),
 		dashboards:      dashboard.NewRepository(db),
 
@@ -496,6 +498,8 @@ type handler struct {
 	grafanaURL  string
 	grafanaGate bool
 	tenancy     *tenancy.Repository
+	// subscribers backs the subscriber lookup and account profiles.
+	subscribers *subscribers.Repository
 	onboarding  *onboarding.Repository
 	dashboards  *dashboard.Repository
 

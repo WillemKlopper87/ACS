@@ -38,6 +38,7 @@ import (
 	"acs/internal/rollout"
 	"acs/internal/scheduler"
 	"acs/internal/store"
+	"acs/internal/subscribers"
 	"acs/internal/templates"
 	"acs/internal/tenancy"
 	"acs/internal/transfer"
@@ -129,6 +130,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		mailer:           mailer.New(mailer.Config{}, logger),
 		frontendBaseURL:  "http://console.test",
 		tenancy:          tenancy.NewRepository(db),
+		subscribers:      subscribers.NewRepository(db),
 		onboarding:       onboarding.NewRepository(db),
 		dashboards:       dashboard.NewRepository(db),
 		bssMappings:      bss.NewRepository(db),
