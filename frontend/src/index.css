@@ -898,7 +898,7 @@ input:focus, select.chip:focus {
 .wifi-insights td .dim { font-size: 0.72rem; }
 
 .sim-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.8rem; color: var(--ink-dim); }
-.sim-field textarea, .sim-field input { font: inherit; color: var(--ink); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.4rem 0.5rem; }
+.sim-field textarea, .sim-field input, .sim-field select { font: inherit; color: var(--ink); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.4rem 0.5rem; }
 .sim-reveal { width: min(32rem, 100%); overflow-y: auto; }
 .sim-revealed { margin-bottom: 0.6rem; }
 
