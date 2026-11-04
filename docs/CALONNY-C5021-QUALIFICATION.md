@@ -41,14 +41,15 @@ the notice applies to a South African deployment is not established.
 The router's web page has a **TR069 / ACS / Account / Password / Periodic notice
 / Notice interval** form. Saving it answered `status: 0` (success), but:
 
-- `tr069_get` afterwards returned an empty body (before saving, it returned the
-  defaults).
+- `tr069_get` afterwards returned an empty body (before saving it returned a
+  106-byte body).
 - No TR-069 process runs (`ps | grep -iE "cwmp|tr06|tr69"` matches only itself).
 - `/etc/config` has no TR-069 file (`cwmp`, `easycwmp`, `icwmp`, `tr069`), and
   `/etc/init.d` has no TR-069 start-up script.
 - The system log (16 minutes, including after the save) holds **no TR-069
   line**. A working client logs every attempt to reach its ACS.
-- Nothing from the router reached the ACS.
+- No attempt to reach the ACS appears in the router's own log. (The ACS-side
+  log was not captured, so "nothing arrived" is not verified.)
 
 So the form saves into nothing. There is also no data model: no Inform, no
 `InternetGatewayDevice` or `Device` tree to discover.
