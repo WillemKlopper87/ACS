@@ -197,8 +197,9 @@ func (h *handler) swapDevice(w http.ResponseWriter, r *http.Request) {
 		h.writeOnboardingError(w, err, "get replacement sale")
 		return
 	}
-	// The replacement is a new sale an integration has not heard of: it
-	// gets the PLANNED event a BSS-created sale gets, with no previous state.
+	// The replacement is a new sale an integration has not heard of, and
+	// unlike one it made (whose id the 202 returns) nothing else tells it
+	// the id: it gets a PLANNED event with no previous state.
 	created := *replacement
 	created.State = ""
 	h.publishSaleEvent(r, &created, onboarding.StatePlanned, "replacement after "+req.Reason)

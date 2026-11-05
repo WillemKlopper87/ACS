@@ -5619,7 +5619,7 @@ export interface paths {
         get?: never;
         /**
          * Give an in-service sale another service plan (tenancy.manage)
-         * @description A plan that writes configuration moves the sale to DISCOVERED; the device is configured on its next check-in and returns to IN_SERVICE. A plan with nothing to write takes effect at once.
+         * @description A plan that writes configuration moves the sale to DISCOVERED; the device is configured on its next check-in and returns to IN_SERVICE. A plan with nothing to write takes effect at once. For a sale the BSS made, the plan code the BSS reads follows, on the sale and on the device's account mapping.
          */
         put: {
             parameters: {

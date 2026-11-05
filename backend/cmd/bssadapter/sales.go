@@ -187,11 +187,12 @@ func (h *handler) retrySale(w http.ResponseWriter, r *http.Request) {
 
 // cancelSale is POST /bss/v1/onboardings/{id}/cancel: the sale is
 // CANCELLED (its serial free for a new sale, an account mapping it wrote
-// ended, a TMF641 item waiting for it FAILED). A sale in service is ended
-// with a TMF641 delete instead.
+// ended, a TMF641 item waiting for it FAILED). A sale in service is not
+// cancelled: an operator ends it (ENDED) in the console, and a TMF641 delete
+// ends its account mapping only.
 func (h *handler) cancelSale(w http.ResponseWriter, r *http.Request) {
 	h.changeSale(w, r, "OnboardingCancelled", func(ctx context.Context, id string) error { return h.onboarding.Cancel(ctx, id) },
-		"an IN_SERVICE or CANCELLED sale cannot be cancelled")
+		"an IN_SERVICE, ENDED or CANCELLED sale cannot be cancelled")
 }
 
 func (h *handler) changeSale(w http.ResponseWriter, r *http.Request, action string, change func(context.Context, string) error, refusal string) {

@@ -247,6 +247,9 @@ func TestIntegration_SaleLifecycle(t *testing.T) {
 	if s := one(`SELECT bss_service_plan FROM onboardings WHERE id = $1`, saleM); s.String != "QUIET" {
 		t.Fatalf("bss_service_plan after a plan change = %q", s.String)
 	}
+	if s := one(`SELECT service_plan FROM account_device_mappings WHERE device_id = $1 AND unassigned_at IS NULL`, devM); s.String != "QUIET" {
+		t.Fatalf("the account mapping kept the old plan: %q", s.String)
+	}
 	if s := one(`SELECT coalesce(bss_service_plan, 'none') FROM onboardings WHERE id = $1`, saleS2); s.String != "none" {
 		t.Fatalf("a console sale gained a BSS plan code: %q", s.String)
 	}

@@ -305,7 +305,8 @@ func (s *Service) ChangePlan(ctx context.Context, onboardingID, planID string, c
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := lockInService(ctx, tx, onboardingID); err != nil {
+	deviceID, err := lockInService(ctx, tx, onboardingID)
+	if err != nil {
 		return err
 	}
 	// A sale the BSS made reports the plan code it names (bss_service_plan);
@@ -323,6 +324,14 @@ func (s *Service) ChangePlan(ctx context.Context, onboardingID, planID string, c
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return invalidf("that service plan is not one this sale's customer can use")
+	}
+	// The device's account mapping names the plan too (GET /bss/v1/mappings);
+	// it follows, for a sale the BSS made.
+	if _, err := tx.ExecContext(ctx, `UPDATE account_device_mappings m SET service_plan = p.code, updated_at = now()
+		FROM service_plans p, onboardings o
+		WHERE p.id = $2 AND o.id = $1 AND o.bss_role IS NOT NULL AND m.device_id = $3::uuid AND m.unassigned_at IS NULL`,
+		onboardingID, planID, deviceID); err != nil {
+		return fmt.Errorf("change mapping plan: %w", err)
 	}
 	return tx.Commit()
 }
