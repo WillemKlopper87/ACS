@@ -5481,7 +5481,7 @@ export interface paths {
         put?: never;
         /**
          * Replace the device of an in-service sale (tenancy.manage)
-         * @description Ends the sale with reason rma or upgrade, keeping the subscriber profile, and records a PLANNED sale for the replacement serial with the same customer, account, site and plan. When the old device had an account mapping, the replacement is mapped to the account in the same role when it connects. Audited as OnboardingDeviceSwapped.
+         * @description Ends the sale with reason rma or upgrade, keeping the subscriber profile, and records a PLANNED sale for the replacement serial with the same customer, account, site and plan. When the old device had an account mapping, the replacement is mapped to the account in the same role when it connects. Audited as OnboardingDeviceSwapped; publishes OnboardingStateChangeEvent ENDED for the old sale and PLANNED for the replacement.
          */
         post: {
             parameters: {
