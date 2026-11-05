@@ -1,0 +1,138 @@
+{
+  "name": "acs/sale-swap",
+  "description": "An operator swaps the device of an in-service sale (RMA or upgrade; operator API, shown for context): the old sale is ENDED and a new sale for the replacement serial is PLANNED with the same account and plan. They are two sales with two ids, and each publishes an OnboardingStateChangeEvent: ENDED for the old sale, PLANNED (no previous state) for the replacement, which is how an integration learns the new sale id. The replacement joins the account in the same role when it connects.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit a722bd8, 2026-11-05. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/api/v1/onboardings/ae52fa55-e198-49f7-b8fe-3be69661fe66/swap",
+      "status": 200,
+      "mutating": true,
+      "body": {
+        "ended_onboarding_id": "ae52fa55-e198-49f7-b8fe-3be69661fe66",
+        "replacement": {
+          "id": "36984329-e2e8-4898-9b05-73aaa8927ccd",
+          "customer_id": "1906e74f-a899-43b6-bc56-33104dfb18d6",
+          "device_id": null,
+          "expected_oui": "",
+          "expected_serial": "CONTRACT22",
+          "expected_imei": "",
+          "expected_iccid": "",
+          "expected_imsi": "",
+          "account_ref": "contract.0021",
+          "site_id": "68758a92-61af-4e23-95e3-89e15d325766",
+          "service_plan_id": "8554536e-93ae-40d7-a61a-9c845c989f88",
+          "role": "gateway",
+          "commercial_model": "retail",
+          "source": "bss",
+          "external_ref": "",
+          "state": "PLANNED",
+          "state_reason": "",
+          "config_jobs": [],
+          "requested_by": "operator",
+          "created_at": "2026-11-05T16:11:51.851371+02:00",
+          "updated_at": "2026-11-05T16:11:51.851371+02:00",
+          "contacted_at": null,
+          "in_service_at": null
+        }
+      },
+      "request": {
+        "reason": "rma",
+        "serial": "CONTRACT22"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/onboardings/ae52fa55-e198-49f7-b8fe-3be69661fe66",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "id": "ae52fa55-e198-49f7-b8fe-3be69661fe66",
+        "href": "/bss/v1/onboardings/ae52fa55-e198-49f7-b8fe-3be69661fe66",
+        "account_id": "contract.0021",
+        "oui": "A4FC77",
+        "serial_number": "CONTRACT21",
+        "role": "gateway",
+        "service_plan": "HOME-5G",
+        "plan_matched": true,
+        "state": "ENDED",
+        "reason": "service ended: device faulty (RMA)",
+        "device_id": "f3dc12f5-2a39-48c4-b906-4757754685b0",
+        "created_at": "2026-11-05T14:11:51.399637Z",
+        "updated_at": "2026-11-05T14:11:51.851371Z",
+        "contacted_at": "2026-11-05T14:11:51.734024Z",
+        "in_service_at": "2026-11-05T14:11:51.734024Z"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/onboardings/36984329-e2e8-4898-9b05-73aaa8927ccd",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "id": "36984329-e2e8-4898-9b05-73aaa8927ccd",
+        "href": "/bss/v1/onboardings/36984329-e2e8-4898-9b05-73aaa8927ccd",
+        "account_id": "contract.0021",
+        "serial_number": "CONTRACT22",
+        "role": "gateway",
+        "service_plan": "HOME-5G",
+        "plan_matched": true,
+        "state": "PLANNED",
+        "created_at": "2026-11-05T14:11:51.851371Z",
+        "updated_at": "2026-11-05T14:11:51.851371Z",
+        "expires_at": "2026-12-05T14:11:51.851371Z"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/events (the old sale's ENDED event)",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "id": "960f5462-ef66-4c1b-abfa-500d6e1997b9",
+        "type": "OnboardingStateChangeEvent",
+        "occurred_at": "2026-11-05T14:11:51.856288Z",
+        "sequence": 6,
+        "customer_id": "1906e74f-a899-43b6-bc56-33104dfb18d6",
+        "account_id": "contract.0021",
+        "device": {
+          "id": "f3dc12f5-2a39-48c4-b906-4757754685b0",
+          "oui_serial": "A4FC77+3TG02241+CONTRACT21"
+        },
+        "data": {
+          "state": "ENDED",
+          "reason": "rma",
+          "source": "bss",
+          "externalId": "",
+          "onboardingId": "ae52fa55-e198-49f7-b8fe-3be69661fe66",
+          "serialNumber": "CONTRACT21",
+          "previousState": "IN_SERVICE"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/events (the new sale's PLANNED event)",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "id": "6e609564-bf5e-464a-b293-fb395652eb71",
+        "type": "OnboardingStateChangeEvent",
+        "occurred_at": "2026-11-05T14:11:51.85829Z",
+        "sequence": 7,
+        "customer_id": "1906e74f-a899-43b6-bc56-33104dfb18d6",
+        "account_id": "contract.0021",
+        "device": null,
+        "data": {
+          "state": "PLANNED",
+          "reason": "replacement after rma",
+          "source": "bss",
+          "externalId": "",
+          "onboardingId": "36984329-e2e8-4898-9b05-73aaa8927ccd",
+          "serialNumber": "CONTRACT22",
+          "previousState": ""
+        }
+      }
+    }
+  ]
+}

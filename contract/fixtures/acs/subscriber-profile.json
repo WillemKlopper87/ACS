@@ -1,0 +1,86 @@
+{
+  "name": "acs/subscriber-profile",
+  "description": "PUT /bss/v1/accounts/{id}/subscriber (1.2): set the display name and VIP flag, change one field (the other is kept), clear the name with an empty string, a name over 120 characters (400), and an account of another customer (404). A first write to an account nobody owns claims it, as a mapping does. Optional: the BSS stays the record and a name it sends is read-only in the console.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit a722bd8, 2026-11-05. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "PUT",
+      "path": "/bss/v1/accounts/contract.0001/subscriber",
+      "status": 200,
+      "mutating": true,
+      "body": {
+        "account_id": "contract.0001",
+        "subscriber_name": "Test Subscriber",
+        "vip": true
+      },
+      "request": {
+        "subscriber_name": "Test Subscriber",
+        "vip": true
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/bss/v1/accounts/contract.0001/subscriber",
+      "status": 200,
+      "mutating": true,
+      "body": {
+        "account_id": "contract.0001",
+        "subscriber_name": "Test Subscriber",
+        "vip": false
+      },
+      "request": {
+        "vip": false
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/bss/v1/accounts/contract.0001/subscriber",
+      "status": 200,
+      "mutating": true,
+      "body": {
+        "account_id": "contract.0001",
+        "subscriber_name": null,
+        "vip": false
+      },
+      "request": {
+        "subscriber_name": ""
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/bss/v1/accounts/contract.0001/subscriber",
+      "status": 400,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrInvalidRequest",
+        "title": "Invalid request",
+        "status": 400,
+        "detail": "subscriber_name is at most 120 characters",
+        "code": "ErrInvalidRequest",
+        "error": "ErrInvalidRequest",
+        "message": "subscriber_name is at most 120 characters"
+      },
+      "request": {
+        "subscriber_name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/bss/v1/accounts/rival.0001/subscriber",
+      "status": 404,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrNotFound",
+        "title": "Not found",
+        "status": 404,
+        "detail": "resource not found",
+        "code": "ErrNotFound",
+        "error": "ErrNotFound",
+        "message": "resource not found"
+      },
+      "request": {
+        "vip": true
+      }
+    }
+  ]
+}
