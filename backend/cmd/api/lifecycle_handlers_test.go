@@ -162,6 +162,16 @@ func TestIntegration_SaleLifecycle(t *testing.T) {
 	if s := one(`SELECT concat_ws(',', account_ref, (site_id::text = $1)::text, bss_role, bss_service_plan) FROM onboardings WHERE expected_serial = 'LC9999'`, siteA); s.String != "ACC-SWAP,true,gateway,HOME" {
 		t.Fatalf("replacement sale = %q", s.String)
 	}
+	// The replacement is announced like any new sale (PLANNED), so an
+	// integration can learn its id; the ended sale has its ENDED event.
+	if s := one(`SELECT count(*)::text FROM tmf_events WHERE event_type = 'OnboardingStateChangeEvent'
+	               AND payload->>'serialNumber' = 'LC9999' AND payload->>'state' = 'PLANNED' AND payload->>'previousState' = ''`); s.String != "1" {
+		t.Fatalf("PLANNED events for the replacement sale = %s", s.String)
+	}
+	if s := one(`SELECT count(*)::text FROM tmf_events WHERE event_type = 'OnboardingStateChangeEvent'
+	               AND payload->>'serialNumber' = 'LC0004' AND payload->>'state' = 'ENDED'`); s.String != "1" {
+		t.Fatalf("ENDED events for the swapped sale = %s", s.String)
+	}
 	if s := one(`SELECT display_name FROM account_profiles WHERE account_id = 'ACC-SWAP'`); s.String != name {
 		t.Fatalf("a swap archived the subscriber")
 	}

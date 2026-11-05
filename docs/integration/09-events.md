@@ -62,7 +62,9 @@ sale's current state with `GET /bss/v1/onboardings/{onboardingId}`.
 Onboarding states are `PLANNED`, `CONTACTED`, `SECURED`, `DISCOVERED`,
 `CONFIGURING`, `IN_SERVICE`, `ON_HOLD`, `FAILED`, `CANCELLED`, and (contract 1.2)
 `ENDED`: an operator ended a sale that was in service, or swapped its device; its
-account mappings are ended and the device is released. A sale whose plan was
+account mappings are ended and the device is released. A swap publishes two
+events: `ENDED` for the old sale and `PLANNED` (empty `previousState`) for the
+replacement sale, which is how you learn the new sale's id. A sale whose plan was
 changed goes back to `DISCOVERED` and returns to `IN_SERVICE` once the device is
 configured.
 `AWAITING_DEVICE` is not an onboarding state: it is the status of the mapping
