@@ -95,6 +95,73 @@ Huawei firmware families vary significantly; do not create one global
   it. Isolate the affected test profile and capture evidence for the exact
   model/firmware.
 
+## Subscriber lifecycle and personal data
+
+What an operator does when a customer leaves, swaps a router or moves, and
+what the ACS keeps afterwards. The mechanics are in `docs/ONBOARDING.md`
+("After service"); this is the operating view. Subscriber names and addresses
+are personal information (POPIA): the console masks them, and showing them is
+a recorded action.
+
+**Who can do what**
+
+| Action | Needs |
+|---|---|
+| Find a subscriber (the *Find a subscriber* box on Devices → Inventory) | any role; results are limited to the operator's customers |
+| Show a masked name or address (*Show details* on a device's Ownership page) | any role that can open the device; recorded |
+| End service, swap device, change site, change plan | `tenancy.manage` (manager by default) |
+| Set a subscriber name the BSS did not send, set or clear VIP | `subscriber.manage` (manager by default; NOC and read-only do not have it) |
+| Factory reset when ending service | also `devices.write` and `credential.manage` |
+
+**Procedures** (Devices → Onboarding → *In service*, one row per sale)
+
+- *Customer leaves, router returned:* **End service**, reason `return`. The sale
+  becomes `ENDED`, the account mapping ends, and the device returns to the
+  unassigned pool (no customer, site, nickname or location). Tick *factory
+  reset* only if the unit will be redeployed: it opens a 24-hour window for the
+  reset unit to connect with the bootstrap credential.
+- *Faulty or upgraded router:* **Swap device**, reason `rma` or `upgrade`, with
+  the replacement serial. The subscriber is kept and a new planned sale waits
+  for the replacement, which is mapped to the account when it connects. Two
+  events are published (`ENDED` for the old sale, `PLANNED` for the new one).
+- *Customer moves:* **Change site**. *New plan:* **Change plan**; a plan that
+  writes configuration sends the sale back to `DISCOVERED` until the router
+  next checks in.
+- *A mapping made by mistake:* BSS / NaaS, the account's mapping, **Remove** (it asks for a reason). This ends
+  the mapping only; it does not end a sale or release the device.
+- A TMF641 delete from the BSS ends the account mapping and leaves the sale
+  `IN_SERVICE`; only an operator ends a sale in service.
+
+**What is kept, and for how long**
+
+- When an account has no device left after *End service*, its subscriber
+  profile (name, VIP) moves to the `account_profile_archive` table and is
+  deleted `ACS_RETENTION_SUBSCRIBER_ARCHIVE_DAYS` later (default 1095, three
+  years), by the retention worker in cmd/api. *Keep subscriber* skips the
+  archive. A swap archives nothing.
+- Setting that variable to `0` turns the pruning off, which keeps archived
+  profiles for ever. Do not do that without a documented lawful reason.
+- Audit records are kept `ACS_RETENTION_AUDIT_LOG_DAYS` (default 365).
+
+**Audit trail** (Records → Audit Log)
+
+| Action | Recorded when |
+|---|---|
+| `SubscriberLookup` | a subscriber search. It keeps the search text the operator typed, whether a personal match occurred, and the number of results, so the audit log can itself contain a name that was searched for |
+| `SubscriberDetailsRevealed` | *Show details* on a device: who, which device, which account |
+| `AccountProfileChanged` | a name or VIP edit, by an operator or the BSS |
+| `OnboardingEnded`, `OnboardingDeviceSwapped`, `OnboardingSiteChanged`, `OnboardingPlanChanged` | the lifecycle actions above |
+| `BSSMappingUnassignedByAdmin` | a mapping removed in the console |
+
+Never copy subscriber names, addresses or SIM identifiers into tickets, chat or
+exports. The full IMSI, ICCID, MSISDN, IMEI and EID are shown only through the
+audited superadmin reveal; the SIM PIN is never returned.
+
+**Erasure requests.** Archived profiles are deleted by the retention worker.
+To erase one sooner, end the service without *Keep subscriber* and note the
+date, since a restore (below) can bring back data deleted after the backup was
+taken.
+
 ## Backup and restore (RPO/RTO)
 
 - **Backup**: `ACS_POSTGRES_DSN=... scripts/backup.sh /backups` — a PostgreSQL
@@ -111,6 +178,9 @@ Huawei firmware families vary significantly; do not create one global
   destructive on the target schema; services started afterwards apply any
   newer migrations automatically. The archive records logical firmware and
   upload store names, so a restore can target custom storage roots.
+  A restore also brings back anything deleted after the backup was taken,
+  including subscriber profiles (`account_profile_archive`) erased on request:
+  keep a dated list of erasure requests and apply it again after a restore.
 - **Drill (do this before you need it)**: restore the latest backup into
   a staging database quarterly, time it, and record it here. The `field-rc`
   workflow also performs a destructive database + file-store rehearsal on
@@ -133,6 +203,25 @@ Huawei firmware families vary significantly; do not create one global
   on the device's next authenticated Inform; `CONNECTION_REQUEST` needs
   the explicit activate step). The shared `ACS_DIGEST_*` pair keeps
   working for un-rotated devices.
+- `ACS_CWMP_BOOTSTRAP_PASSWORD` (the shared first-contact login,
+  `acs-bootstrap`): rotate it when it may have been seen (a screenshot of a CPE
+  settings page, a shared log). It is only used for a CPE's first contact; a
+  device that has graduated uses its own credential. Never print the value.
+  1. Check nothing still depends on it. Each device should have an `ACTIVE`
+     `CWMP_DIGEST` credential of its own:
+     `docker exec <postgres container> psql -U acs -d acs -c "select left(d.oui_serial,6) as device, d.cwmp_auth_mode, coalesce((select string_agg(c.status, ',') from device_credentials c where c.device_id=d.id and c.credential_type='CWMP_DIGEST'),'none') as own_logins from devices d"`.
+     If one shows `none` or `PENDING`, stop and find out why before rotating: it
+     would lose contact. (Graduation is enforced in the production profile only;
+     in the lab profile a device may keep using the shared login.)
+  2. Copy the secrets env file, mode 600, next to itself.
+  3. Replace only that one line with a new random value (at least 16
+     characters, e.g. `openssl rand -hex 24`), and confirm exactly one such line
+     remains.
+  4. Restart the stack with `./scripts/start.sh`, then confirm readiness and that
+     the devices are online in Inventory.
+  5. Clear the old password wherever it was typed (a CPE's TR-069 form), and
+     shred the copy from step 2.
+  Keep the legacy shared `ACS_DIGEST_*` pair separate: it is a different secret.
 - `ACS_CREDENTIAL_ENCRYPTION_KEY`: set identically on cmd/api and
   cmd/acs. There is no re-encryption tool; rotating it orphans stored
   credential ciphertexts — rotate device credentials afterwards.

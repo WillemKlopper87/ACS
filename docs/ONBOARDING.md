@@ -54,13 +54,15 @@ A sale in service can be changed from the console (*In service* tab) or the API
   The old sale ends as above but the subscriber stays, and a PLANNED sale for the
   replacement serial is recorded with the same customer, account, site and plan.
   If the old device had an account mapping, the replacement is mapped to the account
-  in the same role when it connects. Audit `OnboardingDeviceSwapped`.
+  in the same role when it connects. Audit `OnboardingDeviceSwapped`. Two events:
+  `ENDED` for the old sale and `PLANNED` (no previous state) for the replacement.
 - **Change site** (`PUT …/site`) moves the sale and the device to another site of
   the same customer. Audit `OnboardingSiteChanged`.
 - **Change plan** (`PUT …/plan`). A plan that writes configuration sends the sale back
   to DISCOVERED: the device is configured on its next check-in and returns to
-  IN_SERVICE. A plan that writes nothing takes effect at once. Audit
-  `OnboardingPlanChanged`.
+  IN_SERVICE. A plan that writes nothing takes effect at once. For a sale the
+  BSS made, the plan code the BSS reads follows, on the sale and on the device's
+  account mapping. Audit `OnboardingPlanChanged`.
 
 An ENDED or CANCELLED sale frees its serial for a new sale.
 
@@ -93,6 +95,8 @@ on an allowed MCC+MNC holds the onboarding.
 ## API
 
 Reads are open to every role; changes need `tenancy.manage` (managers by default).
+Setting a subscriber name the BSS did not send, or setting or clearing VIP, needs
+`subscriber.manage` (managers by default); see `docs/OPERATIONS-RUNBOOK.md`.
 A scoped operator must name a customer within their scope, sees only their customers'
 sites and sales, sees shared plans, and sees no unclaimed devices (these have no
 customer yet).
