@@ -238,6 +238,18 @@ func TestIntegration_SaleLifecycle(t *testing.T) {
 	if r := e.call("mgr-a", "PUT", "/api/v1/onboardings/"+saleM+"/plan", map[string]any{"service_plan_id": quiet}); r.code != 200 || !strings.Contains(r.body, `"state":"IN_SERVICE"`) {
 		t.Fatalf("plan with nothing to write = %d %s", r.code, r.body)
 	}
+	// A sale the BSS made reads the plan code it now has; a console sale
+	// has none to report.
+	exec(`UPDATE onboardings SET bss_role = 'gateway', bss_service_plan = 'HOME' WHERE id = $1`, saleM)
+	if r := e.call("mgr-a", "PUT", "/api/v1/onboardings/"+saleM+"/plan", map[string]any{"service_plan_id": quiet}); r.code != 200 {
+		t.Fatalf("plan again = %d %s", r.code, r.body)
+	}
+	if s := one(`SELECT bss_service_plan FROM onboardings WHERE id = $1`, saleM); s.String != "QUIET" {
+		t.Fatalf("bss_service_plan after a plan change = %q", s.String)
+	}
+	if s := one(`SELECT coalesce(bss_service_plan, 'none') FROM onboardings WHERE id = $1`, saleS2); s.String != "none" {
+		t.Fatalf("a console sale gained a BSS plan code: %q", s.String)
+	}
 	if r := e.call("mgr-a", "PUT", "/api/v1/onboardings/"+saleM+"/plan", map[string]any{"service_plan_id": busy}); r.code != 200 || !strings.Contains(r.body, `"state":"DISCOVERED"`) {
 		t.Fatalf("plan with configuration = %d %s", r.code, r.body)
 	}

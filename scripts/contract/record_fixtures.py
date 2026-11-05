@@ -536,8 +536,9 @@ def record_lifecycle(token, cust):
     status3, after = call(BSS, "GET", href, token=token)
     events = sale_events(token, sale_id)
     assert events and events[-1]["data"]["state"] == "DISCOVERED", events
+    assert after["service_plan"] == "HOME-5G-PLUS", after
     record("sale-plan-change", "An operator gives an in-service sale another service plan, one that writes configuration (operator API, "
-           "shown for context): the BSS reads the sale as DISCOVERED (1.2) with the new bss_service_plan, and the replayed "
+           "shown for context): the BSS reads the sale as DISCOVERED (1.2) with the new service_plan code, and the replayed "
            "OnboardingStateChangeEvent says DISCOVERED. The sale returns to IN_SERVICE once the CPE is configured.",
            [exchange("GET", href, status, before, False),
             exchange("PUT", ppath, status2, changed, True, change),

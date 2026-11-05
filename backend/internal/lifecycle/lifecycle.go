@@ -308,7 +308,10 @@ func (s *Service) ChangePlan(ctx context.Context, onboardingID, planID string, c
 	if _, err := lockInService(ctx, tx, onboardingID); err != nil {
 		return err
 	}
+	// A sale the BSS made reports the plan code it names (bss_service_plan);
+	// it follows the plan, or the BSS would read the old code for ever.
 	res, err := tx.ExecContext(ctx, `UPDATE onboardings o SET service_plan_id = $2,
+			bss_service_plan = CASE WHEN o.bss_role IS NOT NULL THEN (SELECT p.code FROM service_plans p WHERE p.id = $2) ELSE o.bss_service_plan END,
 			state = CASE WHEN $3 THEN 'DISCOVERED' ELSE o.state END,
 			state_reason = CASE WHEN $3 THEN 'service plan changed; configuring on the next check-in' ELSE o.state_reason END,
 			state_code = NULL, config_jobs = '{}', updated_at = now()
