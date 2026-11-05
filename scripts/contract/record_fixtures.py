@@ -537,12 +537,16 @@ def record_lifecycle(token, cust):
     events = sale_events(token, sale_id)
     assert events and events[-1]["data"]["state"] == "DISCOVERED", events
     assert after["service_plan"] == "HOME-5G-PLUS", after
+    status4, mapping = call(BSS, "GET", f"/bss/v1/mappings/{account}", token=token)
+    assert status4 == 200 and mapping["items"][0]["service_plan"] == "HOME-5G-PLUS", mapping
     record("sale-plan-change", "An operator gives an in-service sale another service plan, one that writes configuration (operator API, "
            "shown for context): the BSS reads the sale as DISCOVERED (1.2) with the new service_plan code, and the replayed "
-           "OnboardingStateChangeEvent says DISCOVERED. The sale returns to IN_SERVICE once the CPE is configured.",
+           "OnboardingStateChangeEvent says DISCOVERED. The account mapping keeps its status and shows the new service_plan too. "
+           "The sale returns to IN_SERVICE once the CPE is configured.",
            [exchange("GET", href, status, before, False),
             exchange("PUT", ppath, status2, changed, True, change),
             exchange("GET", href, status3, after, False),
+            exchange("GET", f"/bss/v1/mappings/{account}", status4, mapping, False),
             exchange("GET", "/bss/v1/events (the DISCOVERED event)", 200, events[-1], False)])
 
 
