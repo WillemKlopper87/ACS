@@ -24,6 +24,11 @@ Environment:
   ACS_CWMP_USER, ACS_CWMP_PASSWORD   its shared Digest credential; run cmd/acs
                     with ACS_CWMP_ALLOW_SHARED_ESTABLISHED=true for the recording
   ACS_COMMIT        commit the stack was built from (recorded in captured_from)
+  ACS_RECORD_ONLY   optional: comma-separated fixture names; only those are
+                    written, so a new minor version can add fixtures without
+                    churning the recorded ids and times of the others
+The stack needs ACS_BSS_OAUTH_SIGNING_SECRET (both services), or the tokens are
+not customer-bound, and ACS_INTERNAL_API_URL on the adapter.
 Usage: record_fixtures.py <output-dir>
 """
 
@@ -383,11 +388,18 @@ def main():
            [exchange("GET", "/tmf-api/serviceOrdering/v4/serviceOrder?accountId=someone-else.0001", status, other, False)])
 
     record_edges(token, cust)
+    record_lifecycle(token, cust)
 
     if os.environ.get("ACS_CWMP_URL"):
         record_webhook_bodies(token)
         record_secret_handles(token)
 
+    only = {n.strip() for n in os.environ.get("ACS_RECORD_ONLY", "").split(",") if n.strip()}
+    if only:
+        missing = only - set(fixtures)
+        assert not missing, f"ACS_RECORD_ONLY names unknown fixtures: {sorted(missing)}"
+        for name in set(fixtures) - only:
+            del fixtures[name]
     for name, fixture in fixtures.items():
         assert "Contract-wifi-" not in json.dumps(fixture), f"a passphrase is in {name}"
         with open(os.path.join(OUT, name + ".json"), "w", encoding="utf-8", newline="\n") as f:
@@ -403,6 +415,135 @@ def map_device(token, n, root="DEVICE2"):
     status, _ = call(BSS, "POST", "/bss/v1/mappings", {"account_id": f"contract.00{n:02d}", "oui_serial": f"A4FC77+3TG02241+{serial}",
                                                       "service_plan": "HOME-5G"}, token)
     assert status == 200, status
+
+
+def in_service_sale(token, cust, n, plan="HOME-5G"):
+    """A sale in service, as a CPE that connected and was configured leaves it:
+    the BSS records the sale (202), the device exists and joins the account,
+    and the sale's state is set in the database as the reconciler records it.
+    Returns (sale id, sale href, account id)."""
+    serial, account = f"CONTRACT{n:02d}", f"contract.00{n:02d}"
+    ouiserial = f"A4FC77+3TG02241+{serial}"
+    body = {"account_id": account, "oui_serial": ouiserial, "service_plan": plan, "pre_provision": True,
+            "place": {"id": f"PREM-CONTRACT-{n}", "name": f"{n} Test Street", "city": "Embalenhle", "country": "ZA"}}
+    status, sale = call(BSS, "POST", "/bss/v1/mappings", body, token)
+    assert status == 202, (status, sale)
+    sql(f"""INSERT INTO devices (id, oui_serial, oui, product_class, serial_number, manufacturer, data_model_root, online_status, customer_id)
+            VALUES (gen_random_uuid(), '{ouiserial}', 'A4FC77', '3TG02241', '{serial}', 'Nokia', 'DEVICE2', 'ONLINE', '{cust}');""")
+    status, mapped = call(BSS, "POST", "/bss/v1/mappings", {"account_id": account, "oui_serial": ouiserial, "service_plan": plan}, token)
+    assert status == 200, (status, mapped)
+    sql(f"""UPDATE onboardings SET state = 'IN_SERVICE', contacted_at = now(), in_service_at = now(),
+              device_id = (SELECT id FROM devices WHERE oui_serial = '{ouiserial}'),
+              bss_mapping_id = (SELECT id FROM account_device_mappings WHERE account_id = '{account}' AND unassigned_at IS NULL LIMIT 1)
+            WHERE id = '{sale['onboarding_id']}';""")
+    return sale["onboarding_id"], sale["href"], account
+
+
+def sale_events(token, sale_id):
+    """The replayed OnboardingStateChangeEvents of one sale, oldest first."""
+    status, page = call(BSS, "GET", "/bss/v1/events?after=0&limit=500", token=token)
+    return [e for e in page["events"] if e["type"] == "OnboardingStateChangeEvent" and e["data"].get("onboardingId") == sale_id]
+
+
+def record_lifecycle(token, cust):
+    """Contract 1.2: the subscriber endpoint, and the sale states an operator
+    causes: ENDED (end service, swap) and DISCOVERED again (plan change). The
+    operator calls (/api/v1/onboardings/...) are not part of the BSS contract;
+    they are recorded so an integrator sees what produces the BSS-side state
+    and events."""
+    # --- Subscriber profile: PUT /bss/v1/accounts/{id}/subscriber
+    account = "contract.0001"
+    path = f"/bss/v1/accounts/{account}/subscriber"
+    exchanges = []
+    for body in ({"subscriber_name": "Test Subscriber", "vip": True}, {"vip": False}, {"subscriber_name": ""}):
+        status, resp = call(BSS, "PUT", path, body, token)
+        exchanges.append(exchange("PUT", path, status, resp, True, body))
+    long_body = {"subscriber_name": "x" * 121}
+    status, resp = call(BSS, "PUT", path, long_body, token)
+    exchanges.append(exchange("PUT", path, status, resp, False, {"subscriber_name": "x" * 121}))
+    # An account another customer owns: a second ISP claims it with its first write.
+    status, rival = call(API, "POST", "/api/v1/customers", {"name": "Rival ISP"}, ADMIN)
+    assert status in (200, 201), (status, rival)
+    status, rc = call(API, "POST", "/api/v1/bss/oauth-clients",
+                      {"name": "rival-isp", "scopes": ["tmf:read", "tmf:write"], "customer_id": rival["id"]}, ADMIN)
+    assert status in (200, 201), (status, rc)
+    status, rtok = call(BSS, "POST", "/bss/v1/oauth/token", form={"grant_type": "client_credentials",
+                        "client_id": rc["client"]["client_id"], "client_secret": rc["client_secret"]})
+    status, claimed = call(BSS, "PUT", "/bss/v1/accounts/rival.0001/subscriber", {"vip": False}, rtok["access_token"])
+    assert status == 200, (status, claimed)
+    other = "/bss/v1/accounts/rival.0001/subscriber"
+    status, resp = call(BSS, "PUT", other, {"vip": True}, token)
+    exchanges.append(exchange("PUT", other, status, resp, False, {"vip": True}))
+    record("subscriber-profile", "PUT /bss/v1/accounts/{id}/subscriber (1.2): set the display name and VIP flag, change one field "
+           "(the other is kept), clear the name with an empty string, a name over 120 characters (400), and an account of "
+           "another customer (404). A first write to an account nobody owns claims it, as a mapping does. Optional: the BSS stays the record and a name it sends is read-only in the console.", exchanges)
+
+    # --- End service: the sale ends (ENDED), its mapping ends, the device is released
+    sale_id, href, account = in_service_sale(token, cust, 20)
+    status, before = call(BSS, "GET", href, token=token)
+    end = {"reason": "return"}
+    opath = f"/api/v1/onboardings/{sale_id}/end"
+    status2, ended = call(API, "POST", opath, end, ADMIN)
+    assert status2 == 200, (status2, ended)
+    status3, after = call(BSS, "GET", href, token=token)
+    status4, mapping = call(BSS, "GET", f"/bss/v1/mappings/{account}", token=token)
+    status5, cancel = call(BSS, "POST", href + "/cancel", None, token)
+    events = sale_events(token, sale_id)
+    assert events and events[-1]["data"]["state"] == "ENDED", events
+    record("sale-ended", "An operator ends a sale that was in service (operator API, shown for context): the BSS reads the sale as "
+           "ENDED (1.2), the account no longer lists the device, a cancel of an ended sale is 409 ErrSaleWrongState, and an "
+           "OnboardingStateChangeEvent with state ENDED is replayed.",
+           [exchange("GET", href, status, before, False),
+            exchange("POST", opath, status2, ended, True, end),
+            exchange("GET", href, status3, after, False),
+            exchange("GET", f"/bss/v1/mappings/{account}", status4, mapping, False),
+            exchange("POST", href + "/cancel", status5, cancel, False, headers=dict(LAST_HEADERS)),
+            exchange("GET", "/bss/v1/events (the ENDED event)", 200, events[-1], False)])
+
+    # --- Swap: the old sale ends, a new PLANNED sale waits for the replacement
+    sale_id, href, account = in_service_sale(token, cust, 21)
+    swap = {"reason": "rma", "serial": "CONTRACT22"}
+    spath = f"/api/v1/onboardings/{sale_id}/swap"
+    status, swapped = call(API, "POST", spath, swap, ADMIN)
+    assert status == 200, (status, swapped)
+    new_href = f"/bss/v1/onboardings/{swapped['replacement']['id']}"
+    status2, old_sale = call(BSS, "GET", href, token=token)
+    status3, new_sale = call(BSS, "GET", new_href, token=token)
+    old_events, new_events = sale_events(token, sale_id), sale_events(token, swapped["replacement"]["id"])
+    assert old_events and old_events[-1]["data"]["state"] == "ENDED", old_events
+    assert len(new_events) == 1 and new_events[0]["data"]["state"] == "PLANNED", new_events
+    record("sale-swap", "An operator swaps the device of an in-service sale (RMA or upgrade; operator API, shown for context): the "
+           "old sale is ENDED and a new sale for the replacement serial is PLANNED with the same account and plan. They are two "
+           "sales with two ids, and each publishes an OnboardingStateChangeEvent: ENDED for the old sale, PLANNED (no previous "
+           "state) for the replacement, which is how an integration learns the new sale id. The replacement joins the account "
+           "in the same role when it connects.",
+           [exchange("POST", spath, status, swapped, True, swap),
+            exchange("GET", href, status2, old_sale, False),
+            exchange("GET", new_href, status3, new_sale, False),
+            exchange("GET", "/bss/v1/events (the old sale's ENDED event)", 200, old_events[-1], False),
+            exchange("GET", "/bss/v1/events (the new sale's PLANNED event)", 200, new_events[0], False)])
+
+    # --- Plan change: a plan that writes configuration sends the sale back to DISCOVERED
+    status, plus = call(API, "POST", "/api/v1/service-plans",
+                        {"code": "HOME-5G-PLUS", "name": "Home 5G Plus", "customer_id": cust, "cellular": {"apn": "plus.example", "mtu": 1420}}, ADMIN)
+    assert status == 201, (status, plus)
+    sale_id, href, account = in_service_sale(token, cust, 23)
+    status, before = call(BSS, "GET", href, token=token)
+    change = {"service_plan_id": plus["id"]}
+    ppath = f"/api/v1/onboardings/{sale_id}/plan"
+    status2, changed = call(API, "PUT", ppath, change, ADMIN)
+    assert status2 == 200, (status2, changed)
+    status3, after = call(BSS, "GET", href, token=token)
+    events = sale_events(token, sale_id)
+    assert events and events[-1]["data"]["state"] == "DISCOVERED", events
+    assert after["service_plan"] == "HOME-5G-PLUS", after
+    record("sale-plan-change", "An operator gives an in-service sale another service plan, one that writes configuration (operator API, "
+           "shown for context): the BSS reads the sale as DISCOVERED (1.2) with the new service_plan code, and the replayed "
+           "OnboardingStateChangeEvent says DISCOVERED. The sale returns to IN_SERVICE once the CPE is configured.",
+           [exchange("GET", href, status, before, False),
+            exchange("PUT", ppath, status2, changed, True, change),
+            exchange("GET", href, status3, after, False),
+            exchange("GET", "/bss/v1/events (the DISCOVERED event)", 200, events[-1], False)])
 
 
 def record_edges(token, cust):

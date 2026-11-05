@@ -1,0 +1,113 @@
+{
+  "name": "acs/sale-plan-change",
+  "description": "An operator gives an in-service sale another service plan, one that writes configuration (operator API, shown for context): the BSS reads the sale as DISCOVERED (1.2) with the new service_plan code, and the replayed OnboardingStateChangeEvent says DISCOVERED. The sale returns to IN_SERVICE once the CPE is configured.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit a722bd8, 2026-11-05. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "GET",
+      "path": "/bss/v1/onboardings/d2789016-db07-4170-b689-3a8e30b530bd",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "id": "d2789016-db07-4170-b689-3a8e30b530bd",
+        "href": "/bss/v1/onboardings/d2789016-db07-4170-b689-3a8e30b530bd",
+        "account_id": "contract.0023",
+        "oui": "A4FC77",
+        "serial_number": "CONTRACT23",
+        "role": "gateway",
+        "service_plan": "HOME-5G",
+        "plan_matched": true,
+        "state": "IN_SERVICE",
+        "device_id": "e5abcced-be1e-4bf4-93aa-5add5f42cd4c",
+        "created_at": "2026-11-05T14:11:52.88713Z",
+        "updated_at": "2026-11-05T14:11:52.88713Z",
+        "contacted_at": "2026-11-05T14:11:53.219739Z",
+        "in_service_at": "2026-11-05T14:11:53.219739Z"
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/onboardings/d2789016-db07-4170-b689-3a8e30b530bd/plan",
+      "status": 200,
+      "mutating": true,
+      "body": {
+        "id": "d2789016-db07-4170-b689-3a8e30b530bd",
+        "customer_id": "1906e74f-a899-43b6-bc56-33104dfb18d6",
+        "device_id": "e5abcced-be1e-4bf4-93aa-5add5f42cd4c",
+        "expected_oui": "A4FC77",
+        "expected_serial": "CONTRACT23",
+        "expected_imei": "",
+        "expected_iccid": "",
+        "expected_imsi": "",
+        "account_ref": "contract.0023",
+        "site_id": "bfe8a301-2222-428a-93d5-e95b1d7e8d0e",
+        "service_plan_id": "8a2cd24f-c4fd-42f4-959d-2fa8a5fcce9b",
+        "role": "gateway",
+        "commercial_model": "retail",
+        "source": "bss",
+        "external_ref": "",
+        "state": "DISCOVERED",
+        "state_reason": "service plan changed; configuring on the next check-in",
+        "config_jobs": [],
+        "requested_by": "bss:contract.0023",
+        "created_at": "2026-11-05T16:11:52.88713+02:00",
+        "updated_at": "2026-11-05T16:11:53.354904+02:00",
+        "contacted_at": "2026-11-05T16:11:53.219739+02:00",
+        "in_service_at": "2026-11-05T16:11:53.219739+02:00"
+      },
+      "request": {
+        "service_plan_id": "8a2cd24f-c4fd-42f4-959d-2fa8a5fcce9b"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/onboardings/d2789016-db07-4170-b689-3a8e30b530bd",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "id": "d2789016-db07-4170-b689-3a8e30b530bd",
+        "href": "/bss/v1/onboardings/d2789016-db07-4170-b689-3a8e30b530bd",
+        "account_id": "contract.0023",
+        "oui": "A4FC77",
+        "serial_number": "CONTRACT23",
+        "role": "gateway",
+        "service_plan": "HOME-5G-PLUS",
+        "plan_matched": true,
+        "state": "DISCOVERED",
+        "reason": "service plan changed; configuring on the next check-in",
+        "device_id": "e5abcced-be1e-4bf4-93aa-5add5f42cd4c",
+        "created_at": "2026-11-05T14:11:52.88713Z",
+        "updated_at": "2026-11-05T14:11:53.354904Z",
+        "contacted_at": "2026-11-05T14:11:53.219739Z",
+        "in_service_at": "2026-11-05T14:11:53.219739Z"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/events (the DISCOVERED event)",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "id": "edfe4b8a-314f-4b17-876b-2fbf0b6e0aa3",
+        "type": "OnboardingStateChangeEvent",
+        "occurred_at": "2026-11-05T14:11:53.35881Z",
+        "sequence": 8,
+        "customer_id": "1906e74f-a899-43b6-bc56-33104dfb18d6",
+        "account_id": "contract.0023",
+        "device": {
+          "id": "e5abcced-be1e-4bf4-93aa-5add5f42cd4c",
+          "oui_serial": "A4FC77+3TG02241+CONTRACT23"
+        },
+        "data": {
+          "state": "DISCOVERED",
+          "reason": "service plan changed",
+          "source": "bss",
+          "externalId": "",
+          "onboardingId": "d2789016-db07-4170-b689-3a8e30b530bd",
+          "serialNumber": "CONTRACT23",
+          "previousState": "IN_SERVICE"
+        }
+      }
+    }
+  ]
+}

@@ -162,6 +162,16 @@ func TestIntegration_SaleLifecycle(t *testing.T) {
 	if s := one(`SELECT concat_ws(',', account_ref, (site_id::text = $1)::text, bss_role, bss_service_plan) FROM onboardings WHERE expected_serial = 'LC9999'`, siteA); s.String != "ACC-SWAP,true,gateway,HOME" {
 		t.Fatalf("replacement sale = %q", s.String)
 	}
+	// The replacement is announced like any new sale (PLANNED), so an
+	// integration can learn its id; the ended sale has its ENDED event.
+	if s := one(`SELECT count(*)::text FROM tmf_events WHERE event_type = 'OnboardingStateChangeEvent'
+	               AND payload->>'serialNumber' = 'LC9999' AND payload->>'state' = 'PLANNED' AND payload->>'previousState' = ''`); s.String != "1" {
+		t.Fatalf("PLANNED events for the replacement sale = %s", s.String)
+	}
+	if s := one(`SELECT count(*)::text FROM tmf_events WHERE event_type = 'OnboardingStateChangeEvent'
+	               AND payload->>'serialNumber' = 'LC0004' AND payload->>'state' = 'ENDED'`); s.String != "1" {
+		t.Fatalf("ENDED events for the swapped sale = %s", s.String)
+	}
 	if s := one(`SELECT display_name FROM account_profiles WHERE account_id = 'ACC-SWAP'`); s.String != name {
 		t.Fatalf("a swap archived the subscriber")
 	}
@@ -227,6 +237,18 @@ func TestIntegration_SaleLifecycle(t *testing.T) {
 	}
 	if r := e.call("mgr-a", "PUT", "/api/v1/onboardings/"+saleM+"/plan", map[string]any{"service_plan_id": quiet}); r.code != 200 || !strings.Contains(r.body, `"state":"IN_SERVICE"`) {
 		t.Fatalf("plan with nothing to write = %d %s", r.code, r.body)
+	}
+	// A sale the BSS made reads the plan code it now has; a console sale
+	// has none to report.
+	exec(`UPDATE onboardings SET bss_role = 'gateway', bss_service_plan = 'HOME' WHERE id = $1`, saleM)
+	if r := e.call("mgr-a", "PUT", "/api/v1/onboardings/"+saleM+"/plan", map[string]any{"service_plan_id": quiet}); r.code != 200 {
+		t.Fatalf("plan again = %d %s", r.code, r.body)
+	}
+	if s := one(`SELECT bss_service_plan FROM onboardings WHERE id = $1`, saleM); s.String != "QUIET" {
+		t.Fatalf("bss_service_plan after a plan change = %q", s.String)
+	}
+	if s := one(`SELECT coalesce(bss_service_plan, 'none') FROM onboardings WHERE id = $1`, saleS2); s.String != "none" {
+		t.Fatalf("a console sale gained a BSS plan code: %q", s.String)
 	}
 	if r := e.call("mgr-a", "PUT", "/api/v1/onboardings/"+saleM+"/plan", map[string]any{"service_plan_id": busy}); r.code != 200 || !strings.Contains(r.body, `"state":"DISCOVERED"`) {
 		t.Fatalf("plan with configuration = %d %s", r.code, r.body)
