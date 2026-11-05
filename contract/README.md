@@ -41,8 +41,9 @@ and the response `body`.
 | `sale-swap` | **1.2.** A device swap: the old sale `ENDED`, a new `PLANNED` sale for the replacement, and an event for each |
 | `sale-plan-change` | **1.2.** A plan change that writes configuration: the sale reads `DISCOVERED` with the new plan code, and its event |
 
-The four 1.2 fixtures were recorded at their own commit (see `captured_from`);
-the others keep the 1.1.1 recording, since nothing they show changed. The
+The four 1.2 fixtures were recorded at their own commit (see `captured_from`;
+`sale-ended` and `sale-plan-change` were re-recorded for 1.2.1); the others keep
+the 1.1.1 recording, since nothing they show changed. The
 operator calls in the 1.2 fixtures (`/api/v1/onboardings/...`) are not part of
 the BSS contract; they are shown so you can see what produces the state and
 events you read.
@@ -55,8 +56,8 @@ and the request headers that matter (`request_headers`). Errors are RFC 9457
 problems that keep the older `error`/`message` keys.
 
 **Versioned.** The contract is tagged `bss-contract-v<major>.<minor>.<patch>`
-(`bss-contract-v1.0.0`, `v1.0.1`, `v1.1.0`, `v1.1.1`, `v1.2.0`). A tag never moves. Within a major version, changes only add
+(`bss-contract-v1.0.0`, `v1.0.1`, `v1.1.0`, `v1.1.1`, `v1.2.0`, `v1.2.1`). A tag never moves. Within a major version, changes only add
 (fields, endpoints, and codes that only a new endpoint or parameter can return); a removal or a changed
-meaning bumps the major version. 1.1.0 added sealed secret handles (`POST /bss/v1/secrets`). 1.2.0 added the optional `subscriber_name` and `vip`, `PUT /bss/v1/accounts/{id}/subscriber` and the `ENDED` sale state (a consumer that validates the state against a fixed list must accept it). Pin integration tests to a tag. Re-record
+meaning bumps the major version. 1.1.0 added sealed secret handles (`POST /bss/v1/secrets`). 1.2.0 added the optional `subscriber_name` and `vip`, `PUT /bss/v1/accounts/{id}/subscriber` and the `ENDED` sale state (a consumer that validates the state against a fixed list must accept it). 1.2.1 made a plan change update the account mapping's `service_plan` too (it only changed the sale's), corrected the spec text on ending a sale in service (a TMF641 delete ends the mapping and leaves the sale `IN_SERVICE`), and named `ENDED` in the cancel 409 message. Pin integration tests to a tag. Re-record
 with [`scripts/contract/record_fixtures.py`](../scripts/contract/record_fixtures.py)
 against a throwaway stack (its docstring lists the environment it needs).
