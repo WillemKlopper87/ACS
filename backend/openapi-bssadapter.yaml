@@ -354,7 +354,7 @@ paths:
     post:
       tags: [Mappings]
       summary: Cancel a sale that is not in service (tmf:execute for customer-bound clients)
-      description: "The sale is CANCELLED: its serial is free for a new sale, an account mapping it wrote is ended (corrected), a TMF641 item waiting for it FAILS. End a sale in service with a TMF641 delete. Emits an OnboardingStateChangeEvent."
+      description: "The sale is CANCELLED: its serial is free for a new sale, an account mapping it wrote is ended (corrected), a TMF641 item waiting for it FAILS. A sale in service is refused (409 ErrSaleWrongState): an operator ends it in the console (ENDED), and a TMF641 delete ends its account mapping and leaves the sale IN_SERVICE. Emits an OnboardingStateChangeEvent."
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
