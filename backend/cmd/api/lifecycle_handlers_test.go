@@ -21,6 +21,7 @@ func TestIntegration_SaleLifecycle(t *testing.T) {
 	e.operator("mgr-a", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custA})
 	e.operator("noc-a", operators.RoleNOC, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custA})
 	e.operator("mgr-b", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custB})
+	e.operator("root", operators.RoleSuperAdmin)
 
 	exec := func(q string, args ...any) {
 		t.Helper()
@@ -118,6 +119,12 @@ func TestIntegration_SaleLifecycle(t *testing.T) {
 	}
 	if s := one(`SELECT count(*)::text FROM audit_log WHERE action = 'OnboardingEnded'`); s.String != "1" {
 		t.Fatalf("end not audited")
+	}
+	// The released device is back in the pool of claimable devices; a device
+	// whose sale is still in service is not.
+	inService("LC0099", "ACC-LIVE")
+	if r := e.call("root", "GET", "/api/v1/onboardings/unclaimed", nil); r.code != 200 || !strings.Contains(r.body, "LC0001") || strings.Contains(r.body, "LC0099") {
+		t.Fatalf("unclaimed after an end: %d %s", r.code, r.body)
 	}
 	if r := e.call("mgr-a", "POST", "/api/v1/onboardings/"+sale+"/end", map[string]any{"reason": "return"}); r.code != 404 {
 		// The device left customer A's scope with the release, so the
