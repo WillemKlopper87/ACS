@@ -77,9 +77,12 @@ func (r *Resolver) IP(req *http.Request) string {
 	}
 	parts := strings.Split(strings.Join(req.Header.Values("X-Forwarded-For"), ","), ",")
 	for i := len(parts) - 1; i >= 0; i-- {
-		a, err := netip.ParseAddr(strings.TrimSpace(parts[i]))
-		if err != nil {
-			continue
+		a, ok := parseEntry(parts[i])
+		if !ok {
+			// A trusted proxy wrote this entry in a form we cannot read, so
+			// everything to its left is only the client's word. Stop and use
+			// the peer rather than skip it and believe a forged address.
+			return host
 		}
 		if r.isTrusted(a) {
 			continue
@@ -87,6 +90,19 @@ func (r *Resolver) IP(req *http.Request) string {
 		return a.Unmap().String()
 	}
 	return host
+}
+
+// parseEntry reads one X-Forwarded-For entry: an address, or an address with
+// a port ("192.0.2.1:443", "[2001:db8::1]:443") as some load balancers add.
+func parseEntry(s string) (netip.Addr, bool) {
+	s = strings.TrimSpace(s)
+	if a, err := netip.ParseAddr(s); err == nil {
+		return a, true
+	}
+	if ap, err := netip.ParseAddrPort(s); err == nil {
+		return ap.Addr(), true
+	}
+	return netip.Addr{}, false
 }
 
 var current atomic.Pointer[Resolver]
