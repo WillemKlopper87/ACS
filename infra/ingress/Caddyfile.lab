@@ -1,0 +1,45 @@
+# TLS front door for the lab (docs/LAB-TLS.md). Caddy gets and renews a Let's
+# Encrypt certificate for each name and forwards to the services on this host.
+# Run it with the compose profile "tls" (scripts/start.sh does when the
+# ACS_LAB_* names are set); Caddy uses the host network so it can reach the
+# loopback origins and bind 80 (certificate check, redirect) and 443.
+#
+# Names and the contact come from the environment, set by start.sh:
+#   ACS_LAB_FRONTEND_HOST  console          -> 127.0.0.1:5173
+#   ACS_LAB_API_HOST       operator API     -> 127.0.0.1:8080
+#   ACS_LAB_BSS_HOST       BSS adapter      -> 127.0.0.1:8090
+#   ACS_LAB_TLS_EMAIL      Let's Encrypt contact for expiry notices
+#
+# Caddy trusts no upstream proxy here: it overwrites X-Forwarded-For with the
+# address that connected to it, so the services (ACS_TRUSTED_PROXY_CIDRS=
+# 127.0.0.1,::1) read the real client from that header and a client cannot
+# choose its own.
+{
+	email {$ACS_LAB_TLS_EMAIL}
+}
+
+(secure) {
+	header {
+		# 30 days: a lab name can be dropped without browsers insisting on https for a year.
+		Strict-Transport-Security "max-age=2592000"
+		-Server
+	}
+}
+
+{$ACS_LAB_FRONTEND_HOST} {
+	import secure
+	reverse_proxy 127.0.0.1:5173
+}
+
+{$ACS_LAB_API_HOST} {
+	import secure
+	# flush_interval -1: stream responses as they are written.
+	reverse_proxy 127.0.0.1:8080 {
+		flush_interval -1
+	}
+}
+
+{$ACS_LAB_BSS_HOST} {
+	import secure
+	reverse_proxy 127.0.0.1:8090
+}

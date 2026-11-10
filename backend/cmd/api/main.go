@@ -12,6 +12,7 @@ package main
 
 import (
 	"acs/internal/bulkdata"
+	"acs/internal/clientip"
 	"context"
 	"errors"
 	"log/slog"
@@ -60,6 +61,14 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	if err := clientip.Configure(os.Getenv("ACS_TRUSTED_PROXY_CIDRS")); err != nil {
+		logger.Error("ACS_TRUSTED_PROXY_CIDRS is invalid", "err", err)
+		os.Exit(1)
+	}
+	if v := os.Getenv("ACS_TRUSTED_PROXY_CIDRS"); v != "" {
+		logger.Info("forwarding headers are trusted from these proxies only", "ACS_TRUSTED_PROXY_CIDRS", v)
+	}
 
 	dsn := os.Getenv("ACS_POSTGRES_DSN")
 	if dsn == "" {

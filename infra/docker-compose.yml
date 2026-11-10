@@ -116,6 +116,25 @@ services:
   # Pinned to the 0.12 release series (the config relies on its
   # `Lua.os.getenv`, foreground-by-default and mod_admin_adhoc behaviour);
   # pin the digest once pulled for a production-like deployment.
+  # Lab TLS front door (docs/LAB-TLS.md): Caddy gets a Let's Encrypt certificate
+  # for the console, API and BSS adapter names and forwards to the loopback
+  # services. Host network so it can reach them and bind 80 and 443 (Linux).
+  # scripts/start.sh starts it when the ACS_LAB_* names are set.
+  caddy:
+    image: caddy:2.10.2-alpine
+    profiles: ["tls"]
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      ACS_LAB_TLS_EMAIL: ${ACS_LAB_TLS_EMAIL:-}
+      ACS_LAB_FRONTEND_HOST: ${ACS_LAB_FRONTEND_HOST:-}
+      ACS_LAB_API_HOST: ${ACS_LAB_API_HOST:-}
+      ACS_LAB_BSS_HOST: ${ACS_LAB_BSS_HOST:-}
+    volumes:
+      - ./ingress/Caddyfile.lab:/etc/caddy/Caddyfile:ro
+      - acs_caddy_data:/data
+      - acs_caddy_config:/config
+
   prosody:
     image: prosodyim/prosody:0.12
     profiles: ["xmpp"]
@@ -237,3 +256,5 @@ volumes:
   acs_prometheus_data:
   acs_grafana_data:
   acs_prosody_data:
+  acs_caddy_data:
+  acs_caddy_config:

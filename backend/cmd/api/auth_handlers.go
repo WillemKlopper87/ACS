@@ -16,12 +16,12 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"acs/internal/auth"
+	"acs/internal/clientip"
 	"acs/internal/observability"
 	"acs/internal/operators"
 	"acs/internal/ratelimit"
@@ -267,7 +267,7 @@ func withRateLimit(limiter *ratelimit.Limiter, metrics *observability.Metrics, n
 			next.ServeHTTP(w, r)
 			return
 		}
-		key := r.RemoteAddr
+		key := clientIP(r)
 		if claims, ok := operatorClaims(r.Context()); ok {
 			key = claims.Subject
 		}
@@ -486,17 +486,11 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// clientIP is the peer address without port. X-Forwarded-For is
-// deliberately not consulted: this API is meant to sit behind a proxy
-// the operator controls, but trusting the header unconditionally would
-// let any client choose its own rate-limit key.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
+// clientIP is the peer address without port. Forwarding headers are
+// consulted only when the peer is inside ACS_TRUSTED_PROXY_CIDRS (see
+// internal/clientip): trusting them unconditionally would let any client
+// choose its own rate-limit key.
+func clientIP(r *http.Request) string { return clientip.Of(r) }
 
 // --- operator management (admin-only) ----------------------------------
 

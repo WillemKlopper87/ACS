@@ -325,7 +325,16 @@ ACS_RETENTION_SUBSCRIBER_ARCHIVE_DAYS (cmd/api — pruning windows, 0 disables;
   stream GET /bss/v1/events replays; SUBSCRIBER_ARCHIVE is how long an ended
   subscriber's archived name and VIP are kept, three years; 0 keeps them for
   ever, see docs/OPERATIONS-RUNBOOK.md),
-ACS_API_CORS_ORIGIN now defaults to ACS_FRONTEND_BASE_URL rather than "*"
+ACS_API_CORS_ORIGIN now defaults to ACS_FRONTEND_BASE_URL rather than "*",
+ACS_TRUSTED_PROXY_CIDRS (cmd/api, cmd/bssadapter — comma-separated addresses or CIDR
+  ranges of reverse proxies whose X-Forwarded-For may be believed;
+  default empty = never; without it every user behind a proxy looks like one client),
+ACS_BSS_SECRETS_BEHIND_TLS_PROXY (cmd/bssadapter — TLS ends at a proxy, so secret
+  handles are accepted over its plain-HTTP hop; only the proxy may reach the port),
+ACS_LAB_PUBLIC_FRONTEND_URL, ACS_LAB_PUBLIC_API_URL, ACS_LAB_PUBLIC_BSS_URL,
+ACS_LAB_TLS_EMAIL (start.sh, lab profile — the https names of the console, API and
+  BSS adapter, and the Let's Encrypt contact; with all four, start.sh runs the Caddy
+  TLS front door; the first two alone only change the URLs; see docs/LAB-TLS.md)
 
 # docker compose (infra/docker-compose.yml) — shell/.env, not the app env file
 GRAFANA_ADMIN_PASSWORD, ACS_GRAFANA_DB_PASSWORD (both required — scripts/gen-env.sh
