@@ -177,6 +177,33 @@ else
 fi
 set_compose_env PROMETHEUS_BIND "$PROMETHEUS_BIND"
 
+# /metrics may need a bearer token (ACS_METRICS_TOKEN; required in the
+# production profile). Prometheus cannot read it from its environment, so
+# when one is set the scrape configuration is rendered with it: every ACS
+# job gets an authorization block. The rendered file is not in git and is
+# readable only through this host's own file permissions.
+PROMETHEUS_SOURCE="${ACS_PROMETHEUS_CONFIG:-prometheus.yml}"
+if [ "$PROMETHEUS_SOURCE" = ".prometheus.generated.yml" ]; then
+  PROMETHEUS_SOURCE="prometheus.yml" # never render from a previous rendering
+fi
+if [ -n "${ACS_METRICS_TOKEN:-}" ]; then
+  PROMETHEUS_RENDERED="$ROOT/infra/.prometheus.generated.yml"
+  ( umask 022
+    awk -v token="$ACS_METRICS_TOKEN" '
+      { print }
+      /^  - job_name: / {
+        print "    authorization:"
+        print "      credentials: \"" token "\""
+      }' "$ROOT/infra/$PROMETHEUS_SOURCE" > "$PROMETHEUS_RENDERED" )
+  ACS_PROMETHEUS_CONFIG=".prometheus.generated.yml"
+else
+  ACS_PROMETHEUS_CONFIG="$PROMETHEUS_SOURCE"
+fi
+# In the environment too: a value exported in the shell would otherwise
+# win over infra/.env when compose starts Prometheus below.
+export ACS_PROMETHEUS_CONFIG
+set_compose_env ACS_PROMETHEUS_CONFIG "$ACS_PROMETHEUS_CONFIG"
+
 echo "=== Stopping any previous ACS application processes ==="
 "$ROOT/scripts/stop.sh" || true
 sleep 1

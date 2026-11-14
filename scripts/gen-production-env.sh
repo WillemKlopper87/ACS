@@ -92,6 +92,12 @@ fi
 # and device web pages kept in their sandbox.
 upsert_export ACS_MFA_REQUIRED_ROLES "${ACS_PRODUCTION_MFA_REQUIRED_ROLES:-superadmin,manager,noc}"
 upsert_export ACS_WEBGUI_ALLOW_SAME_ORIGIN "false"
+# /metrics answers only a scraper with this token. Kept if it already
+# exists, so re-running this script does not change it under a running
+# Prometheus; scripts/start.sh gives Prometheus the same value.
+if ! grep -q '^export ACS_METRICS_TOKEN="[^"]\{32,\}"' "$SECRETS_FILE"; then
+  upsert_export ACS_METRICS_TOKEN "$(openssl rand -hex 32)"
+fi
 
 chmod 600 "$SECRETS_FILE"
 # Regenerate the systemd companion from the final persisted values.

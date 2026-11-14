@@ -1,12 +1,17 @@
 package main
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"acs/internal/auth"
 	"acs/internal/operators"
 	"acs/internal/ratelimit"
 	"acs/internal/tenancy"
@@ -179,5 +184,44 @@ func TestIntegration_PasswordRulesAndSignInTiming(t *testing.T) {
 	}
 	if d := time.Since(start); d < 5*time.Millisecond {
 		t.Fatalf("unknown username answered in %v: no hash comparison was made, so timing tells it from a wrong password", d)
+	}
+}
+
+// With the lookup configured, a password found in published breaches is
+// refused when it is set, and a lookup that cannot be made does not stop
+// a password change (finding O12).
+func TestIntegration_BreachedPasswordIsRefused(t *testing.T) {
+	e := newTestEnv(t)
+	e.operator("root", operators.RoleSuperAdmin)
+	const breached, clean = "blue-Kettle-49-rain", "green-Teapot-52-snow"
+	suffix := func(p string) string {
+		s := sha1.Sum([]byte(p))
+		return strings.ToUpper(hex.EncodeToString(s[:]))[5:]
+	}
+	down := false
+	hibp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprintf(w, "%s:42\r\n", suffix(breached))
+	}))
+	defer hibp.Close()
+	var err error
+	if e.h.passwordBreaches, err = auth.NewBreachChecker(hibp.URL + "/range/"); err != nil {
+		t.Fatal(err)
+	}
+	create := func(username, password string) resp {
+		return e.call("root", "POST", "/api/v1/auth/operators", map[string]string{"username": username, "password": password, "role": "readonly"})
+	}
+	if r := create("op-breached", breached); r.code != 400 || !strings.Contains(r.body, "breaches") {
+		t.Fatalf("a breached password = %d %s, want 400", r.code, r.body)
+	}
+	if r := create("op-clean", clean); r.code/100 != 2 {
+		t.Fatalf("a password the service does not list = %d %s", r.code, r.body)
+	}
+	down = true
+	if r := create("op-while-down", breached); r.code/100 != 2 {
+		t.Fatalf("with the lookup service down = %d %s, want the password accepted on the other rules", r.code, r.body)
 	}
 }

@@ -65,6 +65,27 @@ func IntegrationMode(getenv func(string) string) (string, error) {
 	}
 }
 
+// MetricsTokenEnv puts a credential on /metrics (internal/observability).
+const MetricsTokenEnv = "ACS_METRICS_TOKEN"
+
+// MetricsTokenProblem is what stops a service from running under the
+// production profile without a credential on /metrics, or "". Every
+// service serves /metrics on the listener it serves everything else on:
+// for the CWMP gateway and the USP controller that is the one device
+// networks reach, and for the API and the adapter it is whatever the
+// reverse proxy forwards. Route names, volumes and error rates are not
+// for either audience (security assessment O9).
+func MetricsTokenProblem(getenv func(string) string) string {
+	token := strings.TrimSpace(getenv(MetricsTokenEnv))
+	switch {
+	case token == "":
+		return MetricsTokenEnv + " is required in production: without it /metrics answers anyone who can reach the listener. Generate one (openssl rand -hex 32) and give Prometheus the same value"
+	case len(token) < 32:
+		return MetricsTokenEnv + " must be at least 32 characters"
+	}
+	return ""
+}
+
 // writeRoles are the operator roles that can change devices. Production
 // requires a second sign-in step for all of them.
 var writeRoles = []string{"superadmin", "manager", "noc"}
@@ -103,6 +124,9 @@ func APIProductionProblems(getenv func(string) string) []string {
 	}
 	if getenv("ACS_WEBGUI_ALLOW_SAME_ORIGIN") == "true" {
 		problems = append(problems, "ACS_WEBGUI_ALLOW_SAME_ORIGIN=true is forbidden in production: it lets a device's web pages run on the console's origin")
+	}
+	if p := MetricsTokenProblem(getenv); p != "" {
+		problems = append(problems, p)
 	}
 	return problems
 }
@@ -155,6 +179,9 @@ func BSSProductionProblems(getenv func(string) string) []string {
 	// the proxy is trusted to say who the caller was.
 	if loopback && !ownTLS && strings.TrimSpace(getenv("ACS_TRUSTED_PROXY_CIDRS")) == "" {
 		problems = append(problems, "ACS_TRUSTED_PROXY_CIDRS is required when the adapter listens on loopback behind a proxy: without it every caller appears to be the proxy and ACS_BSS_ALLOWED_CIDRS cannot be applied")
+	}
+	if p := MetricsTokenProblem(getenv); p != "" {
+		problems = append(problems, p)
 	}
 	return problems
 }

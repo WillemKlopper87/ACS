@@ -11,6 +11,7 @@
 package main
 
 import (
+	"acs/internal/auth"
 	"acs/internal/bulkdata"
 	"acs/internal/bulkops"
 	"acs/internal/clientip"
@@ -452,6 +453,20 @@ func main() {
 	}
 	// What one process allows over the same time (a burst of 5, then one
 	// every 12 seconds), now for all replicas together.
+	if h.passwordBreaches, err = auth.NewBreachChecker(os.Getenv(auth.BreachCheckURLEnv)); err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if h.passwordBreaches != nil {
+		logger.Info("new operator passwords are looked up among published breaches", auth.BreachCheckURLEnv, os.Getenv(auth.BreachCheckURLEnv))
+	}
+	if os.Getenv(ratelimit.SharedEnv) == "true" {
+		sharedRateLimit = ratelimit.NewSynced(db, "api", apiRate, apiBurst, 10*time.Second)
+		go sharedRateLimit.Run(ctx, func(err error) {
+			logger.Error("shared rate limit unavailable; the per-process limit still applies", "err", err)
+		})
+		logger.Info("request rate limit is shared across replicas", ratelimit.SharedEnv, "true")
+	}
 	h.sharedLoginLimit = ratelimit.NewShared(db, "login", 30, 5*time.Minute)
 	h.sharedMFALimit = ratelimit.NewShared(db, "mfa", 30, 5*time.Minute)
 	h.sessionCookies = sessionCookiesAllowed(corsOrigin, h.webGUISameOrigin)
@@ -549,6 +564,9 @@ type handler struct {
 	firmwareBase string // base URL the CPE fetches Download URLs from (design doc v3 §9.4's "HTTPS static file host", local-disk stand-in — see internal/firmware doc comment)
 
 	operators *operators.Repository
+	// passwordBreaches looks a new password up among published breaches
+	// (auth.BreachChecker). Nil: the lookup is off.
+	passwordBreaches *auth.BreachChecker
 	// sharedLoginLimit and sharedMFALimit count sign-in attempts in the
 	// database, so the limit holds across replicas (finding O10). Nil in
 	// tests that do not set them: the per-process limiters then stand alone.

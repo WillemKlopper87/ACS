@@ -8,7 +8,7 @@ points to the document that has the detail.
 
 - **19 commits**, 192 files, about 13,900 lines added and 990 removed.
   No pull request has been opened; nothing is merged to `main`.
-- **Six schema migrations** (0095 to 0100), all forward-only.
+- **Seven schema migrations** (0095 to 0101), all forward-only.
 - **State of the checks at the last commit:** the Go suite passes against
   PostgreSQL (54 packages), the console's 189 unit tests and 16 browser
   tests pass, and the production preflight matrix passes.
@@ -23,7 +23,7 @@ points to the document that has the detail.
 | Live check of the stack | Done locally with a simulated CPE fleet; findings fixed or recorded |
 | Console look, feel and workflow | Redesign steps A to G built; no function removed |
 | Two-step sign-in (MFA) | Built |
-| Security assessment | 3 findings fixed at once; all 14 left open have since been addressed (three are built but need a setting turned on) |
+| Security assessment | 3 findings fixed at once; all 14 left open have since been addressed (some parts are opt-in, listed in section 6) |
 | Standalone / NaaS switch | Built |
 | Production profile enforcement | Built for the operator API and the BSS adapter |
 | Database login per service | Built, opt-in |
@@ -146,12 +146,12 @@ not a penetration test.
 | O6 | Medium | Session token in browser storage | **Fixed** |
 | O7 | Medium | A resent order with a changed body was answered as accepted | **Fixed** |
 | O8 | Low | Webhooks may target plain `http://` | **Fixed**: 32-character secrets, `https` in production, secrets sealed at rest when a key is set |
-| O9 | Low | `/metrics` needs no credentials | **Built, off by default**: `ACS_METRICS_TOKEN` |
-| O10 | Low | Rate limits are per process, so replicas multiply them | **Fixed** for sign-in attempts; general rate limits are still per process |
+| O9 | Low | `/metrics` needs no credentials | **Fixed**: `/metrics` needs a token, required in production |
+| O10 | Low | Rate limits are per process, so replicas multiply them | **Fixed** for sign-in attempts; general rate limits shared with `ACS_SHARED_RATE_LIMIT=true` (**opt-in**) |
 | O11 | Low | Sign-in timing reveals whether a username exists | **Fixed** |
-| O12 | Low | Operator passwords need only eight characters | **Fixed**: 12 characters and basic rules; no breached-password lookup |
+| O12 | Low | Operator passwords need only eight characters | **Fixed**: 12 characters and basic rules; breached-password lookup with `ACS_PASSWORD_BREACH_CHECK_URL` (**opt-in**) |
 | O13 | Low | Token issuance and adapter reads are not audited | **Fixed**: token issuance audited; reads audited in summary |
-| O14 | Info | Frontend container runs as root; images pinned by tag | **Fixed** for the images this project builds; Compose third-party images still by tag |
+| O14 | Info | Frontend container runs as root; images pinned by tag | **Fixed**: unprivileged console image; all images pinned by digest |
 
 O4 and O8 to O14 were done after this summary was first written; the
 runbook section "Smaller hardening changes" says what each needs from
@@ -225,6 +225,7 @@ an ID first. Now each is unique per ISP.
 | 0098 | Account registry and internal keys; order key, scope and request digest |
 | 0099 | IDs unique per customer; source keys per customer / account |
 | 0100 | Sign-in attempt counts shared by all replicas |
+| 0101 | Request-rate counts shared by all replicas (used only when switched on) |
 
 0098 and 0099 rewrite the account columns of the event table once. Back
 up first and run them in a quiet period.
@@ -323,10 +324,9 @@ These were not exercised and should not be read as covered:
   two ISPs' same-numbered accounts share the label.
 - **Device management plan** steps 2 to 10, and the optional console
   housekeeping.
-- **Not done within the findings**: a breached-password lookup (O12),
-  shared limits for the general API and adapter rate limiters (O10),
-  digest pins for the third-party images in the Compose file (O14), and
-  `/metrics` is not forced to need a token in production (O9).
+- **Opt-in parts of the findings**, off until set: the breached-password
+  lookup (O12), the shared general rate limit (O10), strict device
+  ownership (O3) and per-service database logins (O5).
 
 ## 12. Where the detail is
 

@@ -209,12 +209,29 @@ taken.
   **Do not lose or change that key**: deliveries for sealed subscriptions
   then fail with "the signing secret could not be opened" until each
   subscription's secret is rotated.
-- **`/metrics`.** Set `ACS_METRICS_TOKEN` on every service and give
-  Prometheus the same value (`authorization: credentials_file: ...` in
-  each scrape job). Do both in one change: a service with the token and a
-  Prometheus without it shows the target as down. The CWMP listener is
-  reachable from device networks and serves `/metrics` too, so this
-  matters most there.
+- **`/metrics`** needs a bearer token in the production profile
+  (`ACS_METRICS_TOKEN`, 32 characters or more): the services refuse to
+  start without it. `scripts/gen-production-env.sh` writes one to the
+  secrets file (and keeps it on later runs), and `scripts/start.sh`
+  renders the Prometheus configuration with it
+  (`infra/.prometheus.generated.yml`, not in git). **Upgrading an
+  existing production host**: run `gen-production-env.sh` again, or add
+  the line by hand (`openssl rand -hex 32`), before starting. A
+  Prometheus that is not started by `start.sh` needs
+  `authorization: { credentials: <token> }` in each ACS scrape job. In
+  the lab the token is optional. The CWMP listener is reachable from
+  device networks and serves `/metrics` too, which is why this is
+  required.
+- **Breached passwords.** Set `ACS_PASSWORD_BREACH_CHECK_URL` on the API
+  to refuse new operator passwords that appear in published breaches.
+  It needs outbound HTTPS from the API to that address; only a
+  five-character digest prefix is sent. If the lookup fails the API logs
+  `breached-password lookup failed` and accepts the password on the
+  other rules.
+- **More than one replica.** Set `ACS_SHARED_RATE_LIMIT=true` on the API
+  and the adapter, so a caller's request rate is counted across all of
+  them (tables `rate_limit_windows`, which holds digests). Sign-in
+  attempt limits are shared regardless.
 - **Sign-in attempts** are counted in the database as well as in each
   process (table `auth_attempt_windows`, which holds digests, not names).
   If the database cannot be reached the per-process limit still applies.
@@ -228,8 +245,10 @@ taken.
   80 as root). The Compose file maps it; a deployment with its own port
   mapping or proxy upstream for the console container must change 80 to
   8080.
-- **Base images** are pinned by digest. Dependabot raises them; a build
-  that cannot find a digest fails instead of using different content.
+- **Images** are pinned by digest: the base images of the five
+  Dockerfiles and the six third-party images in the Compose file.
+  Dependabot raises them; a build or pull that cannot find a digest
+  fails instead of using different content.
 
 ## A resent order must be the same order
 

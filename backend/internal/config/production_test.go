@@ -34,6 +34,7 @@ func TestDeploymentProfile(t *testing.T) {
 var goodAPI = []string{
 	"ACS_CREDENTIAL_ENCRYPTION_KEY", "a-real-key-0123456789",
 	"ACS_MFA_REQUIRED_ROLES", "superadmin, manager,noc",
+	"ACS_METRICS_TOKEN", "a-scrape-token-of-thirty-two-chars-0123",
 }
 
 func TestAPIProductionProblems(t *testing.T) {
@@ -53,6 +54,8 @@ func TestAPIProductionProblems(t *testing.T) {
 		"dev mode":            {with(goodAPI, DevModeEnv, "true"), DevModeEnv},
 		"web GUI sandbox off": {with(goodAPI, "ACS_WEBGUI_ALLOW_SAME_ORIGIN", "true"), "ACS_WEBGUI_ALLOW_SAME_ORIGIN"},
 		"any CORS origin":     {with(goodAPI, "ACS_API_CORS_ORIGIN", "*"), "ACS_API_CORS_ORIGIN"},
+		"open /metrics":       {with(goodAPI, "ACS_METRICS_TOKEN", ""), "ACS_METRICS_TOKEN is required"},
+		"short metrics token": {with(goodAPI, "ACS_METRICS_TOKEN", "short"), "at least 32"},
 	}
 	for name, c := range cases {
 		p := APIProductionProblems(c.env)
@@ -68,6 +71,7 @@ var goodBSS = []string{
 	"ACS_BSS_ADDR", "127.0.0.1:8090",
 	"ACS_BSS_ALLOWED_CIDRS", "198.51.100.0/24, 2001:db8:42::/64",
 	"ACS_TRUSTED_PROXY_CIDRS", "127.0.0.1/32",
+	"ACS_METRICS_TOKEN", "a-scrape-token-of-thirty-two-chars-0123",
 }
 
 func TestBSSProductionProblems(t *testing.T) {

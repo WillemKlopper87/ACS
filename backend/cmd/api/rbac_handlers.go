@@ -4,7 +4,6 @@
 package main
 
 import (
-	"acs/internal/auth"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -91,8 +90,7 @@ func (h *handler) resetOperatorPassword(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if err := auth.CheckPassword(req.NewPassword, ""); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !h.acceptablePassword(w, r, req.NewPassword, "") {
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
@@ -179,8 +177,7 @@ func (h *handler) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if err := auth.CheckPassword(req.NewPassword, ""); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !h.acceptablePassword(w, r, req.NewPassword, "") {
 		return
 	}
 

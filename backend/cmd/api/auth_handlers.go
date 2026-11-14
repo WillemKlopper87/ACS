@@ -356,6 +356,10 @@ func isPublicRoute(r *http.Request) bool {
 	return false
 }
 
+// sharedRateLimit makes the request limit hold across replicas
+// (ratelimit.Synced). Nil unless ACS_SHARED_RATE_LIMIT=true.
+var sharedRateLimit *ratelimit.Synced
+
 // withRateLimit enforces a per-operator token bucket (build plan §7.3/§7d
 // — deliberately shipped after JWT auth, not before: an unauthenticated
 // limiter here could only key on IP, which is weak for an internal API).
@@ -373,7 +377,7 @@ func withRateLimit(limiter *ratelimit.Limiter, metrics *observability.Metrics, n
 		if claims, ok := operatorClaims(r.Context()); ok {
 			key = claims.Subject
 		}
-		if !limiter.Allow(key) {
+		if !limiter.Allow(key) || !sharedRateLimit.Allow(key) {
 			metrics.RateLimitRejectedTotal.Inc()
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
@@ -649,8 +653,7 @@ func (h *handler) createOperator(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username, password, and a valid role (superadmin, manager, noc, readonly) are required", http.StatusBadRequest)
 		return
 	}
-	if err := auth.CheckPassword(req.Password, req.Username); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !h.acceptablePassword(w, r, req.Password, req.Username) {
 		return
 	}
 
@@ -771,4 +774,24 @@ func (h *handler) sharedAllowCtx(ctx context.Context, limit *ratelimit.Shared, k
 		h.logger.Error("shared attempt limit unavailable; the per-process limit still applies", "err", err)
 	}
 	return ok
+}
+
+// acceptablePassword applies the rules for a new operator password and
+// answers 400 with the reason when it fails them: the built-in floor
+// (auth.CheckPassword) and, when configured, the lookup of published
+// breaches. A lookup that cannot be made is logged and does not refuse
+// the password; see auth.BreachChecker.
+func (h *handler) acceptablePassword(w http.ResponseWriter, r *http.Request, password, username string) bool {
+	if err := auth.CheckPassword(password, username); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return false
+	}
+	switch err := h.passwordBreaches.Check(r.Context(), password); {
+	case errors.Is(err, auth.ErrPasswordBreached):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return false
+	case err != nil:
+		h.logger.Warn("breached-password lookup failed; the password was accepted on the other rules", "err", err)
+	}
+	return true
 }

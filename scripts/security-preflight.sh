@@ -227,6 +227,12 @@ case "$mfa_roles" in
     ;;
 esac
 require_nonempty ACS_CREDENTIAL_ENCRYPTION_KEY
+# /metrics is served on the same listeners as everything else, the
+# device-facing ones included: it needs a credential.
+require_nonempty ACS_METRICS_TOKEN
+if [ "${#ACS_METRICS_TOKEN}" -lt 32 ]; then
+  fail "ACS_METRICS_TOKEN must be at least 32 characters (openssl rand -hex 32)"
+fi
 if [ "${ACS_WEBGUI_ALLOW_SAME_ORIGIN:-}" = "true" ]; then
   fail "ACS_WEBGUI_ALLOW_SAME_ORIGIN=true is forbidden in production: it lets a device's web pages run on the console's origin"
 fi

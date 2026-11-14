@@ -37,6 +37,7 @@ export ACS_BSS_ALLOWED_CIDRS="198.51.100.0/24, 2001:db8:51::/64"
 export ACS_TRUSTED_PROXY_CIDRS="127.0.0.1/32"
 export ACS_MFA_REQUIRED_ROLES="superadmin,manager,noc"
 export ACS_CREDENTIAL_ENCRYPTION_KEY="ci-only-encryption-key-0123456789"
+export ACS_METRICS_TOKEN="ci-only-metrics-token-0123456789abcdef"
 export ACS_WEBGUI_ALLOW_SAME_ORIGIN=false
 export ACS_INSECURE_DEV_MODE=""
 
@@ -99,6 +100,8 @@ expect_fail "universal IPv6 BSS source network" env ACS_BSS_ALLOWED_CIDRS=198.51
 expect_fail "BSS source that is not a CIDR" env ACS_BSS_ALLOWED_CIDRS=198.51.100.7 bash "$PREFLIGHT"
 expect_fail "ingress proxy not trusted" env ACS_TRUSTED_PROXY_CIDRS= bash "$PREFLIGHT"
 expect_fail "no two-step sign-in requirement" env ACS_MFA_REQUIRED_ROLES= bash "$PREFLIGHT"
+expect_fail "open /metrics" env ACS_METRICS_TOKEN= bash "$PREFLIGHT"
+expect_fail "short /metrics token" env ACS_METRICS_TOKEN=short bash "$PREFLIGHT"
 expect_fail "two-step sign-in for superadmin only" env ACS_MFA_REQUIRED_ROLES=superadmin bash "$PREFLIGHT"
 expect_fail "two-step sign-in missing noc" env ACS_MFA_REQUIRED_ROLES=superadmin,manager bash "$PREFLIGHT"
 expect_fail "no credential encryption key" env ACS_CREDENTIAL_ENCRYPTION_KEY= bash "$PREFLIGHT"

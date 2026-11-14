@@ -88,3 +88,35 @@ func TestTokenEndpointGuessesShareOneAllowance(t *testing.T) {
 		t.Fatalf("dropping the header got a new allowance: %d, want 429", code)
 	}
 }
+
+// With the shared limit on, a caller refused across the replicas is
+// refused here too, whatever this process's own bucket says (finding
+// O10). Off (nil), requests pass as before.
+func TestSharedRateLimitAppliesBehindThePerProcessLimit(t *testing.T) {
+	saved := sharedRateLimit
+	t.Cleanup(func() { sharedRateLimit = saved })
+	served := 0
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { served++ })
+	h := withRateLimit(ratelimit.New(1000, 1000, time.Minute), observability.NewMetrics(t.Name()), ok)
+	get := func() int {
+		req := httptest.NewRequest(http.MethodGet, "/bss/v1/devices", nil)
+		req.RemoteAddr = "203.0.113.9:4000"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := get(); code != http.StatusOK {
+		t.Fatalf("shared limit off = %d", code)
+	}
+	sharedRateLimit = ratelimit.NewSynced(nil, "bss", 1, 1, time.Hour)
+	if code := get(); code != http.StatusOK {
+		t.Fatalf("shared limit on, caller not over it = %d", code)
+	}
+	sharedRateLimit.BlockUntil("addr:203.0.113.9", time.Now().Add(time.Minute))
+	if code := get(); code != http.StatusTooManyRequests {
+		t.Fatalf("caller over the shared limit = %d, want 429", code)
+	}
+	if served != 2 {
+		t.Fatalf("handler ran %d times, want 2", served)
+	}
+}

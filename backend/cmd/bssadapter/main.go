@@ -321,6 +321,13 @@ func main() {
 	rateLimitPerSecond := envOrFloat("ACS_BSS_RATE_LIMIT_PER_SECOND", defaultRateLimitPerSecond)
 	rateLimitBurst := envOrInt("ACS_BSS_RATE_LIMIT_BURST", defaultRateLimitBurst)
 	limiter := ratelimit.New(rateLimitPerSecond, rateLimitBurst, rateLimitIdleTTL)
+	if os.Getenv(ratelimit.SharedEnv) == "true" {
+		sharedRateLimit = ratelimit.NewSynced(db, "bss", rateLimitPerSecond, rateLimitBurst, 10*time.Second)
+		go sharedRateLimit.Run(ctx, func(err error) {
+			logger.Error("shared rate limit unavailable; the per-process limit still applies", "err", err)
+		})
+		logger.Info("request rate limit is shared across replicas", ratelimit.SharedEnv, "true")
+	}
 
 	addr := envOr("ACS_BSS_ADDR", ":8090")
 	server := &http.Server{
@@ -567,12 +574,16 @@ func rateLimitKey(r *http.Request) string {
 	return "addr:" + clientip.Of(r)
 }
 
+// sharedRateLimit makes the request limit hold across replicas
+// (ratelimit.Synced). Nil unless ACS_SHARED_RATE_LIMIT=true.
+var sharedRateLimit *ratelimit.Synced
+
 // withRateLimit enforces a token bucket per caller (build plan §7.3/§7b),
 // keyed by rateLimitKey. It runs after withAuth so that a request with a
 // bad token is refused before it can spend anyone's allowance.
 func withRateLimit(limiter *ratelimit.Limiter, metrics *observability.Metrics, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !limiter.Allow(rateLimitKey(r)) {
+		if key := rateLimitKey(r); !limiter.Allow(key) || !sharedRateLimit.Allow(key) {
 			metrics.RateLimitRejectedTotal.Inc()
 			// A token frees within 1/rate seconds; at the default 5/s and any
 			// rate of at least 1/s, a client retrying after a second gets in.
