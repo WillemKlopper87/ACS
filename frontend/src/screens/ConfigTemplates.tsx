@@ -1,13 +1,14 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
-import type { ConfigTemplate, TemplateParameter } from "../api/types";
+import type { ConfigTemplate, DeviceGroup, TemplateParameter } from "../api/types";
 import { DataTable } from "../components/DataTable";
 import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
-import { useEscape } from "../lib/hotkeys";
+import { Link } from "react-router-dom";
+import { Drawer } from "../components/Drawer";
 import { useCustomers, customerName } from "../lib/useCustomers";
 import { confirmDialog } from "../lib/confirm";
 
@@ -43,6 +44,15 @@ export function ConfigTemplates() {
   const [deviceIdsInput, setDeviceIdsInput] = useState("");
   const [groupIdInput, setGroupIdInput] = useState("");
   const [applying, setApplying] = useState(false);
+  const [creatingOpen, setCreatingOpen] = useState(false);
+  // Groups for the "apply to a group" list, and the operation the last
+  // apply was recorded as.
+  const [groups, setGroups] = useState<DeviceGroup[]>([]);
+  const [lastOperation, setLastOperation] = useState<string | null>(null);
+  useEffect(() => {
+    api.listDeviceGroups().then((res) => setGroups(res.items)).catch(() => setGroups([]));
+  }, []);
+  useEffect(() => setLastOperation(null), [selected?.id]);
 
   async function load() {
     setLoading(true);
@@ -61,7 +71,6 @@ export function ConfigTemplates() {
     load();
   }, []);
 
-  useEscape(() => setSelected(null), selected !== null);
 
   function updateRow(i: number, patch: Partial<TemplateParameter>) {
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -102,6 +111,7 @@ export function ConfigTemplates() {
       setAutoApply(false);
       setCustomerId("");
       setRows([{ ...emptyRow }]);
+      setCreatingOpen(false);
       await load();
     } catch (e) {
       setCreateError(e instanceof ApiError ? e.message : "Failed to create template");
@@ -141,10 +151,11 @@ export function ConfigTemplates() {
         return;
       }
       if (applyTarget === "group" && !groupIdInput.trim()) {
-        toast("Enter a group ID", "error");
+        toast("Choose a group", "error");
         return;
       }
       const res = await api.applyTemplate(selected.id, target);
+      setLastOperation(res.bulk_operation_id ?? null);
       toast(`Applied "${selected.name}": ${res.succeeded} of ${res.requested} devices queued successfully`, res.succeeded === res.requested ? "success" : "info");
       if (res.results.some((r) => r.error)) {
         const failed = res.results.filter((r) => r.error).slice(0, 5);
@@ -214,11 +225,17 @@ export function ConfigTemplates() {
         </div>
       )}
 
-      <div className="split two-col">
-        <div className="panel">
-          <h3>Create config template</h3>
+      <div className="page-bar">
+        <p className="page-lede">A template is a named set of parameters, such as a Wi-Fi profile, that you apply to devices or a group in one go.</p>
+        <button className="btn primary" onClick={() => setCreatingOpen(true)} disabled={!writable}>
+          New template
+        </button>
+      </div>
+
+      {creatingOpen && (
+        <Drawer title="New template" onClose={() => setCreatingOpen(false)} wide>
           <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
-            A named, reusable set of parameters — e.g. a WiFi profile (SSID + passphrase + channel together). Paths are plain TR-181 (Device:2), the same convention every write in this app already uses — works across manufacturers/models sharing that data model root.
+            Parameter paths are TR-181 (<code>Device.</code>…), so one template works across models that share that data model.
           </p>
           <form onSubmit={onCreate}>
             <div className="form-row">
@@ -294,19 +311,11 @@ export function ConfigTemplates() {
               </button>
             </div>
           </form>
-        </div>
+        </Drawer>
+      )}
 
-        <div className="panel">
-          <h3>
-            {selected ? selected.name : "Select a template"}
-            {selected && (
-              <button className="close-detail" onClick={() => setSelected(null)}>
-                ✕
-              </button>
-            )}
-          </h3>
-          {selected ? (
-            <>
+      {selected && (
+        <Drawer title={selected.name} onClose={() => setSelected(null)} wide>
               <ul style={{ listStyle: "none", margin: "0 0 0.9rem", padding: 0, maxHeight: "10rem", overflow: "auto" }}>
                 {selected.parameters.map((p) => (
                   <li key={p.name} className="param-row" style={{ padding: "0.3rem 0" }}>
@@ -329,13 +338,14 @@ export function ConfigTemplates() {
                     disabled={!writable}
                   />
                 ) : (
-                  <input
-                    aria-label="Group ID to apply this template to"
-                    placeholder="Group ID"
-                    value={groupIdInput}
-                    onChange={(e) => setGroupIdInput(e.target.value)}
-                    disabled={!writable}
-                  />
+                  <select aria-label="Group to apply this template to" value={groupIdInput} onChange={(e) => setGroupIdInput(e.target.value)} disabled={!writable}>
+                    <option value="">Choose a group…</option>
+                    {groups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name} ({g.member_count})
+                      </option>
+                    ))}
+                  </select>
                 )}
               </div>
               <div className="form-row">
@@ -349,16 +359,15 @@ export function ConfigTemplates() {
                 </button>
               </div>
               <p className="dim" style={{ fontSize: "0.76rem", marginTop: "0.6rem", marginBottom: 0 }}>
-                Same selection convention Fleet Control uses: paste device IDs directly, or target a device group instead. Each device gets its own independent job — one failure doesn't block the rest.
+                Each device gets its own job, so one failure does not block the rest.
               </p>
-            </>
-          ) : (
-            <p className="dim" style={{ margin: 0 }}>
-              Click a template in the table below to apply it.
-            </p>
-          )}
-        </div>
-      </div>
+              {lastOperation && (
+                <div className="banner info" style={{ marginTop: "0.7rem" }}>
+                  Queued. <Link to={`/operations?id=${lastOperation}`}>Follow progress</Link>
+                </div>
+              )}
+        </Drawer>
+      )}
 
       {loading && items.length === 0 ? (
         <div className="loading">Loading templates…</div>

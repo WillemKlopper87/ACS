@@ -441,6 +441,8 @@ export interface ConfigTemplate {
 }
 
 export interface ApplyTemplateResult {
+  // The bulk operation recording this apply, to follow its progress.
+  bulk_operation_id?: string;
   template_id: string;
   requested: number;
   succeeded: number;

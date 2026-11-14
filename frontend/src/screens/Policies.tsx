@@ -9,6 +9,7 @@ import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
 import { useCustomers, customerName } from "../lib/useCustomers";
 import { confirmDialog } from "../lib/confirm";
+import { Drawer } from "../components/Drawer";
 
 export function Policies() {
   const { role } = useAuth();
@@ -24,6 +25,7 @@ export function Policies() {
   const [customerId, setCustomerId] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [creatingOpen, setCreatingOpen] = useState(false);
   const customers = useCustomers();
 
   async function load() {
@@ -61,6 +63,7 @@ export function Policies() {
       setParameterName("");
       setDesiredValue("");
       setCustomerId("");
+      setCreatingOpen(false);
       await load();
     } catch (e) {
       setCreateError(e instanceof ApiError ? e.message : "Failed to create policy");
@@ -138,8 +141,15 @@ export function Policies() {
         </div>
       )}
 
-      <div className="panel">
-        <h3>Create compliance policy</h3>
+      <div className="page-bar">
+        <p className="page-lede">A policy keeps one parameter at a set value: a device that reports a different value at check-in is corrected.</p>
+        <button className="btn primary" onClick={() => setCreatingOpen(true)} disabled={!writable}>
+          New policy
+        </button>
+      </div>
+
+      {creatingOpen && (
+        <Drawer title="New policy" onClose={() => setCreatingOpen(false)}>
         <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
           Devices matching the model filter get this parameter auto-corrected the moment a check-in reports a drifted value.
         </p>
@@ -182,7 +192,8 @@ export function Policies() {
             </button>
           </div>
         </form>
-      </div>
+        </Drawer>
+      )}
 
       {loading && items.length === 0 ? (
         <div className="loading">Loading policies…</div>

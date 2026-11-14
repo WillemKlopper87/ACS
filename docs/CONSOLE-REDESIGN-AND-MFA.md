@@ -34,7 +34,7 @@ None of this is about missing features. It is the same handful of jobs (list thi
 | Step | What | Removes cause |
 |---|---|---|
 | **A** | **Shared components**: confirmation dialog, drawer, page bar. Done, §4. Still to add: form field, empty state, a five-step type scale, and a lint rule against new inline styles and raw colours. | 3, 4 |
-| **B** | **The list-screen pattern** on every list screen: a one-line description and the primary action on the right, filters, then the table; create and edit in a drawer; a row opens its detail in a drawer. Groups is done (§4). Next, in this order: Templates, Policies, Scheduled Jobs, Rollouts, Operators, Alerting, Tenancy, BSS. | 1, 2 |
+| **B** | **The list-screen pattern** on every list screen: a one-line description and the primary action on the right, filters, then the table; create and edit in a drawer; a row opens its detail in a drawer. Groups, Templates, Policies and Scheduled Jobs are done (§4). Next, in this order: Rollouts, Operators, Alerting, Tenancy, BSS. | 1, 2 |
 | **C** | **Plain-language labels** from one table (the status badges already work this way): reachability, inform recency, job types, BSS states. Form help text shortened to one line, with the detail behind a "?" . | 5 |
 | **D** | **Navigation in five areas**, related screens as tabs of one page: *Overview* (Dashboard, Fleet Health, Alerting), *Devices* (Inventory, Onboarding, Groups), *Activity* (Jobs, Bulk operations, Scheduled Jobs, Bulk actions as its "New" button), *Configuration* (Templates, Policies, Rollouts), *Administration* (Operators, Tenancy, BSS/NaaS, Audit, Reports, Captures). Old URLs redirect. A global search box in the top bar using the existing subscriber lookup. | 6 |
 | **E** | **Device first screen**: name or subscriber, model and serial under it, then a health row (firmware, uptime, signal, Wi-Fi clients, last job) in the space that is empty today. Lists show label or subscriber first, serial second. | 7, 8 |
@@ -50,6 +50,12 @@ Steps A and B change how screens are laid out, not what they do, so they can shi
 **Drawer and page bar** (`components/Drawer.tsx`, `.page-bar` in `index.css`). A panel over the right edge for creating or inspecting one thing while its list stays put.
 
 **Groups on the list-screen pattern** (`screens/DeviceGroups.tsx`). The screen opens on the groups table with a "New group" button. The create form and the member manager are the same forms as before, in drawers. Nothing was removed: create, delete, add by picker, add by pasted serials and remove member all work as they did.
+
+**Templates, Policies and Scheduled Jobs on the same pattern.** Each opens on its table with a "New …" button; the create form is the same form, in a drawer that closes when the item is created. On Templates the apply panel is a drawer too, and two things got better on the way:
+
+- Applying to a group offers a list of groups with their sizes. It used to ask for a group ID to be pasted in.
+- After applying, the drawer links to the bulk operation so the result can be followed.
+- A device skipped because it belongs to a different customer than the template now says so; it used to say "not found" about a device the operator could see.
 
 Verified in a browser against the running stack and by two new Playwright tests (confirmation dialog; two-step sign-in).
 

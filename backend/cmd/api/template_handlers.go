@@ -227,8 +227,16 @@ func (h *handler) applyTemplate(w http.ResponseWriter, r *http.Request) {
 	for _, deviceID := range req.DeviceIDs {
 		result := bulkActionResult{DeviceID: deviceID}
 		d, err := h.devices.Get(r.Context(), deviceID)
-		if err != nil || (scoped && !deviceInScope(d.CustomerID, customerIDs)) || !sameCustomer(d.CustomerID, t.CustomerID) {
+		if err != nil || (scoped && !deviceInScope(d.CustomerID, customerIDs)) {
 			result.Error = "not found"
+			results = append(results, result)
+			continue
+		}
+		if !sameCustomer(d.CustomerID, t.CustomerID) {
+			// The caller may see this device, so say why it was skipped:
+			// "not found" for a device they are looking at sent operators
+			// hunting for a missing device.
+			result.Error = "the device belongs to a different customer than this template"
 			results = append(results, result)
 			continue
 		}
