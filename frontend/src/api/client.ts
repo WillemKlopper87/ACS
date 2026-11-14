@@ -119,6 +119,46 @@ class ApiError extends Error {
 }
 
 const LOGIN_PATH = "/api/v1/auth/login";
+const CSRF_HEADER = "X-ACS-CSRF";
+
+// Every call goes out with the session cookie ("include"). An API that
+// allows any origin (ACS_API_CORS_ORIGIN="*", local experiments) cannot
+// accept a credentialed request at all, and the browser reports that as a
+// failed fetch. The call is then repeated once without credentials; if
+// that works, this page stops sending them. Such an API issues no cookie
+// either, so nothing is lost: the session is the in-memory bearer token.
+let sendCredentials = true;
+
+async function apiFetch(path: string, init: RequestInit): Promise<Response> {
+  if (!sendCredentials) return fetch(`${BASE_URL}${path}`, { ...init, credentials: "omit" });
+  try {
+    return await fetch(`${BASE_URL}${path}`, { ...init, credentials: "include" });
+  } catch (e) {
+    let res: Response;
+    try {
+      res = await fetch(`${BASE_URL}${path}`, { ...init, credentials: "omit" });
+    } catch {
+      throw e; // unreachable either way
+    }
+    sendCredentials = false;
+    return res;
+  }
+}
+
+// cookieSessionWorks asks the API who the caller is, sending only the
+// cookie. True means the browser kept the cookie and sends it back, so
+// the console needs no token of its own.
+export async function cookieSessionWorks(): Promise<boolean> {
+  if (!sendCredentials) return false;
+  try {
+    const res = await fetch(`${BASE_URL}/api/v1/auth/session`, { credentials: "include", headers: { [CSRF_HEADER]: "1" } });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { via?: string };
+    return body.via === "cookie";
+  } catch {
+    return false;
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const { token } = getAuthState();
@@ -131,6 +171,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...(init?.headers as Record<string, string> | undefined),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  // The session is a cookie (auth/tokenStore.ts). The API accepts a
+  // state-changing request that relies on it only with this header, which
+  // a page on another origin cannot add.
+  headers[CSRF_HEADER] = "1";
 
   // A thrown fetch means the API is unreachable (DNS, connection
   // refused, TLS, or a rejected CORS preflight); any HTTP response —
@@ -138,7 +182,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // sidebar's connection dot reports.
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}${path}`, { ...init, headers });
+    res = await apiFetch(path, { ...init, headers });
   } catch (e) {
     markApiReachable(false);
     throw e;
@@ -172,7 +216,7 @@ async function download(path: string, fallbackFilename: string) {
   const { token } = getAuthState();
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    res = await apiFetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
   } catch (e) {
     markApiReachable(false);
     throw e;
@@ -236,6 +280,8 @@ export const api = {
   // its own expiry — on a shared machine that is the whole point of
   // signing out.
   logout: () => request<void>("/api/v1/auth/logout", { method: "POST" }),
+  /** Who the caller is signed in as; the console cannot read its own session cookie. */
+  session: () => request<components["schemas"]["SessionInfo"]>("/api/v1/auth/session"),
 
   listDevices: (page = 1, pageSize = 100) =>
     request<{ items: Device[]; total: number }>(`/api/v1/devices?page=${page}&page_size=${pageSize}`),
@@ -746,7 +792,7 @@ export const api = {
   // use; the backend accepts nothing else in ?token=. Returns null when
   // auth is disabled (dev mode) so the URL builders omit the param.
   browserTicket: async (): Promise<string | null> => {
-    if (!getAuthState().token) return null;
+    if (!getAuthState().signedIn) return null;
     const { ticket } = await request<{ ticket: string }>("/api/v1/auth/ticket", { method: "POST" });
     return ticket;
   },

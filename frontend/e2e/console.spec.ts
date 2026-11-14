@@ -37,6 +37,10 @@ const DEVICE = {
 // mockAPI wires a hermetic backend: happy-path login, one device, empty
 // collections for everything else so no screen crashes on load.
 async function mockAPI(page: Page) {
+  // Like the real API, a sign-in leaves a session cookie that the console
+  // cannot read and that outlives a page load. The mock keeps it as a flag
+  // (a mocked response cannot set a real cookie).
+  let cookieSession: { username: string } | null = null;
   await page.route(`${API}/**`, async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
@@ -47,7 +51,15 @@ async function mockAPI(page: Page) {
     // Unauthenticated requests get 401 (excluding the public auth
     // routes) — that is what flips the console into its login state,
     // exactly like the real fail-closed API.
-    const authed = !!route.request().headers()["authorization"];
+    const authed = !!route.request().headers()["authorization"] || cookieSession !== null;
+    if (method === "GET" && path === "/api/v1/auth/session") {
+      if (!cookieSession) return route.fulfill({ status: 401, contentType: "text/plain", body: "missing bearer token" });
+      return json({ auth_required: true, username: cookieSession.username, role: "superadmin", via: "cookie", expires_at: new Date(Date.now() + 3600_000).toISOString() });
+    }
+    if (method === "POST" && path === "/api/v1/auth/logout") {
+      cookieSession = null;
+      return route.fulfill({ status: 204 });
+    }
     if (!authed && !path.startsWith("/api/v1/auth/")) {
       return route.fulfill({ status: 401, contentType: "text/plain", body: "missing bearer token" });
     }
@@ -55,7 +67,14 @@ async function mockAPI(page: Page) {
     if (method === "POST" && path === "/api/v1/auth/login") {
       const body = route.request().postDataJSON() as { username: string; password: string };
       if (body.password === "right-password") {
-        return json({ token: "e2e-token", role: "superadmin", username: body.username, expires_at: new Date(Date.now() + 3600_000).toISOString() });
+        cookieSession = { username: body.username };
+        return json({
+          token: "e2e-token",
+          role: "superadmin",
+          username: body.username,
+          expires_at: new Date(Date.now() + 3600_000).toISOString(),
+          session_cookie: true,
+        });
       }
       return route.fulfill({ status: 401, contentType: "text/plain", body: "invalid username or password" });
     }
@@ -487,4 +506,42 @@ test("an ACS running on its own hides the BSS / NaaS screen and says so", async 
   // An old bookmark explains itself instead of showing a broken screen.
   await page.goto("/bss");
   await expect(page.getByText("the BSS / NaaS integration is switched off")).toBeVisible();
+});
+
+// The session is a cookie the page cannot read (security assessment O6):
+// nothing that could act as the operator is left in browser storage, the
+// token from the sign-in is forgotten once the cookie is confirmed, and a
+// reload keeps the operator signed in.
+test("the session is not kept in browser storage and survives a reload", async ({ page }) => {
+  await signIn(page);
+  await expect
+    .poll(async () => {
+      let withToken = 0;
+      const seen = (r: { url(): string; headers(): Record<string, string> }) => {
+        if (r.url().startsWith(API) && r.headers()["authorization"]) withToken++;
+      };
+      page.on("request", seen);
+      await page.getByRole("button", { name: "Activity", exact: true }).click();
+      await page.getByRole("button", { name: "Devices", exact: true }).click();
+      await page.waitForTimeout(300);
+      page.off("request", seen);
+      return withToken;
+    })
+    .toBe(0);
+  const stored = await page.evaluate(() => JSON.stringify(localStorage) + JSON.stringify(sessionStorage) + document.cookie);
+  expect(stored).not.toContain("e2e-token");
+
+  let csrfMissing = 0;
+  page.on("request", (r) => {
+    if (r.url().startsWith(API) && !r.headers()["x-acs-csrf"]) csrfMissing++;
+  });
+  await page.reload();
+  await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
+  await expect(page.getByText("001349-NR7101-S1")).toBeVisible();
+  expect(csrfMissing).toBe(0);
+
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page.getByText("Sign in to continue.")).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("Sign in to continue.")).toBeVisible();
 });

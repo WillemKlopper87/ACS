@@ -433,9 +433,13 @@ func main() {
 	if corsOrigin == "*" {
 		logger.Warn("ACS_API_CORS_ORIGIN=* — any web origin may call this API with a stolen token; set it to the console's exact origin in production")
 	}
+	h.sessionCookies = sessionCookiesAllowed(corsOrigin, h.webGUISameOrigin)
+	if len(jwtSecret) > 0 && !h.sessionCookies {
+		logger.Warn("the console session is not kept in a cookie: ACS_API_CORS_ORIGIN is \"*\" or ACS_WEBGUI_ALLOW_SAME_ORIGIN=true. The console keeps it in memory and asks for a sign-in on every reload")
+	}
 	server := &http.Server{
 		Addr:    addr,
-		Handler: withCORS(corsOrigin, withJWTAuth(jwtSecret, internalServiceToken, h.tokenCurrent, withRateLimit(apiLimiter, metrics, withBodyLimit(mux)))),
+		Handler: withCORS(corsOrigin, withSessionOriginCheck(corsOrigin, withJWTAuth(jwtSecret, internalServiceToken, h.tokenCurrent, withRateLimit(apiLimiter, metrics, withBodyLimit(mux))))),
 		// Timeouts (audit P1.2). No global ReadTimeout/WriteTimeout on
 		// purpose: firmware uploads and CPE upload receipts stream large
 		// bodies, and the console WebSocket / web-GUI proxy are long-lived
@@ -524,7 +528,10 @@ type handler struct {
 	firmwareBase string // base URL the CPE fetches Download URLs from (design doc v3 §9.4's "HTTPS static file host", local-disk stand-in — see internal/firmware doc comment)
 
 	operators *operators.Repository
-	jwtSecret []byte // empty means operator auth is disabled — see main()'s ACS_JWT_SIGNING_SECRET warning
+	// sessionCookies: issue the console's session as a cookie
+	// (session_cookie.go, sessionCookiesAllowed).
+	sessionCookies bool
+	jwtSecret      []byte // empty means operator auth is disabled — see main()'s ACS_JWT_SIGNING_SECRET warning
 
 	// transferKey signs the expiring tokens on public firmware-download
 	// and upload-receipt URLs (audit P0.3, internal/transfer). Derived

@@ -194,6 +194,37 @@ taken.
 |---|---|---|---|
 | — | — | — | no physical/staging drill recorded yet; CI rehearsal is automated |
 
+## The console session is a cookie
+
+The console no longer keeps the operator's session token in browser
+storage. A sign-in sets a cookie (`acs_session`) that page scripts cannot
+read; the browser sends it with the console's API calls.
+
+- **After upgrading**, every operator signs in once more: the token an
+  older console stored is discarded.
+- **The console and the API must be on the same site**: the same host, or
+  hosts under one registered domain (`console.isp.example` and
+  `api.isp.example`). Ports do not matter. `localhost` and `127.0.0.1`
+  are different sites: use one name for both.
+- **`ACS_API_CORS_ORIGIN`** (default: `ACS_FRONTEND_BASE_URL`) must be the
+  console's exact origin. `*` is refused in production.
+- **A TLS-terminating proxy** in front of the API needs nothing special:
+  cookies pass through. In the production profile the cookie is always
+  `Secure`; in the lab it is `Secure` when the proxy sends
+  `X-Forwarded-Proto: https`.
+- **If operators are asked to sign in on every reload**, the cookie is
+  not reaching the API. The API log says so at start when it will not
+  issue one (`the console session is not kept in a cookie`): the origin
+  is `*`, or `ACS_WEBGUI_ALLOW_SAME_ORIGIN=true` is set. Otherwise the
+  console and the API are on different sites, or the proxy strips
+  `Set-Cookie`. The console still works in that state, holding the
+  session in memory.
+- **Scripts** that sign in and send `Authorization: Bearer <token>` are
+  unchanged. A script that wants to use the cookie instead must send the
+  `X-ACS-CSRF: 1` header on anything that is not a read.
+- **Signing out** revokes every session of that operator, as before, and
+  removes the cookie from that browser.
+
 ## Account IDs are per customer
 
 An ISP's `account_id` and order IDs are its own: two customers can have

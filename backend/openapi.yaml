@@ -40,6 +40,7 @@ servers:
 
 security:
   - bearerAuth: []
+  - sessionCookie: []
   - {}
 
 tags:
@@ -776,10 +777,18 @@ paths:
                   expires_in: { type: integer, description: Seconds until the ticket expires }
         "403": { description: Service identities cannot mint tickets, content: { text/plain: { schema: { type: string } } } }
 
+  /api/v1/auth/session:
+    get:
+      tags: [Auth]
+      summary: Who the caller is signed in as. The console asks this when it loads, since it cannot read its own session cookie
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SessionInfo" } } } }
+        "401": { description: Not signed in, content: { text/plain: { schema: { type: string } } } }
+
   /api/v1/auth/logout:
     post:
       tags: [Auth]
-      summary: Revoke every session of the calling operator (bumps token_version; outstanding JWTs stop verifying)
+      summary: Revoke every session of the calling operator (bumps token_version; outstanding JWTs stop verifying) and remove the session cookie
       responses:
         "204": { description: Sessions revoked }
         "400": { description: No operator session to revoke, content: { text/plain: { schema: { type: string } } } }
@@ -3140,6 +3149,18 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: "From POST /api/v1/auth/login. Enforcement is opt-in — see the top-level description."
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: acs_session
+      description: >-
+        The operator console's session: set by a successful sign-in, HttpOnly,
+        SameSite=Strict, scoped to /api/. A request authenticated by it (one
+        with no bearer token) must carry the X-ACS-CSRF header if it changes
+        anything, must come from the console's origin when the browser
+        reports one, and is not accepted on the console WebSocket or the
+        web-GUI proxy, which need a browser ticket. Not issued when
+        ACS_API_CORS_ORIGIN is "*" or ACS_WEBGUI_ALLOW_SAME_ORIGIN=true.
 
   parameters:
     AccountCustomer:
@@ -3337,10 +3358,21 @@ components:
       type: object
       required: [token, role, expires_at]
       properties:
-        token: { type: string }
+        token: { type: string, description: "The session as a bearer token, for clients that send an Authorization header. The console does not keep it: its session is the acs_session cookie set by the same response." }
         role: { $ref: "#/components/schemas/Role" }
         username: { type: string }
         expires_at: { type: string, format: date-time }
+        session_cookie: { type: boolean, description: "Whether this response also set the acs_session cookie." }
+
+    SessionInfo:
+      type: object
+      required: [auth_required]
+      properties:
+        auth_required: { type: boolean, description: "False when operator authentication is switched off; the other fields are then absent." }
+        username: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        expires_at: { type: string, format: date-time }
+        via: { type: string, enum: [cookie, bearer], description: "How the caller authenticated." }
 
     MFAChallenge:
       type: object

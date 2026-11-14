@@ -1069,6 +1069,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who the caller is signed in as. The console asks this when it loads, since it cannot read its own session cookie */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SessionInfo"];
+                    };
+                };
+                /** @description Not signed in */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/plain": string;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/logout": {
         parameters: {
             query?: never;
@@ -1078,7 +1123,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Revoke every session of the calling operator (bumps token_version; outstanding JWTs stop verifying) */
+        /** Revoke every session of the calling operator (bumps token_version; outstanding JWTs stop verifying) and remove the session cookie */
         post: {
             parameters: {
                 query?: never;
@@ -8627,11 +8672,27 @@ export interface components {
          */
         Permission: "devices.write" | "connection_request" | "diagnostics.run" | "firmware.manage" | "template.manage" | "policy.manage" | "schedule.manage" | "group.manage" | "credential.manage" | "cli.access" | "bulk_actions" | "upload.request" | "tenancy.manage";
         Session: {
+            /** @description The session as a bearer token, for clients that send an Authorization header. The console does not keep it: its session is the acs_session cookie set by the same response. */
             token: string;
             role: components["schemas"]["Role"];
             username?: string;
             /** Format: date-time */
             expires_at: string;
+            /** @description Whether this response also set the acs_session cookie. */
+            session_cookie?: boolean;
+        };
+        SessionInfo: {
+            /** @description False when operator authentication is switched off; the other fields are then absent. */
+            auth_required: boolean;
+            username?: string;
+            role?: components["schemas"]["Role"];
+            /** Format: date-time */
+            expires_at?: string;
+            /**
+             * @description How the caller authenticated.
+             * @enum {string}
+             */
+            via?: "cookie" | "bearer";
         };
         MFAChallenge: {
             /**

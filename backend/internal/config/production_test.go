@@ -52,6 +52,7 @@ func TestAPIProductionProblems(t *testing.T) {
 		"no encryption key":   {with(goodAPI, "ACS_CREDENTIAL_ENCRYPTION_KEY", ""), "ACS_CREDENTIAL_ENCRYPTION_KEY"},
 		"dev mode":            {with(goodAPI, DevModeEnv, "true"), DevModeEnv},
 		"web GUI sandbox off": {with(goodAPI, "ACS_WEBGUI_ALLOW_SAME_ORIGIN", "true"), "ACS_WEBGUI_ALLOW_SAME_ORIGIN"},
+		"any CORS origin":     {with(goodAPI, "ACS_API_CORS_ORIGIN", "*"), "ACS_API_CORS_ORIGIN"},
 	}
 	for name, c := range cases {
 		p := APIProductionProblems(c.env)

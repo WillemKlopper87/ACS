@@ -115,17 +115,17 @@ function AppShell() {
   const tabScreen: Screen = screen === "devices" ? "fleet" : screen;
   const setScreen = (s: Screen) => navigate("/" + s);
 
-  const { token, authRequired, username, role, logout } = useAuth();
+  const { signedIn, authRequired, username, role, logout } = useAuth();
   const admin = canAdmin(role);
   const { theme, setTheme, themes } = useTheme();
   const apiReachable = useApiReachable();
   // Standalone or through the NaaS platform (ACS_INTEGRATION_MODE).
-  const systemInfo = useSystemInfo(!authRequired || !!token);
+  const systemInfo = useSystemInfo(!authRequired || signedIn);
   const standalone = systemInfo?.integration_mode === "standalone";
   const allAreas = visibleAreas(admin, standalone);
   const area = allAreas.find((a) => a.id === areaOf(screen)?.id);
 
-  if (authRequired && !token) {
+  if (authRequired && !signedIn) {
     return <Login />;
   }
 
@@ -190,7 +190,7 @@ function AppShell() {
               ))}
             </optgroup>
           </select>
-          {token && (
+          {signedIn && (
             <div className="conn-indicator" style={{ justifyContent: "space-between" }}>
               <button className="account-link" onClick={() => setScreen("account")} title="Your account and two-step sign-in" aria-current={screen === "account" ? "page" : undefined}>
                 {username} <span style={{ color: "var(--ink-faint)" }}>({role})</span>

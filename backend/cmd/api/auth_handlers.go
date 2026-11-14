@@ -132,9 +132,29 @@ func withJWTAuth(secret []byte, internalServiceToken string, current func(contex
 		}
 
 		token, fromQuery, ok := bearerToken(r)
+		// The console's session cookie, when there is no bearer token
+		// (session_cookie.go). The browser attaches a cookie by itself, so
+		// a request that relies on one has to show it came from the
+		// console.
+		fromCookie := false
+		if !ok {
+			if token, ok = sessionCookieToken(r); ok {
+				fromCookie = true
+			}
+		}
 		if !ok {
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
 			return
+		}
+		if fromCookie {
+			if isBrowserTicketRoute(r) {
+				http.Error(w, "this route needs a browser ticket", http.StatusUnauthorized)
+				return
+			}
+			if !isSafeMethod(r.Method) && r.Header.Get(csrfHeader) == "" {
+				http.Error(w, "a request that relies on the session cookie needs the "+csrfHeader+" header", http.StatusForbidden)
+				return
+			}
 		}
 		// A credential in the URL is accepted on exactly the two routes a
 		// browser cannot send a header to (audit P1.4), and then only a
@@ -158,6 +178,9 @@ func withJWTAuth(secret []byte, internalServiceToken string, current func(contex
 
 		claims, err := auth.VerifyJWT(secret, token)
 		if err != nil {
+			if fromCookie {
+				clearSessionCookie(w) // expired: stop the browser sending it
+			}
 			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 			return
 		}
@@ -170,6 +193,9 @@ func withJWTAuth(secret []byte, internalServiceToken string, current func(contex
 			return
 		}
 		if current != nil && !current(r.Context(), claims) {
+			if fromCookie {
+				clearSessionCookie(w)
+			}
 			http.Error(w, "session revoked — sign in again", http.StatusUnauthorized)
 			return
 		}
@@ -473,6 +499,7 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
 	if err := h.auditor.Record(r.Context(), op.Username, "", "OperatorLogout", nil); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
+	clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 

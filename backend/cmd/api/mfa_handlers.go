@@ -98,7 +98,11 @@ func (h *handler) issueSession(w http.ResponseWriter, r *http.Request, op *opera
 	}
 	h.logger.Info("operator logged in", "username", op.Username, "role", op.Role)
 
-	body := map[string]any{"token": token, "role": op.Role, "expires_at": claims.ExpiresAt.Format(time.RFC3339)}
+	// The console keeps the session in a cookie its scripts cannot read
+	// (session_cookie.go). The token stays in the body for clients that
+	// send it as a bearer token; the console does not keep it.
+	h.setSessionCookie(w, r, token, claims.ExpiresAt)
+	body := map[string]any{"token": token, "role": op.Role, "expires_at": claims.ExpiresAt.Format(time.RFC3339), "session_cookie": h.sessionCookies}
 	if codes, ok := extra["recovery_codes"]; ok {
 		body["recovery_codes"] = codes
 	}

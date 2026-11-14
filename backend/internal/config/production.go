@@ -98,6 +98,9 @@ func APIProductionProblems(getenv func(string) string) []string {
 		}
 	}
 
+	if strings.TrimSpace(getenv("ACS_API_CORS_ORIGIN")) == "*" {
+		problems = append(problems, "ACS_API_CORS_ORIGIN=* is forbidden in production: set it to the console's exact origin (or leave it unset to use ACS_FRONTEND_BASE_URL). With \"*\" the console's session cannot be kept in a cookie and any web page may call the API")
+	}
 	if getenv("ACS_WEBGUI_ALLOW_SAME_ORIGIN") == "true" {
 		problems = append(problems, "ACS_WEBGUI_ALLOW_SAME_ORIGIN=true is forbidden in production: it lets a device's web pages run on the console's origin")
 	}

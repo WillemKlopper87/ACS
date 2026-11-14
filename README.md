@@ -130,7 +130,10 @@ allowlist for the web-GUI proxy and console bridge),
 controller's WebSocket/MQTT listeners; identity-level allowlisting is
 unconditional — pre-register a device via the bulk-import API before
 its first USP contact),
-`ACS_API_CORS_ORIGIN` (defaults to `ACS_FRONTEND_BASE_URL`),
+`ACS_API_CORS_ORIGIN` (defaults to `ACS_FRONTEND_BASE_URL`; the console's
+exact origin. The console's session is a cookie, which needs one exact
+origin on the same site as the API: `*` is refused in production and, in
+the lab, makes the console ask for a sign-in on every reload),
 `ACS_UPLOAD_MAX_BYTES`, `ACS_DB_MAX_OPEN_CONNS`, `ACS_RETENTION_*_DAYS`,
 `ACS_TLS_CERT`/`ACS_TLS_KEY`. The full variable reference is in
 [deployment-testing-onboarding-guide.md](deployment-testing-onboarding-guide.md) §7.

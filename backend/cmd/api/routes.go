@@ -64,6 +64,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("DELETE", "/api/v1/auth/operators/{id}/mfa", admin, h.resetOperatorMFA)
 	route("GET", "/api/v1/system/info", ro, h.systemInfo)
 	route("POST", "/api/v1/auth/ticket", ro, h.issueBrowserTicket) // audit P1.4 — see issueBrowserTicket
+	route("GET", "/api/v1/auth/session", ro, h.getSession)         // who the caller is; the console cannot read its own cookie
 	route("POST", "/api/v1/auth/logout", ro, h.logout)             // revokes every session of the caller
 	// The Grafana gate (grafana_gate.go): a ticket for a signed-in
 	// operator, then two public routes the proxy at Grafana's origin
