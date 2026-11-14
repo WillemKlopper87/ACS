@@ -9,7 +9,6 @@ import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { fmtTime, timeAgo } from "../lib/format";
 import { itemStatus, progressText, sortItems } from "../lib/bulkOperations";
-import { endedWithoutSuccess } from "../lib/jobActions";
 import { toast } from "../lib/toast";
 import { useLive } from "../lib/useLive";
 
@@ -137,7 +136,7 @@ export function BulkOperations() {
   );
 
   const op = detail?.operation;
-  const retryable = detail ? detail.items.filter((it) => endedWithoutSuccess(it.job_status)).length : 0;
+  const retryable = detail ? detail.items.filter((it) => it.job_status === "FAILED" || it.job_status === "TIMEOUT").length : 0;
 
   return (
     <section>
@@ -171,7 +170,7 @@ export function BulkOperations() {
               Cancel queued ({op.queued})
             </button>
             <button className="btn primary" disabled={!writable || busy || retryable === 0} onClick={() => change("retry")}
-              title={retryable === 0 ? "No job has failed, timed out or been cancelled" : "Queue a new job for each device whose job did not succeed"}>
+              title={retryable === 0 ? "No job has failed or timed out" : "Queue a new job for each device whose job failed or timed out; cancelled jobs are left alone"}>
               Retry failed ({retryable})
             </button>
             {op.not_queued > 0 && (

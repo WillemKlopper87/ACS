@@ -311,7 +311,7 @@ func (h *handler) cancelBulkOperation(w http.ResponseWriter, r *http.Request) {
 }
 
 // retryFailedBulkOperation queues a new job for each device whose job
-// ended FAILED, TIMEOUT or CANCELLED.
+// ended FAILED or TIMEOUT.
 func (h *handler) retryFailedBulkOperation(w http.ResponseWriter, r *http.Request) {
 	op, scope, ok := h.bulkOperationForChange(w, r)
 	if !ok {

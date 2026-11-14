@@ -841,6 +841,20 @@ type orderResponse struct {
 // could not produce the response (a further failure resolving the
 // order's job status), in which case it has already written the error
 // response itself.
+// respondWithExistingOrderFor answers a repeated external_order_id for the
+// account the caller was authorized for. external_order_id is unique across
+// all accounts, so an ID another account already used must never be
+// answered with that account's order: the caller would be told its order
+// was accepted when none was placed, and would be handed another
+// account's command_key and job status. Same rule as the TMF640 PATCH key.
+func (h *handler) respondWithExistingOrderFor(w http.ResponseWriter, r *http.Request, accountID, externalOrderID string, existing *bss.OrderRecord) bool {
+	if existing.AccountID != accountID {
+		writeError(w, http.StatusConflict, "ErrIdempotencyKeyReused", "this external_order_id was already used for another order")
+		return false
+	}
+	return h.respondWithExistingOrder(w, r, externalOrderID, existing)
+}
+
 func (h *handler) respondWithExistingOrder(w http.ResponseWriter, r *http.Request, externalOrderID string, existing *bss.OrderRecord) bool {
 	if existing.Status != bss.OrderStatusDispatched {
 		// Still PENDING_DISPATCH or DEAD_LETTERED -- there is no
@@ -1042,7 +1056,7 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	} else if existing != nil {
-		h.respondWithExistingOrder(w, r, req.ExternalOrderID, existing)
+		h.respondWithExistingOrderFor(w, r, req.AccountID, req.ExternalOrderID, existing)
 		return
 	}
 
@@ -1092,7 +1106,7 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 				return
 			}
-			h.respondWithExistingOrder(w, r, req.ExternalOrderID, existing)
+			h.respondWithExistingOrderFor(w, r, req.AccountID, req.ExternalOrderID, existing)
 			return
 		}
 		if errors.Is(err, bss.ErrACSUnreachable) {

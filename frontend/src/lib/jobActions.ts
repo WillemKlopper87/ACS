@@ -25,7 +25,3 @@ export function canCancelJob(status: string): boolean {
 export function canRetryJob(job: { status: string; type: string }): boolean {
   return ENDED_WITHOUT_SUCCESS.has(job.status) && RETRYABLE_TYPES.has(job.type);
 }
-
-export function endedWithoutSuccess(status: string | undefined): boolean {
-  return status !== undefined && ENDED_WITHOUT_SUCCESS.has(status);
-}

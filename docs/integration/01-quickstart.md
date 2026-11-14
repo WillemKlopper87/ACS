@@ -47,8 +47,12 @@ curl -s "$ACS/bss/v1/mappings/ACC-TEST-001" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-An unknown account returns an empty list, not an error. A `401` here
-means the token is wrong; a `429` means you are being rate limited.
+With a customer-bound client (the kind issued to an ISP), an account your
+customer does not own yet answers `404 ErrNotFound`: that is the expected
+result before step 3, and it is the same answer another customer's
+account gives. A global or account-listed client gets an empty list. A
+`401` here means the token is wrong; a `429` means you are being rate
+limited.
 
 ## 3. Bind a device to an account
 
@@ -170,17 +174,28 @@ curl -sX POST "$ACS/bss/v1/webhooks" \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
+        "account_id":  "ACC-TEST-001",
         "target_url":  "https://bss.example.com/hooks/acs",
+        "secret":      "<a random secret you generate, 32+ characters>",
         "event_types": ["JOB_COMPLETED"]
       }'
 ```
 
-The response includes a signing secret. Store it and verify the
-`X-Webhook-Signature` HMAC on every delivery — details in
-`bss-integration-guide.md` §4.3.
+`target_url`, `secret` and at least one event type are required. You
+choose the secret; verify the `X-Webhook-Signature` HMAC on every
+delivery with it — details in `bss-integration-guide.md` §4.3.
 
-Omit `account_id` for fleet-wide delivery, or set it to scope the
-subscription to one account.
+`target_url` must resolve to a public address: loopback, private and
+link-local targets are refused with `400`, so a receiver on your laptop
+needs a public tunnel or an operator-configured allowlist.
+
+`account_id` scopes the subscription to one account. A customer-bound
+client must set it; a subscription without one is fleet-wide and needs a
+global client.
+
+`external_order_id` (step 4) is unique across every account on the ACS,
+not only yours. Prefix it with something of your own: an ID another
+account has used is refused with `409 ErrIdempotencyKeyReused`.
 
 ## 8. Generate a client
 

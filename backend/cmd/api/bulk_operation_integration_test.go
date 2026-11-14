@@ -165,8 +165,11 @@ func TestIntegration_BulkOperationLifecycle(t *testing.T) {
 	t.Run("retry failed queues new jobs and repoints the items", func(t *testing.T) {
 		oldA2 := keyOf[a2]
 		v := decodeBulkOp(t, e.call("alice", "POST", path+"/retry-failed", nil), 202)
-		if v.Retried != 2 { // a2 (failed) and a3 (cancelled)
-			t.Fatalf("retried %d, want 2: skipped=%v", v.Retried, v.Skipped)
+		if v.Retried != 1 { // a2 failed; a3 was cancelled on purpose and stays so
+			t.Fatalf("retried %d, want 1: skipped=%v", v.Retried, v.Skipped)
+		}
+		if v.Operation.Cancelled != 1 {
+			t.Errorf("the cancelled job was retried: %+v", v.Operation)
 		}
 		for _, it := range v.Items {
 			if it.DeviceID != a2 {

@@ -4034,8 +4034,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Queue a new job for every device whose job failed, timed out or was cancelled
-         * @description Each retried item then follows its new job. A device that was never queued is not retried. Needs bulk_actions, or template.manage for a template apply.
+         * Queue a new job for every device whose job failed or timed out
+         * @description Each retried item then follows its new job. A cancelled job and a device that was never queued are not retried. Needs bulk_actions, or template.manage for a template apply.
          */
         post: {
             parameters: {

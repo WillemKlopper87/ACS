@@ -1828,8 +1828,8 @@ paths:
   /api/v1/bulk-operations/{id}/retry-failed:
     post:
       tags: [Bulk operations]
-      summary: Queue a new job for every device whose job failed, timed out or was cancelled
-      description: "Each retried item then follows its new job. A device that was never queued is not retried. Needs bulk_actions, or template.manage for a template apply."
+      summary: Queue a new job for every device whose job failed or timed out
+      description: "Each retried item then follows its new job. A cancelled job and a device that was never queued are not retried. Needs bulk_actions, or template.manage for a template apply."
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         "202":

@@ -89,7 +89,7 @@ Every bulk action and template apply now writes one `bulk_operations` row and on
 | `GET /api/v1/bulk-operations` | Operations, newest first, with counts: queued, running, succeeded, failed, cancelled, not queued. |
 | `GET /api/v1/bulk-operations/{id}` | One operation with each device's latest job. |
 | `POST /api/v1/bulk-operations/{id}/cancel` | Cancels the jobs still queued. |
-| `POST /api/v1/bulk-operations/{id}/retry-failed` | Queues a new job for each device whose job did not succeed, and points the item at it. Reports how many were retried and, by reason, how many were not. |
+| `POST /api/v1/bulk-operations/{id}/retry-failed` | Queues a new job for each device whose job failed or timed out, and points the item at it. Cancelled jobs are left alone: they were withdrawn on purpose. Reports how many were retried and, by reason, how many were not. |
 
 **Tenancy.** A scoped operator sees an operation only through the devices in their scope: counts and items cover those devices alone, cancel and retry touch only those, and an operation with none of their devices is a 404.
 

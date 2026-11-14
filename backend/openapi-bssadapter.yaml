@@ -239,6 +239,7 @@ paths:
         "202": { description: "Queued (or the existing order's current status, if a retry)", content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { description: ErrDeviceNotMapped, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "409": { description: "ErrIdempotencyKeyReused: this external_order_id was already used for an order of another account. Nothing is placed. external_order_id is unique across accounts, so prefix it with something of your own.", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
         "502": { description: ErrACSUnreachable, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
 
   /bss/v1/actions/preflight:

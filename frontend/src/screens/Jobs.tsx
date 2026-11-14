@@ -1,5 +1,6 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { Job } from "../api/types";
 import { DataTable } from "../components/DataTable";
@@ -92,10 +93,37 @@ export function Jobs() {
       {
         accessorKey: "device_id",
         header: "Device",
-        cell: ({ getValue }) => <span className="dim">{(getValue() as string).slice(0, 8)}…</span>,
+        cell: ({ getValue }) => (
+          <Link to={`/devices/${getValue() as string}`} title="Open this device">
+            {(getValue() as string).slice(0, 8)}…
+          </Link>
+        ),
       },
       { accessorKey: "type", header: "Type", cell: ({ getValue }) => <span className="dim">{getValue() as string}</span> },
       { accessorKey: "status", header: "Status", cell: ({ getValue }) => <StatusBadge value={getValue() as string} /> },
+      {
+        id: "actions",
+        header: "",
+        enableSorting: false,
+        cell: ({ row }) => {
+          const j = row.original;
+          if (canCancelJob(j.status)) {
+            return (
+              <button className="btn" disabled={!writable || busy === j.command_key} onClick={() => act(j, "cancel")} aria-label={`Cancel ${j.command_key}`}>
+                Cancel
+              </button>
+            );
+          }
+          if (canRetryJob(j)) {
+            return (
+              <button className="btn" disabled={!writable || busy === j.command_key} onClick={() => act(j, "retry")} aria-label={`Retry ${j.command_key}`}>
+                Retry
+              </button>
+            );
+          }
+          return null;
+        },
+      },
       {
         accessorKey: "created_at",
         header: "Created",
@@ -125,29 +153,6 @@ export function Jobs() {
             {(getValue() as string) || "—"}
           </span>
         ),
-      },
-      {
-        id: "actions",
-        header: "",
-        enableSorting: false,
-        cell: ({ row }) => {
-          const j = row.original;
-          if (canCancelJob(j.status)) {
-            return (
-              <button className="btn" disabled={!writable || busy === j.command_key} onClick={() => act(j, "cancel")} aria-label={`Cancel ${j.command_key}`}>
-                Cancel
-              </button>
-            );
-          }
-          if (canRetryJob(j)) {
-            return (
-              <button className="btn" disabled={!writable || busy === j.command_key} onClick={() => act(j, "retry")} aria-label={`Retry ${j.command_key}`}>
-                Retry
-              </button>
-            );
-          }
-          return null;
-        },
       },
     ],
     [writable, busy, act],

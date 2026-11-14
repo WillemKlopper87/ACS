@@ -275,7 +275,8 @@ func (r *Repository) Get(ctx context.Context, id string, scope Scope) (*Operatio
 		it.JobID, it.CommandKey = strPtr(jobID), strPtr(commandKey)
 		it.JobType, it.JobStatus, it.FaultString = strPtr(jobType), strPtr(jobStatus), strPtr(fault)
 		it.Error, it.Detail = strPtr(itemErr), strPtr(detail)
-		it.jobRetryable = jobStatus.Valid && jobs.IsFinishedUnsuccessfully(jobStatus.String)
+		// Cancelled jobs are left out: someone withdrew those on purpose.
+		it.jobRetryable = jobStatus.Valid && (jobStatus.String == jobs.StatusFailed || jobStatus.String == jobs.StatusTimeout)
 		items = append(items, it)
 	}
 	return op, items, rows.Err()
@@ -313,8 +314,9 @@ type RetryOutcome struct {
 }
 
 // RetryFailed queues a new job for every item whose latest job ended
-// FAILED, TIMEOUT or CANCELLED, and points the item at it. An item that
-// never had a job is not retried: the reason it was not queued (an
+// FAILED or TIMEOUT, and points the item at it. A cancelled job is not
+// retried (it was withdrawn on purpose; retry it from the Jobs screen),
+// nor is an item that never had a job: the reason it was not queued (an
 // unwritable parameter, an unknown device) still holds.
 func (r *Repository) RetryFailed(ctx context.Context, id string, scope Scope, by string) (RetryOutcome, error) {
 	out := RetryOutcome{Skipped: map[string]int{}}

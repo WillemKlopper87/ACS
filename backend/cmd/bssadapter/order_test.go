@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -341,5 +342,50 @@ func TestCreateOrderConcurrentRequestsRaceInsertPending(t *testing.T) {
 	}
 	if order == nil {
 		t.Fatal("FindOrder after race = nil, want exactly one order recorded")
+	}
+}
+
+// TestCreateOrderExternalIDOfAnotherAccountIsRefused: external_order_id is
+// unique across accounts, so an ID one account used must not be answered,
+// for another account, with the first account's order. Before this the
+// second caller got 202 with the first account's command_key and status,
+// and its own order was never placed.
+func TestCreateOrderExternalIDOfAnotherAccountIsRefused(t *testing.T) {
+	dispatched := 0
+	ctx, h, db := newOrderTestHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-first", "status": "QUEUED"})
+			return
+		}
+		dispatched++
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-first"})
+	}))
+	seedOrderDevice(t, ctx, db, "acct-a", "11111111-1111-1111-1111-111111111111")
+	seedOrderDevice(t, ctx, db, "acct-b", "22222222-2222-2222-2222-222222222222")
+
+	post := func(accountID string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(createOrderRequest{ExternalOrderID: "ord-shared", AccountID: accountID, Action: "SUSPEND"})
+		rec := httptest.NewRecorder()
+		h.createOrder(rec, httptest.NewRequest(http.MethodPost, "/bss/v1/orders", bytes.NewReader(body)))
+		return rec
+	}
+
+	if rec := post("acct-a"); rec.Code != http.StatusAccepted {
+		t.Fatalf("first order: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := post("acct-b")
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "ErrIdempotencyKeyReused") {
+		t.Fatalf("other account, same external_order_id: %d %s, want 409 ErrIdempotencyKeyReused", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "ck-first") {
+		t.Errorf("the refusal carries the first account's command_key: %s", rec.Body.String())
+	}
+	if dispatched != 1 {
+		t.Errorf("dispatched %d jobs, want 1", dispatched)
+	}
+	// The owner's own retry is still answered idempotently.
+	if rec := post("acct-a"); rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "ck-first") {
+		t.Errorf("owner's retry: %d %s", rec.Code, rec.Body.String())
 	}
 }
