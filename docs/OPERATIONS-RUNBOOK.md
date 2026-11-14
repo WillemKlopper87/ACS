@@ -15,6 +15,9 @@ qualification.
 2. `scripts/backup.sh` (below) before any upgrade that adds migrations.
 3. Apply migrations ahead of the fleet: `ACS_POSTGRES_DSN=... go run ./cmd/migrate`
    (or let the first new replica do it — the lock serializes either way).
+   With per-service database logins (below) this step is not optional:
+   no service can change the schema, and `cmd/acs` refuses to start until
+   `cmd/migrate` has run. `scripts/start.sh` runs it on every start.
 4. Restart services one at a time; each HTTP service drains in-flight work
    on SIGTERM. Recommended order: `bssadapter` → `api` → `uspc` → `acs`.
    The USP controller is now a first-class deployed service; do not omit it
@@ -176,7 +179,8 @@ taken.
   and lifecycle rules instead, and back up only the database.
 - **Restore**: `ACS_POSTGRES_DSN=... scripts/restore.sh <tarball>` —
   destructive on the target schema; services started afterwards apply any
-  newer migrations automatically. The archive records logical firmware and
+  newer migrations automatically (with per-service database logins, run
+  `cmd/migrate` first: see that section). The archive records logical firmware and
   upload store names, so a restore can target custom storage roots.
   A restore also brings back anything deleted after the backup was taken,
   including subscriber profiles (`account_profile_archive`) erased on request:
@@ -189,6 +193,53 @@ taken.
 | Date | Backup size | Restore time (RTO observed) | Verified by |
 |---|---|---|---|
 | — | — | — | no physical/staging drill recorded yet; CI rehearsal is automated |
+
+## Separate database logins per service
+
+By default every service connects as `acs`, the role that owns the schema.
+`scripts/db-service-roles.sh` gives each service a login of its own with
+only the table privileges its code uses:
+
+| Role | Service | Cannot reach (examples) |
+|---|---|---|
+| `acs_gateway` | `cmd/acs` | operator accounts, two-step sign-in secrets, OAuth clients, webhook secrets |
+| `acs_api` | `cmd/api` | (reads and writes almost every table: it is the operator console) |
+| `acs_bss` | `cmd/bssadapter` | operator accounts, two-step sign-in secrets, password-reset tokens, device credentials, role permissions |
+| `acs_usp` | `cmd/uspc` | operator accounts, OAuth clients, webhook secrets |
+
+None of the four can create, alter or drop anything. `acs` remains the
+owner and is used by `cmd/migrate`, `scripts/backup.sh` and
+`scripts/restore.sh` only.
+
+- **Turn on**: `scripts/db-service-roles.sh`, then `scripts/stop.sh &&
+  scripts/start.sh`. It creates the roles, writes
+  `ACS_CWMP_POSTGRES_DSN`, `ACS_API_POSTGRES_DSN`, `ACS_BSS_POSTGRES_DSN`
+  and `ACS_USP_POSTGRES_DSN` to the secrets file, and runs `cmd/migrate`,
+  which grants the privileges. Check: the `cmd/acs` log says
+  `migrations verified, none applied`, and
+  `grep -c "permission denied" ~/acs-logs/*.log` stays at 0.
+- **Turn off**: `scripts/db-service-roles.sh --disable`, restart. Every
+  service uses `ACS_POSTGRES_DSN` again and the four logins are closed.
+- **Rotate the passwords**: run the script again, restart.
+- **Upgrades**: nothing extra. The privileges are a table in the code
+  (`backend/internal/store/dbroles/manifest.go`); each `cmd/migrate` run
+  sets the roles to exactly that table, so a release that adds a table
+  grants it and one that stops using a table takes it away.
+- **After a restore**: `scripts/restore.sh` recreates the schema without
+  privileges. Run `cmd/migrate` (or `scripts/start.sh`, which does) before
+  the services start, or they are refused every table.
+- **If a service logs `permission denied for table ...`**: that is a
+  missing grant, which the build's tests are meant to catch. Restore
+  service with `--disable` and a restart, then report the table and the
+  service.
+- `scripts/start.sh` starts each service without the owner's login in its
+  environment. The secrets file itself is still readable by the account
+  the services run as: the roles limit what a service can be made to do
+  through its database connection, not what someone with a shell as that
+  account can read. Separate OS accounts or a secrets manager close that.
+- The Compose `containerized` profile still uses the shared login: it has
+  no separate migration step. Use the script-launched deployment for
+  per-service logins.
 
 ## Secret rotation
 

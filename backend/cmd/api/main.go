@@ -95,7 +95,7 @@ func main() {
 	}
 	logger.Info("integration mode", "ACS_INTEGRATION_MODE", integrationMode)
 
-	dsn := os.Getenv("ACS_POSTGRES_DSN")
+	dsn, _ := store.ServiceDSN(os.Getenv, "ACS_API_POSTGRES_DSN")
 	if dsn == "" {
 		logger.Error("ACS_POSTGRES_DSN is required")
 		os.Exit(1)

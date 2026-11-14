@@ -205,3 +205,34 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 
 	return nil
 }
+
+// ServiceDSN returns the connection string a service should use: its own
+// (ownEnv, a login with only that service's privileges, see
+// internal/store/dbroles) when set, otherwise the shared ACS_POSTGRES_DSN.
+// The second result names the variable it came from, for the start-up log.
+func ServiceDSN(getenv func(string) string, ownEnv string) (dsn, source string) {
+	if dsn = getenv(ownEnv); dsn != "" {
+		return dsn, ownEnv
+	}
+	return getenv("ACS_POSTGRES_DSN"), "ACS_POSTGRES_DSN"
+}
+
+// RequireMigrated is the start-up check for a service that does not own
+// the schema: it applies nothing and fails unless every embedded migration
+// is recorded as applied, with the checksum this build expects.
+func RequireMigrated(ctx context.Context, db *sql.DB) error {
+	checks, err := CheckMigrations(ctx, db)
+	if err != nil {
+		return err
+	}
+	var pending []string
+	for _, c := range checks {
+		if c.State != "applied" {
+			pending = append(pending, c.Filename+" ("+c.State+")")
+		}
+	}
+	if len(pending) > 0 {
+		return fmt.Errorf("the database schema is not current, run cmd/migrate first: %s", strings.Join(pending, ", "))
+	}
+	return nil
+}

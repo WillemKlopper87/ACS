@@ -286,20 +286,45 @@ start_process() {
   fi
 }
 
-start_process acs "$ROOT/backend/bin/acs"
+# Per-service database logins (scripts/db-service-roles.sh): a service
+# that has its own login is started without the schema owner's, and
+# without the other services', so none of them is in its environment.
+service_env() {
+  local own="$1" var
+  local -a args=(env)
+  if [ -n "${!own:-}" ]; then
+    args+=(-u ACS_POSTGRES_DSN -u ACS_POSTGRES_PASSWORD)
+    for var in ACS_CWMP_POSTGRES_DSN ACS_API_POSTGRES_DSN ACS_BSS_POSTGRES_DSN ACS_USP_POSTGRES_DSN; do
+      [ "$var" = "$own" ] || args+=(-u "$var")
+    done
+  fi
+  printf '%s\n' "${args[@]}"
+}
+start_service() {
+  local name="$1" own="$2" bin="$3"
+  local -a prefix
+  mapfile -t prefix < <(service_env "$own")
+  start_process "$name" "${prefix[@]}" "$bin"
+}
+
+start_service acs ACS_CWMP_POSTGRES_DSN "$ROOT/backend/bin/acs"
 wait_url "cmd/acs" "${ACS_HEALTH_ACS_URL:-http://127.0.0.1:7547/readyz}" "$LOG_DIR/acs.pid"
 
-start_process api "$ROOT/backend/bin/api"
+start_service api ACS_API_POSTGRES_DSN "$ROOT/backend/bin/api"
 wait_url "cmd/api" "${ACS_HEALTH_API_URL:-http://127.0.0.1:8080/readyz}" "$LOG_DIR/api.pid"
 
-start_process bssadapter "$ROOT/backend/bin/bssadapter"
+start_service bssadapter ACS_BSS_POSTGRES_DSN "$ROOT/backend/bin/bssadapter"
 wait_url "cmd/bssadapter" "${ACS_HEALTH_BSS_URL:-http://127.0.0.1:8090/readyz}" "$LOG_DIR/bssadapter.pid"
 
 if [ "${ACS_USP_ALLOW_PLAINTEXT:-false}" = "true" ] && { [ -z "${ACS_USP_TLS_CERT:-}" ] || [ -z "${ACS_USP_TLS_KEY:-}" ]; }; then
   echo "WARNING: USP WebSocket/MQTT is explicitly running plaintext for this quickstart/field-test deployment."
   echo "         Configure ACS_USP_TLS_CERT/ACS_USP_TLS_KEY and set ACS_USP_ALLOW_PLAINTEXT=false before production exposure."
 fi
-start_process uspc "$ROOT/backend/bin/uspc"
+if [ "${ACS_USP_POSTGRES_DSN:-}" != "${ACS_POSTGRES_DSN:-}" ]; then
+  start_service uspc ACS_USP_POSTGRES_DSN "$ROOT/backend/bin/uspc"
+else
+  start_process uspc "$ROOT/backend/bin/uspc"
+fi
 wait_url "cmd/uspc" "${ACS_HEALTH_USPC_URL:-http://127.0.0.1:8092/readyz}" "$LOG_DIR/uspc.pid"
 
 echo "=== Building frontend ==="

@@ -113,6 +113,7 @@ reverse proxy in front of the API and console.
 |---|---|---|
 | `ACS_JWT_SIGNING_SECRET` (≥32 B) | api | Operator JWTs, browser tickets, transfer-URL tokens |
 | `ACS_CREDENTIAL_ENCRYPTION_KEY` (≥16 B) | api | Device/CLI/VPN credentials at rest; operators' two-step sign-in secrets |
+| `ACS_CWMP_POSTGRES_DSN`, `ACS_API_POSTGRES_DSN`, `ACS_BSS_POSTGRES_DSN`, `ACS_USP_POSTGRES_DSN` (optional) | acs, api, bssadapter, uspc | A database login per service, each with only the tables that service uses, instead of the shared `ACS_POSTGRES_DSN`. Written by `scripts/db-service-roles.sh`; see "Separate database logins per service" in the runbook. `cmd/acs` then verifies the schema at start instead of migrating it (`ACS_DB_MIGRATIONS=check`). |
 | `ACS_INTEGRATION_MODE` | api, bssadapter | `naas` (default) or `standalone`. See "Standalone or through the NaaS platform". |
 | `ACS_BSS_REQUIRE_ALLOCATED_DEVICES` (optional) | bssadapter | `true`: an ISP's integration can map or pre-provision only a device the operator has already allocated to that ISP (device import, or the device's customer set in the console). Off by default: an unassigned device joins the first ISP that names its serial. Turn it on before a second ISP is connected. |
 | `ACS_BSS_ALLOWED_CIDRS` (required in production with `naas`) | bssadapter | Source networks the `/bss/v1` and `/tmf-api` routes accept calls from; others get `403 ErrSourceNotAllowed` before authentication. Unset in lab: any source. Behind a proxy, set `ACS_TRUSTED_PROXY_CIDRS` so the real caller is seen. |

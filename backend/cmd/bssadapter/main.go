@@ -116,7 +116,7 @@ func main() {
 		logger.Info("BSS and TMF routes accept calls from these networks only", "ACS_BSS_ALLOWED_CIDRS", os.Getenv("ACS_BSS_ALLOWED_CIDRS"))
 	}
 
-	dsn := os.Getenv("ACS_POSTGRES_DSN")
+	dsn, _ := store.ServiceDSN(os.Getenv, "ACS_BSS_POSTGRES_DSN")
 	if dsn == "" {
 		logger.Error("ACS_POSTGRES_DSN is required")
 		os.Exit(1)

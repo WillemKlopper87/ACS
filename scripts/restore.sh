@@ -68,3 +68,5 @@ restore_store firmware-storage "$FW"
 restore_store upload-storage "$UP"
 
 echo "restore complete — start the services; store.Migrate applies any migrations newer than the backup"
+echo "With per-service database logins (scripts/db-service-roles.sh), run cmd/migrate as the owner before"
+echo "starting the services: the restore recreated the schema without their privileges. scripts/start.sh does."

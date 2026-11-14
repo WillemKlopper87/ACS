@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"acs/internal/store"
+	"acs/internal/store/dbroles"
 )
 
 func main() {
@@ -62,4 +63,16 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("migrations applied", "took", time.Since(start).Round(time.Millisecond))
+
+	// Per-service logins (internal/store/dbroles): set the privileges of
+	// the service roles that exist to the committed table. A deployment
+	// with one shared login has none of the roles and nothing happens.
+	granted, err := dbroles.Apply(ctx, db)
+	if err != nil {
+		logger.Error("granting service roles failed", "err", err)
+		os.Exit(1)
+	}
+	if len(granted) > 0 {
+		logger.Info("service role privileges applied", "roles", granted)
+	}
 }
