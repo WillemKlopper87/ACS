@@ -464,8 +464,7 @@ export function Operators() {
         <div className="panel" style={{ marginTop: "1.1rem", overflowX: "auto" }}>
           <h3>Role permissions</h3>
           <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
-            superadmin always has every permission (not shown/configurable). Toggling here takes effect immediately —
-            these are enforced on the server, this UI is not the security boundary.
+            Superadmin always has every permission. Changes here take effect immediately.
           </p>
           <table style={{ fontFamily: "var(--font-ui)" }}>
             <thead>

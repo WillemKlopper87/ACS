@@ -75,7 +75,7 @@ export function Jobs() {
     const q = search.toLowerCase();
     return jobs.filter(
       (j) =>
-        (!q || `${j.command_key} ${j.device_id} ${j.fault_string ?? ""}`.toLowerCase().includes(q)) &&
+        (!q || `${j.command_key} ${j.device_id} ${j.oui_serial ?? ""} ${j.device_label ?? ""} ${j.fault_string ?? ""}`.toLowerCase().includes(q)) &&
         (!typeFilter || j.type === typeFilter) &&
         (!statusFilter || j.status === statusFilter),
     );
@@ -94,11 +94,16 @@ export function Jobs() {
       {
         accessorKey: "device_id",
         header: "Device",
-        cell: ({ getValue }) => (
-          <Link to={`/devices/${getValue() as string}`} title="Open this device">
-            {(getValue() as string).slice(0, 8)}…
-          </Link>
-        ),
+        // The name an operator knows the device by, then its serial; the
+        // internal ID only if the API sent neither.
+        cell: ({ row }) => {
+          const j = row.original;
+          return (
+            <Link to={`/devices/${j.device_id}`} title={j.oui_serial ?? "Open this device"}>
+              {j.device_label || j.oui_serial || `${j.device_id.slice(0, 8)}…`}
+            </Link>
+          );
+        },
       },
       {
         accessorKey: "type",
@@ -200,7 +205,7 @@ export function Jobs() {
             <circle cx="11" cy="11" r="7" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <input aria-label="Filter by command_key, device, fault" ref={searchRef} placeholder="Filter by command_key, device, fault… (press /)" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input aria-label="Filter by job, device or fault" ref={searchRef} placeholder="Filter by job, device or fault… (press /)" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <select className="chip" aria-label="Filter by job type" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
           <option value="">All actions</option>

@@ -7,6 +7,7 @@ import { useAuth } from "./auth/useAuth";
 import { canAdmin } from "./auth/roles";
 import { ToastHost } from "./components/Toast";
 import { ConfirmHost } from "./components/ConfirmHost";
+import { GlobalSearch } from "./components/GlobalSearch";
 import { areaOf, screenTitle, visibleAreas, type Screen } from "./lib/nav";
 import { useApiReachable } from "./lib/apiHealth";
 import { useTheme, type Theme } from "./theme/useTheme";
@@ -32,6 +33,7 @@ async function openGrafana() {
 
 
 const THEME_LABEL: Record<Theme, string> = { dark: "Dark", light: "Light", unfold: "Unfold", fluent: "Fluent 2" };
+const SUPPORTED_THEMES: Theme[] = ["dark", "light"];
 
 
 // Every screen is a lazy chunk (audit P2.4: one 750 kB bundle). The
@@ -165,11 +167,23 @@ function AppShell() {
 
         <div className="sidebar-footer">
           <select className="chip" aria-label="Console theme" value={theme} onChange={(e) => setTheme(e.target.value as Theme)} title="Console theme">
-            {themes.map((t) => (
-              <option key={t} value={t}>
-                {THEME_LABEL[t]}
-              </option>
-            ))}
+            {/* Dark and Light are the themes new screens are designed and
+                checked in. The other two stay selectable, but are not kept
+                up to date (docs/CONSOLE-REDESIGN-AND-MFA.md, step G). */}
+            <optgroup label="Supported">
+              {themes.filter((t) => SUPPORTED_THEMES.includes(t)).map((t) => (
+                <option key={t} value={t}>
+                  {THEME_LABEL[t]}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Not maintained">
+              {themes.filter((t) => !SUPPORTED_THEMES.includes(t)).map((t) => (
+                <option key={t} value={t}>
+                  {THEME_LABEL[t]}
+                </option>
+              ))}
+            </optgroup>
           </select>
           {token && (
             <div className="conn-indicator" style={{ justifyContent: "space-between" }}>
@@ -207,6 +221,7 @@ function AppShell() {
               </button>
             )}
             <h1 className="page-title">{screenTitle(screen)}</h1>
+            <GlobalSearch />
           </div>
           {area && area.screens.length > 1 && (
             <nav className="area-tabs" aria-label={`${area.label} sections`}>

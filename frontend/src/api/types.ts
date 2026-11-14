@@ -80,6 +80,9 @@ export interface CaptureEvent {
 export interface Job {
   command_key: string;
   device_id: string;
+  // Set on the fleet-wide jobs list, so a row can name its device.
+  oui_serial?: string;
+  device_label?: string;
   type: string;
   status: string;
   created_at: string;

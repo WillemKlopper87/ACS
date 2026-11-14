@@ -373,7 +373,7 @@ export function BSSIntegration() {
           <div className="panel">
             <h3>Webhook subscriptions</h3>
             <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
-              Where the ACS posts a message each time an order's job finishes. Leave the account blank to receive them for every account. A subscription made here listens for job completions only; other event types are subscribed through the API.
+              Where the ACS posts a message when an order's job finishes. Leave the account blank for every account. Other event types are subscribed through the API.
             </p>
             <form onSubmit={createWebhook} className="form-row" style={{ flexWrap: "wrap" }}>
               <input aria-label="account_id (optional)" placeholder="Account ID (optional)" value={webhookAccountId} onChange={(e) => setWebhookAccountId(e.target.value)} />
@@ -395,8 +395,7 @@ export function BSSIntegration() {
           <div className="panel">
             <h3>OAuth2 clients</h3>
             <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
-              Recommended auth for new integrations (RFC 6749 client-credentials). Grant only the TMF permissions and
-              accounts this integration needs, or deliberately choose fleet-wide access. The secret is shown once after creation.
+              Each integration gets its own client. Grant only the permissions and accounts it needs. The secret is shown once, when the client is created.
             </p>
             <form onSubmit={createOAuthClient} style={{ marginTop: "0.75rem" }}>
               <div className="form-row" style={{ flexWrap: "wrap" }}>

@@ -35,11 +35,11 @@ None of this is about missing features. It is the same handful of jobs (list thi
 |---|---|---|
 | **A** | **Shared components**: confirmation dialog, drawer, page bar. Done, §4. Still to add: form field, empty state, a five-step type scale, and a lint rule against new inline styles and raw colours. | 3, 4 |
 | **B** | **The list-screen pattern** on every list screen: a one-line description and the primary action on the right, filters, then the table; create and edit in a drawer; a row opens its detail in a drawer. Done for Groups, Templates, Policies, Scheduled Jobs, Rollouts, Operators and Alerting (§4). Tenancy and BSS keep their layout: their forms are single "add" rows above short lists, not the standing form this step removes. | 1, 2 |
-| **C** | *Done for the dashboard, Jobs, the device page and status badges (§4); form help text is still to shorten.* **Plain-language labels** from one table (the status badges already work this way): reachability, inform recency, job types, BSS states. Form help text shortened to one line, with the detail behind a "?" . | 5 |
-| **D** | *Done (§4), as six areas plus Help; the global search box is not built.* **Navigation in five areas**, related screens as tabs of one page: *Overview* (Dashboard, Fleet Health, Alerting), *Devices* (Inventory, Onboarding, Groups), *Activity* (Jobs, Bulk operations, Scheduled Jobs, Bulk actions as its "New" button), *Configuration* (Templates, Policies, Rollouts), *Administration* (Operators, Tenancy, BSS/NaaS, Audit, Reports, Captures). Old URLs redirect. A global search box in the top bar using the existing subscriber lookup. | 6 |
-| **E** | *Health row done (§4); lists still lead with the serial when a device has no label or subscriber name.* **Device first screen**: name or subscriber, model and serial under it, then a health row (firmware, uptime, signal, Wi-Fi clients, last job) in the space that is empty today. Lists show label or subscriber first, serial second. | 7, 8 |
+| **C** | *Done (§4).* **Plain-language labels** from one table (the status badges already work this way): reachability, inform recency, job types, BSS states. Form help text shortened to one line, with the detail behind a "?" . | 5 |
+| **D** | *Done (§4), as six areas plus Help, with the search box in the page header.* **Navigation in five areas**, related screens as tabs of one page: *Overview* (Dashboard, Fleet Health, Alerting), *Devices* (Inventory, Onboarding, Groups), *Activity* (Jobs, Bulk operations, Scheduled Jobs, Bulk actions as its "New" button), *Configuration* (Templates, Policies, Rollouts), *Administration* (Operators, Tenancy, BSS/NaaS, Audit, Reports, Captures). Old URLs redirect. A global search box in the top bar using the existing subscriber lookup. | 6 |
+| **E** | *Done (§4).* **Device first screen**: name or subscriber, model and serial under it, then a health row (firmware, uptime, signal, Wi-Fi clients, last job) in the space that is empty today. Lists show label or subscriber first, serial second. | 7, 8 |
 | **F** | *Done (§4).* **Dashboard**: a widget with one value shows a number, not a bar; a widget with nothing to show collapses to a line. | 8 |
-| **G** | **Themes**: keep Dark and Light as supported; keep Unfold and Fluent selectable but stop designing for them until the raw colours are gone. Decision needed. | 9 |
+| **G** | *Done as proposed (§4); reversible.* **Themes**: keep Dark and Light as supported; keep Unfold and Fluent selectable but stop designing for them until the raw colours are gone. Decision needed. | 9 |
 
 Steps A and B change how screens are laid out, not what they do, so they can ship screen by screen. D is the only step an operator will notice as "things moved", and should go out with a short note in Help.
 
@@ -83,6 +83,16 @@ Every screen keeps the address it had (`/jobs`, `/rollouts`, …), so bookmarks,
 **Dashboard.** A chart with a single category is written as a statement ("Offline — all 15 devices") in place of a full-width bar, and a widget with nothing to report is one line under the grid.
 
 **More plain labels.** Job types read "Set parameters", "Wake device", "Firmware update" on the Jobs screen and the device page, and the badges say "at next check-in" and "sent to device"; the raw value is the tooltip everywhere.
+
+**Search from any screen** (`components/GlobalSearch.tsx`). A search box sits in the page header on every screen, with Ctrl+K (Cmd+K) to reach it. It is the fleet-wide lookup Inventory already had (subscriber name, address, account number, device label, last digits of a serial), so it covers every device the operator may see, and a result opens the device. It runs on Enter, not per keystroke, because lookups by name and address are audited.
+
+**Devices named in lists.** The Jobs list showed the first eight characters of an internal ID; `GET /jobs` now returns each device's serial and label (one extra query per page), and the row shows the label or the serial and links to the device. Bulk actions leads with the label or the subscriber's name, as Inventory does.
+
+**Shorter help text.** Nine paragraphs of 180 to 360 characters inside forms are now one or two plain sentences. Text that states a legal or irreversible consequence (revealing SIM identifiers, swapping a device) was left as it is.
+
+**Themes.** The picker groups Dark and Light as *Supported* and Unfold and Fluent 2 as *Not maintained*. All four still work and can be chosen; the grouping says which two new screens are designed and checked in. Reverting is one line in `App.tsx`.
+
+**Not done from step A:** a shared form-field component, an empty-state component, a fixed five-step type scale, and a lint rule against new inline styles and raw colours. The screens converted so far reuse the existing form markup; these would reduce the remaining inline styles (still several hundred) but change no behaviour.
 
 Verified in a browser against the running stack and by two new Playwright tests (confirmation dialog; two-step sign-in).
 

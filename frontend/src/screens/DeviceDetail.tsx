@@ -745,7 +745,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
               </div>
               {cwmpDigestCredentials.length === 0 ? (
                 <p className="dim" style={{ fontSize: "0.78rem", marginTop: 0 }}>
-                  No per-device CWMP_DIGEST credential is recorded yet. Secure bootstrap should create one and keep it PENDING until this CPE reconnects with the generated credential and matching identity.
+                  This device has no credential of its own yet. One is created at first contact and becomes active when the device reconnects with it.
                 </p>
               ) : (
                 cwmpDigestCredentials.map((credential) => (
@@ -884,8 +884,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
             <div className="panel">
               <h3>Push firmware</h3>
               <p className="dim" style={{ marginTop: 0, fontSize: "0.8rem" }}>
-                Sends one image to this device alone. For a fleet, use a canary rollout on the Rollouts screen instead — this
-                is for single-device work: an RMA replacement, or reproducing a report on a known build.
+                Sends one image to this device only. For many devices, use a rollout (Configuration → Rollouts).
               </p>
               {firmwareImages.length === 0 ? (
                 <p className="dim" style={{ fontSize: "0.8rem", margin: 0 }}>

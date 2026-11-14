@@ -3657,6 +3657,8 @@ components:
       properties:
         command_key: { type: string }
         device_id: { type: string }
+        oui_serial: { type: string, description: "The device's serial identity. Set on GET /jobs; absent on a single-job read." }
+        device_label: { type: string, description: "The operator's name for the device, when it has one. Set on GET /jobs." }
         type: { type: string }
         status: { $ref: "#/components/schemas/JobStatus" }
         created_at: { type: string, format: date-time }

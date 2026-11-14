@@ -44,10 +44,7 @@ export function Reports() {
       <div className="panel" style={{ maxWidth: "40rem" }}>
         <h3>Device report</h3>
         <p className="dim" style={{ marginTop: 0, fontSize: "0.84rem" }}>
-          Exports an Excel (.xlsx) sheet: serial, manufacturer, model, MAC address, online status, firmware version,
-          current SSID, location, customer, and region — for the whole fleet, or narrowed to one region/customer/
-          project below. If your account is scoped to specific customers, the export never includes devices outside
-          that scope, regardless of these filters.
+          An Excel sheet of the fleet, or of one region, customer or project: serial, model, MAC address, status, firmware, Wi-Fi name, location, customer and region. It only ever contains devices you are allowed to see.
         </p>
 
         <div className="form-row" style={{ marginTop: 0, flexWrap: "wrap" }}>

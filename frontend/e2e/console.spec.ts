@@ -434,3 +434,37 @@ test("a destructive action asks in the console's own dialog, and Escape means no
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
   expect(deleted).toBe(true);
 });
+
+test("the header search finds a device from any screen and opens it", async ({ page }) => {
+  let asked = "";
+  await page.route(`${API}/api/v1/lookup**`, (route) => {
+    asked = new URL(route.request().url()).searchParams.get("q") ?? "";
+    const items = asked === "nkosi" ? [{ device_id: "dev-1", oui_serial: DEVICE.oui_serial, manufacturer: "Zyxel", model: "NR7101", subscriber_name: "Thandi Nkosi", account_id: "ACC-1001", vip: false, matched: ["name"] }] : [];
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items, count: items.length }) });
+  });
+  await signIn(page);
+  // Not from Inventory: the point is that it works wherever you are.
+  await page.goto("/jobs");
+
+  const search = page.getByRole("searchbox", { name: "Search for a device or subscriber" });
+  await page.keyboard.press("Control+k");
+  await expect(search).toBeFocused();
+
+  // Nothing is looked up until Enter: lookups by name are audited.
+  await search.fill("nkosi");
+  expect(asked).toBe("");
+  await search.press("Enter");
+  const results = page.getByRole("list", { name: "Search results" });
+  await expect(results.getByText("Thandi Nkosi")).toBeVisible();
+  expect(asked).toBe("nkosi");
+
+  await results.getByRole("listitem").click();
+  await expect(page).toHaveURL(/\/devices\/dev-1\/overview$/);
+  await expect(results).toHaveCount(0);
+
+  await search.fill("nobody");
+  await search.press("Enter");
+  await expect(page.getByText("Nothing matches")).toBeVisible();
+  await search.press("Escape");
+  await expect(page.getByRole("list", { name: "Search results" })).toHaveCount(0);
+});

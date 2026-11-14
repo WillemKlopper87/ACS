@@ -114,8 +114,7 @@ export function CaptureSessions() {
         <div className="panel capture-launcher">
           <h3>Start a capture</h3>
           <p className="dim capture-guidance">
-            Use expected identity before a device authenticates, or a known remote IP for first-contact/fleet-wide troubleshooting.
-            For an onboarded device, start from its Device Detail panel.
+            Match by expected identity for a device that has not authenticated yet, or by its remote address. For a device already onboarded, start the capture from its Diagnostics page.
           </p>
 
           <div className="form-row" style={{ marginTop: 0 }}>

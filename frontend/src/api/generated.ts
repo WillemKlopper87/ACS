@@ -8908,6 +8908,10 @@ export interface components {
         Job: {
             command_key?: string;
             device_id?: string;
+            /** @description The device's serial identity. Set on GET /jobs; absent on a single-job read. */
+            oui_serial?: string;
+            /** @description The operator's name for the device, when it has one. Set on GET /jobs. */
+            device_label?: string;
             type?: string;
             status?: components["schemas"]["JobStatus"];
             /** Format: date-time */

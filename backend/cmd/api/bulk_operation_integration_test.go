@@ -342,3 +342,35 @@ func TestIntegration_JobCancelAndRetry(t *testing.T) {
 		}
 	})
 }
+
+// The jobs list names each device, so the console does not have to show
+// an internal ID.
+func TestIntegration_JobsListNamesDevices(t *testing.T) {
+	e := newTestEnv(t)
+	custA, custB := e.customer("Customer A"), e.customer("Customer B")
+	mine, theirs := e.device("A001", &custA), e.device("B001", &custB)
+	e.operator("root", operators.RoleSuperAdmin)
+	e.operator("alice", operators.RoleNOC, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custA})
+	if _, err := e.db.ExecContext(e.ctx, `UPDATE devices SET label = 'Branch router' WHERE id = $1`, mine); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{mine, theirs} {
+		if _, err := e.h.jobs.Create(e.ctx, d, jobs.TypeReboot, struct{}{}, "root"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var list struct {
+		Items []struct {
+			DeviceID    string `json:"device_id"`
+			OUISerial   string `json:"oui_serial"`
+			DeviceLabel string `json:"device_label"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(e.call("alice", "GET", "/api/v1/jobs", nil).body), &list); err != nil {
+		t.Fatal(err)
+	}
+	// Scoping is unchanged: alice sees her customer's job only, now named.
+	if len(list.Items) != 1 || list.Items[0].DeviceID != mine || list.Items[0].OUISerial != "ABCDEF-A001" || list.Items[0].DeviceLabel != "Branch router" {
+		t.Fatalf("alice's jobs: %+v", list.Items)
+	}
+}

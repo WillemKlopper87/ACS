@@ -217,12 +217,15 @@ export function FleetControl() {
       {
         id: "device",
         header: "Device",
-        accessorFn: (d) => d.label || d.oui_serial,
+        accessorFn: (d) => d.label || d.subscriber?.subscriber_name || d.oui_serial,
         cell: ({ row }) => {
           const d = row.original;
-          return d.label ? (
+          // Same order as Inventory: the label or the subscriber's name,
+          // then the serial.
+          const title = d.label || d.subscriber?.subscriber_name;
+          return title ? (
             <div>
-              <div>{d.label}</div>
+              <div>{title}</div>
               <div className="dim mono" style={{ fontSize: "0.72rem" }}>{d.oui_serial}</div>
             </div>
           ) : (
