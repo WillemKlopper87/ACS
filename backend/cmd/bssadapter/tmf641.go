@@ -305,7 +305,7 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 				}
 				break
 			}
-			if _, dispatchErr := h.dispatchOrder(r.Context(), req.ExternalID+":"+strconv.Itoa(i), req.AccountID, "MODIFY_WIFI", mapping.DeviceID, params); dispatchErr != nil {
+			if _, dispatchErr := h.dispatchOrder(r.Context(), req.ExternalID+":"+strconv.Itoa(i), req.AccountID, "MODIFY_WIFI", mapping.DeviceID, params, ""); dispatchErr != nil {
 				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", dispatchErr.Error())
 				items[i].Status = "FAILED"
 				for j := i + 1; j < len(items); j++ {

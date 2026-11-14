@@ -194,6 +194,20 @@ taken.
 |---|---|---|---|
 | — | — | — | no physical/staging drill recorded yet; CI rehearsal is automated |
 
+## A resent order must be the same order
+
+An integration that sends an `external_order_id` again gets the original
+order back only if the request is the same (action, role, parameters).
+If it changed anything, the answer is `409 ErrIdempotencyKeyReused` and
+the device is sent nothing more. Before, the changed request was
+answered `202` as if accepted, while the device had the original.
+
+- A `WARN` line `order ID resent with a different request` in the
+  adapter log names the order and account. It means the integration is
+  amending orders in place: it has to send an amendment under a new ID.
+- Orders placed before this version have no request on record to compare
+  with, so a resend of one of those is still answered with the original.
+
 ## The adapter's calls name their customer
 
 The BSS adapter reaches the operator API with one shared service token.

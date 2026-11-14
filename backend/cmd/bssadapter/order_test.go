@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -388,5 +389,82 @@ func TestCreateOrderExternalIDOfAnotherAccountIsRefused(t *testing.T) {
 	// The owner's own retry is still answered idempotently.
 	if rec := post("acct-a"); rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "ck-first") {
 		t.Errorf("owner's retry: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A resent order ID is a retry only if it asks for the same thing
+// (security assessment O7). An integration that amends an order and
+// resends it under the same ID used to be told it was accepted, while the
+// device had been sent the original.
+func TestCreateOrderResentWithAChangedRequestIsRefused(t *testing.T) {
+	var dispatched atomic.Int64
+	ctx, h, db := newOrderTestHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Write([]byte(`{"status":"QUEUED","command_key":"ck-1"}`))
+			return
+		}
+		dispatched.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-1"})
+	}))
+	const accountID, deviceID = "acct-o7", "77777777-1111-1111-1111-111111111111"
+	seedOrderDevice(t, ctx, db, accountID, deviceID)
+	send := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.createOrder(rec, httptest.NewRequest(http.MethodPost, "/bss/v1/orders", strings.NewReader(body)))
+		return rec
+	}
+	first := `{"external_order_id":"ord-o7","account_id":"acct-o7","action":"SUSPEND"}`
+	if rec := send(first); rec.Code != http.StatusAccepted {
+		t.Fatalf("first = %d %s", rec.Code, rec.Body)
+	}
+
+	// The identical request, and the same request spelled differently
+	// (field order, the default role written out), are retries.
+	for name, body := range map[string]string{
+		"identical":        first,
+		"reordered fields": `{"action":"SUSPEND","account_id":"acct-o7","external_order_id":"ord-o7"}`,
+		"default role":     `{"external_order_id":"ord-o7","account_id":"acct-o7","action":"SUSPEND","role":"gateway"}`,
+	} {
+		rec := send(body)
+		if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"command_key":"ck-1"`) {
+			t.Errorf("%s retry = %d %s, want the original order", name, rec.Code, rec.Body)
+		}
+	}
+
+	// The same ID asking for something else is not.
+	for name, body := range map[string]string{
+		"another action":    `{"external_order_id":"ord-o7","account_id":"acct-o7","action":"ACTIVATE"}`,
+		"another role":      `{"external_order_id":"ord-o7","account_id":"acct-o7","action":"SUSPEND","role":"extender"}`,
+		"another parameter": `{"external_order_id":"ord-o7","account_id":"acct-o7","action":"SUSPEND","parameters":{"reason":"non-payment"}}`,
+	} {
+		rec := send(body)
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "ErrIdempotencyKeyReused") {
+			t.Errorf("%s under the same ID = %d %s, want 409 ErrIdempotencyKeyReused", name, rec.Code, rec.Body)
+		}
+	}
+	if n := dispatched.Load(); n != 1 {
+		t.Fatalf("device writes dispatched = %d, want 1 (the original only)", n)
+	}
+	var orders int
+	var action string
+	if err := db.QueryRowContext(ctx, `SELECT count(*), min(action) FROM bss_orders WHERE external_order_id = 'ord-o7'`).Scan(&orders, &action); err != nil || orders != 1 || action != "SUSPEND" {
+		t.Fatalf("orders = %d action %q (%v), want the one original", orders, action, err)
+	}
+
+	// An order from before digests were recorded has nothing to compare
+	// with: its ID keeps answering with the original, as it always did.
+	if _, err := db.ExecContext(ctx, `UPDATE bss_orders SET request_hash = NULL WHERE external_order_id = 'ord-o7'`); err != nil {
+		t.Fatal(err)
+	}
+	if rec := send(`{"external_order_id":"ord-o7","account_id":"acct-o7","action":"ACTIVATE"}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("an order with no digest on record = %d %s, want the original (202)", rec.Code, rec.Body)
+	}
+	// Likewise one that carries the earlier, unmarked digest of the device writes.
+	if _, err := db.ExecContext(ctx, `UPDATE bss_orders SET request_hash = 'ab12cd34' WHERE external_order_id = 'ord-o7'`); err != nil {
+		t.Fatal(err)
+	}
+	if rec := send(first); rec.Code != http.StatusAccepted {
+		t.Fatalf("an order with an old-style digest = %d %s, want the original (202)", rec.Code, rec.Body)
 	}
 }

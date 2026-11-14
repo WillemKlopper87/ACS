@@ -965,17 +965,46 @@ type orderResponse struct {
 // order's job status), in which case it has already written the error
 // response itself.
 // respondWithExistingOrderFor answers a repeated external_order_id for the
-// account the caller was authorized for. external_order_id is unique across
-// all accounts, so an ID another account already used must never be
-// answered with that account's order: the caller would be told its order
-// was accepted when none was placed, and would be handed another
-// account's command_key and job status. Same rule as the TMF640 PATCH key.
-func (h *handler) respondWithExistingOrderFor(w http.ResponseWriter, r *http.Request, accountID, externalOrderID string, existing *bss.OrderRecord) bool {
+// account the caller was authorized for. Two things make a repeat not a
+// retry, and both are refused with 409 rather than answered with the
+// original order:
+//
+//   - the ID belongs to another of the caller's accounts: the caller would
+//     be told its order was accepted when none was placed, and handed
+//     another account's command_key and job status;
+//   - the request differs from the one the order was accepted with
+//     (requestDigest): an integration that amends an order and resends it
+//     under the same ID would be told the amendment was accepted, when
+//     the device was sent the original. An amendment is a new order.
+//
+// Same rules as the TMF640 PATCH key.
+func (h *handler) respondWithExistingOrderFor(w http.ResponseWriter, r *http.Request, accountID, externalOrderID, requestDigest string, existing *bss.OrderRecord) bool {
 	if existing.AccountID != accountID {
 		writeError(w, http.StatusConflict, "ErrIdempotencyKeyReused", "this external_order_id was already used for another order")
 		return false
 	}
+	if !h.sameOrderRequest(w, r, existing, requestDigest, "external_order_id") {
+		return false
+	}
 	return h.respondWithExistingOrder(w, r, externalOrderID, existing)
+}
+
+// sameOrderRequest writes the 409 for a repeated order ID whose request
+// changed, and reports whether the repeat is a true retry.
+func (h *handler) sameOrderRequest(w http.ResponseWriter, r *http.Request, existing *bss.OrderRecord, requestDigest, idName string) bool {
+	err := h.mappings.SameRequest(r.Context(), existing.ID, requestDigest)
+	if errors.Is(err, bss.ErrOrderRequestChanged) {
+		h.logger.Warn("order ID resent with a different request", "external_order_id", existing.ExternalOrderID, "account_id", existing.AccountID)
+		writeError(w, http.StatusConflict, "ErrIdempotencyKeyReused",
+			"this "+idName+" was already used for a different request; the original order stands. Send a changed order under a new "+idName)
+		return false
+	}
+	if err != nil {
+		h.logger.Error("failed to compare a repeated order with the original", "err", err, "external_order_id", existing.ExternalOrderID)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return false
+	}
+	return true
 }
 
 func (h *handler) respondWithExistingOrder(w http.ResponseWriter, r *http.Request, externalOrderID string, existing *bss.OrderRecord) bool {
@@ -1063,10 +1092,10 @@ func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
 // unwrapped, per errors.Is), the caller is responsible for routing to
 // its own idempotent-response path -- this function only dispatches, it
 // does not know how to shape either caller's response.
-func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID, action, deviceID string, params []bss.ParameterWrite) (commandKey string, err error) {
+func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID, action, deviceID string, params []bss.ParameterWrite, requestDigest string) (commandKey string, err error) {
 	// Write-ahead: the order's intent, including exactly what dispatch
 	// would send, is durable before dispatch is attempted (design S3).
-	orderID, err := h.mappings.InsertPending(ctx, externalOrderID, accountID, action, deviceID, params)
+	orderID, err := h.mappings.InsertPending(ctx, externalOrderID, accountID, action, deviceID, params, requestDigest)
 	if err != nil {
 		// ErrOrderAlreadyExists is the expected idempotent-retry race --
 		// the caller routes it to its own existing-order response, not
@@ -1174,13 +1203,16 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFExecute, req.AccountID) {
 		return
 	}
+	// What this request asks for, in the caller's terms. A repeat of the
+	// order ID is a retry only if it asks for the same.
+	digest := bss.RequestDigest("order", req.Action, roleOrDefault(req.Role), req.ServiceType, req.Parameters)
 
 	if existing, err := h.mappings.FindOrder(r.Context(), req.ExternalOrderID); err != nil {
 		h.logger.Error("failed to check order idempotency", "err", err, "external_order_id", req.ExternalOrderID)
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	} else if existing != nil {
-		h.respondWithExistingOrderFor(w, r, req.AccountID, req.ExternalOrderID, existing)
+		h.respondWithExistingOrderFor(w, r, req.AccountID, req.ExternalOrderID, digest, existing)
 		return
 	}
 
@@ -1216,7 +1248,7 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	commandKey, err := h.dispatchOrder(r.Context(), req.ExternalOrderID, req.AccountID, req.Action, mapping.DeviceID, params)
+	commandKey, err := h.dispatchOrder(r.Context(), req.ExternalOrderID, req.AccountID, req.Action, mapping.DeviceID, params, digest)
 	if err != nil {
 		if errors.Is(err, bss.ErrOrderAlreadyExists) {
 			// A genuine race: another request for the same
@@ -1230,7 +1262,7 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 				return
 			}
-			h.respondWithExistingOrderFor(w, r, req.AccountID, req.ExternalOrderID, existing)
+			h.respondWithExistingOrderFor(w, r, req.AccountID, req.ExternalOrderID, digest, existing)
 			return
 		}
 		if errors.Is(err, bss.ErrACSUnreachable) {

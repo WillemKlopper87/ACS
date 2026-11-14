@@ -41,7 +41,7 @@ func acsRouterStub(t *testing.T, jobStatus map[string]string, parameters map[str
 
 func insertDispatchedOrder(t *testing.T, ctx context.Context, r *bss.Repository, externalID, accountID, deviceID, commandKey string, params []bss.ParameterWrite) {
 	t.Helper()
-	if _, err := r.InsertPending(ctx, externalID, accountID, "MODIFY_WIFI", deviceID, params); err != nil {
+	if _, err := r.InsertPending(ctx, externalID, accountID, "MODIFY_WIFI", deviceID, params, ""); err != nil {
 		t.Fatalf("InsertPending %s: %v", externalID, err)
 	}
 	if err := r.MarkDispatched(ctx, testOrderID(t, r, externalID), commandKey); err != nil {

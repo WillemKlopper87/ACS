@@ -17,7 +17,7 @@ func TestReconcilePendingOrdersRetriesAndMarksDispatched(t *testing.T) {
 	seedOrderDevice(t, ctx, db, "acct-1", "11111111-1111-1111-1111-111111111111")
 
 	params := []bss.ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if _, err := h.mappings.InsertPending(ctx, "ord-retry-1", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := h.mappings.InsertPending(ctx, "ord-retry-1", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	// InsertPending now stamps last_attempt_at at insert time (final
@@ -47,7 +47,7 @@ func TestReconcilePendingOrdersLeavesFailedRetriesPending(t *testing.T) {
 	seedOrderDevice(t, ctx, db, "acct-1", "11111111-1111-1111-1111-111111111111")
 
 	params := []bss.ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if _, err := h.mappings.InsertPending(ctx, "ord-retry-fail", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := h.mappings.InsertPending(ctx, "ord-retry-fail", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	backdateOrderLastAttempt(t, ctx, db, "ord-retry-fail")
@@ -77,7 +77,7 @@ func TestReconcilePendingOrdersDeadLettersAfterMaxAttempts(t *testing.T) {
 	seedOrderDevice(t, ctx, db, "acct-1", "11111111-1111-1111-1111-111111111111")
 
 	params := []bss.ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if _, err := h.mappings.InsertPending(ctx, "ord-dlq", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := h.mappings.InsertPending(ctx, "ord-dlq", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 
@@ -115,7 +115,7 @@ func TestReconcilePendingOrdersIgnoresDispatchedOrders(t *testing.T) {
 	seedOrderDevice(t, ctx, db, "acct-1", "11111111-1111-1111-1111-111111111111")
 
 	params := []bss.ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if _, err := h.mappings.InsertPending(ctx, "ord-already-done", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := h.mappings.InsertPending(ctx, "ord-already-done", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	if err := h.mappings.MarkDispatched(ctx, testOrderID(t, h.mappings, "ord-already-done"), "ck-already"); err != nil {

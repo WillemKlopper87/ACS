@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"acs/internal/accounts"
@@ -197,7 +198,7 @@ func scanOrder(row orderScanner, operation string) (*OrderRecord, error) {
 // (createOrder's own, still in flight when this row was inserted) has
 // resolved. The load-bearing half of that fix is ClaimDuePendingOrders'
 // atomic claim itself, below.
-func (r *Repository) InsertPending(ctx context.Context, externalOrderID, accountID, action, deviceID string, params []ParameterWrite) (string, error) {
+func (r *Repository) InsertPending(ctx context.Context, externalOrderID, accountID, action, deviceID string, params []ParameterWrite, requestDigest string) (string, error) {
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
 		return "", fmt.Errorf("marshal order parameters: %w", err)
@@ -207,8 +208,9 @@ func (r *Repository) InsertPending(ctx context.Context, externalOrderID, account
 		return "", err
 	}
 	// order_scope is the account's customer, the namespace the order ID is
-	// unique in. request_hash is a digest of the order as first accepted
-	// (recorded for finding O7; nothing compares it yet).
+	// unique in. request_hash is the caller's digest of the request as it
+	// was sent (RequestDigest); a later request with the same ID is
+	// compared with it. Empty for callers that do not compare.
 	var id string
 	err = r.db.QueryRowContext(ctx, `
 		INSERT INTO bss_orders (external_order_id, account_id, account_key, order_scope, action, device_id, parameters, status, last_attempt_at, request_hash)
@@ -216,7 +218,7 @@ func (r *Repository) InsertPending(ctx context.Context, externalOrderID, account
 		  FROM bss_accounts a WHERE a.id = $7::uuid
 		RETURNING id::text
 	`, externalOrderID, accountID, action, deviceID, paramsJSON, OrderStatusPendingDispatch, accountKey,
-		orderRequestHash(action, deviceID, paramsJSON)).Scan(&id)
+		nullIfEmpty(requestDigest)).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return "", ErrOrderAlreadyExists
@@ -226,16 +228,47 @@ func (r *Repository) InsertPending(ctx context.Context, externalOrderID, account
 	return id, nil
 }
 
-// orderRequestHash digests what an order asks for: the action, the device
-// and the translated parameter writes.
-func orderRequestHash(action, deviceID string, paramsJSON []byte) string {
-	h := sha256.New()
-	h.Write([]byte(action))
-	h.Write([]byte{0})
-	h.Write([]byte(deviceID))
-	h.Write([]byte{0})
-	h.Write(paramsJSON)
-	return hex.EncodeToString(h.Sum(nil))
+// requestDigestVersion marks a digest of the request as the caller sent
+// it. Orders recorded before such digests existed carry none, or (for a
+// short while) an unmarked digest of the translated device writes, which
+// is not comparable with a request: those are never compared.
+const requestDigestVersion = "v1:"
+
+// RequestDigest is the fingerprint of an order request: what was asked
+// for, in the caller's own terms. Two requests with the same fingerprint
+// are the same order; a different one under the same order ID is a
+// different order (ErrOrderRequestChanged).
+//
+// It deliberately covers the request and not the device writes it was
+// translated into: translation reads the device, so the same request can
+// translate differently an hour later, and an identical retry must never
+// look like a changed order.
+func RequestDigest(fields ...any) string {
+	canonical, _ := json.Marshal(fields) // map keys are sorted by encoding/json
+	sum := sha256.Sum256(canonical)
+	return requestDigestVersion + hex.EncodeToString(sum[:])
+}
+
+// ErrOrderRequestChanged: an order ID was sent again with a different
+// request.
+var ErrOrderRequestChanged = errors.New("this order ID was already used for a different request")
+
+// SameRequest reports whether a repeated order ID carries the request the
+// order was first accepted with. An order with no comparable digest on
+// record, or a caller that supplies none, is taken as the same request:
+// the behaviour from before digests were recorded.
+func (r *Repository) SameRequest(ctx context.Context, orderID, requestDigest string) error {
+	if requestDigest == "" {
+		return nil
+	}
+	var stored sql.NullString
+	if err := r.db.QueryRowContext(ctx, `SELECT request_hash FROM bss_orders WHERE id = $1::uuid`, orderID).Scan(&stored); err != nil {
+		return fmt.Errorf("read order request digest: %w", err)
+	}
+	if !strings.HasPrefix(stored.String, requestDigestVersion) || stored.String == requestDigest {
+		return nil
+	}
+	return ErrOrderRequestChanged
 }
 
 // MarkDispatched records that dispatch succeeded: status DISPATCHED, the

@@ -236,10 +236,10 @@ paths:
                   additionalProperties: { type: string }
                   description: "Business parameters, e.g. {wifi_ssid, wifi_password} for MODIFY_WIFI. Send wifi_password_handle (POST /bss/v1/secrets) instead of wifi_password to keep the passphrase out of the order and the job; the order claims the handle (400 ErrSecretHandleInvalid if it is unknown, expired, already used or another customer's). With ACS_BSS_REQUIRE_SECRET_HANDLES a plain wifi_password is 400 ErrInvalidRequest."
       responses:
-        "202": { description: "Queued (or the existing order's current status, if a retry)", content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "202": { description: "Queued (or the existing order's current status, if a retry of the same request)", content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { description: ErrDeviceNotMapped, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
-        "409": { description: "ErrIdempotencyKeyReused: this external_order_id was already used for an order of another account. Nothing is placed. external_order_id is unique across accounts, so prefix it with something of your own.", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+        "409": { description: "ErrIdempotencyKeyReused: this external_order_id was already used, either for another of your accounts or for a different request (another action, role or parameters). The original order stands and nothing more is placed. A resend is a retry only when it asks for the same thing; send a changed order under a new external_order_id. Order IDs are unique per customer, so another customer's use of the same value has no effect.", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
         "502": { description: ErrACSUnreachable, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
 
   /bss/v1/actions/preflight:

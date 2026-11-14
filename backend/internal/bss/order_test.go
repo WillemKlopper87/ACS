@@ -21,7 +21,7 @@ func TestInsertPendingThenFindOrder(t *testing.T) {
 	seedDevice(t, ctx, r, orderDeviceID, "S-ORDER")
 	params := []ParameterWrite{{Name: "Device.WiFi.SSID.1.SSID", Value: "MyNetwork", Type: "string"}}
 
-	if _, err := r.InsertPending(ctx, "ord-1", "acct-1", "MODIFY_WIFI", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-1", "acct-1", "MODIFY_WIFI", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 
@@ -54,10 +54,10 @@ func TestInsertPendingDuplicateExternalOrderID(t *testing.T) {
 	seedDevice(t, ctx, r, orderDeviceID, "S-ORDER")
 	params := []ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
 
-	if _, err := r.InsertPending(ctx, "ord-dup", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-dup", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("first InsertPending: %v", err)
 	}
-	_, err := r.InsertPending(ctx, "ord-dup", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params)
+	_, err := r.InsertPending(ctx, "ord-dup", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, "")
 	if !errors.Is(err, ErrOrderAlreadyExists) {
 		t.Fatalf("second InsertPending for the same external_order_id = %v, want ErrOrderAlreadyExists", err)
 	}
@@ -67,7 +67,7 @@ func TestMarkDispatchedSetsCommandKeyAndStatus(t *testing.T) {
 	ctx, r := newMappingTestRepo(t)
 	seedDevice(t, ctx, r, orderDeviceID, "S-ORDER")
 	params := []ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if _, err := r.InsertPending(ctx, "ord-2", "acct-1", "ACTIVATE", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-2", "acct-1", "ACTIVATE", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 
@@ -102,7 +102,7 @@ func TestMarkDispatchFailedIncrementsAttemptsAndStaysPending(t *testing.T) {
 	ctx, r := newMappingTestRepo(t)
 	seedDevice(t, ctx, r, orderDeviceID, "S-ORDER")
 	params := []ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if _, err := r.InsertPending(ctx, "ord-3", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-3", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 
@@ -133,7 +133,7 @@ func TestMarkDispatchFailedDeadLettersAfterMaxAttempts(t *testing.T) {
 	ctx, r := newMappingTestRepo(t)
 	seedDevice(t, ctx, r, orderDeviceID, "S-ORDER")
 	params := []ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if _, err := r.InsertPending(ctx, "ord-4", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-4", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 
@@ -166,13 +166,13 @@ func TestClaimDuePendingOrdersReturnsOnlyPendingBelowMaxAttempts(t *testing.T) {
 	// review finding 1 -- so a genuinely fresh row is deliberately NOT
 	// immediately due; TestClaimDuePendingOrdersDoesNotClaimFreshlyInserted
 	// below proves that half directly.)
-	if _, err := r.InsertPending(ctx, "ord-due", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-due", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending ord-due: %v", err)
 	}
 	backdateLastAttempt(t, ctx, r, "ord-due")
 
 	// A dispatched order: must never appear.
-	if _, err := r.InsertPending(ctx, "ord-dispatched", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-dispatched", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending ord-dispatched: %v", err)
 	}
 	if err := r.MarkDispatched(ctx, testOrderID(t, r, "ord-dispatched"), "ck-1"); err != nil {
@@ -180,7 +180,7 @@ func TestClaimDuePendingOrdersReturnsOnlyPendingBelowMaxAttempts(t *testing.T) {
 	}
 
 	// A dead-lettered order: must never appear (exhausted).
-	if _, err := r.InsertPending(ctx, "ord-dead", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-dead", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending ord-dead: %v", err)
 	}
 	for i := 0; i < maxDispatchAttempts; i++ {
@@ -205,7 +205,7 @@ func TestClaimDuePendingOrdersRespectsBackoff(t *testing.T) {
 	ctx, r := newMappingTestRepo(t)
 	seedDevice(t, ctx, r, orderDeviceID, "S-ORDER")
 	params := []ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if _, err := r.InsertPending(ctx, "ord-backoff", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-backoff", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	// One failed attempt sets last_attempt_at = now(); backoff for
@@ -255,7 +255,7 @@ func TestClaimDuePendingOrdersDoesNotClaimFreshlyInserted(t *testing.T) {
 	seedDevice(t, ctx, r, orderDeviceID, "S-ORDER")
 	params := []ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
 
-	if _, err := r.InsertPending(ctx, "ord-fresh", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-fresh", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 
@@ -287,7 +287,7 @@ func TestClaimDuePendingOrdersSkipLockedExcludesConcurrentClaimant(t *testing.T)
 	seedDevice(t, ctx, r, orderDeviceID, "S-ORDER")
 	params := []ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
 
-	if _, err := r.InsertPending(ctx, "ord-race", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-race", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	backdateLastAttempt(t, ctx, r, "ord-race")
@@ -336,13 +336,13 @@ func TestUnnotifiedOrdersOnlyReturnsDispatched(t *testing.T) {
 	params := []ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
 
 	// PENDING_DISPATCH: no command_key to poll GetJobStatus for yet.
-	if _, err := r.InsertPending(ctx, "ord-pending", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-pending", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending ord-pending: %v", err)
 	}
 
 	// DEAD_LETTERED: empty command_key forever -- the row this finding is
 	// about.
-	if _, err := r.InsertPending(ctx, "ord-dead", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-dead", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending ord-dead: %v", err)
 	}
 	for i := 0; i < maxDispatchAttempts; i++ {
@@ -352,7 +352,7 @@ func TestUnnotifiedOrdersOnlyReturnsDispatched(t *testing.T) {
 	}
 
 	// DISPATCHED, not yet notified: the one row that must appear.
-	if _, err := r.InsertPending(ctx, "ord-dispatched", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-dispatched", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending ord-dispatched: %v", err)
 	}
 	if err := r.MarkDispatched(ctx, testOrderID(t, r, "ord-dispatched"), "ck-1"); err != nil {
@@ -377,23 +377,23 @@ func TestOrdersForDeviceReturnsOnlyDispatchedMostRecentFirst(t *testing.T) {
 	seedDevice(t, ctx, r, orderDeviceID, "S-ORDER-RECON")
 	params := []ParameterWrite{{Name: "Device.WiFi.SSID.1.SSID", Value: "v", Type: "string"}}
 
-	if _, err := r.InsertPending(ctx, "ord-recon-pending", "acct-1", "MODIFY_WIFI", orderDeviceID, params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-recon-pending", "acct-1", "MODIFY_WIFI", orderDeviceID, params, ""); err != nil {
 		t.Fatalf("InsertPending pending: %v", err)
 	}
-	if _, err := r.InsertPending(ctx, "ord-recon-old", "acct-1", "MODIFY_WIFI", orderDeviceID, params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-recon-old", "acct-1", "MODIFY_WIFI", orderDeviceID, params, ""); err != nil {
 		t.Fatalf("InsertPending old: %v", err)
 	}
 	if err := r.MarkDispatched(ctx, testOrderID(t, r, "ord-recon-old"), "ck-old"); err != nil {
 		t.Fatalf("MarkDispatched old: %v", err)
 	}
-	if _, err := r.InsertPending(ctx, "ord-recon-new", "acct-1", "MODIFY_WIFI", orderDeviceID, params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-recon-new", "acct-1", "MODIFY_WIFI", orderDeviceID, params, ""); err != nil {
 		t.Fatalf("InsertPending new: %v", err)
 	}
 	if err := r.MarkDispatched(ctx, testOrderID(t, r, "ord-recon-new"), "ck-new"); err != nil {
 		t.Fatalf("MarkDispatched new: %v", err)
 	}
 	deadParams := []ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if _, err := r.InsertPending(ctx, "ord-recon-dead", "acct-1", "MODIFY_WIFI", orderDeviceID, deadParams); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-recon-dead", "acct-1", "MODIFY_WIFI", orderDeviceID, deadParams, ""); err != nil {
 		t.Fatalf("InsertPending dead: %v", err)
 	}
 	for i := 0; i < 8; i++ {

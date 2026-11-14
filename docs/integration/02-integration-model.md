@@ -48,6 +48,8 @@ ISP on the same ACS can use the same value and neither of you will notice.
 
 Resubmitting an identical order returns the **original** job with its
 **current** status. Not a duplicate, not a conflict, not an error.
+"Identical" means it asks for the same thing: the same action, role and
+parameters. Field order and spacing do not matter.
 
 | Situation | Do this |
 |---|---|
@@ -57,6 +59,7 @@ Resubmitting an identical order returns the **original** job with its
 | Genuinely a new change | New `external_order_id`. |
 | Your key, already used by another ISP | Nothing: order IDs are per ISP. You get your own order, and no answer ever tells you another ISP used the value. |
 | Your key, reused for a different one of your accounts | `409 ErrIdempotencyKeyReused`. One ID is one order. |
+| Your key, same account, but a changed request (another action, role or parameter) | `409 ErrIdempotencyKeyReused`. The original order stands and the change is **not** applied. An amendment is a new order: new `external_order_id`. The same holds for a TMF640 `PATCH` repeated under one `X-Idempotency-Key`. |
 | Retrying a *failed* order after fixing the cause | New `external_order_id` — the original is terminal. |
 
 **The anti-pattern that causes real incidents:** appending a suffix or a

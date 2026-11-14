@@ -68,6 +68,13 @@ last one of `subscriber-profile` (`PUT .../rival.0001/subscriber`, recorded
 as 404, now 200). The fixtures have not been re-recorded and no tag has
 been cut; by the rule below, a changed meaning is a major version.
 
+**Not yet released: a resent order must be the same order.** The same
+build refuses an `external_order_id` (or a TMF640 `X-Idempotency-Key`)
+that is sent again with a different request: `409
+ErrIdempotencyKeyReused`, where it used to answer `202` with the original
+order. An identical resend is unchanged. No recorded exchange shows the
+old answer. This too is a changed meaning.
+
 **Versioned.** The contract is tagged `bss-contract-v<major>.<minor>.<patch>`
 (`bss-contract-v1.0.0`, `v1.0.1`, `v1.1.0`, `v1.1.1`, `v1.2.0`, `v1.2.1`). A tag never moves. Within a major version, changes only add
 (fields, endpoints, and codes that only a new endpoint or parameter can return); a removal or a changed

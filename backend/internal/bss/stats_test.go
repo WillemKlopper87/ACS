@@ -7,10 +7,10 @@ func TestStatsIncludesOrdersByStatus(t *testing.T) {
 	seedDevice(t, ctx, r, orderDeviceID, "S-STATS")
 	params := []ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
 
-	if _, err := r.InsertPending(ctx, "ord-pending", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-pending", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
-	if _, err := r.InsertPending(ctx, "ord-dispatched", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := r.InsertPending(ctx, "ord-dispatched", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params, ""); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	if err := r.MarkDispatched(ctx, testOrderID(t, r, "ord-dispatched"), "ck-1"); err != nil {

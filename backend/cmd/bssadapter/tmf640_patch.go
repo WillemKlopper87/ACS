@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -102,8 +103,22 @@ func (h *handler) patchService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A retry: same key, same service. A key reused for another service or
-	// account is a caller bug, never a way to read someone else's order.
+	// The body is read before the key is looked up: a repeat of the key
+	// is a retry only if it asks for the same change.
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "could not read the request body")
+		return
+	}
+	digest := ""
+	var asked any
+	if json.Unmarshal(body, &asked) == nil {
+		digest = bss.RequestDigest("tmf640-patch", asked) // key order and spacing do not matter
+	}
+
+	// A retry: same key, same service, same change. A key reused for
+	// another service or account, or for a different change, is a caller
+	// bug, never a way to read someone else's order or to amend one.
 	if existing, err := h.mappings.FindOrder(r.Context(), key); err != nil {
 		h.logger.Error("failed to check order idempotency", "err", err, "external_order_id", key)
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
@@ -111,6 +126,9 @@ func (h *handler) patchService(w http.ResponseWriter, r *http.Request) {
 	} else if existing != nil {
 		if existing.AccountID != m.AccountID || existing.DeviceID != m.DeviceID {
 			writeError(w, http.StatusConflict, "ErrIdempotencyKeyReused", "this X-Idempotency-Key was already used for another service")
+			return
+		}
+		if !h.sameOrderRequest(w, r, existing, digest, "X-Idempotency-Key") {
 			return
 		}
 		h.writeMonitor(w, r, http.StatusAccepted, existing, m.ID)
@@ -126,8 +144,8 @@ func (h *handler) patchService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var raw json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+	raw := json.RawMessage(body)
+	if !json.Valid(raw) {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "invalid JSON body")
 		return
 	}
@@ -156,7 +174,7 @@ func (h *handler) patchService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.dispatchOrder(r.Context(), key, m.AccountID, action, m.DeviceID, writes)
+	_, err = h.dispatchOrder(r.Context(), key, m.AccountID, action, m.DeviceID, writes, digest)
 	if err != nil && !errors.Is(err, bss.ErrOrderAlreadyExists) && !errors.Is(err, bss.ErrACSUnreachable) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return

@@ -129,7 +129,7 @@ func (h *handler) resumeTMF641Item(ctx context.Context, work bss.ServiceOrderWor
 			return h.finishTMF641Item(ctx, work.Item, "FAILED", err.Error())
 		}
 		externalID := req.ExternalID + ":" + itoa(work.Item.Seq)
-		_, err = h.dispatchOrder(ctx, externalID, req.AccountID, "MODIFY_WIFI", mapping.DeviceID, params)
+		_, err = h.dispatchOrder(ctx, externalID, req.AccountID, "MODIFY_WIFI", mapping.DeviceID, params, "")
 		if err != nil && !errors.Is(err, bss.ErrOrderAlreadyExists) {
 			// dispatchOrder has already durably written a PENDING_DISPATCH row
 			// for transient ACS failures; its outbox owns retry from here.
