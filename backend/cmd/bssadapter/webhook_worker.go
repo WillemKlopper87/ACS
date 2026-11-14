@@ -22,7 +22,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -400,24 +399,11 @@ func (h *handler) listWebhookSubscriptions(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *handler) deleteWebhookSubscription(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	sub, err := h.webhooks.SubscriptionByID(r.Context(), id)
-	if errors.Is(err, bss.ErrSubscriptionNotFound) {
-		writeError(w, http.StatusNotFound, "ErrNotFound", "webhook subscription not found")
+	sub, ok := h.subscriptionFor(w, r, bss.ScopeTMFWrite)
+	if !ok {
 		return
 	}
-	if err != nil {
-		h.logger.Error("failed to resolve webhook subscription", "err", err, "id", id)
-		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
-		return
-	}
-	if sub.AccountID == nil {
-		if !h.authorizeBSSFleet(w, r) {
-			return
-		}
-	} else if !h.authorizeBSSAccount(w, r, bss.ScopeTMFWrite, *sub.AccountID) {
-		return
-	}
+	id := sub.ID
 	if err := h.webhooks.DeleteSubscription(r.Context(), id); err != nil {
 		if err == bss.ErrSubscriptionNotFound {
 			writeError(w, http.StatusNotFound, "ErrNotFound", "webhook subscription not found")
