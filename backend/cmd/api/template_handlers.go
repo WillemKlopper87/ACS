@@ -7,6 +7,7 @@
 package main
 
 import (
+	"acs/internal/bulkops"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -253,7 +254,11 @@ func (h *handler) applyTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	h.logger.Info("config template applied", "template_id", t.ID, "name", t.Name, "requested", len(req.DeviceIDs), "succeeded", succeeded)
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"template_id": t.ID, "requested": len(req.DeviceIDs), "succeeded": succeeded, "results": results,
-	})
+	}
+	if id := h.recordBulkOperation(r.Context(), bulkops.KindTemplateApply, jobs.TypeSetParameter, "Apply template "+t.Name, req.GroupID, operator, results); id != "" {
+		body["bulk_operation_id"] = id
+	}
+	writeJSON(w, http.StatusOK, body)
 }

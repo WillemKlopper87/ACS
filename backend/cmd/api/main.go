@@ -12,6 +12,7 @@ package main
 
 import (
 	"acs/internal/bulkdata"
+	"acs/internal/bulkops"
 	"acs/internal/clientip"
 	"context"
 	"errors"
@@ -449,10 +450,13 @@ func envOrInt(key string, fallback int) int {
 
 type handler struct {
 	bulkData *bulkdata.Repository
-	logger   *slog.Logger
-	devices  *devices.Repository
-	jobs     *jobs.Repository
-	params   *parameters.Repository
+	// bulkOps records fan-outs (bulk actions, template applies) so their
+	// progress can be read back; built in registerRoutes when unset.
+	bulkOps *bulkops.Repository
+	logger  *slog.Logger
+	devices *devices.Repository
+	jobs    *jobs.Repository
+	params  *parameters.Repository
 	// wifiInsights serves the controller-style Wi-Fi overview (sampled by cmd/acs).
 	wifiInsights *wifiinsights.Repository
 	vendors      *adapters.Registry

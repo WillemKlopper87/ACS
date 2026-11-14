@@ -28,7 +28,7 @@ async function openGrafana() {
   if (problem) toast(problem, "error");
 }
 
-type Screen = "dashboard" | "fleet" | "devices" | "onboarding" | "control" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help" | "alerting";
+type Screen = "dashboard" | "fleet" | "devices" | "onboarding" | "control" | "operations" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help" | "alerting";
 
 const THEME_LABEL: Record<Theme, string> = { dark: "Dark", light: "Light", unfold: "Unfold", fluent: "Fluent 2" };
 
@@ -50,6 +50,7 @@ const NAV: { id: Screen; label: string; adminOnly?: boolean; group: string }[] =
   { group: "Devices", id: "fleet", label: "Inventory" },
   { group: "Devices", id: "onboarding", label: "Onboarding" },
   { group: "Devices", id: "control", label: "Bulk actions" },
+  { group: "Devices", id: "operations", label: "Bulk operations" },
   { group: "Devices", id: "groups", label: "Groups" },
 
   { group: "Provisioning", id: "templates", label: "Templates" },
@@ -125,6 +126,7 @@ const SCREEN_COMPONENT: Record<Screen, ComponentType> = {
   devices: screen(() => import("./screens/DeviceWorkspace"), "DeviceWorkspace"),
   onboarding: screen(() => import("./screens/Onboarding"), "Onboarding"),
   control: screen(() => import("./screens/FleetControl"), "FleetControl"),
+  operations: screen(() => import("./screens/BulkOperations"), "BulkOperations"),
   health: screen(() => import("./screens/FleetHealthScreen"), "FleetHealthScreen"),
   jobs: screen(() => import("./screens/Jobs"), "Jobs"),
   groups: screen(() => import("./screens/DeviceGroups"), "DeviceGroups"),

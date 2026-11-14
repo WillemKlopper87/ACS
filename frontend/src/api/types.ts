@@ -152,10 +152,54 @@ export interface BulkActionResult {
 }
 
 export interface BulkActionResponse {
+  // The bulk operation recording this fan-out, to follow its progress.
+  bulk_operation_id?: string;
   action: string;
   requested: number;
   succeeded: number;
   results: BulkActionResult[];
+}
+
+// A bulk operation is the record of one bulk action or template apply;
+// its counts are its devices' latest jobs, read when asked.
+export interface BulkOperation {
+  id: string;
+  kind: "BULK_ACTION" | "TEMPLATE_APPLY";
+  action: string;
+  label: string;
+  group_id?: string | null;
+  created_by: string;
+  created_at: string;
+  state: "RUNNING" | "FINISHED";
+  total: number;
+  queued: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  not_queued: number;
+  unknown: number;
+}
+
+export interface BulkOperationItem {
+  device_id: string;
+  oui_serial?: string;
+  device_label?: string;
+  command_key?: string;
+  job_type?: string;
+  job_status?: string;
+  fault_string?: string;
+  error?: string;
+  detail?: string;
+  retries: number;
+}
+
+export interface BulkOperationDetail {
+  operation: BulkOperation;
+  items: BulkOperationItem[];
+  cancelled?: number;
+  retried?: number;
+  skipped?: Record<string, number>;
 }
 
 export interface DeviceGroup {

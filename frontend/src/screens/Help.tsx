@@ -345,7 +345,7 @@ const SECTIONS: Section[] = [
     group: "Devices",
     title: "Bulk actions",
     audience: "everyone",
-    keywords: "fleet control bulk action mass set parameter connection request select all matching",
+    keywords: "fleet control bulk action mass set parameter connection request select all matching bulk operation progress cancel retry job",
     body: (
       <>
         <p>
@@ -358,6 +358,13 @@ const SECTIONS: Section[] = [
           <Term>CONNECTION_REQUEST</Term> and a cellular refresh. Reboots and factory resets are not
           available in bulk. Each selected device gets its own job, so results arrive independently —
           watch them in <strong>Monitor → Jobs</strong>.
+        </p>
+        <p>
+          Every bulk action and template apply is recorded under <strong>Devices → Bulk operations</strong>:
+          how many devices have finished, which failed and why. From there you can cancel the jobs not yet
+          sent to a device, or retry the ones that failed. A single job can be cancelled (while queued) or
+          retried (after it failed) from <strong>Monitor → Jobs</strong>. Jobs that belong to a firmware
+          rollout, a BSS order or onboarding are managed there and cannot be changed from these screens.
         </p>
       </>
     ),

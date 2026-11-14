@@ -3,6 +3,7 @@
 package main
 
 import (
+	"acs/internal/bulkops"
 	"acs/internal/datamodel"
 	"acs/internal/devices"
 	"acs/internal/jobs"
@@ -794,10 +795,14 @@ func (h *handler) bulkAction(w http.ResponseWriter, r *http.Request) {
 	}
 	h.logger.Info("bulk action dispatched", "action", req.Action, "devices", len(req.DeviceIDs), "succeeded", succeeded)
 
-	writeJSON(w, http.StatusAccepted, map[string]any{
+	body := map[string]any{
 		"action":    req.Action,
 		"requested": len(req.DeviceIDs),
 		"succeeded": succeeded,
 		"results":   results,
-	})
+	}
+	if id := h.recordBulkOperation(r.Context(), bulkops.KindBulkAction, req.Action, bulkActionLabel(req), req.GroupID, operator, results); id != "" {
+		body["bulk_operation_id"] = id
+	}
+	writeJSON(w, http.StatusAccepted, body)
 }

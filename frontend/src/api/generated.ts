@@ -3759,6 +3759,325 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{command_key}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a job that is still queued
+         * @description Only a QUEUED job can be cancelled: once an RPC has gone out the device may already have acted on it. Jobs that belong to a firmware rollout, a BSS order, an onboarding, a credential rotation or the ACS itself are refused. Needs the permission that queuing a job of this type needs. Audited as JobCancelled.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    command_key: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The job, now CANCELLED */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Job"];
+                    };
+                };
+                /** @description Missing the permission this job type needs */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not queued any more, or managed by a rollout, order, onboarding or the system (the body says which) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{command_key}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue a new job with the payload of one that failed, timed out or was cancelled
+         * @description The original job is left as it is. Refused for job types that are not safe to repeat unchanged (firmware and file transfers, ADD_OBJECT, FACTORY_RESET, PARAMETER_DISCOVERY), for jobs managed by a rollout, order, onboarding or the system, and for a job whose payload held a secret, which is erased when a job finishes. Audited as JobRetried.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    command_key: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The new job */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Job"];
+                    };
+                };
+                /** @description Missing the permission this job type needs, or the payload writes a protected parameter */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not retryable (the body says why) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bulk-operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List bulk operations, newest first
+         * @description A bulk operation is the record of one bulk action or template apply. A scoped operator sees an operation only through the devices in their scope: counts cover those devices alone.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    page?: number;
+                    page_size?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["BulkOperation"][];
+                            total: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bulk-operations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One bulk operation with the latest job of each device */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BulkOperationDetail"];
+                    };
+                };
+                /** @description Not found, or no device of it is in the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bulk-operations/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel the operation's jobs that are still queued
+         * @description Jobs already sent to a device are left to finish. Needs bulk_actions, or template.manage for a template apply.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The operation as it now stands */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BulkOperationDetail"] & {
+                            /** @description Jobs cancelled by this call */
+                            cancelled: number;
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bulk-operations/{id}/retry-failed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue a new job for every device whose job failed, timed out or was cancelled
+         * @description Each retried item then follows its new job. A device that was never queued is not retried. Needs bulk_actions, or template.manage for a template apply.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The operation as it now stands */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BulkOperationDetail"] & {
+                            retried: number;
+                            /** @description Failed items left as they were, counted by reason */
+                            skipped: {
+                                [key: string]: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/device-groups": {
         parameters: {
             query?: never;
@@ -8023,7 +8342,58 @@ export interface components {
             summary?: string;
             body?: string | null;
         };
+        BulkOperation: {
+            id: string;
+            /** @enum {string} */
+            kind: "BULK_ACTION" | "TEMPLATE_APPLY";
+            action: string;
+            /** @description What was asked, in words. Parameter names only, never values. */
+            label: string;
+            group_id?: string | null;
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * @description RUNNING while any job is queued or in flight
+             * @enum {string}
+             */
+            state: "RUNNING" | "FINISHED";
+            total: number;
+            queued: number;
+            running: number;
+            succeeded: number;
+            /** @description FAILED or TIMEOUT */
+            failed: number;
+            cancelled: number;
+            /** @description Devices for which no job could be created */
+            not_queued: number;
+            /** @description Devices whose job has been pruned by retention */
+            unknown: number;
+        };
+        BulkOperationItem: {
+            /** @description The device ID as requested */
+            device_id: string;
+            oui_serial?: string;
+            device_label?: string;
+            /** @description The latest job for this device */
+            command_key?: string;
+            job_type?: string;
+            job_status?: components["schemas"]["JobStatus"];
+            fault_string?: string;
+            /** @description Why no job was queued */
+            error?: string;
+            detail?: string;
+            retries: number;
+        };
+        BulkOperationDetail: {
+            operation: components["schemas"]["BulkOperation"];
+            items: components["schemas"]["BulkOperationItem"][];
+        };
+        /** @enum {string} */
+        JobStatus: "QUEUED" | "RPC_SENT" | "IN_PROGRESS" | "AWAITING_TRANSFER_COMPLETE" | "AWAITING_DIAGNOSTICS_COMPLETE" | "SUCCESS" | "FAILED" | "TIMEOUT" | "CANCELLED";
         BulkActionResponse: {
+            /** @description The bulk operation recording this fan-out (GET /api/v1/bulk-operations/{id}) */
+            bulk_operation_id?: string;
             action?: string;
             requested?: number;
             succeeded?: number;
@@ -8041,8 +8411,7 @@ export interface components {
             command_key?: string;
             device_id?: string;
             type?: string;
-            /** @enum {string} */
-            status?: "QUEUED" | "RPC_SENT" | "IN_PROGRESS" | "AWAITING_TRANSFER_COMPLETE" | "AWAITING_DIAGNOSTICS_COMPLETE" | "SUCCESS" | "FAILED" | "TIMEOUT";
+            status?: components["schemas"]["JobStatus"];
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */

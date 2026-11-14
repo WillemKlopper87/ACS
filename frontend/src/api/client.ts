@@ -13,6 +13,8 @@ import type {
   BSSOAuthClientCreateResult,
   BSSWebhookSubscription,
   BulkActionResponse,
+  BulkOperation,
+  BulkOperationDetail,
   CaptureEvent,
   CaptureProtocol,
   CaptureSession,
@@ -456,6 +458,18 @@ export const api = {
     request<QueueResponse>(`/api/v1/devices/${id}/factory-reset`, { method: "POST" }),
 
   listJobs: () => request<{ items: Job[]; total: number }>("/api/v1/jobs"),
+  // Cancel works on a job that is still queued; retry queues a new job
+  // with the payload of one that failed, timed out or was cancelled.
+  cancelJob: (commandKey: string) => request<Job>(`/api/v1/jobs/${encodeURIComponent(commandKey)}/cancel`, { method: "POST" }),
+  retryJob: (commandKey: string) => request<Job>(`/api/v1/jobs/${encodeURIComponent(commandKey)}/retry`, { method: "POST" }),
+
+  listBulkOperations: (page = 1, pageSize = 50) =>
+    request<{ items: BulkOperation[]; total: number }>(`/api/v1/bulk-operations?page=${page}&page_size=${pageSize}`),
+  getBulkOperation: (id: string) => request<BulkOperationDetail>(`/api/v1/bulk-operations/${encodeURIComponent(id)}`),
+  cancelBulkOperation: (id: string) =>
+    request<BulkOperationDetail>(`/api/v1/bulk-operations/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  retryFailedBulkOperation: (id: string) =>
+    request<BulkOperationDetail>(`/api/v1/bulk-operations/${encodeURIComponent(id)}/retry-failed`, { method: "POST" }),
 
   listDeviceJobs: (id: string) =>
     request<{ items: Job[]; total: number }>(`/api/v1/devices/${id}/jobs`),

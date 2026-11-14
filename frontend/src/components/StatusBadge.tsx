@@ -16,6 +16,12 @@ const TONE_BY_VALUE: Record<string, string> = {
   UNKNOWN: "neutral",
   FAILED: "danger",
   TIMEOUT: "danger",
+  // Withdrawn by an operator before anything was sent to the device.
+  CANCELLED: "neutral",
+  // Bulk operation states and item outcomes.
+  RUNNING: "pending",
+  FINISHED: "neutral",
+  NOT_QUEUED: "warn",
   OFFLINE: "danger",
   UNREACHABLE: "danger",
   // ACS-requested reboot/reset in progress: expected-down, not an outage.

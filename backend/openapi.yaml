@@ -61,6 +61,8 @@ tags:
     description: AddObject/DeleteObject — provisioning new instances
   - name: Jobs
     description: The durable ACS-initiated work queue every write endpoint feeds
+  - name: Bulk operations
+    description: The record of a bulk action or template apply — progress, cancel what is queued, retry what failed
   - name: Device Groups
     description: Curated named device sets, used by bulk actions/schedules/templates
   - name: Scheduled Jobs
@@ -1761,6 +1763,89 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
         "404": { description: Not found }
 
+  /api/v1/jobs/{command_key}/cancel:
+    post:
+      tags: [Jobs]
+      summary: Cancel a job that is still queued
+      description: "Only a QUEUED job can be cancelled: once an RPC has gone out the device may already have acted on it. Jobs that belong to a firmware rollout, a BSS order, an onboarding, a credential rotation or the ACS itself are refused. Needs the permission that queuing a job of this type needs. Audited as JobCancelled."
+      parameters: [{ name: command_key, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: "The job, now CANCELLED", content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "403": { description: Missing the permission this job type needs }
+        "404": { description: Not found }
+        "409": { description: "Not queued any more, or managed by a rollout, order, onboarding or the system (the body says which)" }
+
+  /api/v1/jobs/{command_key}/retry:
+    post:
+      tags: [Jobs]
+      summary: Queue a new job with the payload of one that failed, timed out or was cancelled
+      description: "The original job is left as it is. Refused for job types that are not safe to repeat unchanged (firmware and file transfers, ADD_OBJECT, FACTORY_RESET, PARAMETER_DISCOVERY), for jobs managed by a rollout, order, onboarding or the system, and for a job whose payload held a secret, which is erased when a job finishes. Audited as JobRetried."
+      parameters: [{ name: command_key, in: path, required: true, schema: { type: string } }]
+      responses:
+        "202": { description: The new job, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "403": { description: "Missing the permission this job type needs, or the payload writes a protected parameter" }
+        "404": { description: Not found }
+        "409": { description: "Not retryable (the body says why)" }
+
+  # --- Bulk operations ---
+  /api/v1/bulk-operations:
+    get:
+      tags: [Bulk operations]
+      summary: List bulk operations, newest first
+      description: "A bulk operation is the record of one bulk action or template apply. A scoped operator sees an operation only through the devices in their scope: counts cover those devices alone."
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, required: [items, total], properties: { items: { type: array, items: { $ref: "#/components/schemas/BulkOperation" } }, total: { type: integer } } } } } }
+
+  /api/v1/bulk-operations/{id}:
+    get:
+      tags: [Bulk operations]
+      summary: One bulk operation with the latest job of each device
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BulkOperationDetail" } } } }
+        "404": { description: "Not found, or no device of it is in the caller's scope" }
+
+  /api/v1/bulk-operations/{id}/cancel:
+    post:
+      tags: [Bulk operations]
+      summary: Cancel the operation's jobs that are still queued
+      description: "Jobs already sent to a device are left to finish. Needs bulk_actions, or template.manage for a template apply."
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: The operation as it now stands
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/BulkOperationDetail"
+                  - { type: object, required: [cancelled], properties: { cancelled: { type: integer, description: Jobs cancelled by this call } } }
+        "404": { description: Not found }
+
+  /api/v1/bulk-operations/{id}/retry-failed:
+    post:
+      tags: [Bulk operations]
+      summary: Queue a new job for every device whose job failed, timed out or was cancelled
+      description: "Each retried item then follows its new job. A device that was never queued is not retried. Needs bulk_actions, or template.manage for a template apply."
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "202":
+          description: The operation as it now stands
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/BulkOperationDetail"
+                  - type: object
+                    required: [retried, skipped]
+                    properties:
+                      retried: { type: integer }
+                      skipped: { type: object, additionalProperties: { type: integer }, description: "Failed items left as they were, counted by reason" }
+        "404": { description: Not found }
+
   # --- Device Groups ---
   /api/v1/device-groups:
     post:
@@ -3343,9 +3428,57 @@ components:
         summary: { type: string }
         body: { type: string, nullable: true }
 
+    BulkOperation:
+      type: object
+      required: [id, kind, action, label, created_by, created_at, state, total, queued, running, succeeded, failed, cancelled, not_queued, unknown]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [BULK_ACTION, TEMPLATE_APPLY] }
+        action: { type: string }
+        label: { type: string, description: "What was asked, in words. Parameter names only, never values." }
+        group_id: { type: string, nullable: true }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        state: { type: string, enum: [RUNNING, FINISHED], description: RUNNING while any job is queued or in flight }
+        total: { type: integer }
+        queued: { type: integer }
+        running: { type: integer }
+        succeeded: { type: integer }
+        failed: { type: integer, description: FAILED or TIMEOUT }
+        cancelled: { type: integer }
+        not_queued: { type: integer, description: Devices for which no job could be created }
+        unknown: { type: integer, description: Devices whose job has been pruned by retention }
+
+    BulkOperationItem:
+      type: object
+      required: [device_id, retries]
+      properties:
+        device_id: { type: string, description: The device ID as requested }
+        oui_serial: { type: string }
+        device_label: { type: string }
+        command_key: { type: string, description: The latest job for this device }
+        job_type: { type: string }
+        job_status: { $ref: "#/components/schemas/JobStatus" }
+        fault_string: { type: string }
+        error: { type: string, description: Why no job was queued }
+        detail: { type: string }
+        retries: { type: integer }
+
+    BulkOperationDetail:
+      type: object
+      required: [operation, items]
+      properties:
+        operation: { $ref: "#/components/schemas/BulkOperation" }
+        items: { type: array, items: { $ref: "#/components/schemas/BulkOperationItem" } }
+
+    JobStatus:
+      type: string
+      enum: [QUEUED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, AWAITING_DIAGNOSTICS_COMPLETE, SUCCESS, FAILED, TIMEOUT, CANCELLED]
+
     BulkActionResponse:
       type: object
       properties:
+        bulk_operation_id: { type: string, description: "The bulk operation recording this fan-out (GET /api/v1/bulk-operations/{id})" }
         action: { type: string }
         requested: { type: integer }
         succeeded: { type: integer }
@@ -3366,7 +3499,7 @@ components:
         command_key: { type: string }
         device_id: { type: string }
         type: { type: string }
-        status: { type: string, enum: [QUEUED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, AWAITING_DIAGNOSTICS_COMPLETE, SUCCESS, FAILED, TIMEOUT] }
+        status: { $ref: "#/components/schemas/JobStatus" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         completed_at: { type: string, format: date-time, nullable: true }

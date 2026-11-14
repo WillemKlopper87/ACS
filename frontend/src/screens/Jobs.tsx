@@ -7,6 +7,10 @@ import { StatusBadge } from "../components/StatusBadge";
 import { durationSeconds, fmtTime, timeAgo } from "../lib/format";
 import { useLive } from "../lib/useLive";
 import { useSlashFocus } from "../lib/hotkeys";
+import { useAuth } from "../auth/useAuth";
+import { canWrite } from "../auth/roles";
+import { toast } from "../lib/toast";
+import { canCancelJob, canRetryJob } from "../lib/jobActions";
 
 export function Jobs() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -35,6 +39,31 @@ export function Jobs() {
   }, [load]);
 
   const [live, setLive] = useLive(() => load(true), 5000);
+  const writable = canWrite(useAuth().role);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  // The server decides what may be cancelled or retried (a job owned by a
+  // rollout or an order is refused there); its reason is shown as it is.
+  const act = useCallback(
+    async (job: Job, action: "cancel" | "retry") => {
+      setBusy(job.command_key);
+      try {
+        if (action === "cancel") {
+          await api.cancelJob(job.command_key);
+          toast(`Cancelled ${job.command_key}`, "success");
+        } else {
+          const fresh = await api.retryJob(job.command_key);
+          toast(`Queued again as ${fresh.command_key}`, "success");
+        }
+        await load(true);
+      } catch (e) {
+        toast(e instanceof ApiError ? e.message : `Could not ${action} the job`, "error");
+      } finally {
+        setBusy(null);
+      }
+    },
+    [load],
+  );
   useSlashFocus(searchRef);
 
   const types = useMemo(() => [...new Set(jobs.map((j) => j.type))].sort(), [jobs]);
@@ -97,8 +126,31 @@ export function Jobs() {
           </span>
         ),
       },
+      {
+        id: "actions",
+        header: "",
+        enableSorting: false,
+        cell: ({ row }) => {
+          const j = row.original;
+          if (canCancelJob(j.status)) {
+            return (
+              <button className="btn" disabled={!writable || busy === j.command_key} onClick={() => act(j, "cancel")} aria-label={`Cancel ${j.command_key}`}>
+                Cancel
+              </button>
+            );
+          }
+          if (canRetryJob(j)) {
+            return (
+              <button className="btn" disabled={!writable || busy === j.command_key} onClick={() => act(j, "retry")} aria-label={`Retry ${j.command_key}`}>
+                Retry
+              </button>
+            );
+          }
+          return null;
+        },
+      },
     ],
-    [],
+    [writable, busy, act],
   );
 
   return (

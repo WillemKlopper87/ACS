@@ -2,6 +2,7 @@ package main
 
 import (
 	"acs/internal/bulkdata"
+	"acs/internal/bulkops"
 	"database/sql"
 	"net/http"
 
@@ -17,6 +18,9 @@ import (
 func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *http.ServeMux {
 	if h.bulkData == nil {
 		h.bulkData = bulkdata.NewRepository(db)
+	}
+	if h.bulkOps == nil {
+		h.bulkOps = bulkops.NewRepository(db, h.jobs)
 	}
 	mux := http.NewServeMux()
 	// route(method, pattern, minRole, fn) wraps a handler with both HTTP
@@ -253,6 +257,16 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("GET", "/api/v1/devices/{id}/jobs", ro, h.listDeviceJobs)
 	route("GET", "/api/v1/jobs", ro, h.listJobs)
 	route("GET", "/api/v1/jobs/{command_key}", ro, h.getJob)
+	// Cancel and retry check the permission the job's own type needs
+	// (jobPermission), so they are gated inside the handler.
+	route("POST", "/api/v1/jobs/{command_key}/cancel", op, h.cancelJob)
+	route("POST", "/api/v1/jobs/{command_key}/retry", op, h.retryJob)
+	// Bulk operations: the record of a bulk action or template apply.
+	// Changing one needs the permission that starting its kind needs.
+	route("GET", "/api/v1/bulk-operations", ro, h.listBulkOperations)
+	route("GET", "/api/v1/bulk-operations/{id}", ro, h.getBulkOperation)
+	route("POST", "/api/v1/bulk-operations/{id}/cancel", op, h.cancelBulkOperation)
+	route("POST", "/api/v1/bulk-operations/{id}/retry-failed", op, h.retryFailedBulkOperation)
 	route("GET", "/api/v1/firmware/images", ro, h.listFirmwareImages)
 	routePerm("POST", "/api/v1/firmware/images", operators.PermFirmwareManage, h.uploadFirmwareImage)
 	mux.HandleFunc("GET /api/v1/firmware/images/{id}/file", h.serveFirmwareFile) // CPE traffic, not an operator — see isPublicRoute, uninstrumented to avoid a per-device-download label blowup
