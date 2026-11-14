@@ -43,6 +43,7 @@ var problemTitles = map[string]string{
 	"ErrGlobalClientsDisabled":  "Global clients disabled",
 	"ErrClientNotCustomerBound": "Client not customer-bound",
 	"ErrTLSRequired":            "TLS required",
+	"ErrSourceNotAllowed":       "Source not allowed",
 	"ErrSecretStoreDisabled":    "Secret store disabled",
 	"ErrSecretHandleInvalid":    "Secret handle invalid",
 	// OAuth 2.0 (RFC 6749 §5.2, RFC 6750 §3.1) codes keep their spelling.

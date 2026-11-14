@@ -159,6 +159,67 @@ if [ -n "${ACS_USP_CLIENT_CA_CERT:-}" ] && [ ! -r "$ACS_USP_CLIENT_CA_CERT" ]; t
   fail "ACS_USP_CLIENT_CA_CERT points to an unreadable file: $ACS_USP_CLIENT_CA_CERT"
 fi
 
+# --- Operator and integration plane (docs/SECURITY-ASSESSMENT-2026-11-14.md, O1).
+# cmd/api and cmd/bssadapter enforce the same rules at startup
+# (backend/internal/config/production.go); checking them here reports every
+# problem at once, before anything is started.
+
+if [ "${ACS_INSECURE_DEV_MODE:-}" = "true" ]; then
+  fail "ACS_INSECURE_DEV_MODE=true is forbidden in production"
+fi
+
+# The BSS adapter: customer-bound OAuth clients only.
+require_nonempty ACS_BSS_OAUTH_SIGNING_SECRET
+if [ -n "${ACS_BSS_API_TOKEN:-}" ]; then
+  fail "ACS_BSS_API_TOKEN must be unset in production: the shared token grants every scope on every account"
+fi
+if [ "${ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS:-}" != "true" ]; then
+  fail "ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true is required in production"
+fi
+
+# ...reachable only from the integration platform's networks.
+if [ -z "${ACS_BSS_ALLOWED_CIDRS:-}" ]; then
+  fail "ACS_BSS_ALLOWED_CIDRS is required in production: list the networks the BSS/NaaS platform calls from"
+else
+  IFS=',' read -r -a bss_cidrs <<< "$ACS_BSS_ALLOWED_CIDRS"
+  for raw in "${bss_cidrs[@]}"; do
+    cidr="${raw//[[:space:]]/}"
+    case "$cidr" in
+      */0)
+        fail "ACS_BSS_ALLOWED_CIDRS must not contain universal network $cidr in production"
+        ;;
+      */*) ;;
+      *)
+        fail "ACS_BSS_ALLOWED_CIDRS entry '$cidr' is not a CIDR (address/prefix)"
+        ;;
+    esac
+  done
+fi
+# The adapter sits on loopback behind the HTTPS ingress (checked above), so
+# the ingress must be trusted to report the caller, or every caller looks
+# like the ingress and the allowlist cannot be applied.
+if [ -z "${ACS_TRUSTED_PROXY_CIDRS:-}" ]; then
+  fail "ACS_TRUSTED_PROXY_CIDRS is required in production: name the ingress proxy so the adapter sees the real caller address"
+fi
+
+# Operators: two-step sign-in for every role that can change devices.
+mfa_roles=",$(printf '%s' "${ACS_MFA_REQUIRED_ROLES:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'),"
+case "$mfa_roles" in
+  *,all,*) ;;
+  *)
+    for role in superadmin manager noc; do
+      case "$mfa_roles" in
+        *",$role,"*) ;;
+        *) fail "ACS_MFA_REQUIRED_ROLES must include $role in production (set it to superadmin,manager,noc or all)" ;;
+      esac
+    done
+    ;;
+esac
+require_nonempty ACS_CREDENTIAL_ENCRYPTION_KEY
+if [ "${ACS_WEBGUI_ALLOW_SAME_ORIGIN:-}" = "true" ]; then
+  fail "ACS_WEBGUI_ALLOW_SAME_ORIGIN=true is forbidden in production: it lets a device's web pages run on the console's origin"
+fi
+
 if [ "$errors" -ne 0 ]; then
   echo "Security preflight FAILED with $errors problem(s)." >&2
   exit 1
@@ -167,5 +228,7 @@ fi
 echo "Security preflight passed: production device transports and operator ingress requirements are configured."
 echo "Operator console/API: one HTTPS public origin -> loopback-only host listeners."
 echo "BSS adapter, USP health/metrics, Grafana and Prometheus remain host-local in this production profile."
+echo "BSS adapter: customer-bound OAuth clients only, no shared token, calls accepted from ACS_BSS_ALLOWED_CIDRS only."
+echo "Operators: two-step sign-in required for ${ACS_MFA_REQUIRED_ROLES}."
 echo "Note: production CWMP rejects the shared fleet Digest username; provision per-device Digest credentials or mTLS before connecting established CPEs."
 echo "Note: production USP requires each agent certificate to be pre-bound to its device, EndpointID, and MQTT response topic in usp_transport_principals."

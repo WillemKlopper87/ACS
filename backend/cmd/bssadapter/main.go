@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -76,6 +77,31 @@ func main() {
 	}
 	if v := os.Getenv("ACS_TRUSTED_PROXY_CIDRS"); v != "" {
 		logger.Info("forwarding headers are trusted from these proxies only", "ACS_TRUSTED_PROXY_CIDRS", v)
+	}
+
+	// The production profile makes the strict settings a property of the
+	// deployment rather than something to remember per host
+	// (docs/SECURITY-ASSESSMENT-2026-11-14.md, O1).
+	profile, err := config.DeploymentProfile(os.Getenv)
+	if err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if profile == config.ProfileProduction {
+		if problems := config.BSSProductionProblems(os.Getenv); len(problems) > 0 {
+			logger.Error(config.FormatProblems("cmd/bssadapter", problems))
+			os.Exit(1)
+		}
+	}
+	// Source networks the integration surface accepts calls from. Unset
+	// (lab) accepts any; production requires it.
+	allowedSources, err := netguard.ParseCIDRList(strings.ReplaceAll(os.Getenv("ACS_BSS_ALLOWED_CIDRS"), " ", ""))
+	if err != nil {
+		logger.Error("ACS_BSS_ALLOWED_CIDRS is invalid", "err", err)
+		os.Exit(1)
+	}
+	if len(allowedSources) > 0 {
+		logger.Info("BSS and TMF routes accept calls from these networks only", "ACS_BSS_ALLOWED_CIDRS", os.Getenv("ACS_BSS_ALLOWED_CIDRS"))
 	}
 
 	dsn := os.Getenv("ACS_POSTGRES_DSN")
@@ -276,7 +302,7 @@ func main() {
 		// missing token is rejected (401) without ever touching the rate
 		// limiter — otherwise an attacker could spray distinct bogus
 		// tokens to dodge a per-token bucket entirely.
-		Handler:           withProblemMediaType(withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(mux)))),
+		Handler:           withProblemMediaType(withSourceAllowlist(allowedSources, logger, withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(mux))))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second, // every BSS route is a small JSON exchange
 		WriteTimeout:      60 * time.Second,
@@ -418,6 +444,37 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 		}
 
 		writeError(w, http.StatusUnauthorized, "ErrUnauthorized", "missing or invalid Authorization header")
+	})
+}
+
+// withSourceAllowlist refuses calls to the integration surface (/bss/v1
+// and /tmf-api) from outside the allowed networks, before authentication,
+// so a stolen client secret is of no use from anywhere else and a caller
+// outside learns nothing about which credentials exist. An empty list
+// allows every source. Health and metrics are not part of the integration
+// surface and are left to the listener's own binding.
+//
+// The caller's address is clientip.Of: the connecting address, or the one
+// a proxy listed in ACS_TRUSTED_PROXY_CIDRS reports.
+func withSourceAllowlist(allowed []*net.IPNet, logger *slog.Logger, next http.Handler) http.Handler {
+	if len(allowed) == 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/bss/v1/") && !strings.HasPrefix(r.URL.Path, "/tmf-api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		source := clientip.Of(r)
+		ip := net.ParseIP(source)
+		for _, n := range allowed {
+			if ip != nil && n.Contains(ip) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		logger.Warn("BSS call refused: source is outside ACS_BSS_ALLOWED_CIDRS", "source", source, "path", r.URL.Path)
+		writeError(w, http.StatusForbidden, "ErrSourceNotAllowed", "calls are not accepted from this network")
 	})
 }
 

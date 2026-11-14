@@ -30,6 +30,15 @@ export ACS_USP_HTTP_ADDR="127.0.0.1:8092"
 export ACS_FRONTEND_BIND="127.0.0.1"
 export ACS_GRAFANA_PUBLIC=0
 export ACS_PROMETHEUS_PUBLIC=0
+export ACS_BSS_OAUTH_SIGNING_SECRET="ci-only-bss-oauth-secret-0123456789abcdef"
+export ACS_BSS_API_TOKEN=""
+export ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true
+export ACS_BSS_ALLOWED_CIDRS="198.51.100.0/24, 2001:db8:51::/64"
+export ACS_TRUSTED_PROXY_CIDRS="127.0.0.1/32"
+export ACS_MFA_REQUIRED_ROLES="superadmin,manager,noc"
+export ACS_CREDENTIAL_ENCRYPTION_KEY="ci-only-encryption-key-0123456789"
+export ACS_WEBGUI_ALLOW_SAME_ORIGIN=false
+export ACS_INSECURE_DEV_MODE=""
 
 expect_pass() {
   local name="$1"
@@ -75,5 +84,24 @@ expect_fail "universal IPv4 USP CIDR" env ACS_USP_ALLOWED_CIDRS=0.0.0.0/0 bash "
 expect_fail "universal IPv6 USP CIDR" env ACS_USP_ALLOWED_CIDRS=::/0 bash "$PREFLIGHT"
 expect_fail "missing CWMP certificate" env ACS_TLS_CERT= bash "$PREFLIGHT"
 expect_fail "missing USP client CA" env ACS_USP_CLIENT_CA_CERT= bash "$PREFLIGHT"
+
+expect_pass "two-step sign-in required for all roles" env ACS_MFA_REQUIRED_ROLES=all bash "$PREFLIGHT"
+expect_pass "role list with spaces and capitals" env ACS_MFA_REQUIRED_ROLES="SuperAdmin, manager, noc, readonly" bash "$PREFLIGHT"
+
+expect_fail "insecure dev mode" env ACS_INSECURE_DEV_MODE=true bash "$PREFLIGHT"
+expect_fail "legacy shared BSS token still set" env ACS_BSS_API_TOKEN=legacy-shared-token-0123456789 bash "$PREFLIGHT"
+expect_fail "global BSS clients accepted" env ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=false bash "$PREFLIGHT"
+expect_fail "customer-bound flag unset" env ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS= bash "$PREFLIGHT"
+expect_fail "no BSS OAuth signing secret" env ACS_BSS_OAUTH_SIGNING_SECRET= bash "$PREFLIGHT"
+expect_fail "no BSS source networks" env ACS_BSS_ALLOWED_CIDRS= bash "$PREFLIGHT"
+expect_fail "universal IPv4 BSS source network" env ACS_BSS_ALLOWED_CIDRS=0.0.0.0/0 bash "$PREFLIGHT"
+expect_fail "universal IPv6 BSS source network" env ACS_BSS_ALLOWED_CIDRS=198.51.100.0/24,::/0 bash "$PREFLIGHT"
+expect_fail "BSS source that is not a CIDR" env ACS_BSS_ALLOWED_CIDRS=198.51.100.7 bash "$PREFLIGHT"
+expect_fail "ingress proxy not trusted" env ACS_TRUSTED_PROXY_CIDRS= bash "$PREFLIGHT"
+expect_fail "no two-step sign-in requirement" env ACS_MFA_REQUIRED_ROLES= bash "$PREFLIGHT"
+expect_fail "two-step sign-in for superadmin only" env ACS_MFA_REQUIRED_ROLES=superadmin bash "$PREFLIGHT"
+expect_fail "two-step sign-in missing noc" env ACS_MFA_REQUIRED_ROLES=superadmin,manager bash "$PREFLIGHT"
+expect_fail "no credential encryption key" env ACS_CREDENTIAL_ENCRYPTION_KEY= bash "$PREFLIGHT"
+expect_fail "device web GUI sandbox disabled" env ACS_WEBGUI_ALLOW_SAME_ORIGIN=true bash "$PREFLIGHT"
 
 echo "security preflight regression matrix passed"

@@ -618,7 +618,7 @@ components:
     ProblemCode:
       type: string
       description: "Closed list. New codes come only with a new problem contract version."
-      enum: [ErrInvalidRequest, ErrNotFound, ErrInternal, ErrACSUnreachable, ErrDeviceNotMapped, ErrDeviceNotFound, ErrUnsupportedAction, ErrUnauthorized, ErrJobNotFound, ErrInvalidRelation, ErrConflict, ErrServiceTerminated, ErrServiceNotActive, ErrRoleAlreadyAssigned, ErrDeviceAlreadyAssigned, ErrReplayNeedsCustomer, ErrRateLimited, ErrPreProvisionRefused, ErrIdempotencyKeyReused, ErrIdempotencyKeyInFlight, ErrSaleWrongState, ErrGlobalClientsDisabled, ErrClientNotCustomerBound, ErrTLSRequired, ErrSecretStoreDisabled, ErrSecretHandleInvalid, invalid_token, insufficient_scope, invalid_request, invalid_client, invalid_scope, unsupported_grant_type, server_error]
+      enum: [ErrInvalidRequest, ErrNotFound, ErrInternal, ErrACSUnreachable, ErrDeviceNotMapped, ErrDeviceNotFound, ErrUnsupportedAction, ErrUnauthorized, ErrJobNotFound, ErrInvalidRelation, ErrConflict, ErrServiceTerminated, ErrServiceNotActive, ErrRoleAlreadyAssigned, ErrDeviceAlreadyAssigned, ErrReplayNeedsCustomer, ErrRateLimited, ErrPreProvisionRefused, ErrIdempotencyKeyReused, ErrIdempotencyKeyInFlight, ErrSaleWrongState, ErrGlobalClientsDisabled, ErrClientNotCustomerBound, ErrTLSRequired, ErrSourceNotAllowed, ErrSecretStoreDisabled, ErrSecretHandleInvalid, invalid_token, insufficient_scope, invalid_request, invalid_client, invalid_scope, unsupported_grant_type, server_error]
 
     Mapping:
       type: object

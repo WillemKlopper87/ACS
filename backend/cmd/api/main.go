@@ -72,6 +72,21 @@ func main() {
 		logger.Info("forwarding headers are trusted from these proxies only", "ACS_TRUSTED_PROXY_CIDRS", v)
 	}
 
+	// The production profile requires the strict operator-side settings
+	// (docs/SECURITY-ASSESSMENT-2026-11-14.md, O1): two-step sign-in for
+	// every role that can change devices, and no lab switches.
+	profile, err := config.DeploymentProfile(os.Getenv)
+	if err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if profile == config.ProfileProduction {
+		if problems := config.APIProductionProblems(os.Getenv); len(problems) > 0 {
+			logger.Error(config.FormatProblems("cmd/api", problems))
+			os.Exit(1)
+		}
+	}
+
 	dsn := os.Getenv("ACS_POSTGRES_DSN")
 	if dsn == "" {
 		logger.Error("ACS_POSTGRES_DSN is required")

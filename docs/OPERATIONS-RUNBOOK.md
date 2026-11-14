@@ -226,6 +226,32 @@ taken.
   cmd/acs. There is no re-encryption tool; rotating it orphans stored
   credential ciphertexts — rotate device credentials afterwards.
 
+## Production profile: operator and integration plane
+
+Under `ACS_DEPLOYMENT_PROFILE=production`, `cmd/api` and `cmd/bssadapter`
+refuse to start unless the strict settings are in place, and say which are
+missing. `scripts/gen-production-env.sh` writes them;
+`scripts/security-preflight.sh` checks them before anything starts.
+
+| Setting | Required value | If it is wrong |
+|---|---|---|
+| `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS` | `true` | Adapter does not start. Fleet-wide and account-listed OAuth clients stop working: re-issue each integration a client bound to its customer (BSS / NaaS → OAuth2 clients). |
+| `ACS_BSS_API_TOKEN` | unset | Adapter does not start. Anything still using the shared token must move to an OAuth client first. |
+| `ACS_BSS_ALLOWED_CIDRS` | the platform's source networks, no `/0` | Adapter does not start. A caller outside the list gets `403 ErrSourceNotAllowed` and a `source is outside ACS_BSS_ALLOWED_CIDRS` warning is logged with its address. |
+| `ACS_TRUSTED_PROXY_CIDRS` | the ingress proxy | Adapter does not start (when on loopback without its own TLS). If set wrongly, every caller looks like the proxy and is refused. |
+| `ACS_MFA_REQUIRED_ROLES` | `superadmin,manager,noc` or `all` | API does not start. Operators in those roles set up two-step sign-in at their next sign-in. |
+| `ACS_WEBGUI_ALLOW_SAME_ORIGIN` | not `true` | API does not start. |
+| `ACS_INSECURE_DEV_MODE` | not `true` | Neither starts. |
+
+**Moving an existing production host onto this:** before restarting, (1) make
+sure every BSS integration uses a customer-bound OAuth client, (2) find the
+platform's source addresses (the adapter's access log, or ask the platform
+team) and export `ACS_PRODUCTION_BSS_ALLOWED_CIDRS`, (3) tell operators they
+will be asked to set up an authenticator app at next sign-in, then re-run
+`gen-production-env.sh` and `start-production.sh`. The NaaS platform changing
+its egress addresses is now an outage for the integration until the list is
+updated: agree a notice period with them.
+
 ## Operator two-step sign-in (MFA)
 
 Operators can add a code from an authenticator app as a second sign-in

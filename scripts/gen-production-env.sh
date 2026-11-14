@@ -12,6 +12,9 @@ SECRETS_FILE="${HOME}/.acs-secrets.env"
 : "${ACS_PRODUCTION_TLS_CERT:?set ACS_PRODUCTION_TLS_CERT to the server full-chain PEM}"
 : "${ACS_PRODUCTION_TLS_KEY:?set ACS_PRODUCTION_TLS_KEY to the server private-key PEM}"
 : "${ACS_PRODUCTION_USP_CLIENT_CA_CERT:?set ACS_PRODUCTION_USP_CLIENT_CA_CERT to the USP agent client CA PEM}"
+# The networks the BSS/NaaS platform calls the adapter from. The adapter
+# answers its integration routes to these only.
+: "${ACS_PRODUCTION_BSS_ALLOWED_CIDRS:?set ACS_PRODUCTION_BSS_ALLOWED_CIDRS to the source CIDRs of the BSS/NaaS platform}"
 
 case "$ACS_PRODUCTION_BIND_ADDRESS" in
   0.0.0.0|::|"[::]"|"")
@@ -57,6 +60,23 @@ upsert_export ACS_USP_ALLOWED_CIDRS "$ACS_PRODUCTION_ALLOWED_CIDRS"
 upsert_export ACS_AUTH_ALLOW_BASIC "false"
 upsert_export ACS_CWMP_ALLOW_SHARED_ESTABLISHED "false"
 
+# Operator and integration plane (docs/SECURITY-ASSESSMENT-2026-11-14.md, O1).
+# cmd/api and cmd/bssadapter refuse to start under the production profile
+# without these.
+#
+# The adapter: customer-bound OAuth clients only, no shared token, calls
+# accepted only from the platform's networks, listening on loopback behind
+# the HTTPS ingress, which is the one proxy trusted to report the caller.
+upsert_export ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS "true"
+upsert_export ACS_BSS_API_TOKEN ""
+upsert_export ACS_BSS_ADDR "127.0.0.1:8090"
+upsert_export ACS_BSS_ALLOWED_CIDRS "$ACS_PRODUCTION_BSS_ALLOWED_CIDRS"
+upsert_export ACS_TRUSTED_PROXY_CIDRS "${ACS_PRODUCTION_TRUSTED_PROXY_CIDRS:-127.0.0.1/32,::1/128}"
+# The console: two-step sign-in for every role that can change devices,
+# and device web pages kept in their sandbox.
+upsert_export ACS_MFA_REQUIRED_ROLES "${ACS_PRODUCTION_MFA_REQUIRED_ROLES:-superadmin,manager,noc}"
+upsert_export ACS_WEBGUI_ALLOW_SAME_ORIGIN "false"
+
 chmod 600 "$SECRETS_FILE"
 # Regenerate the systemd companion from the final persisted values.
 # shellcheck disable=SC1091
@@ -68,3 +88,5 @@ echo "  allowed CIDRs: $ACS_PRODUCTION_ALLOWED_CIDRS"
 echo "  CWMP: https://${ACS_PRODUCTION_BIND_ADDRESS}:7547/cwmp"
 echo "  USP WebSocket: wss://${ACS_PRODUCTION_BIND_ADDRESS}:9877/usp"
 echo "  USP MQTT TLS: ${ACS_PRODUCTION_BIND_ADDRESS}:8883"
+echo "  BSS adapter: customer-bound OAuth clients only, from $ACS_PRODUCTION_BSS_ALLOWED_CIDRS"
+echo "  Operators: two-step sign-in required for ${ACS_PRODUCTION_MFA_REQUIRED_ROLES:-superadmin,manager,noc}"

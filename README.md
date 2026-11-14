@@ -46,8 +46,16 @@ export ACS_PRODUCTION_ALLOWED_CIDRS=10.30.0.0/16,10.40.0.0/16
 export ACS_PRODUCTION_TLS_CERT=/etc/letsencrypt/live/acs.example/fullchain.pem
 export ACS_PRODUCTION_TLS_KEY=/etc/letsencrypt/live/acs.example/privkey.pem
 export ACS_PRODUCTION_USP_CLIENT_CA_CERT=/etc/acs/tls/usp-client-ca.pem
+export ACS_PRODUCTION_BSS_ALLOWED_CIDRS=198.51.100.0/24   # where the BSS/NaaS platform calls from
 source scripts/gen-production-env.sh
 ```
+
+The production profile also covers the operator and integration plane, and
+`cmd/api` and `cmd/bssadapter` refuse to start without it: the BSS adapter
+accepts customer-bound OAuth clients only (no shared token), answers its
+integration routes only to `ACS_BSS_ALLOWED_CIDRS`, and every operator role
+that can change devices must use two-step sign-in. `scripts/security-preflight.sh`
+reports every missing setting at once.
 
 This requires readable TLS material, refuses wildcard listener addresses,
 uses TLS 1.2 or newer, disables Basic/plaintext transport, restricts CWMP and USP
@@ -85,6 +93,8 @@ reverse proxy in front of the API and console.
 |---|---|---|
 | `ACS_JWT_SIGNING_SECRET` (≥32 B) | api | Operator JWTs, browser tickets, transfer-URL tokens |
 | `ACS_CREDENTIAL_ENCRYPTION_KEY` (≥16 B) | api | Device/CLI/VPN credentials at rest; operators' two-step sign-in secrets |
+| `ACS_BSS_ALLOWED_CIDRS` (required in production) | bssadapter | Source networks the `/bss/v1` and `/tmf-api` routes accept calls from; others get `403 ErrSourceNotAllowed` before authentication. Unset in lab: any source. Behind a proxy, set `ACS_TRUSTED_PROXY_CIDRS` so the real caller is seen. |
+| `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS` (required `true` in production) | bssadapter | Accept only OAuth clients bound to one customer: no shared token, no fleet-wide client. |
 | `ACS_WEBGUI_ALLOW_SAME_ORIGIN` (optional) | api | `true` turns off the sandbox on device web pages relayed by the web-GUI proxy. Lab only: without the sandbox a device's scripts run on the API's origin (`docs/SECURITY-ASSESSMENT-2026-11-14.md`, F1). |
 | `ACS_MFA_REQUIRED_ROLES` (optional) | api | Roles that must use two-step sign-in: a comma-separated list (`superadmin,manager`) or `all`. Unset: each operator chooses. Needs `ACS_CREDENTIAL_ENCRYPTION_KEY`. |
 | `ACS_INTERNAL_SERVICE_TOKEN` (≥32 B) | api, bssadapter | Adapter → API machine identity (narrow route allowlist) |
