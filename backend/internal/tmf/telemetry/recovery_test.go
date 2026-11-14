@@ -1,6 +1,7 @@
 package telemetry_test
 
 import (
+	"acs/internal/accounts/accountstest"
 	"context"
 	"os"
 	"strings"
@@ -35,7 +36,7 @@ func TestRecoveryFollowsAFault(t *testing.T) {
 	const device = "bbbbbbbb-0000-0000-0000-000000000001"
 	for _, q := range []string{
 		`INSERT INTO devices (id, oui_serial) VALUES ($1, 'A4FC77+X+REC01')`,
-		`INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, status, role) VALUES (gen_random_uuid(), 'acct-rec', $1, 'A4FC77+X+REC01', 'ACTIVE', 'gateway')`,
+		accountstest.EnsureCTE("'acct-rec'") + `INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, status, role) VALUES (gen_random_uuid(), 'acct-rec', (SELECT id FROM acct), $1, 'A4FC77+X+REC01', 'ACTIVE', 'gateway')`,
 		`INSERT INTO jobs (id, command_key, device_id, type, status, payload) VALUES ('cccccccc-0000-0000-0000-000000000001', 'ck-fault', $1, 'SET_PARAMETER', 'FAILED', '{}')`,
 	} {
 		if _, err := db.ExecContext(ctx, q, device); err != nil {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts/accountstest"
 	"database/sql"
 	"strings"
 	"testing"
@@ -71,8 +72,8 @@ func TestIntegration_SaleLifecycle(t *testing.T) {
 		if len(role) > 0 {
 			mapRole = role[0]
 		}
-		exec(`INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, service_plan, status, assigned_at)
-			SELECT gen_random_uuid(), $1, id, oui_serial, $3, 'HOME', 'ACTIVE', now() FROM devices WHERE id = $2`, account, device, mapRole)
+		exec(accountstest.EnsureCTE("$1")+`INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, role, service_plan, status, assigned_at)
+			SELECT gen_random_uuid(), $1, (SELECT id FROM acct), id, oui_serial, $3, 'HOME', 'ACTIVE', now() FROM devices WHERE id = $2`, account, device, mapRole)
 		return sale, device
 	}
 	name := "Thandi Nkosi"

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"acs/internal/accounts/accountstest"
 	"context"
 	"database/sql"
 	"os"
@@ -63,9 +64,9 @@ func TestMigration0052_AssignmentSchema(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `INSERT INTO devices (id, oui_serial) VALUES ('11111111-1111-1111-1111-111111111111', '001349-NR7101-A')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `
-		INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, status)
-		VALUES ('22222222-2222-2222-2222-222222222222', 'acct-1', '11111111-1111-1111-1111-111111111111', '001349-NR7101-A', 'ACTIVE')`); err != nil {
+	if _, err := db.ExecContext(ctx, accountstest.EnsureCTE("'acct-1'")+`
+		INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, status)
+		VALUES ('22222222-2222-2222-2222-222222222222', 'acct-1', (SELECT id FROM acct), '11111111-1111-1111-1111-111111111111', '001349-NR7101-A', 'ACTIVE')`); err != nil {
 		t.Fatal(err)
 	}
 	var role string
@@ -91,13 +92,13 @@ func TestMigration0052_RoleUniqueRejectsSecondGateway(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	first := `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, status, role)
-	          VALUES ('44444444-4444-4444-4444-444444444444', 'acct-2', '33333330-3333-3333-3333-333333333333', '001349-NR7101-B', 'ACTIVE', 'gateway')`
+	first := accountstest.EnsureCTE("'acct-2'") + `INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, status, role)
+	          VALUES ('44444444-4444-4444-4444-444444444444', 'acct-2', (SELECT id FROM acct), '33333330-3333-3333-3333-333333333333', '001349-NR7101-B', 'ACTIVE', 'gateway')`
 	if _, err := db.ExecContext(ctx, first); err != nil {
 		t.Fatal(err)
 	}
-	second := `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, status, role)
-	           VALUES ('55555555-5555-5555-5555-555555555555', 'acct-2', '33333331-3333-3333-3333-333333333333', '001349-NR7101-C', 'ACTIVE', 'gateway')`
+	second := accountstest.EnsureCTE("'acct-2'") + `INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, status, role)
+	           VALUES ('55555555-5555-5555-5555-555555555555', 'acct-2', (SELECT id FROM acct), '33333331-3333-3333-3333-333333333333', '001349-NR7101-C', 'ACTIVE', 'gateway')`
 	if _, err := db.ExecContext(ctx, second); err == nil {
 		t.Fatal("second active gateway for the same account was accepted; the role-unique index is not enforcing")
 	}

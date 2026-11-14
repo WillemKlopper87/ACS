@@ -1027,7 +1027,8 @@ func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
 func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID, action, deviceID string, params []bss.ParameterWrite) (commandKey string, err error) {
 	// Write-ahead: the order's intent, including exactly what dispatch
 	// would send, is durable before dispatch is attempted (design S3).
-	if err := h.mappings.InsertPending(ctx, externalOrderID, accountID, action, deviceID, params); err != nil {
+	orderID, err := h.mappings.InsertPending(ctx, externalOrderID, accountID, action, deviceID, params)
+	if err != nil {
 		// ErrOrderAlreadyExists is the expected idempotent-retry race --
 		// the caller routes it to its own existing-order response, not
 		// an error worth logging here. Any other InsertPending failure
@@ -1041,7 +1042,7 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 
 	commandKey, err = h.acs.SetParametersWithIdempotency(ctx, deviceID, params, "bss:"+externalOrderID+":set-parameters")
 	if err != nil {
-		if markErr := h.mappings.MarkDispatchFailed(ctx, externalOrderID, err.Error()); markErr != nil {
+		if markErr := h.mappings.MarkDispatchFailed(ctx, orderID, err.Error()); markErr != nil {
 			h.logger.Error("failed to record dispatch failure", "err", markErr, "external_order_id", externalOrderID)
 		}
 		// ErrACSUnreachable maps to its own 502 at the caller with no
@@ -1061,7 +1062,7 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 	// for it, which can double-dispatch in this narrow window (design S3's
 	// disclosed residual: one UPDATE statement wide, not the open-ended
 	// "any future BSS retry" window this design replaces).
-	if err := h.mappings.MarkDispatched(ctx, externalOrderID, commandKey); err != nil {
+	if err := h.mappings.MarkDispatched(ctx, orderID, commandKey); err != nil {
 		h.logger.Error("failed to record order dispatched -- reconciler retry may double-dispatch",
 			"err", err, "external_order_id", externalOrderID, "command_key", commandKey)
 	}

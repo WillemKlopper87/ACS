@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"acs/internal/accounts"
 )
 
 // IdempotencyTTL is how long a completed Idempotency-Key answers a retry.
@@ -34,12 +36,16 @@ type IdempotentResponse struct {
 // request finished, ErrIdempotencyInFlight while it runs, and
 // ErrIdempotencyMismatch for another request under the same key.
 func (r *Repository) BeginIdempotent(ctx context.Context, accountID, key, operation, requestHash string) (*IdempotentResponse, error) {
-	if _, err := r.db.ExecContext(ctx, `DELETE FROM bss_idempotency_keys WHERE account_id = $1 AND key = $2 AND created_at < now() - make_interval(secs => $3::float8)`,
-		accountID, key, IdempotencyTTL.Seconds()); err != nil {
+	accountKey, err := accounts.Ensure(ctx, r.db, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM bss_idempotency_keys WHERE account_key = $1 AND key = $2 AND created_at < now() - make_interval(secs => $3::float8)`,
+		accountKey, key, IdempotencyTTL.Seconds()); err != nil {
 		return nil, fmt.Errorf("expire idempotency key: %w", err)
 	}
-	res, err := r.db.ExecContext(ctx, `INSERT INTO bss_idempotency_keys (account_id, key, operation, request_hash) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (account_id, key) DO NOTHING`, accountID, key, operation, requestHash)
+	res, err := r.db.ExecContext(ctx, `INSERT INTO bss_idempotency_keys (account_key, key, operation, request_hash, account_id) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (account_key, key) DO NOTHING`, accountKey, key, operation, requestHash, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("claim idempotency key: %w", err)
 	}
@@ -52,8 +58,8 @@ func (r *Repository) BeginIdempotent(ctx context.Context, accountID, key, operat
 		body     []byte
 		location sql.NullString
 	)
-	err = r.db.QueryRowContext(ctx, `SELECT operation, request_hash, status, response, location FROM bss_idempotency_keys WHERE account_id = $1 AND key = $2`,
-		accountID, key).Scan(&op, &hash, &status, &body, &location)
+	err = r.db.QueryRowContext(ctx, `SELECT operation, request_hash, status, response, location FROM bss_idempotency_keys WHERE account_key = $1 AND key = $2`,
+		accountKey, key).Scan(&op, &hash, &status, &body, &location)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrIdempotencyInFlight // released between the insert and the read; retry
 	}
@@ -71,8 +77,12 @@ func (r *Repository) BeginIdempotent(ctx context.Context, accountID, key, operat
 
 // CompleteIdempotent stores the response a claimed key answers retries with.
 func (r *Repository) CompleteIdempotent(ctx context.Context, accountID, key string, resp IdempotentResponse) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE bss_idempotency_keys SET status = $3, response = $4, location = NULLIF($5, ''), completed_at = now()
-		WHERE account_id = $1 AND key = $2`, accountID, key, resp.Status, []byte(resp.Body), resp.Location)
+	accountKey, err := accounts.Resolve(ctx, r.db, accountID)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.ExecContext(ctx, `UPDATE bss_idempotency_keys SET status = $3, response = $4, location = NULLIF($5, ''), completed_at = now()
+		WHERE account_key = $1 AND key = $2`, accountKey, key, resp.Status, []byte(resp.Body), resp.Location)
 	if err != nil {
 		return fmt.Errorf("complete idempotency key: %w", err)
 	}
@@ -82,6 +92,10 @@ func (r *Repository) CompleteIdempotent(ctx context.Context, accountID, key stri
 // ReleaseIdempotent frees a claimed key without a stored answer (the
 // request failed on the server's side), so a retry runs again.
 func (r *Repository) ReleaseIdempotent(ctx context.Context, accountID, key string) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM bss_idempotency_keys WHERE account_id = $1 AND key = $2 AND status IS NULL`, accountID, key)
+	accountKey, err := accounts.Resolve(ctx, r.db, accountID)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.ExecContext(ctx, `DELETE FROM bss_idempotency_keys WHERE account_key = $1 AND key = $2 AND status IS NULL`, accountKey, key)
 	return err
 }

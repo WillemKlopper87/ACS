@@ -1,6 +1,7 @@
 package bss
 
 import (
+	"acs/internal/accounts/accountstest"
 	"context"
 	"errors"
 	"os"
@@ -45,7 +46,7 @@ func seedDevice(t *testing.T, ctx context.Context, r *Repository, id, ouiSerial 
 // write path, so the read-side tests do not depend on Task 3.
 func rawAssign(t *testing.T, ctx context.Context, r *Repository, id, accountID, deviceID, ouiSerial, role string, released bool) {
 	t.Helper()
-	q := `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, status, role) VALUES ($1, $2, $3, $4, 'ACTIVE', $5)`
+	q := accountstest.EnsureCTE("$2") + `INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, status, role) VALUES ($1, $2, (SELECT id FROM acct), $3, $4, 'ACTIVE', $5)`
 	if _, err := r.db.ExecContext(ctx, q, id, accountID, deviceID, ouiSerial, role); err != nil {
 		t.Fatalf("raw assign: %v", err)
 	}

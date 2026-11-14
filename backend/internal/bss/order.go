@@ -2,11 +2,15 @@ package bss
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
+
+	"acs/internal/accounts"
 )
 
 // Order status values (design S3). PENDING_DISPATCH is written before
@@ -37,6 +41,9 @@ var ErrOrderAlreadyExists = errors.New("an order with this external_order_id alr
 // original attempt would have sent, never re-resolving the account's
 // active device or re-running Translate.
 type OrderRecord struct {
+	// ID is the order's internal key. State changes address the order by
+	// it; ExternalOrderID is the integration's own identifier.
+	ID              string
 	ExternalOrderID string
 	AccountID       string
 	Action          string
@@ -56,7 +63,7 @@ type OrderRecord struct {
 // external_order_id. Returns nil, nil if it hasn't been seen before.
 func (r *Repository) FindOrder(ctx context.Context, externalOrderID string) (*OrderRecord, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
+		SELECT id::text, external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
 		FROM bss_orders WHERE external_order_id = $1
 	`, externalOrderID)
 	return scanOrder(row, "find order")
@@ -68,7 +75,7 @@ func (r *Repository) FindOrder(ctx context.Context, externalOrderID string) (*Or
 // client's side channel into arbitrary operator jobs.
 func (r *Repository) FindOrderByCommandKey(ctx context.Context, commandKey string) (*OrderRecord, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
+		SELECT id::text, external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
 		FROM bss_orders WHERE command_key = $1
 	`, commandKey)
 	return scanOrder(row, "find order by command key")
@@ -84,11 +91,18 @@ func (r *Repository) OrdersForDevice(ctx context.Context, deviceID string, limit
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	accountKey := ""
+	if id := firstAccountID(accountIDs); id != "" {
+		var err error
+		if accountKey, err = accounts.Resolve(ctx, r.db, id); err != nil {
+			return nil, err
+		}
+	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, COALESCE(last_error, ''), created_at
+		SELECT id::text, external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, COALESCE(last_error, ''), created_at
 		FROM bss_orders WHERE device_id = $1 AND status = $2
-		  AND ($4 = '' OR account_id = $4)
-		ORDER BY created_at DESC LIMIT $3`, deviceID, OrderStatusDispatched, limit, firstAccountID(accountIDs))
+		  AND ($4 = '' OR account_key = NULLIF($4, '')::uuid)
+		ORDER BY created_at DESC LIMIT $3`, deviceID, OrderStatusDispatched, limit, accountKey)
 	if err != nil {
 		return nil, fmt.Errorf("list orders for device: %w", err)
 	}
@@ -99,7 +113,7 @@ func (r *Repository) OrdersForDevice(ctx context.Context, deviceID string, limit
 		var rec OrderRecord
 		var deviceIDCol, commandKey sql.NullString
 		var paramsJSON []byte
-		if err := rows.Scan(&rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceIDCol, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &rec.LastError, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceIDCol, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &rec.LastError, &rec.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan order for device: %w", err)
 		}
 		rec.DeviceID = deviceIDCol.String
@@ -129,7 +143,7 @@ func scanOrder(row orderScanner, operation string) (*OrderRecord, error) {
 	var rec OrderRecord
 	var deviceID, commandKey, lastError sql.NullString
 	var paramsJSON []byte
-	err := row.Scan(&rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceID, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &lastError)
+	err := row.Scan(&rec.ID, &rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceID, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &lastError)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -163,33 +177,56 @@ func scanOrder(row orderScanner, operation string) (*OrderRecord, error) {
 // (createOrder's own, still in flight when this row was inserted) has
 // resolved. The load-bearing half of that fix is ClaimDuePendingOrders'
 // atomic claim itself, below.
-func (r *Repository) InsertPending(ctx context.Context, externalOrderID, accountID, action, deviceID string, params []ParameterWrite) error {
+func (r *Repository) InsertPending(ctx context.Context, externalOrderID, accountID, action, deviceID string, params []ParameterWrite) (string, error) {
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
-		return fmt.Errorf("marshal order parameters: %w", err)
+		return "", fmt.Errorf("marshal order parameters: %w", err)
 	}
-	_, err = r.db.ExecContext(ctx, `
-		INSERT INTO bss_orders (external_order_id, account_id, action, device_id, parameters, status, last_attempt_at)
-		VALUES ($1, $2, $3, $4, $5, $6, now())
-	`, externalOrderID, accountID, action, deviceID, paramsJSON, OrderStatusPendingDispatch)
+	accountKey, err := accounts.Ensure(ctx, r.db, accountID)
+	if err != nil {
+		return "", err
+	}
+	// order_scope is the account's customer, the namespace the order ID is
+	// unique in. request_hash is a digest of the order as first accepted
+	// (recorded for finding O7; nothing compares it yet).
+	var id string
+	err = r.db.QueryRowContext(ctx, `
+		INSERT INTO bss_orders (external_order_id, account_id, account_key, order_scope, action, device_id, parameters, status, last_attempt_at, request_hash)
+		SELECT $1, $2, a.id, COALESCE(a.customer_id::text, ''), $3, $4, $5, $6, now(), $8
+		  FROM bss_accounts a WHERE a.id = $7::uuid
+		RETURNING id::text
+	`, externalOrderID, accountID, action, deviceID, paramsJSON, OrderStatusPendingDispatch, accountKey,
+		orderRequestHash(action, deviceID, paramsJSON)).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return ErrOrderAlreadyExists
+			return "", ErrOrderAlreadyExists
 		}
-		return fmt.Errorf("insert pending order: %w", err)
+		return "", fmt.Errorf("insert pending order: %w", err)
 	}
-	return nil
+	return id, nil
+}
+
+// orderRequestHash digests what an order asks for: the action, the device
+// and the translated parameter writes.
+func orderRequestHash(action, deviceID string, paramsJSON []byte) string {
+	h := sha256.New()
+	h.Write([]byte(action))
+	h.Write([]byte{0})
+	h.Write([]byte(deviceID))
+	h.Write([]byte{0})
+	h.Write(paramsJSON)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // MarkDispatched records that dispatch succeeded: status DISPATCHED, the
 // real command_key recorded. Guarded on status = PENDING_DISPATCH (final
 // review finding 5) so a DEAD_LETTERED row can never be silently
 // resurrected by a stray or racing dispatch outcome.
-func (r *Repository) MarkDispatched(ctx context.Context, externalOrderID, commandKey string) error {
+func (r *Repository) MarkDispatched(ctx context.Context, orderID, commandKey string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE bss_orders SET status = $2, command_key = $3, last_attempt_at = now()
-		WHERE external_order_id = $1 AND status = $4
-	`, externalOrderID, OrderStatusDispatched, commandKey, OrderStatusPendingDispatch)
+		WHERE id = $1::uuid AND status = $4
+	`, orderID, OrderStatusDispatched, commandKey, OrderStatusPendingDispatch)
 	if err != nil {
 		return fmt.Errorf("mark order dispatched: %w", err)
 	}
@@ -203,13 +240,13 @@ func (r *Repository) MarkDispatched(ctx context.Context, externalOrderID, comman
 // maxDispatchAttempts, in which case it becomes DEAD_LETTERED. Guarded on
 // status = PENDING_DISPATCH (final review finding 5) so a DEAD_LETTERED
 // row can never be silently resurrected.
-func (r *Repository) MarkDispatchFailed(ctx context.Context, externalOrderID, errMsg string) error {
+func (r *Repository) MarkDispatchFailed(ctx context.Context, orderID, errMsg string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE bss_orders
 		SET attempts = attempts + 1, last_attempt_at = now(), last_error = $2,
 		    status = CASE WHEN attempts + 1 >= $3 THEN $4 ELSE status END
-		WHERE external_order_id = $1 AND status = $5
-	`, externalOrderID, errMsg, maxDispatchAttempts, OrderStatusDeadLettered, OrderStatusPendingDispatch)
+		WHERE id = $1::uuid AND status = $5
+	`, orderID, errMsg, maxDispatchAttempts, OrderStatusDeadLettered, OrderStatusPendingDispatch)
 	if err != nil {
 		return fmt.Errorf("mark order dispatch failed: %w", err)
 	}
@@ -253,7 +290,7 @@ func (r *Repository) MarkDispatchFailed(ctx context.Context, externalOrderID, er
 func (r *Repository) ClaimDuePendingOrders(ctx context.Context, limit int) ([]OrderRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		WITH claimed AS (
-			SELECT external_order_id
+			SELECT id
 			FROM bss_orders
 			WHERE status = $1
 			  AND attempts < $2
@@ -265,8 +302,8 @@ func (r *Repository) ClaimDuePendingOrders(ctx context.Context, limit int) ([]Or
 		UPDATE bss_orders o
 		SET last_attempt_at = now()
 		FROM claimed c
-		WHERE o.external_order_id = c.external_order_id
-		RETURNING o.external_order_id, o.account_id, o.action, o.device_id, o.parameters, o.command_key, o.status, o.attempts, o.last_error
+		WHERE o.id = c.id
+		RETURNING o.id::text, o.external_order_id, o.account_id, o.action, o.device_id, o.parameters, o.command_key, o.status, o.attempts, o.last_error
 	`, OrderStatusPendingDispatch, maxDispatchAttempts, limit)
 	if err != nil {
 		return nil, fmt.Errorf("claim due pending orders: %w", err)
@@ -278,7 +315,7 @@ func (r *Repository) ClaimDuePendingOrders(ctx context.Context, limit int) ([]Or
 		var rec OrderRecord
 		var deviceID, commandKey, lastError sql.NullString
 		var paramsJSON []byte
-		if err := rows.Scan(&rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceID, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &lastError); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceID, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &lastError); err != nil {
 			return nil, fmt.Errorf("scan claimed pending order: %w", err)
 		}
 		rec.DeviceID = deviceID.String
@@ -316,7 +353,7 @@ func (r *Repository) ClaimDuePendingOrders(ctx context.Context, limit int) ([]Or
 // there is no automatic requeue; that is an operator's decision.
 func (r *Repository) UnnotifiedOrders(ctx context.Context, limit int) ([]OrderRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
+		SELECT id::text, external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
 		FROM bss_orders WHERE notified_at IS NULL AND status = $1
 		ORDER BY created_at ASC LIMIT $2`, OrderStatusDispatched, limit)
 	if err != nil {
@@ -329,7 +366,7 @@ func (r *Repository) UnnotifiedOrders(ctx context.Context, limit int) ([]OrderRe
 		var rec OrderRecord
 		var deviceID, commandKey, lastError sql.NullString
 		var paramsJSON []byte
-		if err := rows.Scan(&rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceID, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &lastError); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceID, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &lastError); err != nil {
 			return nil, fmt.Errorf("scan unnotified order: %w", err)
 		}
 		rec.DeviceID = deviceID.String
@@ -349,8 +386,8 @@ func (r *Repository) UnnotifiedOrders(ctx context.Context, limit int) ([]OrderRe
 // been turned into a webhook delivery (or that it has no matching
 // subscriptions to notify) — either way, the poller shouldn't check it
 // again.
-func (r *Repository) MarkOrderNotified(ctx context.Context, externalOrderID string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE bss_orders SET notified_at = now() WHERE external_order_id = $1`, externalOrderID)
+func (r *Repository) MarkOrderNotified(ctx context.Context, orderID string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE bss_orders SET notified_at = now() WHERE id = $1::uuid`, orderID)
 	if err != nil {
 		return fmt.Errorf("mark order notified: %w", err)
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -16,7 +17,7 @@ func TestReconcilePendingOrdersRetriesAndMarksDispatched(t *testing.T) {
 	seedOrderDevice(t, ctx, db, "acct-1", "11111111-1111-1111-1111-111111111111")
 
 	params := []bss.ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if err := h.mappings.InsertPending(ctx, "ord-retry-1", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := h.mappings.InsertPending(ctx, "ord-retry-1", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	// InsertPending now stamps last_attempt_at at insert time (final
@@ -46,7 +47,7 @@ func TestReconcilePendingOrdersLeavesFailedRetriesPending(t *testing.T) {
 	seedOrderDevice(t, ctx, db, "acct-1", "11111111-1111-1111-1111-111111111111")
 
 	params := []bss.ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if err := h.mappings.InsertPending(ctx, "ord-retry-fail", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := h.mappings.InsertPending(ctx, "ord-retry-fail", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 	backdateOrderLastAttempt(t, ctx, db, "ord-retry-fail")
@@ -76,7 +77,7 @@ func TestReconcilePendingOrdersDeadLettersAfterMaxAttempts(t *testing.T) {
 	seedOrderDevice(t, ctx, db, "acct-1", "11111111-1111-1111-1111-111111111111")
 
 	params := []bss.ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if err := h.mappings.InsertPending(ctx, "ord-dlq", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := h.mappings.InsertPending(ctx, "ord-dlq", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
 
@@ -88,7 +89,7 @@ func TestReconcilePendingOrdersDeadLettersAfterMaxAttempts(t *testing.T) {
 	// call path reaches MarkDispatchFailed's dead-letter branch, not just
 	// the repository method in isolation.
 	for i := 0; i < 7; i++ {
-		if err := h.mappings.MarkDispatchFailed(ctx, "ord-dlq", "seed"); err != nil {
+		if err := h.mappings.MarkDispatchFailed(ctx, testOrderID(t, h.mappings, "ord-dlq"), "seed"); err != nil {
 			t.Fatalf("seed MarkDispatchFailed %d: %v", i, err)
 		}
 	}
@@ -114,14 +115,25 @@ func TestReconcilePendingOrdersIgnoresDispatchedOrders(t *testing.T) {
 	seedOrderDevice(t, ctx, db, "acct-1", "11111111-1111-1111-1111-111111111111")
 
 	params := []bss.ParameterWrite{{Name: "p", Value: "v", Type: "string"}}
-	if err := h.mappings.InsertPending(ctx, "ord-already-done", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
+	if _, err := h.mappings.InsertPending(ctx, "ord-already-done", "acct-1", "SUSPEND", "11111111-1111-1111-1111-111111111111", params); err != nil {
 		t.Fatalf("InsertPending: %v", err)
 	}
-	if err := h.mappings.MarkDispatched(ctx, "ord-already-done", "ck-already"); err != nil {
+	if err := h.mappings.MarkDispatched(ctx, testOrderID(t, h.mappings, "ord-already-done"), "ck-already"); err != nil {
 		t.Fatalf("MarkDispatched: %v", err)
 	}
 
 	h.reconcilePendingOrders(ctx)
 	// The httptest handler's t.Fatal above is the real assertion -- if
 	// this reaches here without failing, SetParameters was never called.
+}
+
+// testOrderID returns the internal key of an order the test placed, which
+// is what the order's state changes are addressed by.
+func testOrderID(t *testing.T, r *bss.Repository, externalOrderID string) string {
+	t.Helper()
+	order, err := r.FindOrder(context.Background(), externalOrderID)
+	if err != nil || order == nil {
+		t.Fatalf("order %s not found: %v", externalOrderID, err)
+	}
+	return order.ID
 }

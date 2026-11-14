@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts/accountstest"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -40,10 +41,10 @@ func acsRouterStub(t *testing.T, jobStatus map[string]string, parameters map[str
 
 func insertDispatchedOrder(t *testing.T, ctx context.Context, r *bss.Repository, externalID, accountID, deviceID, commandKey string, params []bss.ParameterWrite) {
 	t.Helper()
-	if err := r.InsertPending(ctx, externalID, accountID, "MODIFY_WIFI", deviceID, params); err != nil {
+	if _, err := r.InsertPending(ctx, externalID, accountID, "MODIFY_WIFI", deviceID, params); err != nil {
 		t.Fatalf("InsertPending %s: %v", externalID, err)
 	}
-	if err := r.MarkDispatched(ctx, externalID, commandKey); err != nil {
+	if err := r.MarkDispatched(ctx, testOrderID(t, r, externalID), commandKey); err != nil {
 		t.Fatalf("MarkDispatched %s: %v", externalID, err)
 	}
 }
@@ -106,7 +107,7 @@ func TestGetReconciliationUsesCurrentAccountAndFiltersHistory(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE account_device_mappings SET unassigned_at = now(), unassign_reason = 'moved' WHERE device_id = $1 AND unassigned_at IS NULL`, deviceID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at) VALUES (gen_random_uuid(), 'acct-current', $1, $2, 'gateway', now())`, deviceID, deviceID+"-serial"); err != nil {
+	if _, err := db.ExecContext(ctx, accountstest.EnsureCTE("'acct-current'")+`INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, role, assigned_at) VALUES (gen_random_uuid(), 'acct-current', (SELECT id FROM acct), $1, $2, 'gateway', now())`, deviceID, deviceID+"-serial"); err != nil {
 		t.Fatal(err)
 	}
 	insertDispatchedOrder(t, ctx, h.mappings, "current-order", "acct-current", deviceID, "ck-current",

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts/accountstest"
 	"strings"
 	"testing"
 
@@ -20,8 +21,8 @@ func TestIntegration_SubscriberLookup(t *testing.T) {
 	devA := e.device("LK0001A1B2", &custA)
 	devB := e.device("LK0002C3D4", &custB)
 	for acc, dev := range map[string]string{"ACC-A1": devA, "ACC-B1": devB} {
-		if _, err := e.db.ExecContext(e.ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at)
-			SELECT gen_random_uuid(), $1, id, oui_serial, 'gateway', now() FROM devices WHERE id = $2`, acc, dev); err != nil {
+		if _, err := e.db.ExecContext(e.ctx, accountstest.EnsureCTE("$1")+`INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, role, assigned_at)
+			SELECT gen_random_uuid(), $1, (SELECT id FROM acct), id, oui_serial, 'gateway', now() FROM devices WHERE id = $2`, acc, dev); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -104,13 +105,13 @@ func TestIntegration_SubscriberLookup(t *testing.T) {
 
 	// A device of customer B mapped onto A's owned account neither shows
 	// A's subscriber to B nor lets B edit A's profile.
-	if _, err := e.db.ExecContext(e.ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('ACC-A1', $1, 'test')`, custA); err != nil {
+	if _, err := e.db.ExecContext(e.ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('ACC-A1', $1, 'test') ON CONFLICT (account_id) DO UPDATE SET customer_id = EXCLUDED.customer_id`, custA); err != nil {
 		t.Fatal(err)
 	}
 	e.operator("mgr-b", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custB})
 	devB2 := e.device("LK0003E5F6", &custB)
-	if _, err := e.db.ExecContext(e.ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at)
-		SELECT gen_random_uuid(), 'ACC-A1', id, oui_serial, 'extender', now() FROM devices WHERE id = $1`, devB2); err != nil {
+	if _, err := e.db.ExecContext(e.ctx, accountstest.EnsureCTE("'ACC-A1'")+`INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, role, assigned_at)
+		SELECT gen_random_uuid(), 'ACC-A1', (SELECT id FROM acct), id, oui_serial, 'extender', now() FROM devices WHERE id = $1`, devB2); err != nil {
 		t.Fatal(err)
 	}
 	if r := e.call("mgr-b", "PUT", "/api/v1/accounts/ACC-A1/profile", map[string]any{"vip": false}); r.code != 404 {
@@ -133,8 +134,8 @@ func TestIntegration_SubscriberLookup(t *testing.T) {
 	// neither sees a name, and neither may edit it.
 	devA2, devB3 := e.device("LK0004AAAA", &custA), e.device("LK0005BBBB", &custB)
 	for _, dev := range []string{devA2, devB3} {
-		if _, err := e.db.ExecContext(e.ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at)
-			SELECT gen_random_uuid(), 'ACC-SHARED', id, oui_serial, CASE WHEN customer_id = $2 THEN 'gateway' ELSE 'extender' END, now() FROM devices WHERE id = $1`, dev, custA); err != nil {
+		if _, err := e.db.ExecContext(e.ctx, accountstest.EnsureCTE("'ACC-SHARED'")+`INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, role, assigned_at)
+			SELECT gen_random_uuid(), 'ACC-SHARED', (SELECT id FROM acct), id, oui_serial, CASE WHEN customer_id = $2 THEN 'gateway' ELSE 'extender' END, now() FROM devices WHERE id = $1`, dev, custA); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -57,6 +57,8 @@ func (r *Repository) EventsAfter(ctx context.Context, customerID string, after i
 		SELECT e.id, e.event_type, e.event_time, e.seq, e.customer_id::text, e.account_id, e.device_id::text, d.oui_serial, e.payload
 		  FROM tmf_events e LEFT JOIN devices d ON d.id = e.device_id
 		 WHERE COALESCE(e.customer_id::text, '') = $1 AND e.seq > $2
+		   -- Text IDs are safe here: the row is already limited to one customer,
+		   -- and an ID is unique within a customer.
 		   AND ($4::text[] IS NULL OR e.account_id = ANY($4::text[]))
 		 ORDER BY e.seq LIMIT $3`, customerID, after, limit, store.StringArray(accounts))
 	if err != nil {
@@ -94,18 +96,24 @@ func (r *Repository) CreateCustomerEvent(ctx context.Context, customerID, source
 	if customerID == "" {
 		return r.CreateEvent(ctx, sourceKey, accountID, deviceID, "", eventType, payload, at)
 	}
+	accountKey, err := r.accountKeyForWrite(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
 	var e EventRecord
-	err := r.db.QueryRowContext(ctx, `
-		INSERT INTO tmf_events (id, source_key, customer_id, account_id, device_id, event_type, event_time, payload)
+	err = r.db.QueryRowContext(ctx, `
+		INSERT INTO tmf_events (id, source_key, customer_id, account_id, account_key, device_id, event_type, event_time, payload)
 		SELECT gen_random_uuid(), $1::text, $2::text::uuid,
-		       CASE WHEN COALESCE((SELECT customer_id::text FROM bss_accounts WHERE account_id = NULLIF($3::text, '')), $2::text) = $2::text
+		       CASE WHEN COALESCE((SELECT customer_id::text FROM bss_accounts WHERE id = NULLIF($8::text, '')::uuid), $2::text) = $2::text
 		            THEN NULLIF($3::text, '') END,
+		       CASE WHEN COALESCE((SELECT customer_id::text FROM bss_accounts WHERE id = NULLIF($8::text, '')::uuid), $2::text) = $2::text
+		            THEN NULLIF($8::text, '')::uuid END,
 		       CASE WHEN COALESCE((SELECT customer_id::text FROM devices WHERE id = NULLIF($4::text, '')::uuid), $2::text) = $2::text
 		            THEN NULLIF($4::text, '')::uuid END,
 		       $5::text, $6::timestamptz, $7::jsonb
 		ON CONFLICT (source_key) DO NOTHING
 		RETURNING id, source_key, COALESCE(account_id, ''), COALESCE(device_id::text, ''), '', event_type, event_time, payload,
-		          customer_id::text, seq`, sourceKey, customerID, accountID, deviceID, eventType, at, payload).
+		          customer_id::text, seq`, sourceKey, customerID, accountID, deviceID, eventType, at, payload, accountKey).
 		Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload, &e.CustomerID, &e.Seq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil

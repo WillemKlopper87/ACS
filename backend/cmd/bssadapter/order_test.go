@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts/accountstest"
 	"bytes"
 	"context"
 	"database/sql"
@@ -77,7 +78,7 @@ func seedOrderDevice(t *testing.T, ctx context.Context, db *sql.DB, accountID, d
 		t.Fatalf("seed device: %v", err)
 	}
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at) VALUES (gen_random_uuid(), $1, $2, $3, 'gateway', now())`,
+		accountstest.EnsureCTE("$1")+`INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, role, assigned_at) VALUES (gen_random_uuid(), $1, (SELECT id FROM acct), $2, $3, 'gateway', now())`,
 		accountID, deviceID, deviceID+"-serial"); err != nil {
 		t.Fatalf("seed mapping: %v", err)
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts/accountstest"
 	"bytes"
 	"context"
 	"database/sql"
@@ -116,8 +117,8 @@ func TestCustomerBoundClientsAreIsolated(t *testing.T) {
 		t.Fatalf("device moved to %q", got)
 	}
 	// A failed mapping leaves an unassigned device unassigned.
-	if _, err := e.db.ExecContext(e.ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, status)
-		SELECT gen_random_uuid(), 'B.2', id, oui_serial, 'gateway', 'ACTIVE' FROM devices WHERE oui_serial = '001122-DEV-L'`); err != nil {
+	if _, err := e.db.ExecContext(e.ctx, accountstest.EnsureCTE("'B.2'")+`INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, role, status)
+		SELECT gen_random_uuid(), 'B.2', (SELECT id FROM acct), id, oui_serial, 'gateway', 'ACTIVE' FROM devices WHERE oui_serial = '001122-DEV-L'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.h.mappings.AssignAccountOwner(e.ctx, "B.2", e.custB, "test"); err != nil {

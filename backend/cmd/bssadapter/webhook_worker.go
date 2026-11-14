@@ -129,7 +129,7 @@ func (h *handler) notifyTerminalOrders(ctx context.Context) {
 				h.logger.Error("failed to enqueue webhook delivery", "err", err, "subscription_id", sub.ID)
 			}
 		}
-		if err := h.mappings.MarkOrderNotified(ctx, order.ExternalOrderID); err != nil {
+		if err := h.mappings.MarkOrderNotified(ctx, order.ID); err != nil {
 			h.logger.Error("failed to mark order notified", "err", err, "external_order_id", order.ExternalOrderID)
 			continue
 		}

@@ -1,8 +1,10 @@
 # Per-ISP account IDs and order IDs: design
 
-Status: **proposal, nothing built.** Closes finding O2 of
-`docs/SECURITY-ASSESSMENT-2026-11-14.md`. Section 8 lists the decisions
-needed before building.
+Status: **approved; phase 1 of 2 is built** (migration 0098, no behaviour
+change). Phase 2, the switch to per-ISP IDs, is not built. Closes finding
+O2 of `docs/SECURITY-ASSESSMENT-2026-11-14.md` once phase 2 is in.
+Section 8 records the decisions taken; section 9 says what phase 1
+changed and what phase 2 still has to do.
 
 ## 1. The problem
 
@@ -73,15 +75,19 @@ UNIQUE (COALESCE(customer_id::text, ''), account_id)
   `webhook_subscriptions` (nullable there: a fleet-wide subscription has
   no account), `webhook_deliveries`, `tmf_alarms`, `tmf_events`
   (nullable), `tmf_service_problems`, `bss_idempotency_keys`,
-  `account_profiles`, `account_profile_archive`, and the onboarding
-  tables' `account_ref`.
+  `account_profiles` and `account_profile_archive`. A sale
+  (`onboardings`) is not one of them: it already carries its own
+  `customer_id` next to `account_ref`, so it is scoped by that.
 - The text `account_id` stays in those tables as the value shown to
   people and sent on the wire. It is no longer used to find rows.
-- **Resolution happens once, at the edge.** The adapter turns
-  `(customer from the token, account_id from the request)` into a key
-  before any repository call. A bound client can only ever resolve inside
-  its own customer, so another ISP's account with the same ID is not
-  "forbidden", it simply is not there.
+- **One rule for what an ID means.** Every repository function that
+  takes an account ID resolves it to a key first, through one package
+  (`internal/accounts`), and then finds rows by the key. In phase 2 the
+  resolver uses the caller's customer, which the adapter's authentication
+  layer sets once per request. A bound client can only ever resolve
+  inside its own customer, so another ISP's account with the same ID is
+  not "forbidden", it simply is not there. A test fails the build if any
+  SQL finds rows by the text ID outside a short reviewed list.
 - **Claiming** stays as it is (first write creates the registry row), but
   can no longer be blocked: the row is created in the caller's own
   namespace.
@@ -179,7 +185,14 @@ account ID; and the Grafana role's column list for `bss_orders`.
 - **Operators with bookmarks or scripts** that address an account by ID
   alone keep working until the first real duplicate exists.
 
-## 8. Decisions needed
+## 8. Decisions (taken 2026-11-14)
+
+All six were answered "as recommended": design C; order IDs unique per
+ISP; `409 ErrAccountAmbiguous` plus a `customer_id` qualifier for global
+clients; `request_hash` recorded now. Who mints account IDs (2) does not
+change the design. The contract version (6) is decided at release time.
+
+The questions as asked:
 
 1. **Go ahead with C**, or stay on A (prefix by convention) for now?
 2. **Who mints account IDs in practice?** If the NaaS platform mints all
@@ -197,3 +210,59 @@ account ID; and the Grafana role's column list for `bss_orders`.
    refusals, and adds one error code for global clients. Whether that is
    a minor version, and when fixtures are re-recorded, is a release
    decision.
+
+## 9. Phase 1 as built
+
+Migration `0098_account_registry.sql`, rehearsed on a copy of the lab
+database and covered by `internal/store/migration_0098_test.go`:
+
+- `bss_accounts` has an internal `id` and holds unowned accounts
+  (`customer_id` NULL). Every account any table mentioned was registered.
+- `account_key` on the ten tables of section 4, filled from the registry,
+  with a check that a row names an account by ID and key together or by
+  neither. Uniqueness that was on the text ID (active mapping per role,
+  idempotency keys, profiles) is on the key.
+- `bss_orders` has `id`, `order_scope` and `request_hash`;
+  `service_order_items.bss_order_id` replaces the foreign key on the text
+  order ID. Order state changes address the order by `id`.
+- The event triggers of 0090 use the key.
+- IDs are still unique across the ACS: the constraints named `*_global_*`
+  keep that until phase 2 drops them. The per-customer indexes already
+  exist beside them.
+
+Code: every lookup goes through `accounts.Resolve` (read) or
+`accounts.Ensure` (write). `internal/accounts/lookup_guard_test.go`
+lists the five places that may still use the text ID, with the reason
+each is safe.
+
+Unchanged in phase 1, checked by the existing suite and a live run of the
+stack on the migrated copy: every response, status code and event.
+
+One difference worth knowing: an account that exists only because
+something was written for it (a mapping from the console, a profile) now
+has a registry row with no owner, where before it had no row. The rules
+that depended on "no row" (claiming, who may see a profile) test for "no
+owner" instead.
+
+### What phase 2 has to do
+
+1. `accounts.Resolve` / `Ensure` take the caller's customer from the
+   request context; the adapter's authentication sets it. Without a
+   customer (operator API, global client) an ID resolves only if it is
+   unambiguous, else `ErrAccountAmbiguous`.
+2. `FindOrder`, `FindServiceOrder` and the service-problem lookup by
+   external ID use the same scope. `GET /monitor/{id}` has no account in
+   its path, so it depends on this.
+3. `ClaimAccount` creates the account in the caller's namespace;
+   `AssignAccountOwner` refuses a move onto an existing ID.
+4. Drop the `*_global_*` constraints.
+5. `customer_id` qualifier on the operator routes; customer shown in the
+   console's account lists and header search.
+6. Sales: add the customer to the `account_ref` lookup
+   (`onboarding.OpenBSSSales`).
+7. Alerting uses the account ID as its tenant label; decide whether two
+   ISPs' same-numbered accounts may share that label or it becomes the
+   key.
+8. Test fixtures go through `accountstest.EnsureCTE`, the one place that
+   needs the new uniqueness rule.
+9. Tests of section 6, the integration guide, OpenAPI and fixtures.

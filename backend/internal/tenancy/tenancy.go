@@ -158,8 +158,8 @@ func (r *Repository) DeleteProject(ctx context.Context, id string) error {
 // device is actively mapped to (accounts with no owner are left out).
 func (r *Repository) MappedAccountCustomers(ctx context.Context, deviceID string) ([]string, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT a.customer_id::text FROM account_device_mappings m
-		JOIN bss_accounts a ON a.account_id = m.account_id
-		WHERE m.device_id = $1 AND m.unassigned_at IS NULL`, deviceID)
+		JOIN bss_accounts a ON a.id = m.account_key
+		WHERE m.device_id = $1 AND m.unassigned_at IS NULL AND a.customer_id IS NOT NULL`, deviceID)
 	if err != nil {
 		return nil, fmt.Errorf("mapped account customers: %w", err)
 	}

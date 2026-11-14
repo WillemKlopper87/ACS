@@ -44,6 +44,10 @@ type ServiceOrderWork struct {
 var ErrServiceOrderExists = errors.New("service order already exists")
 
 func (r *Repository) CreateServiceOrder(ctx context.Context, externalID, accountID string, raw json.RawMessage, items []ServiceOrderItem) (*ServiceOrder, error) {
+	accountKey, err := r.accountKeyForWrite(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin service order: %w", err)
@@ -51,7 +55,9 @@ func (r *Repository) CreateServiceOrder(ctx context.Context, externalID, account
 	defer tx.Rollback()
 	id := uuid.New().String()
 	var order ServiceOrder
-	err = tx.QueryRowContext(ctx, `INSERT INTO service_orders (id, external_id, account_id, raw_request) VALUES ($1,$2,$3,$4) RETURNING id, external_id, account_id, raw_request, created_at`, id, externalID, accountID, raw).Scan(&order.ID, &order.ExternalID, &order.AccountID, &order.RawRequest, &order.CreatedAt)
+	err = tx.QueryRowContext(ctx, `INSERT INTO service_orders (id, external_id, account_id, account_key, order_scope, raw_request)
+		SELECT $1, $2, $3, a.id, COALESCE(a.customer_id::text, ''), $4 FROM bss_accounts a WHERE a.id = $5::uuid
+		RETURNING id, external_id, account_id, raw_request, created_at`, id, externalID, accountID, raw, accountKey).Scan(&order.ID, &order.ExternalID, &order.AccountID, &order.RawRequest, &order.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrServiceOrderExists
@@ -63,7 +69,7 @@ func (r *Repository) CreateServiceOrder(ctx context.Context, externalID, account
 		if item.ID == "" {
 			item.ID = uuid.New().String()
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO service_order_items (id, order_id, seq, action, role, mapping_id, external_order_id, status, last_error, completed_at) VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,'')::uuid,NULLIF($7,''),$8,NULLIF($9,''),$10)`, item.ID, id, item.Seq, item.Action, item.Role, item.MappingID, item.ExternalOrderID, item.Status, item.LastError, item.CompletedAt)
+		_, err = tx.ExecContext(ctx, `INSERT INTO service_order_items (id, order_id, seq, action, role, mapping_id, external_order_id, bss_order_id, status, last_error, completed_at) VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,'')::uuid,NULLIF($7,''),(SELECT id FROM bss_orders WHERE external_order_id = NULLIF($7,'')),$8,NULLIF($9,''),$10)`, item.ID, id, item.Seq, item.Action, item.Role, item.MappingID, item.ExternalOrderID, item.Status, item.LastError, item.CompletedAt)
 		if err != nil {
 			return nil, fmt.Errorf("insert service order item: %w", err)
 		}
@@ -189,10 +195,14 @@ func (r *Repository) CancelServiceOrder(ctx context.Context, id string) error {
 }
 
 func (r *Repository) ListServiceOrders(ctx context.Context, accountID string, limit int) ([]ServiceOrder, error) {
+	accountKey, err := r.accountFilter(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
 	if limit <= 0 || limit > 500 {
 		limit = 50
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id,external_id,account_id,raw_request,created_at,cancelled_at FROM service_orders WHERE ($1='' OR account_id=$1) ORDER BY created_at DESC LIMIT $2`, accountID, limit)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,external_id,account_id,raw_request,created_at,cancelled_at FROM service_orders WHERE ($1='' OR account_key=NULLIF($1,'')::uuid) ORDER BY created_at DESC LIMIT $2`, accountKey, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list service orders: %w", err)
 	}

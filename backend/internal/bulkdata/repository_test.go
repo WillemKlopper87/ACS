@@ -1,6 +1,7 @@
 package bulkdata
 
 import (
+	"acs/internal/accounts/accountstest"
 	"acs/internal/alerting"
 	"acs/internal/jobs"
 	"acs/internal/store"
@@ -55,7 +56,7 @@ func TestReceiverRenewalQueuesCredentialsAtomically(t *testing.T) {
 	if err != nil || current.ExpiresAt.Sub(expiry) > time.Second {
 		t.Fatal(current, err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO account_device_mappings(id,account_id,device_id,oui_serial,role,assigned_at) VALUES(gen_random_uuid(),'lab-account',$1,'LAB-RECEIVER','gateway',now())`, device); err != nil {
+	if _, err := db.ExecContext(ctx, accountstest.EnsureCTE("'lab-account'")+`INSERT INTO account_device_mappings (id,account_id,account_key,device_id,oui_serial,role,assigned_at) VALUES(gen_random_uuid(),'lab-account', (SELECT id FROM acct),$1,'LAB-RECEIVER','gateway',now())`, device); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE bulk_data_receivers SET renewed_at=now()-interval '1 hour' WHERE id=$1`, receiver.ID); err != nil {

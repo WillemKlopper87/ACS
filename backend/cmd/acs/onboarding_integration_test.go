@@ -206,7 +206,7 @@ func TestIntegration_OnboardingNeverMovesAnOwnedDevice(t *testing.T) {
 	// The sale also names an account that B owns: neither the account nor
 	// the device may route its events to B.
 	h.tmfEvents = bss.NewRepository(db)
-	if _, err := db.ExecContext(ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('B-ACC', $1, 'test')`, custB); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('B-ACC', $1, 'test') ON CONFLICT (account_id) DO UPDATE SET customer_id = EXCLUDED.customer_id`, custB); err != nil {
 		t.Fatal(err)
 	}
 	o, err := h.onboarding.Create(ctx, onboarding.Onboarding{ExpectedSerial: "OB0004", CustomerID: &custA, AccountRef: "B-ACC", Source: "console"})

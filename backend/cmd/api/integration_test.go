@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts/accountstest"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -433,11 +434,11 @@ func TestIntegration_H3SubResourceIsolation(t *testing.T) {
 	})
 
 	t.Run("a BSS-mapped device stays with its account's customer", func(t *testing.T) {
-		if _, err := e.db.ExecContext(e.ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('acct-s6', $1, 'test')`, custB); err != nil {
+		if _, err := e.db.ExecContext(e.ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('acct-s6', $1, 'test') ON CONFLICT (account_id) DO UPDATE SET customer_id = EXCLUDED.customer_id`, custB); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.db.ExecContext(e.ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at)
-			SELECT gen_random_uuid(), 'acct-s6', id, oui_serial, 'gateway', now() FROM devices WHERE id = $1`, devB); err != nil {
+		if _, err := e.db.ExecContext(e.ctx, accountstest.EnsureCTE("'acct-s6'")+`INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, role, assigned_at)
+			SELECT gen_random_uuid(), 'acct-s6', (SELECT id FROM acct), id, oui_serial, 'gateway', now() FROM devices WHERE id = $1`, devB); err != nil {
 			t.Fatal(err)
 		}
 		e.operator("root", operators.RoleSuperAdmin)

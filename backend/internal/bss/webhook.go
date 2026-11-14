@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"acs/internal/accounts"
 	"acs/internal/store"
 )
 
@@ -61,11 +62,20 @@ func NewWebhookRepository(db *sql.DB) *WebhookRepository {
 
 func (r *WebhookRepository) CreateSubscription(ctx context.Context, accountID *string, targetURL, secret string, eventTypes []string) (*WebhookSubscription, error) {
 	id := uuid.New().String()
+	// A fleet-wide subscription names no account, by ID or by key.
+	var accountKey *string
+	if accountID != nil {
+		key, err := accounts.Ensure(ctx, r.db, *accountID)
+		if err != nil {
+			return nil, err
+		}
+		accountKey = &key
+	}
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO webhook_subscriptions (id, account_id, target_url, secret, event_types)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO webhook_subscriptions (id, account_id, account_key, target_url, secret, event_types)
+		VALUES ($1, $2, $6, $3, $4, $5)
 		RETURNING id, account_id, target_url, secret, event_types, created_at`,
-		id, accountID, targetURL, secret, store.StringArray(eventTypes))
+		id, accountID, targetURL, secret, store.StringArray(eventTypes), accountKey)
 	return scanSubscription(row)
 }
 
@@ -92,9 +102,13 @@ func (r *WebhookRepository) ListSubscriptions(ctx context.Context) ([]WebhookSub
 // account-scoped BSS OAuth client must never discover another integration's
 // fleet receiver through an account listing.
 func (r *WebhookRepository) ListSubscriptionsForAccount(ctx context.Context, accountID string) ([]WebhookSubscription, error) {
+	accountKey, err := accounts.Resolve(ctx, r.db, accountID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, account_id, target_url, secret, event_types, created_at
-		FROM webhook_subscriptions WHERE account_id = $1 ORDER BY created_at ASC`, accountID)
+		FROM webhook_subscriptions WHERE account_key = $1 ORDER BY created_at ASC`, accountKey)
 	if err != nil {
 		return nil, fmt.Errorf("list account webhook subscriptions: %w", err)
 	}
@@ -143,11 +157,15 @@ func (r *WebhookRepository) DeleteSubscription(ctx context.Context, id string) e
 // eventType for accountID — fleet-wide (account_id NULL) or scoped to
 // this specific account, and only if eventType is in its event_types.
 func (r *WebhookRepository) MatchingSubscriptions(ctx context.Context, accountID, eventType string) ([]WebhookSubscription, error) {
+	accountKey, err := accounts.Resolve(ctx, r.db, accountID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, account_id, target_url, secret, event_types, created_at
 		FROM webhook_subscriptions
-		WHERE (account_id IS NULL OR account_id = $1) AND $2 = ANY(event_types)`,
-		accountID, eventType)
+		WHERE (account_key IS NULL OR account_key = $1) AND $2 = ANY(event_types)`,
+		accountKey, eventType)
 	if err != nil {
 		return nil, fmt.Errorf("match webhook subscriptions: %w", err)
 	}
@@ -194,7 +212,7 @@ func (r *WebhookRepository) DispatchTMFEvents(ctx context.Context, since time.Ti
 			       e.event_time, e.source_key, e.payload, e.seq, e.customer_id, s.id AS subscription_id
 			FROM tmf_events e
 			JOIN webhook_subscriptions s
-			  ON (s.account_id IS NULL OR s.account_id = e.account_id)
+			  ON (s.account_key IS NULL OR s.account_key = e.account_key)
 			 AND e.event_type = ANY(s.event_types)
 			LEFT JOIN tmf_webhook_dispatches d
 			  ON d.event_id = e.id AND d.subscription_id = s.id

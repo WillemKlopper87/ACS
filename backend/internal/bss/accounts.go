@@ -1,6 +1,7 @@
 package bss
 
 import (
+	"acs/internal/accounts"
 	"context"
 	"database/sql"
 	"errors"
@@ -20,8 +21,12 @@ var ErrAccountHasHistory = errors.New("account has data from before customer bin
 
 // AccountOwner returns the customer that owns an account, "" if none.
 func (r *Repository) AccountOwner(ctx context.Context, accountID string) (string, error) {
+	accountKey, err := accounts.Resolve(ctx, r.db, accountID)
+	if err != nil {
+		return "", err
+	}
 	var owner string
-	err := r.db.QueryRowContext(ctx, `SELECT customer_id::text FROM bss_accounts WHERE account_id = $1`, strings.TrimSpace(accountID)).Scan(&owner)
+	err = r.db.QueryRowContext(ctx, `SELECT COALESCE(customer_id::text, '') FROM bss_accounts WHERE id = $1`, accountKey).Scan(&owner)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -37,14 +42,17 @@ func (r *Repository) AccountOwner(ctx context.Context, accountID string) (string
 // subscriptions from before binding is never claimed: ErrAccountHasHistory.
 func (r *Repository) ClaimAccount(ctx context.Context, accountID, customerID, claimedBy string) (string, error) {
 	accountID = strings.TrimSpace(accountID)
+	// The registry may already hold the account as unowned (it has rows
+	// from an operator or a global client, or only a profile). It is
+	// claimed only when unowned and without integration history.
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO bss_accounts (account_id, customer_id, claimed_by)
-		SELECT $1, $2::uuid, $3
-		 WHERE NOT EXISTS (SELECT 1 FROM account_device_mappings WHERE account_id = $1)
-		   AND NOT EXISTS (SELECT 1 FROM bss_orders WHERE account_id = $1)
-		   AND NOT EXISTS (SELECT 1 FROM service_orders WHERE account_id = $1)
-		   AND NOT EXISTS (SELECT 1 FROM webhook_subscriptions WHERE account_id = $1)
-		ON CONFLICT (account_id) DO NOTHING`, accountID, customerID, claimedBy)
+		INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ($1, $2::uuid, $3)
+		ON CONFLICT (account_id) DO UPDATE SET customer_id = EXCLUDED.customer_id, claimed_by = EXCLUDED.claimed_by
+		 WHERE bss_accounts.customer_id IS NULL
+		   AND NOT EXISTS (SELECT 1 FROM account_device_mappings WHERE account_key = bss_accounts.id)
+		   AND NOT EXISTS (SELECT 1 FROM bss_orders WHERE account_key = bss_accounts.id)
+		   AND NOT EXISTS (SELECT 1 FROM service_orders WHERE account_key = bss_accounts.id)
+		   AND NOT EXISTS (SELECT 1 FROM webhook_subscriptions WHERE account_key = bss_accounts.id)`, accountID, customerID, claimedBy)
 	if err != nil {
 		return "", fmt.Errorf("claim account: %w", err)
 	}
@@ -66,9 +74,18 @@ func (r *Repository) AssignAccountOwner(ctx context.Context, accountID, customer
 	if accountID == "" {
 		return errors.New("account_id is required")
 	}
+	// The orders' scope is the one copy of the owner outside the registry
+	// (it backs the per-customer uniqueness of order IDs), so it moves in
+	// the same statement.
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ($1, $2::uuid, $3)
-		ON CONFLICT (account_id) DO UPDATE SET customer_id = EXCLUDED.customer_id, claimed_by = EXCLUDED.claimed_by`,
+		WITH acct AS (
+			INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ($1, $2::uuid, $3)
+			ON CONFLICT (account_id) DO UPDATE SET customer_id = EXCLUDED.customer_id, claimed_by = EXCLUDED.claimed_by
+			RETURNING id, COALESCE(customer_id::text, '') AS scope
+		), orders AS (
+			UPDATE bss_orders o SET order_scope = acct.scope FROM acct WHERE o.account_key = acct.id
+		)
+		UPDATE service_orders o SET order_scope = acct.scope FROM acct WHERE o.account_key = acct.id`,
 		accountID, customerID, by)
 	if err != nil {
 		return fmt.Errorf("assign account owner: %w", err)
@@ -104,12 +121,12 @@ func (r *Repository) OwnedAccounts(ctx context.Context, customerID string) (map[
 func deviceForAccount(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, ouiSerial, accountID string, requireAllocated bool) (string, error) {
+}, ouiSerial, accountKey string, requireAllocated bool) (string, error) {
 	var deviceID, deviceCustomer, owner string
 	err := q.QueryRowContext(ctx, `
 		SELECT d.id::text, COALESCE(d.customer_id::text, ''),
-		       COALESCE((SELECT customer_id::text FROM bss_accounts WHERE account_id = $2), '')
-		  FROM devices d WHERE d.oui_serial = $1`, ouiSerial, accountID).Scan(&deviceID, &deviceCustomer, &owner)
+		       COALESCE((SELECT customer_id::text FROM bss_accounts WHERE id = $2::uuid), '')
+		  FROM devices d WHERE d.oui_serial = $1`, ouiSerial, accountKey).Scan(&deviceID, &deviceCustomer, &owner)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("%w: %s", ErrDeviceNotFound, ouiSerial)
 	}
@@ -131,4 +148,24 @@ func deviceForAccount(ctx context.Context, q interface {
 		return "", fmt.Errorf("%w: %s", ErrDeviceNotFound, ouiSerial)
 	}
 	return deviceID, nil
+}
+
+// accountFilter resolves an optional account filter to a key: "" (no
+// filter) stays "", and an ID with no account becomes accounts.None,
+// which matches nothing.
+func (r *Repository) accountFilter(ctx context.Context, accountID string) (string, error) {
+	if strings.TrimSpace(accountID) == "" {
+		return "", nil
+	}
+	return accounts.Resolve(ctx, r.db, accountID)
+}
+
+// accountKeyForWrite is accountFilter for a row about to be written: the
+// account is registered if it is new. "" stays "" for rows that name no
+// account (an event of an unmapped device).
+func (r *Repository) accountKeyForWrite(ctx context.Context, accountID string) (string, error) {
+	if strings.TrimSpace(accountID) == "" {
+		return "", nil
+	}
+	return accounts.Ensure(ctx, r.db, accountID)
 }
