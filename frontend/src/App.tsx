@@ -1,5 +1,5 @@
-import { Suspense, lazy, type ComponentType, useState} from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Suspense, lazy, type ComponentType } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Login } from "./screens/Login";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AuthProvider } from "./auth/AuthContext";
@@ -7,6 +7,7 @@ import { useAuth } from "./auth/useAuth";
 import { canAdmin } from "./auth/roles";
 import { ToastHost } from "./components/Toast";
 import { ConfirmHost } from "./components/ConfirmHost";
+import { areaOf, screenTitle, visibleAreas, type Screen } from "./lib/nav";
 import { useApiReachable } from "./lib/apiHealth";
 import { useTheme, type Theme } from "./theme/useTheme";
 import { grafanaLink, openGatedGrafana } from "./lib/grafana";
@@ -29,58 +30,9 @@ async function openGrafana() {
   if (problem) toast(problem, "error");
 }
 
-type Screen = "dashboard" | "fleet" | "devices" | "onboarding" | "control" | "operations" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help" | "alerting" | "account";
 
 const THEME_LABEL: Record<Theme, string> = { dark: "Dark", light: "Light", unfold: "Unfold", fluent: "Fluent 2" };
 
-// Data-driven nav — the sidebar renders this list instead of one JSX
-// button per screen, so adding a screen is a one-line change here rather
-// than a repeated block (build plan's own convention, applied to the nav
-// the same way every screen list elsewhere in this app already is).
-// Grouped rather than one flat list of fifteen: the sections answer "what
-// am I trying to do" (watch the fleet / act on devices / change how devices
-// are configured / administer the platform / look something up), which is
-// how an operator arrives at the console. Order within a group runs from
-// the screen you open most to the one you open least.
-const NAV: { id: Screen; label: string; adminOnly?: boolean; group: string }[] = [
-  { group: "Monitor", id: "dashboard", label: "Dashboard" },
-  { group: "Monitor", id: "health", label: "Fleet Health" },
-  { group: "Monitor", id: "jobs", label: "Jobs" },
-  { group: "Monitor", id: "alerting", label: "Alerting" },
-
-  { group: "Devices", id: "fleet", label: "Inventory" },
-  { group: "Devices", id: "onboarding", label: "Onboarding" },
-  { group: "Devices", id: "control", label: "Bulk actions" },
-  { group: "Devices", id: "operations", label: "Bulk operations" },
-  { group: "Devices", id: "groups", label: "Groups" },
-
-  { group: "Provisioning", id: "templates", label: "Templates" },
-  { group: "Provisioning", id: "policies", label: "Policies" },
-  { group: "Provisioning", id: "schedules", label: "Scheduled Jobs" },
-  { group: "Provisioning", id: "rollouts", label: "Rollouts" },
-
-  // NOC and tier-2 tools (docs/CONSOLE-UX-PROPOSAL-2026-10-30.md §3); the
-  // per-device diagnostics live in each device's Diagnostics sub-page.
-  { group: "Troubleshooting", id: "captures", label: "Session captures" },
-
-  { group: "Integrations", id: "bss", label: "BSS / NaaS", adminOnly: true },
-
-  { group: "Administration", id: "operators", label: "Operators", adminOnly: true },
-  { group: "Administration", id: "tenancy", label: "Tenancy", adminOnly: true },
-
-  { group: "Records", id: "audit", label: "Audit Log" },
-  { group: "Records", id: "reports", label: "Reports" },
-  { group: "Records", id: "help", label: "Help" },
-];
-
-// Preserves NAV order without hardcoding the section list in two places, so
-// adding a screen stays the one-line change it was before.
-const NAV_COLLAPSED_KEY = "acs.nav.collapsed";
-
-const NAV_GROUPS = NAV.reduce<string[]>((acc, item) => {
-  if (!acc.includes(item.group)) acc.push(item.group);
-  return acc;
-}, []);
 
 // Every screen is a lazy chunk (audit P2.4: one 750 kB bundle). The
 // first paint only loads the shell plus the active screen; the rest
@@ -154,32 +106,13 @@ function AppShell() {
   const { pathname } = useLocation();
   const fromPath = pathname.split("/")[1] as Screen;
   const screen: Screen = SCREEN_COMPONENT[fromPath] ? fromPath : "fleet";
-  // A device workspace belongs under Inventory in the sidebar.
-  const navScreen: Screen = screen === "devices" ? "fleet" : screen;
+  // The sidebar lists areas; the screens of the current area are tabs
+  // above the content (lib/nav.ts).
+  const area = areaOf(screen);
+  // A device's own pages sit under Inventory.
+  const tabScreen: Screen = screen === "devices" ? "fleet" : screen;
   const setScreen = (s: Screen) => navigate("/" + s);
 
-  // Which nav sections are collapsed. Persisted per browser so an operator
-  // who only ever uses two sections keeps their layout between visits; a
-  // read failure (private window, blocked site data) just means everything
-  // starts expanded, which is the safe default.
-  const [collapsed, setCollapsed] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(NAV_COLLAPSED_KEY);
-      return raw ? (JSON.parse(raw) as string[]) : [];
-    } catch {
-      return [];
-    }
-  });
-  const toggleGroup = (group: string) =>
-    setCollapsed((prev) => {
-      const next = prev.includes(group) ? prev.filter((g) => g !== group) : [...prev, group];
-      try {
-        localStorage.setItem(NAV_COLLAPSED_KEY, JSON.stringify(next));
-      } catch {
-        // Persistence is a convenience, never a requirement.
-      }
-      return next;
-    });
   const { token, authRequired, username, role, logout } = useAuth();
   const admin = canAdmin(role);
   const { theme, setTheme, themes } = useTheme();
@@ -199,62 +132,35 @@ function AppShell() {
           {ENV_LABEL && <span className="env">{ENV_LABEL}</span>}
         </div>
 
-        <nav className="sidebar-nav">
-          {NAV_GROUPS.map((group) => {
-            const items = NAV.filter((item) => item.group === group && (!item.adminOnly || admin));
-            // A non-admin sees no Administration items at all, so the
-            // heading would otherwise sit above an empty section.
-            if (items.length === 0) return null;
-            // The group holding the current screen is always shown, even if
-            // it was collapsed earlier — collapsing a section should never
-            // hide where you actually are.
-            const holdsActive = items.some((item) => item.id === navScreen);
-            const open = holdsActive || !collapsed.includes(group);
-            return (
-              <div key={group} className="nav-group">
-                <button
-                  type="button"
-                  className="nav-group-label"
-                  aria-expanded={open}
-                  aria-controls={`nav-group-${group}`}
-                  onClick={() => toggleGroup(group)}
-                >
-                  <span className="nav-caret" aria-hidden="true">{open ? "▾" : "▸"}</span>
-                  {group}
-                </button>
-                <div id={`nav-group-${group}`} role="group" aria-label={group} hidden={!open}>
-                  {items.map((item) => (
-                    <button
-                      key={item.id}
-                      className={navScreen === item.id ? "active" : ""}
-                      aria-current={navScreen === item.id ? "page" : undefined}
-                      onClick={() => setScreen(item.id)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                  {group === "Monitor" && GRAFANA && GRAFANA_GATED && (
-                    <button type="button" onClick={() => void openGrafana()} title="Opens Grafana in a new tab after checking your console sign-in">
-                      Grafana <span aria-hidden="true">↗</span>
-                      <span className="sr-only">(opens in a new tab)</span>
-                    </button>
-                  )}
-                  {group === "Monitor" && GRAFANA && !GRAFANA_GATED && (
-                    <a
-                      className="nav-external"
-                      href={GRAFANA.href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title={GRAFANA.tunnelHint ? `Grafana is only on the server's loopback. Open an SSH tunnel first: ${GRAFANA.tunnelHint}` : "Opens Grafana in a new tab"}
-                    >
-                      Grafana <span aria-hidden="true">↗</span>
-                      <span className="sr-only">(opens in a new tab)</span>
-                    </a>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+        <nav className="sidebar-nav" aria-label="Main">
+          {visibleAreas(admin).map((item) => (
+            <button
+              key={item.id}
+              className={area?.id === item.id ? "active" : ""}
+              aria-current={area?.id === item.id ? "true" : undefined}
+              onClick={() => setScreen(item.screens[0].id)}
+            >
+              {item.label}
+            </button>
+          ))}
+          {GRAFANA && GRAFANA_GATED && (
+            <button type="button" onClick={() => void openGrafana()} title="Opens Grafana in a new tab after checking your console sign-in">
+              Grafana <span aria-hidden="true">↗</span>
+              <span className="sr-only">(opens in a new tab)</span>
+            </button>
+          )}
+          {GRAFANA && !GRAFANA_GATED && (
+            <a
+              className="nav-external"
+              href={GRAFANA.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={GRAFANA.tunnelHint ? `Grafana is only on the server's loopback. Open an SSH tunnel first: ${GRAFANA.tunnelHint}` : "Opens Grafana in a new tab"}
+            >
+              Grafana <span aria-hidden="true">↗</span>
+              <span className="sr-only">(opens in a new tab)</span>
+            </a>
+          )}
         </nav>
 
         <div className="sidebar-footer">
@@ -300,8 +206,17 @@ function AppShell() {
                 ← Back
               </button>
             )}
-            <h1 className="page-title">{screen === "devices" ? "Device" : screen === "account" ? "Account" : NAV.find((item) => item.id === screen)?.label}</h1>
+            <h1 className="page-title">{screenTitle(screen)}</h1>
           </div>
+          {area && area.screens.length > 1 && (
+            <nav className="area-tabs" aria-label={`${area.label} sections`}>
+              {area.screens.map((item) => (
+                <Link key={item.id} to={"/" + item.id} className={item.id === tabScreen ? "on" : ""} aria-current={item.id === tabScreen ? "page" : undefined}>
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+          )}
           <ErrorBoundary key={screen}>
             <Suspense fallback={<p className="dim">Loading…</p>}>
               <ActiveScreen />

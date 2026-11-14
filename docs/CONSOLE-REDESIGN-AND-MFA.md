@@ -35,10 +35,10 @@ None of this is about missing features. It is the same handful of jobs (list thi
 |---|---|---|
 | **A** | **Shared components**: confirmation dialog, drawer, page bar. Done, §4. Still to add: form field, empty state, a five-step type scale, and a lint rule against new inline styles and raw colours. | 3, 4 |
 | **B** | **The list-screen pattern** on every list screen: a one-line description and the primary action on the right, filters, then the table; create and edit in a drawer; a row opens its detail in a drawer. Done for Groups, Templates, Policies, Scheduled Jobs, Rollouts, Operators and Alerting (§4). Tenancy and BSS keep their layout: their forms are single "add" rows above short lists, not the standing form this step removes. | 1, 2 |
-| **C** | *Started (§4).* **Plain-language labels** from one table (the status badges already work this way): reachability, inform recency, job types, BSS states. Form help text shortened to one line, with the detail behind a "?" . | 5 |
-| **D** | **Navigation in five areas**, related screens as tabs of one page: *Overview* (Dashboard, Fleet Health, Alerting), *Devices* (Inventory, Onboarding, Groups), *Activity* (Jobs, Bulk operations, Scheduled Jobs, Bulk actions as its "New" button), *Configuration* (Templates, Policies, Rollouts), *Administration* (Operators, Tenancy, BSS/NaaS, Audit, Reports, Captures). Old URLs redirect. A global search box in the top bar using the existing subscriber lookup. | 6 |
-| **E** | **Device first screen**: name or subscriber, model and serial under it, then a health row (firmware, uptime, signal, Wi-Fi clients, last job) in the space that is empty today. Lists show label or subscriber first, serial second. | 7, 8 |
-| **F** | **Dashboard**: a widget with one value shows a number, not a bar; a widget with nothing to show collapses to a line. | 8 |
+| **C** | *Done for the dashboard, Jobs, the device page and status badges (§4); form help text is still to shorten.* **Plain-language labels** from one table (the status badges already work this way): reachability, inform recency, job types, BSS states. Form help text shortened to one line, with the detail behind a "?" . | 5 |
+| **D** | *Done (§4), as six areas plus Help; the global search box is not built.* **Navigation in five areas**, related screens as tabs of one page: *Overview* (Dashboard, Fleet Health, Alerting), *Devices* (Inventory, Onboarding, Groups), *Activity* (Jobs, Bulk operations, Scheduled Jobs, Bulk actions as its "New" button), *Configuration* (Templates, Policies, Rollouts), *Administration* (Operators, Tenancy, BSS/NaaS, Audit, Reports, Captures). Old URLs redirect. A global search box in the top bar using the existing subscriber lookup. | 6 |
+| **E** | *Health row done (§4); lists still lead with the serial when a device has no label or subscriber name.* **Device first screen**: name or subscriber, model and serial under it, then a health row (firmware, uptime, signal, Wi-Fi clients, last job) in the space that is empty today. Lists show label or subscriber first, serial second. | 7, 8 |
+| **F** | *Done (§4).* **Dashboard**: a widget with one value shows a number, not a bar; a widget with nothing to show collapses to a line. | 8 |
 | **G** | **Themes**: keep Dark and Light as supported; keep Unfold and Fluent selectable but stop designing for them until the raw colours are gone. Decision needed. | 9 |
 
 Steps A and B change how screens are laid out, not what they do, so they can ship screen by screen. D is the only step an operator will notice as "things moved", and should go out with a short note in Help.
@@ -64,6 +64,25 @@ Steps A and B change how screens are laid out, not what they do, so they can shi
 - *Alerting* was the one screen built outside the console's conventions: its own page heading, hand-made tables, a status class that does not exist, raw IDs and durations shown in nanoseconds. It now uses the shared table, opens on the open incidents, shows "15m" for a threshold, picks a group from a list, links an incident to its device, and has the Delete button the API has always supported for a policy.
 
 **Plain-language labels, first use** (`frontend/src/lib/labels.ts`). The dashboard charts say "Reached at its next check-in" and "In the last 5 minutes" where they said `PERIODIC_FALLBACK_ONLY` and `under_5m`; the raw value is the tooltip. On the BSS screen, "Workflow A/B/C" and `oui_serial` in headings and placeholders are replaced with what each form does.
+
+**Navigation in areas** (`frontend/src/lib/nav.ts`). The sidebar had 20 entries in 7 collapsible groups; it now has six areas and Help. The screens of the current area are tabs across the top of the page:
+
+| Area | Tabs |
+|---|---|
+| Overview | Dashboard, Fleet health, Alerting |
+| Devices | Inventory, Onboarding, Groups, Bulk actions |
+| Activity | Jobs, Bulk operations, Scheduled jobs |
+| Configuration | Templates, Policies, Rollouts |
+| Records & tools | Audit log, Reports, Session captures |
+| Administration (superadmin) | Operators, Tenancy, BSS / NaaS |
+
+Every screen keeps the address it had (`/jobs`, `/rollouts`, …), so bookmarks, links in tickets and the Back button work as before; an area is only a grouping. Jobs moved from Monitor to Activity, beside the bulk operations and schedules that create them. A unit test checks that every screen that used to be in the sidebar is still reachable.
+
+**Device health row** (`components/DeviceHealthRow.tsx`, `lib/deviceHealth.ts`). The overview now opens with last check-in, firmware, uptime, signal (RSRP in dBm, banded good / fair / poor), Wi-Fi clients and the last job. A figure the device has not reported is left out, not shown blank, so a mesh satellite has no empty "Signal" box. It reads a dozen named parameters, not the whole cache.
+
+**Dashboard.** A chart with a single category is written as a statement ("Offline — all 15 devices") in place of a full-width bar, and a widget with nothing to report is one line under the grid.
+
+**More plain labels.** Job types read "Set parameters", "Wake device", "Firmware update" on the Jobs screen and the device page, and the badges say "at next check-in" and "sent to device"; the raw value is the tooltip everywhere.
 
 Verified in a browser against the running stack and by two new Playwright tests (confirmation dialog; two-step sign-in).
 

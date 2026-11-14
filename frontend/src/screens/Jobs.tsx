@@ -10,6 +10,7 @@ import { useLive } from "../lib/useLive";
 import { useSlashFocus } from "../lib/hotkeys";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
+import { plainLabel } from "../lib/labels";
 import { toast } from "../lib/toast";
 import { canCancelJob, canRetryJob } from "../lib/jobActions";
 
@@ -89,7 +90,7 @@ export function Jobs() {
 
   const columns = useMemo<ColumnDef<Job, any>[]>(
     () => [
-      { accessorKey: "command_key", header: "Command Key" },
+      { accessorKey: "command_key", header: "Job" },
       {
         accessorKey: "device_id",
         header: "Device",
@@ -99,7 +100,15 @@ export function Jobs() {
           </Link>
         ),
       },
-      { accessorKey: "type", header: "Type", cell: ({ getValue }) => <span className="dim">{getValue() as string}</span> },
+      {
+        accessorKey: "type",
+        header: "Action",
+        cell: ({ getValue }) => (
+          <span className="dim" title={getValue() as string}>
+            {plainLabel(getValue() as string)}
+          </span>
+        ),
+      },
       { accessorKey: "status", header: "Status", cell: ({ getValue }) => <StatusBadge value={getValue() as string} /> },
       {
         id: "actions",
@@ -194,9 +203,9 @@ export function Jobs() {
           <input aria-label="Filter by command_key, device, fault" ref={searchRef} placeholder="Filter by command_key, device, fault… (press /)" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <select className="chip" aria-label="Filter by job type" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-          <option value="">All types</option>
+          <option value="">All actions</option>
           {types.map((t) => (
-            <option key={t} value={t}>{t}</option>
+            <option key={t} value={t}>{plainLabel(t)}</option>
           ))}
         </select>
         <select className="chip" aria-label="Filter by status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>

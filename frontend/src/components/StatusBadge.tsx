@@ -57,7 +57,7 @@ const TONE_BY_VALUE: Record<string, string> = {
 // raw value is always available on hover via title.
 const LABEL_BY_VALUE: Record<string, string> = {
   HTTP_200_INFORM_RECEIVED: "inform received",
-  PERIODIC_FALLBACK_ONLY: "periodic fallback",
+  PERIODIC_FALLBACK_ONLY: "at next check-in",
   LEASE_EXPIRED_UNSAFE_RETRY: "expired — not retried",
   AWAITING_TRANSFER_COMPLETE: "awaiting transfer",
   AWAITING_DIAGNOSTICS_COMPLETE: "awaiting result",
@@ -65,7 +65,7 @@ const LABEL_BY_VALUE: Record<string, string> = {
   DIRECT_IPV6: "direct IPv6",
   XMPP_SENT_INFORM_RECEIVED: "inform received (XMPP)",
   IN_PROGRESS: "in progress",
-  RPC_SENT: "RPC sent",
+  RPC_SENT: "sent to device",
 };
 
 export function StatusBadge({ value }: { value: string }) {

@@ -57,11 +57,13 @@ const SECTIONS: Section[] = [
           <a href="#latency"> Why is my job still QUEUED</a> before you use anything else here.
         </p>
         <p className="help-note">
-          The sidebar is grouped by intent: <strong>Monitor</strong> to see what the fleet is doing,
-          <strong> Devices</strong> to act on specific hardware, <strong>Provisioning</strong> to
-          change how devices get configured, <strong>Troubleshooting</strong> for session captures,
-          <strong> Integrations</strong> for the BSS/NaaS link, <strong>Administration</strong> to run the
-          platform, and <strong>Records</strong> for history and exports.
+          The sidebar lists areas, and each area's screens are tabs across the top of the page:
+          <strong> Overview</strong> to see what the fleet is doing, <strong>Devices</strong> to find and act
+          on hardware, <strong>Activity</strong> for the jobs and bulk operations in flight,
+          <strong> Configuration</strong> for templates, policies and firmware rollouts,
+          <strong> Records &amp; tools</strong> for the audit log, reports and session captures, and
+          <strong> Administration</strong> for operators, tenancy and the BSS/NaaS link. Every screen keeps its
+          own address, so bookmarks still work.
         </p>
       </>
     ),
@@ -382,13 +384,13 @@ const SECTIONS: Section[] = [
           Bulk actions are deliberately limited to <Term>SET_PARAMETER</Term>,{" "}
           <Term>CONNECTION_REQUEST</Term> and a cellular refresh. Reboots and factory resets are not
           available in bulk. Each selected device gets its own job, so results arrive independently —
-          watch them in <strong>Monitor → Jobs</strong>.
+          watch them in <strong>Activity → Jobs</strong>.
         </p>
         <p>
-          Every bulk action and template apply is recorded under <strong>Devices → Bulk operations</strong>:
+          Every bulk action and template apply is recorded under <strong>Activity → Bulk operations</strong>:
           how many devices have finished, which failed and why. From there you can cancel the jobs not yet
           sent to a device, or retry the ones that failed. A single job can be cancelled (while queued) or
-          retried (after it failed) from <strong>Monitor → Jobs</strong>. Jobs that belong to a firmware
+          retried (after it failed) from <strong>Activity → Jobs</strong>. Jobs that belong to a firmware
           rollout, a BSS order or onboarding are managed there and cannot be changed from these screens.
         </p>
       </>
@@ -659,7 +661,7 @@ const SECTIONS: Section[] = [
     body: (
       <>
         <p>
-          Open <strong>Monitor → Jobs</strong> and read the fault code, which comes from the CPE
+          Open <strong>Activity → Jobs</strong> and read the fault code, which comes from the CPE
           itself. A few worth knowing:
         </p>
         <ul className="help-list">

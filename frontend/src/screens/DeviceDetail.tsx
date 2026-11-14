@@ -32,12 +32,17 @@ import { skippedNote, unsupportedReason } from "../lib/diagnostics";
 import { SubNav } from "../components/SubNav";
 import { deviceCapabilities, devicePath, visibleSections, type DeviceSectionId } from "../lib/deviceSections";
 import { confirmDialog } from "../lib/confirm";
+import { HEALTH_PATHS, deviceHealth } from "../lib/deviceHealth";
+import { DeviceHealthRow } from "../components/DeviceHealthRow";
+import { plainLabel } from "../lib/labels";
 
 // What each sub-page reads on open and on every poll, so a page loads only
 // what it shows (the single-page layout fired ~23 calls on open, close to
 // the API's burst limit of 30).
-const SECTION_DATA: Record<DeviceSectionId, { params?: true; jobs?: true; credentials?: true; uploads?: true }> = {
-  overview: { jobs: true },
+const SECTION_DATA: Record<DeviceSectionId, { params?: true; health?: true; jobs?: true; credentials?: true; uploads?: true }> = {
+  // The overview reads a dozen named parameters for its health row, not
+  // the whole cache.
+  overview: { jobs: true, health: true },
   wifi: {},
   cellular: { params: true },
   connectivity: { credentials: true },
@@ -118,7 +123,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
         const needs = SECTION_DATA[section];
         const [d, p, j, c, u] = await Promise.all([
           api.getDevice(id),
-          needs.params ? api.getDeviceParameters(id) : null,
+          needs.params ? api.getDeviceParameters(id) : needs.health ? api.getDeviceParametersByName(id, HEALTH_PATHS).catch(() => null) : null,
           needs.jobs ? api.listDeviceJobs(id) : null,
           needs.credentials ? api.listDeviceCredentials(id) : null,
           needs.uploads ? api.listDeviceUploads(id) : null,
@@ -483,7 +488,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
           jobs.slice(0, 8).map((j) => (
             <div className="param-row" key={j.command_key}>
               <span className="path">
-                {j.command_key} <span style={{ color: "var(--ink-faint)" }}>· {j.type}</span>
+                {j.command_key} <span style={{ color: "var(--ink-faint)" }} title={j.type}>· {plainLabel(j.type)}</span>
               </span>
               <span>
                 <StatusBadge value={j.status} />
@@ -595,6 +600,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
       <div className="device-content split two-col">
         {section === "overview" && (
           <>
+            <DeviceHealthRow device={device} health={deviceHealth(params)} lastJob={jobs[0]} />
             <div className="panel">
               <h3>Identity</h3>
               <dl className="kv">

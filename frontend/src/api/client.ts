@@ -324,6 +324,10 @@ export const api = {
 
   getDeviceParameters: (id: string) =>
     request<{ parameters: ParameterCache }>(`/api/v1/devices/${id}/parameters`),
+  // Only the named parameters. The whole cache of a gateway is thousands
+  // of entries; a screen that shows a handful should ask for a handful.
+  getDeviceParametersByName: (id: string, names: string[]) =>
+    request<{ parameters: ParameterCache }>(`/api/v1/devices/${id}/parameters?paths=${encodeURIComponent(names.join(","))}`),
 
   putDeviceParameters: (
     id: string,

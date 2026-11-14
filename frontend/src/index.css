@@ -1058,3 +1058,26 @@ input:focus, select.chip:focus {
 .drawer-body .member-list { max-height: none; }
 @keyframes drawer-in { from { transform: translateX(1.5rem); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .drawer { animation: none; } }
+
+/* --- Area tabs: the screens of the current navigation area (lib/nav.ts) --- */
+.area-tabs { display: flex; gap: 0.15rem; flex-wrap: wrap; border-bottom: 1px solid var(--border); margin: 0 0 1rem; }
+.area-tabs a {
+  padding: 0.45rem 0.85rem; color: var(--ink-dim); text-decoration: none; font-size: 0.88rem;
+  border-bottom: 2px solid transparent; margin-bottom: -1px; border-radius: var(--radius-sm, 4px) var(--radius-sm, 4px) 0 0;
+}
+.area-tabs a:hover { color: var(--ink); background: var(--surface-2); }
+.area-tabs a.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.area-tabs a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* --- Device health row (components/DeviceHealthRow.tsx) --- */
+.device-health { grid-column: 1 / -1; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); }
+.device-health .stat .n { font-size: 1.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat-note { font-size: 0.72rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
+.signal-good { color: var(--ok); }
+.signal-fair { color: var(--warn); }
+.signal-poor { color: var(--danger); }
+
+/* --- Dashboard: single-value widgets and quiet notes --- */
+.single-value { margin: 0; font-size: 0.95rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.single-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; flex: none; }
+.dashboard-quiet { margin: 0.9rem 0 0; font-size: 0.82rem; }

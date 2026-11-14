@@ -77,7 +77,7 @@ async function signIn(page: Page) {
   await page.getByLabel("Username").fill("e2e-operator");
   await page.getByLabel("Password").fill("right-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("navigation")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -95,15 +95,23 @@ test("wrong password shows the API error, right password reaches the console", a
 
   await page.getByLabel("Password").fill("right-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("button", { name: "Inventory", exact: true })).toBeVisible();
+  // The sidebar lists areas; Inventory is the first tab of Devices.
+  await expect(page.getByRole("button", { name: "Devices", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Inventory", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(page.getByText("001349-NR7101-S1")).toBeVisible();
 });
 
 test("screens are URL-routed and the browser back button works", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "Jobs", exact: true }).click();
+  // An area in the sidebar lands on its first screen; its other screens
+  // are tabs, each with the URL it always had.
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
   await expect(page).toHaveURL(/\/jobs$/);
-  await page.getByRole("button", { name: "Dashboard" }).click();
+  await page.getByRole("link", { name: "Bulk operations" }).click();
+  await expect(page).toHaveURL(/\/operations$/);
+  await page.getByRole("link", { name: "Jobs", exact: true }).click();
+  await expect(page).toHaveURL(/\/jobs$/);
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(page.getByText("job success rate")).toBeVisible();
   await page.goBack();
@@ -151,7 +159,7 @@ test("login page has no critical accessibility violations", async ({ page }) => 
 test("fleet and dashboard have no critical accessibility violations", async ({ page }) => {
   await signIn(page);
   await expectNoSeriousA11y(page, "fleet");
-  await page.getByRole("button", { name: "Dashboard" }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page.getByText("job success rate")).toBeVisible();
   await expectNoSeriousA11y(page, "dashboard");
 });
@@ -319,7 +327,8 @@ test("an admin removes an account-device mapping with a reason", async ({ page }
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items }) });
   });
   await signIn(page);
-  await page.getByRole("button", { name: "BSS / NaaS" }).click();
+  await page.getByRole("button", { name: "Administration", exact: true }).click();
+  await page.getByRole("link", { name: "BSS / NaaS" }).click();
   await page.getByRole("button", { name: `Remove ${DEVICE.oui_serial} from TEST-0001` }).click();
   await page.getByLabel("Reason for removing").selectOption("return");
   await page.getByRole("button", { name: "Remove", exact: true }).click();
@@ -358,7 +367,7 @@ test("ownership masks the subscriber until Show, and Back returns to the previou
   await expectNoSeriousA11y(page, "ownership");
   await page.screenshot({ path: "test-results/ownership-revealed.png" });
 
-  await page.getByRole("button", { name: "Inventory" }).click();
+  await page.getByRole("link", { name: "Inventory", exact: true }).click();
   await page.getByRole("button", { name: "Back to the previous page" }).click();
   await expect(page).toHaveURL(/\/devices\/dev-1\/ownership$/);
 });
@@ -383,7 +392,7 @@ test("two-step sign-in asks for a code, survives a wrong one, and reaches the co
 
   // The password alone does not open the console.
   await expect(page.getByText("six-digit code")).toBeVisible();
-  await expect(page.getByRole("navigation")).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Main" })).toHaveCount(0);
 
   await page.getByLabel("Code").fill("000000");
   await page.getByRole("button", { name: "Verify" }).click();
@@ -393,7 +402,7 @@ test("two-step sign-in asks for a code, survives a wrong one, and reaches the co
 
   await page.getByLabel("Code").fill("123456");
   await page.getByRole("button", { name: "Verify" }).click();
-  await expect(page.getByRole("navigation")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
 
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations.filter((v) => v.impact === "critical")).toEqual([]);

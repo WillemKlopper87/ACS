@@ -20,6 +20,24 @@ const PLAIN: Record<string, string> = {
   under_24h: "In the last 24 hours",
   stale: "More than a day ago",
   never: "Never",
+  // What a job does.
+  SET_PARAMETER: "Set parameters",
+  GET_PARAMETER: "Read parameters",
+  CONNECTION_REQUEST: "Wake device",
+  FIRMWARE_DOWNLOAD: "Firmware update",
+  DIAGNOSTICS_PING: "Ping test",
+  DIAGNOSTICS_TRACEROUTE: "Traceroute",
+  DIAGNOSTICS_DOWNLOAD: "Download speed test",
+  DIAGNOSTICS_UPLOAD: "Upload speed test",
+  ADD_OBJECT: "Add object",
+  DELETE_OBJECT: "Delete object",
+  REBOOT: "Reboot",
+  FACTORY_RESET: "Factory reset",
+  SCHEDULE_INFORM: "Schedule a check-in",
+  SET_PARAMETER_ATTRIBUTES: "Set notifications",
+  GET_PARAMETER_ATTRIBUTES: "Read notifications",
+  UPLOAD: "Fetch a file from the device",
+  PARAMETER_DISCOVERY: "Discover data model",
 };
 
 export function plainLabel(value: string): string {
