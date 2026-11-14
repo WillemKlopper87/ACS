@@ -1,10 +1,9 @@
 # Per-ISP account IDs and order IDs: design
 
-Status: **approved; phase 1 of 2 is built** (migration 0098, no behaviour
-change). Phase 2, the switch to per-ISP IDs, is not built. Closes finding
-O2 of `docs/SECURITY-ASSESSMENT-2026-11-14.md` once phase 2 is in.
-Section 8 records the decisions taken; section 9 says what phase 1
-changed and what phase 2 still has to do.
+Status: **built** (migrations 0098 and 0099). Closes finding O2 of
+`docs/SECURITY-ASSESSMENT-2026-11-14.md`. Sections 1 to 8 are the design
+as proposed and approved; section 9 is phase 1 as built; section 10 is
+phase 2 as built, including where it differs from the proposal.
 
 ## 1. The problem
 
@@ -244,25 +243,89 @@ has a registry row with no owner, where before it had no row. The rules
 that depended on "no row" (claiming, who may see a profile) test for "no
 owner" instead.
 
-### What phase 2 has to do
+## 10. Phase 2 as built
 
-1. `accounts.Resolve` / `Ensure` take the caller's customer from the
-   request context; the adapter's authentication sets it. Without a
-   customer (operator API, global client) an ID resolves only if it is
-   unambiguous, else `ErrAccountAmbiguous`.
-2. `FindOrder`, `FindServiceOrder` and the service-problem lookup by
-   external ID use the same scope. `GET /monitor/{id}` has no account in
-   its path, so it depends on this.
-3. `ClaimAccount` creates the account in the caller's namespace;
-   `AssignAccountOwner` refuses a move onto an existing ID.
-4. Drop the `*_global_*` constraints.
-5. `customer_id` qualifier on the operator routes; customer shown in the
-   console's account lists and header search.
-6. Sales: add the customer to the `account_ref` lookup
-   (`onboarding.OpenBSSSales`).
-7. Alerting uses the account ID as its tenant label; decide whether two
-   ISPs' same-numbered accounts may share that label or it becomes the
-   key.
-8. Test fixtures go through `accountstest.EnsureCTE`, the one place that
-   needs the new uniqueness rule.
-9. Tests of section 6, the integration guide, OpenAPI and fixtures.
+Migration `0099_account_ids_per_customer.sql` drops the constraints that
+kept IDs unique across the ACS. What remains:
+
+| Identifier | Unique within |
+|---|---|
+| `account_id` | a customer (and the unowned accounts) |
+| `external_order_id`, TMF641 `externalId` | a customer |
+| service problem `externalId` | an account |
+| event `sourceKey` | a customer |
+| alarm `sourceKey` | an account |
+
+The last two were not in the proposal. A `sourceKey` is chosen by whoever
+reports the event or alarm, an integration included, and was unique
+across the ACS: one ISP's key made another's identical key a silent
+no-op. Same problem, same fix.
+
+### Who an ID belongs to
+
+`internal/accounts` resolves every ID, from the request's context:
+
+| Caller | Set by | IDs resolve |
+|---|---|---|
+| Customer-bound client | the adapter's authentication, from the token | in that customer only |
+| Global client, shared token, lab profile | `?customer_id=` (`none` = unowned) if given | in the named customer; else the ID must name one account, or `409 ErrAccountAmbiguous` |
+| Client limited to listed account IDs | never (it may not name a customer) | only while unambiguous |
+| Operator API | `?customer_id=` on the account routes | as for a global client; `409` when ambiguous |
+| Worker handling an order | the order's own scope | in the order's customer |
+| Telemetry, alert incidents | the device | the account of that ID the device is mapped to |
+| A sale | the sale's customer | in that customer |
+
+### Rows found by their own ID
+
+This was the one hole the proposal missed, found by the existing tests.
+Handlers that load a row by its own ID (a TMF service, an order, a
+Monitor, a subscription, a sale) used to authorize on the row's account
+ID. Once two customers can share an account ID that is not enough: a
+caller with an account "1001" of its own could present another
+customer's row whose account is also "1001". Two things now prevent it:
+
+1. such lookups run inside the caller's customer, so the row is not
+   found at all; and
+2. the account gate checks that the account the ID names for the caller
+   is the very account the row belongs to (`authorizeTMFRow`,
+   `authorizeBSSRow`), and that a sale is the caller's customer's.
+
+Either alone is sufficient; a test exercises the second without the
+first.
+
+### Differences from the proposal
+
+- **Accounts from before binding** keep their protection. The proposal
+  said a claim "can no longer be blocked". It still is in one case: an
+  unowned account of that ID with mappings, orders, service orders or
+  webhooks. That is almost certainly the same ISP's account from before
+  its client was bound, and letting the client start an empty one beside
+  it would orphan the history. Only operators and global clients can
+  create unowned accounts, so this is not a way for one ISP to block
+  another.
+- **Alerting** still labels incidents with the account ID, qualified by
+  the device. Two ISPs' same-numbered accounts share the label; their
+  incidents do not mix, because an incident is per device. Left as is.
+
+### Tests
+
+- `cmd/bssadapter/tenant_ids_test.go`: two ISPs with the same account ID
+  and order ID; an ID used first by another ISP; another customer's row
+  by its ID; a global client with and without `customer_id`, a listed
+  client, a bound client that names another customer; the same
+  `sourceKey` from two ISPs; a move onto an existing ID.
+- `cmd/api/tenant_ids_test.go`: the operator routes, unqualified (409,
+  nothing changed) and named.
+- A live run on a copy of the lab database: two bound integrations
+  created through the API, same account ID, same order ID, each with its
+  own order and its own retry; the operator API refusing the unqualified
+  call and answering the named ones.
+
+### Contract
+
+For a customer-bound client, requests and responses are unchanged. Two
+answers change meaning: a write to an ID another customer uses (was
+`404`, or `409` for an order ID) now succeeds on the caller's own
+account or order. One recorded fixture exchange no longer holds
+(`subscriber-profile`, the last one). Nothing has been re-recorded or
+tagged; `contract/README.md` says so.

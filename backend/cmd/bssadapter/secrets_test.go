@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts/accountstest"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -213,7 +214,7 @@ func TestSecretOwnership(t *testing.T) {
 	tokA, tokB := bindingToken(t, custA, false), bindingToken(t, custB, false)
 	const deviceB = "33333333-3333-3333-3333-333333333333"
 	seedOrderDevice(t, e.ctx, e.db, "acct-b", deviceB)
-	if _, err := e.db.ExecContext(e.ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('acct-b', $1, 'test') ON CONFLICT (account_id) DO UPDATE SET customer_id = EXCLUDED.customer_id`, custB); err != nil {
+	if _, err := e.db.ExecContext(e.ctx, accountstest.OwnSQL("'acct-b'"), custB); err != nil {
 		t.Fatal(err)
 	}
 

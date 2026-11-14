@@ -55,6 +55,19 @@ these values. Exchanges keep the response headers an integration acts on
 and the request headers that matter (`request_headers`). Errors are RFC 9457
 problems that keep the older `error`/`message` keys.
 
+**Not yet released: account and order IDs per customer.** The build after
+`v1.2.1` makes `account_id`, `external_order_id`, the TMF641 `externalId`
+and event/alarm `sourceKey` unique per customer instead of across the ACS
+(`docs/TENANT-SCOPED-IDS-DESIGN.md`). For a customer-bound client the
+requests and responses are unchanged, with two differences in meaning: a
+write to an ID that another customer uses now registers the caller's own
+account or order (it was `404`, or `409 ErrIdempotencyKeyReused` for an
+order ID), and one new code exists, `409 ErrAccountAmbiguous`, which only
+a global client can receive. One recorded exchange no longer holds: the
+last one of `subscriber-profile` (`PUT .../rival.0001/subscriber`, recorded
+as 404, now 200). The fixtures have not been re-recorded and no tag has
+been cut; by the rule below, a changed meaning is a major version.
+
 **Versioned.** The contract is tagged `bss-contract-v<major>.<minor>.<patch>`
 (`bss-contract-v1.0.0`, `v1.0.1`, `v1.1.0`, `v1.1.1`, `v1.2.0`, `v1.2.1`). A tag never moves. Within a major version, changes only add
 (fields, endpoints, and codes that only a new endpoint or parameter can return); a removal or a changed

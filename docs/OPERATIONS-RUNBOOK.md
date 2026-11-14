@@ -194,6 +194,37 @@ taken.
 |---|---|---|---|
 | — | — | — | no physical/staging drill recorded yet; CI rehearsal is automated |
 
+## Account IDs are per customer
+
+An ISP's `account_id` and order IDs are its own: two customers can have
+an account of the same ID (`docs/TENANT-SCOPED-IDS-DESIGN.md`).
+
+- **In the console** the BSS / NaaS mapping list shows the customer next
+  to each account ID, and the console passes it along when you act on a
+  row. Nothing changes while IDs do not repeat.
+- **In API calls and scripts** that address an account by ID
+  (`/api/v1/accounts/{id}/profile`, `/api/v1/bss/mappings/{id}/...`,
+  `/api/v1/bss/accounts/{id}/customer`): if the ID is used by more than
+  one customer the call is refused with `409` and does nothing. Add
+  `?customer_id=<customer>`, or `customer_id=none` for the account no
+  customer owns.
+- **Assigning an account to a customer** is refused (`409`) when that
+  customer already has an account of the same ID. Decide which of the
+  two is the real one; there is no merge.
+- **An account from before an ISP's client was bound** (created from the
+  console or by a global client, and it has mappings or orders) is not
+  taken over by the ISP's first write: the ISP gets `404` on that ID
+  until you assign the account to it. A `WARN` line "bound client refused
+  an account with legacy data" in the adapter log names the account.
+- **Upgrading**: migrations 0098 and 0099 are forward-only and rewrite
+  the account columns of the event table once. Take a backup first
+  (`scripts/backup.sh`) and run them in a quiet period. Lab data: 100
+  events, under a second; a production-sized event table has not been
+  timed.
+- **Alert incidents** are labelled with the account ID and the device.
+  Two customers' same-numbered accounts share the label; use the device
+  to tell them apart.
+
 ## Separate database logins per service
 
 By default every service connects as `acs`, the role that owns the schema.

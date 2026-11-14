@@ -43,7 +43,8 @@ merely the device's acknowledgement of the request.
 ## 2. Idempotency: `external_order_id` is the contract
 
 `external_order_id` is yours to choose, must be unique per logical order,
-and is the idempotency key.
+and is the idempotency key. It is unique **among your own orders**: another
+ISP on the same ACS can use the same value and neither of you will notice.
 
 Resubmitting an identical order returns the **original** job with its
 **current** status. Not a duplicate, not a conflict, not an error.
@@ -54,7 +55,8 @@ Resubmitting an identical order returns the **original** job with its
 | Connection dropped mid-request | **Resend the identical order.** |
 | `5xx` from the ACS | Back off, then resend the identical order. |
 | Genuinely a new change | New `external_order_id`. |
-| Your key, another tenant's account | `404 ErrNotFound`: a key never confirms that another tenant used it. |
+| Your key, already used by another ISP | Nothing: order IDs are per ISP. You get your own order, and no answer ever tells you another ISP used the value. |
+| Your key, reused for a different one of your accounts | `409 ErrIdempotencyKeyReused`. One ID is one order. |
 | Retrying a *failed* order after fixing the cause | New `external_order_id` — the original is terminal. |
 
 **The anti-pattern that causes real incidents:** appending a suffix or a
@@ -92,6 +94,7 @@ rather than compounding.
 | `404` | `ErrJobNotFound` | Permanent | Wrong `command_key`. |
 | `409` | `ErrRoleAlreadyAssigned` | Needs a decision | The role is occupied. Unassign or swap — do not retry. |
 | `409` | `ErrIdempotencyKeyReused` | Permanent | A key reused for a different request. A bug on the caller's side. |
+| `409` | `ErrAccountAmbiguous` | Permanent | Only a fleet-wide (global) client can get this: the `account_id` (or order ID) is used by more than one customer. Name the customer with the `customer_id` query parameter. A customer-bound client never sees it. |
 | `409` | `ErrIdempotencyKeyInFlight` | **Retryable** | The first request with the key still runs; retry after `Retry-After`. |
 | `409` | `ErrSaleWrongState` | Permanent | The sale's state does not allow the retry or cancel. Read the sale. |
 | `400` | `ErrSecretHandleInvalid` | Permanent | The `wifi_password_handle` is unknown, expired, already used or another customer's. Store the secret again (§8.2). |
@@ -248,16 +251,20 @@ An OAuth client can be **bound to one ACS customer** (an ISP). This is the
 recommended model for an ISP or NaaS platform, and the only one accepted
 when the ACS runs with `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true`.
 
+- **Your IDs are your own.** `account_id`, `external_order_id` and the
+  TMF641 `externalId` are unique per customer, not across the ACS. Use
+  whatever numbering your BSS has; no prefix is needed. Another ISP using
+  the same value has its own account or order, and nothing you send or
+  receive is affected by it or reveals it. The same holds for the
+  `sourceKey` of events and alarms you report.
 - **Accounts belong to customers.** The first *write* a bound client makes
   for a new `account_id` (a mapping, an order, a TMF641 order, a webhook)
-  claims that account for its customer. From then on only that customer's
-  clients can read or change it. Every other client gets **404**, never
-  403, so account ids are no existence oracle across ISPs. A read of an
-  account nobody owns yet is also 404.
-- **Account ids stay globally unique.** Mint them so they cannot collide
-  across ISPs, for example `<tenant prefix>.<uuid>`. Ownership, not
-  per-customer uniqueness, is what keeps one ISP out of the accounts of
-  another.
+  registers that account for its customer. A bound client only ever sees
+  its own customer's accounts: an ID it has not written to reads as
+  **404**, whether or not another ISP uses that ID.
+- **Rows have owners too.** A service, order, Monitor, sale or webhook
+  subscription addressed by its own ID is found only if it is your
+  customer's; anyone else's is **404**.
 - **Devices follow the account.** Mapping a device with no customer to a
   bound account gives the device that customer. A device of another
   customer is not found (404 `ErrDeviceNotMapped`). The device only
@@ -267,11 +274,22 @@ when the ACS runs with `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS=true`.
   customer's plans or shared ones. An explicit `customer_id` (mapping) or
   `customerId` (TMF641 order) must be the account's customer, else the
   request is refused (409 on mappings, a FAILED item on TMF641).
-- **Accounts from before binding.** An account that already has mappings,
-  orders, service orders or webhooks from a global client cannot be
-  claimed by a bound client; it stays 404 until an operator assigns it
+- **Accounts from before binding.** An account that nobody owns and that
+  already has mappings, orders, service orders or webhooks (written from
+  the console or by a global client) is very likely yours from before
+  your client was bound. A bound client's write to that ID is refused
+  with 404 rather than starting a second, empty account beside it, until
+  an operator assigns the existing one
   (`PUT /api/v1/bss/accounts/{account_id}/customer`, superadmin). Only an
-  operator can move an account between customers.
+  operator can move an account between customers, and not onto an ID the
+  customer already uses.
+- **Fleet-wide (global) clients name the customer.** A client that is not
+  bound has no customer of its own. While an ID is used by one customer
+  only, it resolves as before. Once two customers use it, the call is
+  refused with `409 ErrAccountAmbiguous` until it says which:
+  `?customer_id=<customer>` (`customerId` also accepted; `none` means the
+  account no customer owns). A client limited to a list of account IDs
+  cannot name a customer, and a bound client's parameter is ignored.
 - **Scopes apply to `/bss/v1` too.** A bound client needs the same scope
   as the TMF counterpart of each call: `tmf:read` for reads, job status,
   reconciliation and preflight; `tmf:write` for mappings and webhooks;

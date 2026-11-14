@@ -538,6 +538,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
             {editingSubscriber && device.subscriber?.account_id && (
               <SubscriberProfileEditor
                 accountId={device.subscriber.account_id}
+                accountCustomerId={device.subscriber.account_customer_id ?? null}
                 onClose={() => setEditingSubscriber(false)}
                 onSaved={() => {
                   setEditingSubscriber(false);

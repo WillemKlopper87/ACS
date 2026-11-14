@@ -71,8 +71,8 @@ func TestMigration0098_BackfillsAccountKeys(t *testing.T) {
 	if got := one(`SELECT COUNT(*)::text FROM service_order_items WHERE seq = 1 AND bss_order_id IS NULL`); got != "1" {
 		t.Fatal("an item without an order gained one")
 	}
-	// Phase 1 keeps IDs unique across the ACS.
-	if _, err := db.ExecContext(ctx, `INSERT INTO bss_accounts (account_id) VALUES ('owned-1')`); err == nil {
+	// IDs are unique per customer: a second unowned account of an existing ID is refused.
+	if _, err := db.ExecContext(ctx, `INSERT INTO bss_accounts (account_id) VALUES ('legacy-1')`); err == nil {
 		t.Fatal("a second account with an existing ID was accepted")
 	}
 	// A row cannot name an account by ID without its key.

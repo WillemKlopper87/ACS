@@ -82,6 +82,7 @@ export function BSSIntegration() {
   // --- setup: mappings ---
   const [mappings, setMappings] = useState<BSSMapping[]>([]);
   const [mappingAccountId, setMappingAccountId] = useState("");
+  const [mappingCustomerId, setMappingCustomerId] = useState("");
   const [mappingOuiSerial, setMappingOuiSerial] = useState("");
   const [mappingServicePlan, setMappingServicePlan] = useState("");
 
@@ -201,7 +202,7 @@ export function BSSIntegration() {
   async function removeMapping() {
     if (!removing) return;
     try {
-      await api.unassignBSSMapping(removing.account_id, removing.role, removeReason);
+      await api.unassignBSSMapping(removing.account_id, removing.role, removeReason, removing.account_customer_id ?? null);
       toast(`Removed ${removing.oui_serial} from ${removing.account_id}`, "success");
       setRemoving(null);
       await loadSetup();
@@ -213,7 +214,7 @@ export function BSSIntegration() {
   async function createMapping(e: React.FormEvent) {
     e.preventDefault();
     try {
-      await api.createBSSMapping(mappingAccountId, mappingOuiSerial, mappingServicePlan || undefined);
+      await api.createBSSMapping(mappingAccountId, mappingOuiSerial, mappingServicePlan || undefined, mappingCustomerId || undefined);
       setMappingAccountId("");
       setMappingOuiSerial("");
       setMappingServicePlan("");
@@ -323,6 +324,19 @@ export function BSSIntegration() {
             </p>
             <form onSubmit={createMapping} className="form-row" style={{ flexWrap: "wrap" }}>
               <input aria-label="account_id" placeholder="Account ID" value={mappingAccountId} onChange={(e) => setMappingAccountId(e.target.value)} required />
+              <select
+                aria-label="Customer the account belongs to"
+                title="Account IDs are unique per customer. Pick the customer when two customers use this ID, or to create the account for a customer."
+                value={mappingCustomerId}
+                onChange={(e) => setMappingCustomerId(e.target.value)}
+              >
+                <option value="">Customer: not specified</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
               <input aria-label="oui_serial" placeholder="Device: OUI+ProductClass+Serial" value={mappingOuiSerial} onChange={(e) => setMappingOuiSerial(e.target.value)} required />
               <input aria-label="service_plan (optional)" placeholder="Service plan (optional)" value={mappingServicePlan} onChange={(e) => setMappingServicePlan(e.target.value)} />
               <button type="submit" className="btn primary">Create</button>
@@ -333,7 +347,13 @@ export function BSSIntegration() {
               <div style={{ maxHeight: "22rem", overflowY: "auto", marginTop: "0.75rem" }}>
                 {mappings.map((m) => (
                   <div className="param-row" key={m.id}>
-                    <span className="path">{m.account_id} <span className="dim">→</span> {m.oui_serial}</span>
+                    <span className="path">
+                      {m.account_id}{" "}
+                      <span className="dim" title="The customer this account belongs to. Account IDs are unique per customer.">
+                        ({m.account_customer_id ? customerName(customers, m.account_customer_id) : "no customer"})
+                      </span>{" "}
+                      <span className="dim">→</span> {m.oui_serial}
+                    </span>
                     <span className={statusPillClass(m.status)}>{m.status}</span>
                     {m.service_plan && <span className="src">{m.service_plan}</span>}
                     {removing?.id === m.id ? (

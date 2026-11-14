@@ -40,7 +40,12 @@ type bindingEnv struct {
 
 func newBindingEnv(t *testing.T) *bindingEnv {
 	t.Helper()
-	ctx, h, db := newOrderTestHandler(t, acsRouterStub(t, nil, nil))
+	return newBindingEnvWithACS(t, acsRouterStub(t, nil, nil))
+}
+
+func newBindingEnvWithACS(t *testing.T, acs http.Handler) *bindingEnv {
+	t.Helper()
+	ctx, h, db := newOrderTestHandler(t, acs)
 	h.oauthSigningSecret = bindingSecret
 	h.onboarding = onboarding.NewRepository(db)
 	e := &bindingEnv{ctx: ctx, h: h, db: db}
@@ -104,9 +109,25 @@ func TestCustomerBoundClientsAreIsolated(t *testing.T) {
 	if rec := e.call(t, e.h.listTMF641Orders, http.MethodGet, "/tmf-api/serviceOrdering/v4/serviceOrder?accountId=A.1", tokB, nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("B reads A.1 = %d", rec.Code)
 	}
+	// An account ID is the customer's own: B writing "A.1" gets an account
+	// of its own with that ID, and A's is untouched by it.
 	if rec := e.call(t, e.h.createMapping, http.MethodPost, "/bss/v1/mappings", tokB,
-		map[string]any{"account_id": "A.1", "oui_serial": "001122-DEV-B", "role": "extender"}); rec.Code != http.StatusNotFound {
-		t.Fatalf("B writes A.1 = %d %s", rec.Code, rec.Body)
+		map[string]any{"account_id": "A.1", "oui_serial": "001122-DEV-B", "role": "extender"}); rec.Code != http.StatusOK {
+		t.Fatalf("B writes its own A.1 = %d %s", rec.Code, rec.Body)
+	}
+	var owners, onA int
+	if err := e.db.QueryRowContext(e.ctx, `SELECT count(DISTINCT customer_id) FROM bss_accounts WHERE account_id = 'A.1'`).Scan(&owners); err != nil || owners != 2 {
+		t.Fatalf("customers with an account A.1 = %d (%v), want 2", owners, err)
+	}
+	if err := e.db.QueryRowContext(e.ctx, `SELECT count(*) FROM account_device_mappings m JOIN bss_accounts a ON a.id = m.account_key
+		WHERE a.account_id = 'A.1' AND a.customer_id = $1 AND m.unassigned_at IS NULL`, e.custA).Scan(&onA); err != nil || onA != 1 {
+		t.Fatalf("devices on A's A.1 = %d (%v), want only A's own", onA, err)
+	}
+	// Put DEV-B back as an unassigned device for the steps below.
+	if _, err := e.db.ExecContext(e.ctx, `
+		WITH gone AS (DELETE FROM account_device_mappings WHERE oui_serial = '001122-DEV-B')
+		UPDATE devices SET customer_id = NULL WHERE oui_serial = '001122-DEV-B'`); err != nil {
+		t.Fatal(err)
 	}
 	// Nor map A's device into its own account: the device is not found.
 	rec := e.call(t, e.h.createMapping, http.MethodPost, "/bss/v1/mappings", tokB, map[string]any{"account_id": "B.1", "oui_serial": "001122-DEV-A"})

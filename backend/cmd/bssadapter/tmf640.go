@@ -122,7 +122,7 @@ func (h *handler) getService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
-	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, m.AccountID) {
+	if !h.authorizeTMFRow(w, r, bss.ScopeTMFRead, m.AccountID, m.AccountKey) {
 		return
 	}
 

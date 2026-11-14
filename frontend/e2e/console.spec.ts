@@ -231,7 +231,7 @@ test("subscriber lookup finds a caller and the device shows who it serves", asyn
   });
   await page.route(`${API}/api/v1/devices/dev-1`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...DEVICE, subscriber: sub }) }));
-  await page.route(`${API}/api/v1/accounts/ACC-1001/profile`, (route) => {
+  await page.route(`${API}/api/v1/accounts/ACC-1001/profile?customer_id=none`, (route) => {
     if (route.request().method() === "PUT") {
       profileBody = route.request().postDataJSON();
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ account_id: "ACC-1001", vip: false }) });
@@ -333,7 +333,8 @@ test("an admin removes an account-device mapping with a reason", async ({ page }
   await page.getByLabel("Reason for removing").selectOption("return");
   await page.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(page.getByText("No mappings yet.")).toBeVisible();
-  expect(removed).toBe("/api/v1/bss/mappings/TEST-0001/gateway?reason=return");
+  // The console names whose account it is: this one has no customer.
+  expect(removed).toBe("/api/v1/bss/mappings/TEST-0001/gateway?reason=return&customer_id=none");
 });
 
 // Ownership shows who the device serves with the name masked and the
@@ -350,7 +351,7 @@ test("ownership masks the subscriber until Show, and Back returns to the previou
     return route.fulfill({ status: 200, contentType: "application/json",
       body: JSON.stringify({ ...sub, site: { name: "Home", street: "12 Rivonia Rd", suburb: "Sandton", city: "Johannesburg", postal_code: "2196" } }) });
   });
-  await page.route(`${API}/api/v1/accounts/ACC-1001/profile`, (route) =>
+  await page.route(`${API}/api/v1/accounts/ACC-1001/profile?customer_id=none`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ account_id: "ACC-1001", display_name: "Thandi Nkosi", name_source: "bss", vip: true }) }));
 
   await signIn(page);

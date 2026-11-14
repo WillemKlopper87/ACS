@@ -42,6 +42,8 @@ export interface Device {
 export interface SubscriberSummary {
   device_id: string;
   account_id?: string;
+  /** The customer that owns the account; absent when nobody does. Account IDs are unique per customer. */
+  account_customer_id?: string;
   subscriber_name?: string;
   vip: boolean;
   site?: { name?: string; street?: string; suburb?: string; city?: string; postal_code?: string };
@@ -474,7 +476,10 @@ export interface ParameterHistoryEntry {
 // --- BSS integration admin panel (admin-platform backlog) ---
 export interface BSSMapping {
   id: string;
+  /** The ISP's own ID: unique per customer, not across customers. */
   account_id: string;
+  /** The customer that owns the account; null when nobody does. Names the account in later calls. */
+  account_customer_id?: string | null;
   device_id: string;
   oui_serial: string;
   service_plan?: string;

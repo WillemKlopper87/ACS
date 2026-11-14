@@ -85,7 +85,7 @@ func (h *handler) subscriptionFor(w http.ResponseWriter, r *http.Request, scope 
 		if !h.authorizeBSSFleet(w, r) {
 			return nil, false
 		}
-	} else if !h.authorizeBSSAccount(w, r, scope, *sub.AccountID) {
+	} else if !h.authorizeBSSRow(w, r, scope, *sub.AccountID, sub.AccountKey) {
 		return nil, false
 	}
 	return sub, true

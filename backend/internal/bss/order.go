@@ -43,7 +43,13 @@ var ErrOrderAlreadyExists = errors.New("an order with this external_order_id alr
 type OrderRecord struct {
 	// ID is the order's internal key. State changes address the order by
 	// it; ExternalOrderID is the integration's own identifier.
-	ID              string
+	ID string
+	// Scope is the customer that owns the order's account ("" when nobody
+	// does): the namespace ExternalOrderID is unique in. A worker handling
+	// the order acts in it (accounts.WithCustomer).
+	Scope string
+	// AccountKey is the registry key of the order's account.
+	AccountKey      string
 	ExternalOrderID string
 	AccountID       string
 	Action          string
@@ -62,10 +68,23 @@ type OrderRecord struct {
 // FindOrder looks up a previously-recorded order by its BSS-assigned
 // external_order_id. Returns nil, nil if it hasn't been seen before.
 func (r *Repository) FindOrder(ctx context.Context, externalOrderID string) (*OrderRecord, error) {
+	// An order ID is unique per customer. A caller acting for one customer
+	// sees that customer's order; any other caller must not be handed one
+	// of several orders that share the ID.
+	scoped, scope := scopeArgs(ctx)
+	if !scoped {
+		var n int
+		if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM bss_orders WHERE external_order_id = $1`, externalOrderID).Scan(&n); err != nil {
+			return nil, fmt.Errorf("find order: %w", err)
+		}
+		if n > 1 {
+			return nil, fmt.Errorf("%w: order %s", accounts.ErrAmbiguous, externalOrderID)
+		}
+	}
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id::text, external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
-		FROM bss_orders WHERE external_order_id = $1
-	`, externalOrderID)
+		SELECT id::text, account_key::text, order_scope, external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
+		FROM bss_orders WHERE external_order_id = $1 AND ($2 = false OR order_scope = $3)
+	`, externalOrderID, scoped, scope)
 	return scanOrder(row, "find order")
 }
 
@@ -74,10 +93,11 @@ func (r *Repository) FindOrder(ctx context.Context, externalOrderID string) (*Or
 // the legacy BSS status endpoint must never become an account-scoped OAuth
 // client's side channel into arbitrary operator jobs.
 func (r *Repository) FindOrderByCommandKey(ctx context.Context, commandKey string) (*OrderRecord, error) {
+	scoped, scope := scopeArgs(ctx)
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id::text, external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
-		FROM bss_orders WHERE command_key = $1
-	`, commandKey)
+		SELECT id::text, account_key::text, order_scope, external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
+		FROM bss_orders WHERE command_key = $1 AND ($2 = false OR order_scope = $3)
+	`, commandKey, scoped, scope)
 	return scanOrder(row, "find order by command key")
 }
 
@@ -99,7 +119,7 @@ func (r *Repository) OrdersForDevice(ctx context.Context, deviceID string, limit
 		}
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id::text, external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, COALESCE(last_error, ''), created_at
+		SELECT id::text, account_key::text, order_scope, external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, COALESCE(last_error, ''), created_at
 		FROM bss_orders WHERE device_id = $1 AND status = $2
 		  AND ($4 = '' OR account_key = NULLIF($4, '')::uuid)
 		ORDER BY created_at DESC LIMIT $3`, deviceID, OrderStatusDispatched, limit, accountKey)
@@ -113,7 +133,7 @@ func (r *Repository) OrdersForDevice(ctx context.Context, deviceID string, limit
 		var rec OrderRecord
 		var deviceIDCol, commandKey sql.NullString
 		var paramsJSON []byte
-		if err := rows.Scan(&rec.ID, &rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceIDCol, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &rec.LastError, &rec.CreatedAt); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.AccountKey, &rec.Scope, &rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceIDCol, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &rec.LastError, &rec.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan order for device: %w", err)
 		}
 		rec.DeviceID = deviceIDCol.String
@@ -143,7 +163,7 @@ func scanOrder(row orderScanner, operation string) (*OrderRecord, error) {
 	var rec OrderRecord
 	var deviceID, commandKey, lastError sql.NullString
 	var paramsJSON []byte
-	err := row.Scan(&rec.ID, &rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceID, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &lastError)
+	err := row.Scan(&rec.ID, &rec.AccountKey, &rec.Scope, &rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceID, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &lastError)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -303,7 +323,7 @@ func (r *Repository) ClaimDuePendingOrders(ctx context.Context, limit int) ([]Or
 		SET last_attempt_at = now()
 		FROM claimed c
 		WHERE o.id = c.id
-		RETURNING o.id::text, o.external_order_id, o.account_id, o.action, o.device_id, o.parameters, o.command_key, o.status, o.attempts, o.last_error
+		RETURNING o.id::text, o.account_key::text, o.order_scope, o.external_order_id, o.account_id, o.action, o.device_id, o.parameters, o.command_key, o.status, o.attempts, o.last_error
 	`, OrderStatusPendingDispatch, maxDispatchAttempts, limit)
 	if err != nil {
 		return nil, fmt.Errorf("claim due pending orders: %w", err)
@@ -315,7 +335,7 @@ func (r *Repository) ClaimDuePendingOrders(ctx context.Context, limit int) ([]Or
 		var rec OrderRecord
 		var deviceID, commandKey, lastError sql.NullString
 		var paramsJSON []byte
-		if err := rows.Scan(&rec.ID, &rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceID, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &lastError); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.AccountKey, &rec.Scope, &rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceID, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &lastError); err != nil {
 			return nil, fmt.Errorf("scan claimed pending order: %w", err)
 		}
 		rec.DeviceID = deviceID.String
@@ -353,7 +373,7 @@ func (r *Repository) ClaimDuePendingOrders(ctx context.Context, limit int) ([]Or
 // there is no automatic requeue; that is an operator's decision.
 func (r *Repository) UnnotifiedOrders(ctx context.Context, limit int) ([]OrderRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id::text, external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
+		SELECT id::text, account_key::text, order_scope, external_order_id, account_id, action, device_id, parameters, command_key, status, attempts, last_error
 		FROM bss_orders WHERE notified_at IS NULL AND status = $1
 		ORDER BY created_at ASC LIMIT $2`, OrderStatusDispatched, limit)
 	if err != nil {
@@ -366,7 +386,7 @@ func (r *Repository) UnnotifiedOrders(ctx context.Context, limit int) ([]OrderRe
 		var rec OrderRecord
 		var deviceID, commandKey, lastError sql.NullString
 		var paramsJSON []byte
-		if err := rows.Scan(&rec.ID, &rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceID, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &lastError); err != nil {
+		if err := rows.Scan(&rec.ID, &rec.AccountKey, &rec.Scope, &rec.ExternalOrderID, &rec.AccountID, &rec.Action, &deviceID, &paramsJSON, &commandKey, &rec.Status, &rec.Attempts, &lastError); err != nil {
 			return nil, fmt.Errorf("scan unnotified order: %w", err)
 		}
 		rec.DeviceID = deviceID.String

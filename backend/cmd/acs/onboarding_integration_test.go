@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts/accountstest"
 	"context"
 	"database/sql"
 	"errors"
@@ -203,10 +204,11 @@ func TestIntegration_OnboardingNeverMovesAnOwnedDevice(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE devices SET customer_id = $1 WHERE serial_number = 'OB0004'`, custB); err != nil {
 		t.Fatal(err)
 	}
-	// The sale also names an account that B owns: neither the account nor
-	// the device may route its events to B.
+	// The sale also names an account ID that B uses. Account IDs are per
+	// customer, so for A's sale it names an account of A's; neither B's
+	// account of that ID nor the device may route the sale's events to B.
 	h.tmfEvents = bss.NewRepository(db)
-	if _, err := db.ExecContext(ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('B-ACC', $1, 'test') ON CONFLICT (account_id) DO UPDATE SET customer_id = EXCLUDED.customer_id`, custB); err != nil {
+	if _, err := db.ExecContext(ctx, accountstest.OwnSQL("'B-ACC'"), custB); err != nil {
 		t.Fatal(err)
 	}
 	o, err := h.onboarding.Create(ctx, onboarding.Onboarding{ExpectedSerial: "OB0004", CustomerID: &custA, AccountRef: "B-ACC", Source: "console"})
@@ -225,7 +227,8 @@ func TestIntegration_OnboardingNeverMovesAnOwnedDevice(t *testing.T) {
 	}
 	var toA, toB, attached int
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE customer_id = $1::uuid), count(*) FILTER (WHERE customer_id = $2::uuid),
-		count(*) FILTER (WHERE account_id IS NOT NULL OR device_id IS NOT NULL)
+		count(*) FILTER (WHERE device_id IS NOT NULL
+			OR account_key IN (SELECT id FROM bss_accounts WHERE account_id = 'B-ACC' AND customer_id = $2::uuid))
 		FROM tmf_events WHERE payload->>'onboardingId' = $3`, custA, custB, o.ID).Scan(&toA, &toB, &attached); err != nil {
 		t.Fatal(err)
 	}

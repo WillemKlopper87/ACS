@@ -53,11 +53,15 @@ type Site struct {
 
 // Summary is what an operator needs to recognise a device's subscriber.
 type Summary struct {
-	DeviceID       string  `json:"device_id"`
-	AccountID      string  `json:"account_id,omitempty"`
-	SubscriberName *string `json:"subscriber_name,omitempty"`
-	VIP            bool    `json:"vip"`
-	Site           *Site   `json:"site,omitempty"`
+	DeviceID  string `json:"device_id"`
+	AccountID string `json:"account_id,omitempty"`
+	// AccountCustomerID is the customer that owns the account; absent when
+	// nobody does. An account ID is unique per customer, so this is what
+	// names the account in a later call (customer_id).
+	AccountCustomerID *string `json:"account_customer_id,omitempty"`
+	SubscriberName    *string `json:"subscriber_name,omitempty"`
+	VIP               bool    `json:"vip"`
+	Site              *Site   `json:"site,omitempty"`
 	// DisplayName joins the parts that tell two subscribers apart, e.g.
 	// "Jane Smith · ACC-10442 · Sandton · FastMile …0215".
 	DisplayName string `json:"display_name"`
@@ -185,7 +189,7 @@ func (r *Repository) AccountCustomers(ctx context.Context, accountID string) ([]
 // customer's account never shows that account's subscriber.
 const summaryQuery = `
 	SELECT d.id, d.oui_serial, COALESCE(d.serial_number, ''), COALESCE(d.manufacturer, ''), COALESCE(d.product_class, ''), d.label,
-	       m.account_id, p.display_name, COALESCE(p.vip, false),
+	       m.account_id, b.customer_id::text, p.display_name, COALESCE(p.vip, false),
 	       s.name, s.street, s.suburb, s.city, s.postal_code
 	  FROM devices d
 	  LEFT JOIN LATERAL (
@@ -212,15 +216,18 @@ func scanRows(rows *sql.Rows) ([]row, error) {
 	var out []row
 	for rows.Next() {
 		var x row
-		var label, account, name, sName, street, suburb, city, postal sql.NullString
+		var label, account, accountCustomer, name, sName, street, suburb, city, postal sql.NullString
 		if err := rows.Scan(&x.DeviceID, &x.ouiSerial, &x.serial, &x.manufacturer, &x.model, &label,
-			&account, &name, &x.VIP, &sName, &street, &suburb, &city, &postal); err != nil {
+			&account, &accountCustomer, &name, &x.VIP, &sName, &street, &suburb, &city, &postal); err != nil {
 			return nil, err
 		}
 		if label.Valid && strings.TrimSpace(label.String) != "" {
 			x.label = &label.String
 		}
 		x.AccountID = account.String
+		if accountCustomer.Valid {
+			x.AccountCustomerID = &accountCustomer.String
+		}
 		if name.Valid {
 			x.SubscriberName = &name.String
 		}

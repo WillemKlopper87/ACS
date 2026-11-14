@@ -1,6 +1,7 @@
 package bss
 
 import (
+	"acs/internal/accounts"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,9 +13,14 @@ import (
 )
 
 type ServiceOrder struct {
-	ID          string
-	ExternalID  string
-	AccountID   string
+	ID         string
+	ExternalID string
+	AccountID  string
+	// Scope is the customer that owns the order's account ("" when nobody
+	// does): the namespace ExternalID is unique in.
+	Scope string
+	// AccountKey is the registry key of the order's account.
+	AccountKey  string
 	RawRequest  json.RawMessage
 	CreatedAt   time.Time
 	CancelledAt *time.Time
@@ -44,7 +50,7 @@ type ServiceOrderWork struct {
 var ErrServiceOrderExists = errors.New("service order already exists")
 
 func (r *Repository) CreateServiceOrder(ctx context.Context, externalID, accountID string, raw json.RawMessage, items []ServiceOrderItem) (*ServiceOrder, error) {
-	accountKey, err := r.accountKeyForWrite(ctx, accountID)
+	accountKey, err := r.accountKeyForWrite(ctx, accountID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +63,7 @@ func (r *Repository) CreateServiceOrder(ctx context.Context, externalID, account
 	var order ServiceOrder
 	err = tx.QueryRowContext(ctx, `INSERT INTO service_orders (id, external_id, account_id, account_key, order_scope, raw_request)
 		SELECT $1, $2, $3, a.id, COALESCE(a.customer_id::text, ''), $4 FROM bss_accounts a WHERE a.id = $5::uuid
-		RETURNING id, external_id, account_id, raw_request, created_at`, id, externalID, accountID, raw, accountKey).Scan(&order.ID, &order.ExternalID, &order.AccountID, &order.RawRequest, &order.CreatedAt)
+		RETURNING id, external_id, account_id, account_key::text, order_scope, raw_request, created_at`, id, externalID, accountID, raw, accountKey).Scan(&order.ID, &order.ExternalID, &order.AccountID, &order.AccountKey, &order.Scope, &order.RawRequest, &order.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrServiceOrderExists
@@ -69,7 +75,7 @@ func (r *Repository) CreateServiceOrder(ctx context.Context, externalID, account
 		if item.ID == "" {
 			item.ID = uuid.New().String()
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO service_order_items (id, order_id, seq, action, role, mapping_id, external_order_id, bss_order_id, status, last_error, completed_at) VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,'')::uuid,NULLIF($7,''),(SELECT id FROM bss_orders WHERE external_order_id = NULLIF($7,'')),$8,NULLIF($9,''),$10)`, item.ID, id, item.Seq, item.Action, item.Role, item.MappingID, item.ExternalOrderID, item.Status, item.LastError, item.CompletedAt)
+		_, err = tx.ExecContext(ctx, `INSERT INTO service_order_items (id, order_id, seq, action, role, mapping_id, external_order_id, bss_order_id, status, last_error, completed_at) VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,'')::uuid,NULLIF($7,''),(SELECT id FROM bss_orders WHERE external_order_id = NULLIF($7,'') AND order_scope = $11),$8,NULLIF($9,''),$10)`, item.ID, id, item.Seq, item.Action, item.Role, item.MappingID, item.ExternalOrderID, item.Status, item.LastError, item.CompletedAt, order.Scope)
 		if err != nil {
 			return nil, fmt.Errorf("insert service order item: %w", err)
 		}
@@ -81,8 +87,19 @@ func (r *Repository) CreateServiceOrder(ctx context.Context, externalID, account
 }
 
 func (r *Repository) FindServiceOrder(ctx context.Context, externalID string) (*ServiceOrder, error) {
+	// A TMF641 externalId is unique per customer, like an order ID.
+	scoped, scope := scopeArgs(ctx)
+	if !scoped {
+		var n int
+		if err := r.db.QueryRowContext(ctx, `SELECT count(*) FROM service_orders WHERE external_id = $1`, externalID).Scan(&n); err != nil {
+			return nil, fmt.Errorf("find service order: %w", err)
+		}
+		if n > 1 {
+			return nil, fmt.Errorf("%w: service order %s", accounts.ErrAmbiguous, externalID)
+		}
+	}
 	var order ServiceOrder
-	err := r.db.QueryRowContext(ctx, `SELECT id, external_id, account_id, raw_request, created_at, cancelled_at FROM service_orders WHERE external_id=$1`, externalID).Scan(&order.ID, &order.ExternalID, &order.AccountID, &order.RawRequest, &order.CreatedAt, &order.CancelledAt)
+	err := r.db.QueryRowContext(ctx, `SELECT id, external_id, account_id, account_key::text, order_scope, raw_request, created_at, cancelled_at FROM service_orders WHERE external_id=$1 AND ($2=false OR order_scope=$3)`, externalID, scoped, scope).Scan(&order.ID, &order.ExternalID, &order.AccountID, &order.AccountKey, &order.Scope, &order.RawRequest, &order.CreatedAt, &order.CancelledAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -96,13 +113,14 @@ func (r *Repository) FindServiceOrder(ctx context.Context, externalID string) (*
 // order's own id (what its href carries) or the BSS's externalId. An
 // externalId wins if a value is both.
 func (r *Repository) FindServiceOrderByRef(ctx context.Context, ref string) (*ServiceOrder, error) {
+	scoped, scope := scopeArgs(ctx)
 	order, err := r.FindServiceOrder(ctx, ref)
 	if order != nil || err != nil {
 		return order, err
 	}
 	var o ServiceOrder
-	err = r.db.QueryRowContext(ctx, `SELECT id, external_id, account_id, raw_request, created_at, cancelled_at FROM service_orders WHERE id::text=$1`, ref).
-		Scan(&o.ID, &o.ExternalID, &o.AccountID, &o.RawRequest, &o.CreatedAt, &o.CancelledAt)
+	err = r.db.QueryRowContext(ctx, `SELECT id, external_id, account_id, account_key::text, order_scope, raw_request, created_at, cancelled_at FROM service_orders WHERE id::text=$1 AND ($2=false OR order_scope=$3)`, ref, scoped, scope).
+		Scan(&o.ID, &o.ExternalID, &o.AccountID, &o.AccountKey, &o.Scope, &o.RawRequest, &o.CreatedAt, &o.CancelledAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -161,7 +179,7 @@ func (r *Repository) ClaimDueServiceOrderItems(ctx context.Context, limit int) (
 			           COALESCE(i.mapping_id::text,'') AS mapping_id, COALESCE(i.external_order_id,'') AS external_order_id,
 			           i.status, COALESCE(i.last_error,'') AS last_error, i.completed_at, i.claimed_at
 		)
-		SELECT o.id, o.external_id, o.account_id, o.raw_request, o.created_at, o.cancelled_at,
+		SELECT o.id, o.external_id, o.account_id, o.account_key::text, o.order_scope, o.raw_request, o.created_at, o.cancelled_at,
 		       c.id, c.order_id, c.seq, c.action, c.role, c.mapping_id,
 		       c.external_order_id, c.status, c.last_error, c.completed_at, c.claimed_at
 		  FROM claimed c JOIN service_orders o ON o.id = c.order_id
@@ -173,7 +191,7 @@ func (r *Repository) ClaimDueServiceOrderItems(ctx context.Context, limit int) (
 	var work []ServiceOrderWork
 	for rows.Next() {
 		var w ServiceOrderWork
-		if err := rows.Scan(&w.Order.ID, &w.Order.ExternalID, &w.Order.AccountID, &w.Order.RawRequest, &w.Order.CreatedAt, &w.Order.CancelledAt,
+		if err := rows.Scan(&w.Order.ID, &w.Order.ExternalID, &w.Order.AccountID, &w.Order.AccountKey, &w.Order.Scope, &w.Order.RawRequest, &w.Order.CreatedAt, &w.Order.CancelledAt,
 			&w.Item.ID, &w.Item.OrderID, &w.Item.Seq, &w.Item.Action, &w.Item.Role, &w.Item.MappingID,
 			&w.Item.ExternalOrderID, &w.Item.Status, &w.Item.LastError, &w.Item.CompletedAt, &w.Item.ClaimedAt); err != nil {
 			return nil, fmt.Errorf("scan claimed TMF641 item: %w", err)
@@ -202,7 +220,7 @@ func (r *Repository) ListServiceOrders(ctx context.Context, accountID string, li
 	if limit <= 0 || limit > 500 {
 		limit = 50
 	}
-	rows, err := r.db.QueryContext(ctx, `SELECT id,external_id,account_id,raw_request,created_at,cancelled_at FROM service_orders WHERE ($1='' OR account_key=NULLIF($1,'')::uuid) ORDER BY created_at DESC LIMIT $2`, accountKey, limit)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,external_id,account_id,account_key::text,order_scope,raw_request,created_at,cancelled_at FROM service_orders WHERE ($1='' OR account_key=NULLIF($1,'')::uuid) ORDER BY created_at DESC LIMIT $2`, accountKey, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list service orders: %w", err)
 	}
@@ -210,7 +228,7 @@ func (r *Repository) ListServiceOrders(ctx context.Context, accountID string, li
 	var out []ServiceOrder
 	for rows.Next() {
 		var o ServiceOrder
-		if err := rows.Scan(&o.ID, &o.ExternalID, &o.AccountID, &o.RawRequest, &o.CreatedAt, &o.CancelledAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.ExternalID, &o.AccountID, &o.AccountKey, &o.Scope, &o.RawRequest, &o.CreatedAt, &o.CancelledAt); err != nil {
 			return nil, err
 		}
 		out = append(out, o)

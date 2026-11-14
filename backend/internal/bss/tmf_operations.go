@@ -1,6 +1,7 @@
 package bss
 
 import (
+	"acs/internal/accounts"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -38,13 +39,13 @@ type ServiceProblemRecord struct {
 }
 
 func (r *Repository) CreateEvent(ctx context.Context, sourceKey, accountID, deviceID, serviceID, eventType string, payload json.RawMessage, at time.Time) (*EventRecord, error) {
-	accountKey, err := r.accountKeyForWrite(ctx, accountID)
+	accountKey, err := r.accountKeyForWrite(ctx, accountID, deviceID)
 	if err != nil {
 		return nil, err
 	}
 	id := uuid.New().String()
 	var e EventRecord
-	err = r.db.QueryRowContext(ctx, `INSERT INTO tmf_events (id,source_key,account_id,account_key,device_id,service_id,event_type,event_time,payload) VALUES ($1,$2,NULLIF($3,''),NULLIF($9,'')::uuid,NULLIF($4,'')::uuid,NULLIF($5,'')::uuid,$6,$7,$8) ON CONFLICT (source_key) DO NOTHING RETURNING id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),event_type,event_time,payload,COALESCE(customer_id::text,''),seq`, id, sourceKey, accountID, deviceID, serviceID, eventType, at, payload, accountKey).Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload, &e.CustomerID, &e.Seq)
+	err = r.db.QueryRowContext(ctx, `INSERT INTO tmf_events (id,source_key,account_id,account_key,device_id,service_id,event_type,event_time,payload) VALUES ($1,$2,NULLIF($3,''),NULLIF($9,'')::uuid,NULLIF($4,'')::uuid,NULLIF($5,'')::uuid,$6,$7,$8) ON CONFLICT ((COALESCE(customer_id::text,'')), source_key) DO NOTHING RETURNING id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),event_type,event_time,payload,COALESCE(customer_id::text,''),seq`, id, sourceKey, accountID, deviceID, serviceID, eventType, at, payload, accountKey).Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload, &e.CustomerID, &e.Seq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -55,13 +56,13 @@ func (r *Repository) CreateEvent(ctx context.Context, sourceKey, accountID, devi
 }
 
 func (r *Repository) CreateAlarm(ctx context.Context, sourceKey, accountID, deviceID, serviceID, alarmType, severity, cause, problem string, details json.RawMessage) (*AlarmRecord, error) {
-	accountKey, err := r.accountKeyForWrite(ctx, accountID)
+	accountKey, err := r.accountKeyForWrite(ctx, accountID, deviceID)
 	if err != nil {
 		return nil, err
 	}
 	id := uuid.New().String()
 	var a AlarmRecord
-	err = r.db.QueryRowContext(ctx, `INSERT INTO tmf_alarms (id,source_key,account_id,account_key,device_id,service_id,alarm_type,perceived_severity,probable_cause,specific_problem,details) VALUES ($1,$2,NULLIF($3,''),NULLIF($11,'')::uuid,NULLIF($4,'')::uuid,NULLIF($5,'')::uuid,$6,$7,$8,$9,$10) ON CONFLICT (source_key) DO NOTHING RETURNING id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),alarm_type,perceived_severity,state,COALESCE(probable_cause,''),COALESCE(specific_problem,''),raised_at,cleared_at,details`, id, sourceKey, accountID, deviceID, serviceID, alarmType, severity, cause, problem, details, accountKey).Scan(&a.ID, &a.SourceKey, &a.AccountID, &a.DeviceID, &a.ServiceID, &a.AlarmType, &a.Severity, &a.State, &a.ProbableCause, &a.SpecificProblem, &a.RaisedAt, &a.ClearedAt, &a.Details)
+	err = r.db.QueryRowContext(ctx, `INSERT INTO tmf_alarms (id,source_key,account_id,account_key,device_id,service_id,alarm_type,perceived_severity,probable_cause,specific_problem,details) VALUES ($1,$2,NULLIF($3,''),NULLIF($11,'')::uuid,NULLIF($4,'')::uuid,NULLIF($5,'')::uuid,$6,$7,$8,$9,$10) ON CONFLICT ((COALESCE(account_key::text,'')), source_key) DO NOTHING RETURNING id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),alarm_type,perceived_severity,state,COALESCE(probable_cause,''),COALESCE(specific_problem,''),raised_at,cleared_at,details`, id, sourceKey, accountID, deviceID, serviceID, alarmType, severity, cause, problem, details, accountKey).Scan(&a.ID, &a.SourceKey, &a.AccountID, &a.DeviceID, &a.ServiceID, &a.AlarmType, &a.Severity, &a.State, &a.ProbableCause, &a.SpecificProblem, &a.RaisedAt, &a.ClearedAt, &a.Details)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -78,12 +79,13 @@ func (r *Repository) FindEventForAccount(ctx context.Context, id, accountID stri
 	return r.findEvent(ctx, id, accountID)
 }
 func (r *Repository) findEvent(ctx context.Context, id, accountID string) (*EventRecord, error) {
+	scoped, scope := scopeArgs(ctx)
 	accountKey, err := r.accountFilter(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
 	var e EventRecord
-	err = r.db.QueryRowContext(ctx, `SELECT id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),event_type,event_time,payload FROM tmf_events WHERE (id::text=$1 OR source_key=$1) AND ($2='' OR account_key=NULLIF($2,'')::uuid)`, id, accountKey).Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload)
+	err = r.db.QueryRowContext(ctx, `SELECT id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),event_type,event_time,payload FROM tmf_events WHERE (id::text=$1 OR source_key=$1) AND ($2='' OR account_key=NULLIF($2,'')::uuid) AND ($3=false OR COALESCE(customer_id::text,'')=$4) ORDER BY (id::text=$1) DESC LIMIT 1`, id, accountKey, scoped, scope).Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -100,12 +102,13 @@ func (r *Repository) FindAlarmForAccount(ctx context.Context, id, accountID stri
 	return r.findAlarm(ctx, id, accountID)
 }
 func (r *Repository) findAlarm(ctx context.Context, id, accountID string) (*AlarmRecord, error) {
+	scoped, scope := scopeArgs(ctx)
 	accountKey, err := r.accountFilter(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
 	var a AlarmRecord
-	err = r.db.QueryRowContext(ctx, `SELECT id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),alarm_type,perceived_severity,state,COALESCE(probable_cause,''),COALESCE(specific_problem,''),raised_at,cleared_at,details FROM tmf_alarms WHERE (id::text=$1 OR source_key=$1) AND ($2='' OR account_key=NULLIF($2,'')::uuid)`, id, accountKey).Scan(&a.ID, &a.SourceKey, &a.AccountID, &a.DeviceID, &a.ServiceID, &a.AlarmType, &a.Severity, &a.State, &a.ProbableCause, &a.SpecificProblem, &a.RaisedAt, &a.ClearedAt, &a.Details)
+	err = r.db.QueryRowContext(ctx, `SELECT id,source_key,COALESCE(account_id,''),COALESCE(device_id::text,''),COALESCE(service_id::text,''),alarm_type,perceived_severity,state,COALESCE(probable_cause,''),COALESCE(specific_problem,''),raised_at,cleared_at,details FROM tmf_alarms WHERE (id::text=$1 OR source_key=$1) AND ($2='' OR account_key=NULLIF($2,'')::uuid) AND ($3=false OR `+alarmOwner+`=$4) ORDER BY (id::text=$1) DESC LIMIT 1`, id, accountKey, scoped, scope).Scan(&a.ID, &a.SourceKey, &a.AccountID, &a.DeviceID, &a.ServiceID, &a.AlarmType, &a.Severity, &a.State, &a.ProbableCause, &a.SpecificProblem, &a.RaisedAt, &a.ClearedAt, &a.Details)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -191,7 +194,7 @@ func (r *Repository) updateAlarmState(ctx context.Context, id, accountID, state 
 // ClearAlarm closes only a raised alarm belonging to accountID and the
 // device/condition pair. Events are retained separately in tmf_events.
 func (r *Repository) ClearAlarm(ctx context.Context, accountID, deviceID, sourceKey string) error {
-	accountKey, err := r.accountFilter(ctx, accountID)
+	accountKey, err := r.accountFilter(accounts.ForDevice(ctx, deviceID), accountID)
 	if err != nil {
 		return err
 	}
@@ -241,7 +244,7 @@ func (r *Repository) CreateServiceProblem(ctx context.Context, externalID, accou
 }
 
 func (r *Repository) CreateServiceProblemRich(ctx context.Context, externalID, accountID, serviceID, problemType, description, priority, alarmID string, eventIDs, resourceIDs []string, impact, severity, rootCause string) (*ServiceProblemRecord, error) {
-	accountKey, err := r.accountKeyForWrite(ctx, accountID)
+	accountKey, err := r.accountKeyForWrite(ctx, accountID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -272,13 +275,14 @@ func (r *Repository) FindServiceProblemForAccount(ctx context.Context, id, accou
 }
 
 func (r *Repository) findServiceProblem(ctx context.Context, id, accountID string) (*ServiceProblemRecord, error) {
+	scoped, scope := scopeArgs(ctx)
 	accountKey, err := r.accountFilter(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
 	var p ServiceProblemRecord
 	var storedEventIDs, storedResourceIDs []byte
-	err = r.db.QueryRowContext(ctx, `SELECT id,COALESCE(external_id,''),account_id,COALESCE(service_id::text,''),status,COALESCE(priority,''),problem_type,description,COALESCE(related_alarm_id::text,''),created_at,resolved_at,COALESCE(resolution,''),related_event_ids,affected_resource_ids,COALESCE(impact,''),COALESCE(severity,''),COALESCE(root_cause,''),resolution_date FROM tmf_service_problems WHERE (id=$1 OR external_id=$1) AND ($2='' OR account_key=NULLIF($2,'')::uuid)`, id, accountKey).Scan(&p.ID, &p.ExternalID, &p.AccountID, &p.ServiceID, &p.Status, &p.Priority, &p.ProblemType, &p.Description, &p.RelatedAlarmID, &p.CreatedAt, &p.ResolvedAt, &p.Resolution, &storedEventIDs, &storedResourceIDs, &p.Impact, &p.Severity, &p.RootCause, &p.ResolutionDate)
+	err = r.db.QueryRowContext(ctx, `SELECT id,COALESCE(external_id,''),account_id,COALESCE(service_id::text,''),status,COALESCE(priority,''),problem_type,description,COALESCE(related_alarm_id::text,''),created_at,resolved_at,COALESCE(resolution,''),related_event_ids,affected_resource_ids,COALESCE(impact,''),COALESCE(severity,''),COALESCE(root_cause,''),resolution_date FROM tmf_service_problems WHERE (id=$1 OR external_id=$1) AND ($2='' OR account_key=NULLIF($2,'')::uuid) AND ($3=false OR `+problemOwner+`=$4) ORDER BY (id=$1) DESC LIMIT 1`, id, accountKey, scoped, scope).Scan(&p.ID, &p.ExternalID, &p.AccountID, &p.ServiceID, &p.Status, &p.Priority, &p.ProblemType, &p.Description, &p.RelatedAlarmID, &p.CreatedAt, &p.ResolvedAt, &p.Resolution, &storedEventIDs, &storedResourceIDs, &p.Impact, &p.Severity, &p.RootCause, &p.ResolutionDate)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

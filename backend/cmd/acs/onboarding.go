@@ -5,6 +5,7 @@
 package main
 
 import (
+	"acs/internal/accounts"
 	"context"
 	"encoding/json"
 	"errors"
@@ -123,7 +124,8 @@ func (h *handler) publishOnboardingEvent(ctx context.Context, o *onboarding.Onbo
 			_, err := sink.CreateCustomerEvent(ctx, *o.CustomerID, key, o.AccountRef, deviceID, eventType, payload, at)
 			return err
 		}
-		_, err := h.tmfEvents.CreateEvent(ctx, key, o.AccountRef, deviceID, "", eventType, payload, at)
+		// A sale with no customer names an account nobody owns.
+		_, err := h.tmfEvents.CreateEvent(accounts.WithCustomer(ctx, ""), key, o.AccountRef, deviceID, "", eventType, payload, at)
 		return err
 	}
 	data := map[string]any{

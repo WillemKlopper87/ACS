@@ -1,6 +1,7 @@
 package bss
 
 import (
+	"acs/internal/accounts"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -93,10 +94,13 @@ func (r *Repository) EventsAfter(ctx context.Context, customerID string, after i
 // that customer's stream or webhooks. An empty customerID falls back to
 // CreateEvent, which infers the customer.
 func (r *Repository) CreateCustomerEvent(ctx context.Context, customerID, sourceKey, accountID, deviceID, eventType string, payload json.RawMessage, at time.Time) (*EventRecord, error) {
+	// The event belongs to this customer (or, with none, to nobody), so
+	// that is whose account the ID names.
+	ctx = accounts.WithCustomer(ctx, customerID)
 	if customerID == "" {
 		return r.CreateEvent(ctx, sourceKey, accountID, deviceID, "", eventType, payload, at)
 	}
-	accountKey, err := r.accountKeyForWrite(ctx, accountID)
+	accountKey, err := r.accountKeyForWrite(ctx, accountID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +115,7 @@ func (r *Repository) CreateCustomerEvent(ctx context.Context, customerID, source
 		       CASE WHEN COALESCE((SELECT customer_id::text FROM devices WHERE id = NULLIF($4::text, '')::uuid), $2::text) = $2::text
 		            THEN NULLIF($4::text, '')::uuid END,
 		       $5::text, $6::timestamptz, $7::jsonb
-		ON CONFLICT (source_key) DO NOTHING
+		ON CONFLICT ((COALESCE(customer_id::text, '')), source_key) DO NOTHING
 		RETURNING id, source_key, COALESCE(account_id, ''), COALESCE(device_id::text, ''), '', event_type, event_time, payload,
 		          customer_id::text, seq`, sourceKey, customerID, accountID, deviceID, eventType, at, payload, accountKey).
 		Scan(&e.ID, &e.SourceKey, &e.AccountID, &e.DeviceID, &e.ServiceID, &e.EventType, &e.EventTime, &e.Payload, &e.CustomerID, &e.Seq)

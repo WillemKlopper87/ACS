@@ -28,8 +28,10 @@ var ErrSubscriptionNotFound = errors.New("webhook subscription not found")
 // here for the same reason as AccountDeviceMapping — the admin panel
 // encodes this struct directly.
 type WebhookSubscription struct {
-	ID         string    `json:"id"`
-	AccountID  *string   `json:"account_id"` // nil = fleet-wide
+	ID        string  `json:"id"`
+	AccountID *string `json:"account_id"` // nil = fleet-wide
+	// AccountKey is the registry key of the account ("" when fleet-wide).
+	AccountKey string    `json:"-"`
 	TargetURL  string    `json:"target_url"`
 	Secret     string    `json:"secret"`
 	EventTypes []string  `json:"event_types"`
@@ -74,13 +76,13 @@ func (r *WebhookRepository) CreateSubscription(ctx context.Context, accountID *s
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO webhook_subscriptions (id, account_id, account_key, target_url, secret, event_types)
 		VALUES ($1, $2, $6, $3, $4, $5)
-		RETURNING id, account_id, target_url, secret, event_types, created_at`,
+		RETURNING id, account_id, account_key::text, target_url, secret, event_types, created_at`,
 		id, accountID, targetURL, secret, store.StringArray(eventTypes), accountKey)
 	return scanSubscription(row)
 }
 
 func (r *WebhookRepository) ListSubscriptions(ctx context.Context) ([]WebhookSubscription, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, account_id, target_url, secret, event_types, created_at FROM webhook_subscriptions ORDER BY created_at ASC`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, account_id, account_key::text, target_url, secret, event_types, created_at FROM webhook_subscriptions ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list webhook subscriptions: %w", err)
 	}
@@ -107,7 +109,7 @@ func (r *WebhookRepository) ListSubscriptionsForAccount(ctx context.Context, acc
 		return nil, err
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, account_id, target_url, secret, event_types, created_at
+		SELECT id, account_id, account_key::text, target_url, secret, event_types, created_at
 		FROM webhook_subscriptions WHERE account_key = $1 ORDER BY created_at ASC`, accountKey)
 	if err != nil {
 		return nil, fmt.Errorf("list account webhook subscriptions: %w", err)
@@ -128,9 +130,10 @@ func (r *WebhookRepository) ListSubscriptionsForAccount(ctx context.Context, acc
 // destructive action. It deliberately returns ErrSubscriptionNotFound so the
 // caller can make both missing and cross-account rows non-enumerable.
 func (r *WebhookRepository) SubscriptionByID(ctx context.Context, id string) (*WebhookSubscription, error) {
+	scoped, scope := scopeArgs(ctx)
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, account_id, target_url, secret, event_types, created_at
-		FROM webhook_subscriptions WHERE id = $1`, id)
+		SELECT id, account_id, account_key::text, target_url, secret, event_types, created_at
+		FROM webhook_subscriptions WHERE id = $1 AND ($2 = false OR `+subscriptionOwner+` = $3)`, id, scoped, scope)
 	s, err := scanSubscription(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrSubscriptionNotFound
@@ -162,7 +165,7 @@ func (r *WebhookRepository) MatchingSubscriptions(ctx context.Context, accountID
 		return nil, err
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, account_id, target_url, secret, event_types, created_at
+		SELECT id, account_id, account_key::text, target_url, secret, event_types, created_at
 		FROM webhook_subscriptions
 		WHERE (account_key IS NULL OR account_key = $1) AND $2 = ANY(event_types)`,
 		accountKey, eventType)
@@ -313,14 +316,15 @@ func (r *WebhookRepository) MarkAttemptFailed(ctx context.Context, id, reason st
 
 func scanSubscription(s scanner) (*WebhookSubscription, error) {
 	var sub WebhookSubscription
-	var accountID sql.NullString
+	var accountID, accountKey sql.NullString
 	var eventTypes store.StringArray
-	if err := s.Scan(&sub.ID, &accountID, &sub.TargetURL, &sub.Secret, &eventTypes, &sub.CreatedAt); err != nil {
+	if err := s.Scan(&sub.ID, &accountID, &accountKey, &sub.TargetURL, &sub.Secret, &eventTypes, &sub.CreatedAt); err != nil {
 		return nil, fmt.Errorf("scan webhook subscription: %w", err)
 	}
 	if accountID.Valid {
 		sub.AccountID = &accountID.String
 	}
+	sub.AccountKey = accountKey.String
 	sub.EventTypes = []string(eventTypes)
 	return &sub, nil
 }

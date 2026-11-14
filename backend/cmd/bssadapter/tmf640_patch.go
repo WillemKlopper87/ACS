@@ -98,7 +98,7 @@ func (h *handler) patchService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
-	if !h.authorizeTMF(w, r, bss.ScopeTMFExecute, m.AccountID) {
+	if !h.authorizeTMFRow(w, r, bss.ScopeTMFExecute, m.AccountID, m.AccountKey) {
 		return
 	}
 
@@ -178,6 +178,9 @@ func (h *handler) patchService(w http.ResponseWriter, r *http.Request) {
 func (h *handler) getMonitor(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	order, err := h.mappings.FindOrder(r.Context(), id)
+	if ambiguousID(w, err) {
+		return
+	}
 	if err != nil {
 		h.logger.Error("failed to read monitor", "err", err, "id", id)
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
@@ -187,7 +190,7 @@ func (h *handler) getMonitor(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "ErrNotFound", "no such monitor")
 		return
 	}
-	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, order.AccountID) {
+	if !h.authorizeTMFRow(w, r, bss.ScopeTMFRead, order.AccountID, order.AccountKey) {
 		return
 	}
 	serviceID := ""

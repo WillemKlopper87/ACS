@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts"
 	"context"
 	"encoding/json"
 	"strings"
@@ -151,7 +152,7 @@ func (h *handler) processEscalations(ctx context.Context) {
 			continue
 		}
 		step := p.Steps[i.EscalationStage]
-		subs, err := h.webhooks.MatchingSubscriptions(ctx, i.TenantID, "ALERT_ESCALATED")
+		subs, err := h.webhooks.MatchingSubscriptions(accounts.ForDevice(ctx, i.DeviceID), i.TenantID, "ALERT_ESCALATED")
 		if err == nil {
 			payload := map[string]any{"event_type": "ALERT_ESCALATED", "incident_id": i.ID, "tenant_id": i.TenantID, "device_id": i.DeviceID, "priority": i.Priority, "summary": i.Summary, "stage": i.EscalationStage, "destination": step.Destination, "recipient": step.Recipient, "escalated_at": time.Now().UTC()}
 			for _, s := range subs {
@@ -215,7 +216,7 @@ func (h *handler) notifyIncident(ctx context.Context, eventType string, incident
 	if incident == nil {
 		return
 	}
-	subs, err := h.webhooks.MatchingSubscriptions(ctx, incident.TenantID, eventType)
+	subs, err := h.webhooks.MatchingSubscriptions(accounts.ForDevice(ctx, incident.DeviceID), incident.TenantID, eventType)
 	if err != nil {
 		h.logger.Error("failed to match incident notifications", "err", err)
 		return

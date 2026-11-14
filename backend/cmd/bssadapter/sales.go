@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts"
 	"context"
 	"encoding/json"
 	"errors"
@@ -109,6 +110,7 @@ func (h *handler) getSale(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if h.onboarding != nil {
 		o, err = h.onboarding.Get(r.Context(), id)
+		o = saleForCaller(r, o)
 	}
 	if err != nil && !errors.Is(err, onboarding.ErrNotFound) {
 		h.logger.Error("failed to load sale", "err", err)
@@ -124,6 +126,12 @@ func (h *handler) getSale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, o.AccountRef) {
+		return
+	}
+	// The gate has settled which customer the caller acts for: the sale
+	// must be that customer's, not merely one with the same account ID.
+	if saleForCaller(r, o) == nil {
+		writeError(w, http.StatusNotFound, "ErrNotFound", "resource not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, h.saleResponse(o))
@@ -201,6 +209,7 @@ func (h *handler) changeSale(w http.ResponseWriter, r *http.Request, action stri
 	var err error
 	if h.onboarding != nil {
 		o, err = h.onboarding.Get(r.Context(), id)
+		o = saleForCaller(r, o)
 	}
 	if err != nil && !errors.Is(err, onboarding.ErrNotFound) {
 		h.logger.Error("failed to load sale", "err", err)
@@ -214,6 +223,12 @@ func (h *handler) changeSale(w http.ResponseWriter, r *http.Request, action stri
 		return
 	}
 	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFExecute, o.AccountRef) {
+		return
+	}
+	// The gate has settled which customer the caller acts for: the sale
+	// must be that customer's, not merely one with the same account ID.
+	if saleForCaller(r, o) == nil {
+		writeError(w, http.StatusNotFound, "ErrNotFound", "resource not found")
 		return
 	}
 	if err := change(r.Context(), o.ID); errors.Is(err, onboarding.ErrNotFound) {
@@ -237,4 +252,23 @@ func (h *handler) changeSale(w http.ResponseWriter, r *http.Request, action stri
 	}
 	h.publishSaleChange(r.Context(), after, o.State)
 	writeJSON(w, http.StatusOK, h.saleResponse(after))
+}
+
+// saleForCaller hides a sale from a caller that acts for another
+// customer. The sale's account reference is checked afterwards, but two
+// customers can use the same account ID, so the sale's own customer is
+// what decides.
+func saleForCaller(r *http.Request, o *onboarding.Onboarding) *onboarding.Onboarding {
+	customer, bound := accounts.Customer(r.Context())
+	if o == nil || !bound {
+		return o
+	}
+	saleCustomer := ""
+	if o.CustomerID != nil {
+		saleCustomer = *o.CustomerID
+	}
+	if saleCustomer != customer {
+		return nil
+	}
+	return o
 }

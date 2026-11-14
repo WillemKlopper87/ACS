@@ -193,9 +193,10 @@ needs a public tunnel or an operator-configured allowlist.
 client must set it; a subscription without one is fleet-wide and needs a
 global client.
 
-`external_order_id` (step 4) is unique across every account on the ACS,
-not only yours. Prefix it with something of your own: an ID another
-account has used is refused with `409 ErrIdempotencyKeyReused`.
+`external_order_id` (step 4) is unique among your own orders. Another ISP
+on the same ACS can use the same value; you each get your own order.
+Reusing one for a different one of your accounts is refused with
+`409 ErrIdempotencyKeyReused`.
 
 ## 8. Generate a client
 

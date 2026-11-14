@@ -140,16 +140,24 @@ func uniqueViolationErr(err error, accountID, role string) error {
 // it is set. Status is retained for API compatibility and is NOT what
 // decides whether a device currently serves an account (spec §5.4).
 type AccountDeviceMapping struct {
-	ID             string     `json:"id"`
-	AccountID      string     `json:"account_id"`
-	DeviceID       string     `json:"device_id"`
-	OUISerial      string     `json:"oui_serial"`
-	ServicePlan    string     `json:"service_plan,omitempty"`
-	Status         string     `json:"status"`
-	Role           string     `json:"role"`
-	AssignedAt     time.Time  `json:"assigned_at"`
-	UnassignedAt   *time.Time `json:"unassigned_at,omitempty"`
-	UnassignReason string     `json:"unassign_reason,omitempty"`
+	ID        string `json:"id"`
+	AccountID string `json:"account_id"`
+	// AccountKey is the registry key of the account (never on the wire).
+	// A caller is authorized against it, not against AccountID, which two
+	// customers can share.
+	AccountKey string `json:"-"`
+	// AccountCustomerID is the customer that owns the account, "" when
+	// nobody does. The operator API reports it; the integration API does
+	// not (a bound client only ever sees its own).
+	AccountCustomerID string     `json:"-"`
+	DeviceID          string     `json:"device_id"`
+	OUISerial         string     `json:"oui_serial"`
+	ServicePlan       string     `json:"service_plan,omitempty"`
+	Status            string     `json:"status"`
+	Role              string     `json:"role"`
+	AssignedAt        time.Time  `json:"assigned_at"`
+	UnassignedAt      *time.Time `json:"unassigned_at,omitempty"`
+	UnassignReason    string     `json:"unassign_reason,omitempty"`
 }
 
 type Repository struct {
@@ -443,7 +451,8 @@ func (r *Repository) CurrentAccountForDevice(ctx context.Context, deviceID strin
 // GET/PATCH /service/{id} both need to resolve it directly, unlike every
 // other lookup in this file which goes through (account_id, role).
 func (r *Repository) GetMappingByID(ctx context.Context, id string) (*AccountDeviceMapping, error) {
-	row := r.db.QueryRowContext(ctx, "SELECT "+mappingColumns+" FROM account_device_mappings WHERE id = $1", id)
+	scoped, scope := scopeArgs(ctx)
+	row := r.db.QueryRowContext(ctx, "SELECT "+mappingColumns+" FROM account_device_mappings WHERE id = $1 AND ($2 = false OR "+mappingOwner+" = $3)", id, scoped, scope)
 	m, err := scanMapping(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: %s", ErrMappingNotFound, id)
@@ -484,13 +493,13 @@ type scanner interface {
 
 // mappingColumns is every column scanMapping reads, in scan order. Every
 // SELECT against account_device_mappings uses it so the two cannot drift.
-const mappingColumns = `id, account_id, device_id, oui_serial, service_plan, status, role, assigned_at, unassigned_at, unassign_reason`
+const mappingColumns = `id, account_id, account_key::text, ` + mappingOwner + `, device_id, oui_serial, service_plan, status, role, assigned_at, unassigned_at, unassign_reason`
 
 func scanMapping(s scanner) (*AccountDeviceMapping, error) {
 	var m AccountDeviceMapping
 	var servicePlan, reason sql.NullString
 	var unassigned sql.NullTime
-	if err := s.Scan(&m.ID, &m.AccountID, &m.DeviceID, &m.OUISerial, &servicePlan, &m.Status,
+	if err := s.Scan(&m.ID, &m.AccountID, &m.AccountKey, &m.AccountCustomerID, &m.DeviceID, &m.OUISerial, &servicePlan, &m.Status,
 		&m.Role, &m.AssignedAt, &unassigned, &reason); err != nil {
 		return nil, fmt.Errorf("scan mapping: %w", err)
 	}

@@ -194,6 +194,15 @@ async function download(path: string, fallbackFilename: string) {
   URL.revokeObjectURL(url);
 }
 
+// accountCustomerQuery names the customer that owns an account, for the
+// operator routes that address an account by its ID. undefined: the caller
+// does not know (the ID then has to be unambiguous). null or "": the
+// account nobody owns.
+export function accountCustomerQuery(accountCustomerId: string | null | undefined, lead: "?" | "&"): string {
+  if (accountCustomerId === undefined) return "";
+  return `${lead}customer_id=${encodeURIComponent(accountCustomerId || "none")}`;
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request<LoginResponse>(LOGIN_PATH, {
@@ -243,10 +252,16 @@ export const api = {
   revealDeviceSubscriber: (id: string) =>
     request<components["schemas"]["SubscriberSummary"]>(`/api/v1/devices/${id}/subscriber/reveal`, { method: "POST" }),
 
-  getAccountProfile: (accountId: string) => request<AccountProfile>(`/api/v1/accounts/${encodeURIComponent(accountId)}/profile`),
+  // An account ID is unique per customer, so calls that address an
+  // account say whose it is (accountCustomerQuery).
+  getAccountProfile: (accountId: string, accountCustomerId?: string | null) =>
+    request<AccountProfile>(`/api/v1/accounts/${encodeURIComponent(accountId)}/profile${accountCustomerQuery(accountCustomerId, "?")}`),
 
-  updateAccountProfile: (accountId: string, body: { subscriber_name?: string; vip?: boolean }) =>
-    request<AccountProfile>(`/api/v1/accounts/${encodeURIComponent(accountId)}/profile`, { method: "PUT", body: JSON.stringify(body) }),
+  updateAccountProfile: (accountId: string, body: { subscriber_name?: string; vip?: boolean }, accountCustomerId?: string | null) =>
+    request<AccountProfile>(`/api/v1/accounts/${encodeURIComponent(accountId)}/profile${accountCustomerQuery(accountCustomerId, "?")}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
 
   getDevicesSummary: () => request<{ groups: DeviceGroupCount[] }>("/api/v1/devices/summary"),
 
@@ -765,13 +780,15 @@ export const api = {
   // --- BSS integration admin panel (admin-platform backlog) ---
   listBSSMappings: () => request<{ items: BSSMapping[] }>("/api/v1/bss/mappings"),
   /** Ends the account's active assignment in that role; audited with the reason. */
-  unassignBSSMapping: (accountId: string, role: string, reason: string) =>
-    request<void>(`/api/v1/bss/mappings/${encodeURIComponent(accountId)}/${encodeURIComponent(role)}?reason=${encodeURIComponent(reason)}`, {
-      method: "DELETE",
-    }),
+  unassignBSSMapping: (accountId: string, role: string, reason: string, accountCustomerId?: string | null) =>
+    request<void>(
+      `/api/v1/bss/mappings/${encodeURIComponent(accountId)}/${encodeURIComponent(role)}?reason=${encodeURIComponent(reason)}${accountCustomerQuery(accountCustomerId, "&")}`,
+      { method: "DELETE" },
+    ),
 
-  createBSSMapping: (accountId: string, ouiSerial: string, servicePlan?: string) =>
-    request<BSSMapping>("/api/v1/bss/mappings", {
+  /** customerId: create (or use) that customer's account of this ID; omitted, the ID must name one account or a new unowned one. */
+  createBSSMapping: (accountId: string, ouiSerial: string, servicePlan?: string, customerId?: string) =>
+    request<BSSMapping>(`/api/v1/bss/mappings${customerId ? `?customer_id=${encodeURIComponent(customerId)}` : ""}`, {
       method: "POST",
       body: JSON.stringify({ account_id: accountId, oui_serial: ouiSerial, service_plan: servicePlan }),
     }),

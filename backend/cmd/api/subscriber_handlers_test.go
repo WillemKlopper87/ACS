@@ -105,7 +105,7 @@ func TestIntegration_SubscriberLookup(t *testing.T) {
 
 	// A device of customer B mapped onto A's owned account neither shows
 	// A's subscriber to B nor lets B edit A's profile.
-	if _, err := e.db.ExecContext(e.ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('ACC-A1', $1, 'test') ON CONFLICT (account_id) DO UPDATE SET customer_id = EXCLUDED.customer_id`, custA); err != nil {
+	if _, err := e.db.ExecContext(e.ctx, accountstest.OwnSQL("'ACC-A1'"), custA); err != nil {
 		t.Fatal(err)
 	}
 	e.operator("mgr-b", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custB})

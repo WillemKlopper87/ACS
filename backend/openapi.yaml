@@ -1208,12 +1208,14 @@ paths:
   /api/v1/accounts/{account_id}/profile:
     parameters:
       - { name: account_id, in: path, required: true, schema: { type: string } }
+      - { $ref: "#/components/parameters/AccountCustomer" }
     get:
       tags: [Devices]
       summary: Read an account's subscriber profile (name and VIP)
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AccountProfile" } } } }
         "404": { description: The account is outside the caller's scope }
+        "409": { description: "The account_id names accounts of more than one customer; say which with customer_id" }
     put:
       tags: [Devices]
       summary: Fill in a subscriber name the BSS has not sent, or set VIP (subscriber.manage)
@@ -2737,6 +2739,8 @@ paths:
     post:
       tags: [BSS Admin]
       summary: Assign a device to an account in a role from the console (superadmin) — same role-addressable assignment as POST /bss/v1/mappings; a role already filled for the account returns 409
+      parameters:
+        - { $ref: "#/components/parameters/AccountCustomer" }
       requestBody:
         required: true
         content:
@@ -2756,7 +2760,9 @@ paths:
     get:
       tags: [BSS Admin]
       summary: Full assignment history for an account (superadmin) — current and released assignments, oldest first
-      parameters: [{ name: account_id, in: path, required: true, schema: { type: string } }]
+      parameters:
+        - { name: account_id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/AccountCustomer" }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/BSSMapping" } } } } } } }
 
@@ -2768,6 +2774,7 @@ paths:
         - { name: account_id, in: path, required: true, schema: { type: string } }
         - { name: role, in: path, required: true, schema: { type: string, enum: [gateway, ont, extender, stb, ata, other] } }
         - { name: reason, in: query, required: true, schema: { type: string, enum: [rma, upgrade, return, moved, corrected] } }
+        - { $ref: "#/components/parameters/AccountCustomer" }
       responses:
         "204": { description: Unassigned }
         "400": { description: Missing or invalid reason }
@@ -2817,7 +2824,9 @@ paths:
     put:
       tags: [BSS Admin]
       summary: Assign a BSS account to an ACS customer (superadmin) — for accounts used before customer binding, which a bound client may not claim, or to move an account
-      parameters: [{ name: account_id, in: path, required: true, schema: { type: string } }]
+      parameters:
+        - { name: account_id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/AccountCustomer" }
       requestBody:
         required: true
         content:
@@ -2830,6 +2839,7 @@ paths:
       responses:
         "204": { description: Assigned }
         "400": { description: Missing or unknown customer_id }
+        "409": { description: "The account_id names accounts of more than one customer and the customer_id query parameter did not say which; or the customer being assigned to already has an account of this ID (an account cannot be moved onto an existing one)" }
 
   /api/v1/bss/oauth-clients/{id}:
     delete:
@@ -3132,6 +3142,17 @@ components:
       description: "From POST /api/v1/auth/login. Enforcement is opt-in — see the top-level description."
 
   parameters:
+    AccountCustomer:
+      name: customer_id
+      in: query
+      required: false
+      schema: { type: string }
+      description: >-
+        Which customer's account the account_id means. Account IDs are unique
+        per customer, so two customers can have an account of the same ID.
+        Give the customer's ID, or "none" for the account no customer owns.
+        Not needed while the ID names one account only; when it names more
+        than one and this is absent, the answer is 409 and nothing is done.
     DeviceId:
       name: id
       in: path
@@ -3470,6 +3491,7 @@ components:
       properties:
         device_id: { type: string }
         account_id: { type: string }
+        account_customer_id: { type: string, description: "The customer that owns the account; absent when nobody does. Pass it as customer_id to address this account." }
         subscriber_name: { type: string }
         vip: { type: boolean }
         site: { $ref: "#/components/schemas/SubscriberSite" }
@@ -4099,7 +4121,8 @@ components:
       type: object
       properties:
         id: { type: string }
-        account_id: { type: string }
+        account_id: { type: string, description: "The ISP's own account ID. Unique per customer: two customers can have an account of the same ID." }
+        account_customer_id: { type: string, nullable: true, description: "The customer that owns the account (null: nobody does). Listed mappings carry it; pass it as customer_id to address this account." }
         device_id: { type: string }
         oui_serial: { type: string }
         service_plan: { type: string }

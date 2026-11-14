@@ -2398,7 +2398,10 @@ export interface paths {
     };
     "/api/v1/accounts/{account_id}/profile": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                customer_id?: components["parameters"]["AccountCustomer"];
+            };
             header?: never;
             path: {
                 account_id: string;
@@ -2408,7 +2411,10 @@ export interface paths {
         /** Read an account's subscriber profile (name and VIP) */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                    customer_id?: components["parameters"]["AccountCustomer"];
+                };
                 header?: never;
                 path: {
                     account_id: string;
@@ -2433,12 +2439,22 @@ export interface paths {
                     };
                     content?: never;
                 };
+                /** @description The account_id names accounts of more than one customer; say which with customer_id */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         /** Fill in a subscriber name the BSS has not sent, or set VIP (subscriber.manage) */
         put: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                    customer_id?: components["parameters"]["AccountCustomer"];
+                };
                 header?: never;
                 path: {
                     account_id: string;
@@ -7206,7 +7222,10 @@ export interface paths {
         /** Assign a device to an account in a role from the console (superadmin) — same role-addressable assignment as POST /bss/v1/mappings; a role already filled for the account returns 409 */
         post: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                    customer_id?: components["parameters"]["AccountCustomer"];
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -7253,7 +7272,10 @@ export interface paths {
         /** Full assignment history for an account (superadmin) — current and released assignments, oldest first */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                    customer_id?: components["parameters"]["AccountCustomer"];
+                };
                 header?: never;
                 path: {
                     account_id: string;
@@ -7298,6 +7320,8 @@ export interface paths {
             parameters: {
                 query: {
                     reason: "rma" | "upgrade" | "return" | "moved" | "corrected";
+                    /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                    customer_id?: components["parameters"]["AccountCustomer"];
                 };
                 header?: never;
                 path: {
@@ -7429,7 +7453,10 @@ export interface paths {
         /** Assign a BSS account to an ACS customer (superadmin) — for accounts used before customer binding, which a bound client may not claim, or to move an account */
         put: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                    customer_id?: components["parameters"]["AccountCustomer"];
+                };
                 header?: never;
                 path: {
                     account_id: string;
@@ -7453,6 +7480,13 @@ export interface paths {
                 };
                 /** @description Missing or unknown customer_id */
                 400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The account_id names accounts of more than one customer and the customer_id query parameter did not say which; or the customer being assigned to already has an account of this ID (an account cannot be moved onto an existing one) */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -8744,6 +8778,8 @@ export interface components {
         SubscriberSummary: {
             device_id: string;
             account_id?: string;
+            /** @description The customer that owns the account; absent when nobody does. Pass it as customer_id to address this account. */
+            account_customer_id?: string;
             subscriber_name?: string;
             vip: boolean;
             site?: components["schemas"]["SubscriberSite"];
@@ -9402,7 +9438,10 @@ export interface components {
         };
         BSSMapping: {
             id?: string;
+            /** @description The ISP's own account ID. Unique per customer: two customers can have an account of the same ID. */
             account_id?: string;
+            /** @description The customer that owns the account (null: nobody does). Listed mappings carry it; pass it as customer_id to address this account. */
+            account_customer_id?: string | null;
             device_id?: string;
             oui_serial?: string;
             service_plan?: string;
@@ -9559,6 +9598,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+        AccountCustomer: string;
         /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
         DeviceId: string;
         OperatorId: string;

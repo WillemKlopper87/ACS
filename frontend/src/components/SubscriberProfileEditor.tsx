@@ -6,7 +6,19 @@ import { toast } from "../lib/toast";
 // the BSS has not sent, and set or clear VIP. A name from the BSS is shown
 // read-only; it is changed in the BSS.
 
-export function SubscriberProfileEditor({ accountId, onClose, onSaved }: { accountId: string; onClose: () => void; onSaved: () => void }) {
+// accountCustomerId says whose account the ID is (account IDs are unique
+// per customer): the owning customer, or null for an account nobody owns.
+export function SubscriberProfileEditor({
+  accountId,
+  accountCustomerId,
+  onClose,
+  onSaved,
+}: {
+  accountId: string;
+  accountCustomerId: string | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const [profile, setProfile] = useState<AccountProfile | null>(null);
   const [name, setName] = useState("");
   const [vip, setVip] = useState(false);
@@ -15,14 +27,14 @@ export function SubscriberProfileEditor({ accountId, onClose, onSaved }: { accou
 
   useEffect(() => {
     api
-      .getAccountProfile(accountId)
+      .getAccountProfile(accountId, accountCustomerId)
       .then((p) => {
         setProfile(p);
         setName(p.display_name ?? "");
         setVip(p.vip);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : "Could not load the profile"));
-  }, [accountId]);
+  }, [accountId, accountCustomerId]);
 
   const fromBSS = profile?.name_source === "bss";
 
@@ -38,7 +50,7 @@ export function SubscriberProfileEditor({ accountId, onClose, onSaved }: { accou
     setBusy(true);
     setError(null);
     try {
-      await api.updateAccountProfile(accountId, body);
+      await api.updateAccountProfile(accountId, body, accountCustomerId);
       toast("Subscriber profile saved", "success");
       onSaved();
     } catch (err) {

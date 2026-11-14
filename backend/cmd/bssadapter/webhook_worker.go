@@ -14,6 +14,7 @@
 package main
 
 import (
+	"acs/internal/accounts"
 	"bytes"
 	"context"
 	"crypto/hmac"
@@ -114,7 +115,7 @@ func (h *handler) notifyTerminalOrders(ctx context.Context) {
 			continue // still running — check again next tick
 		}
 
-		subs, err := h.webhooks.MatchingSubscriptions(ctx, order.AccountID, "JOB_COMPLETED")
+		subs, err := h.webhooks.MatchingSubscriptions(accounts.WithCustomer(ctx, order.Scope), order.AccountID, "JOB_COMPLETED")
 		if err != nil {
 			h.logger.Error("failed to match webhook subscriptions", "err", err, "account_id", order.AccountID)
 			continue
@@ -415,7 +416,7 @@ func (h *handler) deleteWebhookSubscription(w http.ResponseWriter, r *http.Reque
 		if !h.authorizeBSSFleet(w, r) {
 			return
 		}
-	} else if !h.authorizeBSSAccount(w, r, bss.ScopeTMFWrite, *sub.AccountID) {
+	} else if !h.authorizeBSSRow(w, r, bss.ScopeTMFWrite, *sub.AccountID, sub.AccountKey) {
 		return
 	}
 	if err := h.webhooks.DeleteSubscription(r.Context(), id); err != nil {

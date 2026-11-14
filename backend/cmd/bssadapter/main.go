@@ -14,6 +14,7 @@
 package main
 
 import (
+	"acs/internal/accounts"
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
@@ -431,7 +432,7 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 			(r.Method == http.MethodGet && r.URL.Path == "/metrics") ||
 			(r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz")) ||
 			(r.Method == http.MethodPost && r.URL.Path == "/bss/v1/oauth/token") {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, withNamedCustomer(r))
 			return
 		}
 		got := r.Header.Get("Authorization")
@@ -441,7 +442,7 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 				if claims, err := auth.VerifyJWT(oauthSigningSecret, bearer); err == nil && claims.Role == bssClientRole {
 					clientID := strings.TrimPrefix(claims.Subject, "bss-client:")
 					if !revoked(r.Context(), clientID) {
-						next.ServeHTTP(w, withRateKey(r, "client:"+clientID))
+						next.ServeHTTP(w, withRateKey(withAccountScope(r, claims), "client:"+clientID))
 						return
 					}
 					writeError(w, http.StatusUnauthorized, "ErrUnauthorized", "oauth client has been revoked")
@@ -451,12 +452,50 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 		}
 
 		if token != "" && subtle.ConstantTimeCompare([]byte(got), []byte("Bearer "+token)) == 1 {
-			next.ServeHTTP(w, withRateKey(r, "shared-token"))
+			next.ServeHTTP(w, withRateKey(withNamedCustomer(r), "shared-token"))
 			return
 		}
 
 		writeError(w, http.StatusUnauthorized, "ErrUnauthorized", "missing or invalid Authorization header")
 	})
+}
+
+// withAccountScope says whose accounts the IDs in a request name
+// (internal/accounts). Account and order IDs are unique per customer, so:
+//
+//   - a client bound to a customer always means that customer's, whatever
+//     the request says;
+//   - a global client may name the customer (withNamedCustomer), and
+//     otherwise an ID has to be unambiguous;
+//   - a client limited to a list of account IDs may not name a customer:
+//     its list is of IDs, and letting it pick the customer would let it
+//     reach every customer's account of a listed ID.
+func withAccountScope(r *http.Request, claims *auth.Claims) *http.Request {
+	switch {
+	case claims.CustomerID != "":
+		return r.WithContext(accounts.WithCustomer(r.Context(), claims.CustomerID))
+	case claims.GlobalAccess:
+		return withNamedCustomer(r)
+	}
+	return r
+}
+
+// withNamedCustomer applies the customer a fleet-wide caller names with
+// the customer_id (customerId) query parameter; "none" means the accounts
+// no customer owns.
+func withNamedCustomer(r *http.Request) *http.Request {
+	q := r.URL.Query()
+	named := strings.TrimSpace(q.Get("customer_id"))
+	if named == "" {
+		named = strings.TrimSpace(q.Get("customerId"))
+	}
+	switch named {
+	case "":
+		return r
+	case "none":
+		return r.WithContext(accounts.WithCustomer(r.Context(), ""))
+	}
+	return r.WithContext(accounts.WithCustomer(r.Context(), named))
 }
 
 // withSourceAllowlist refuses calls to the integration surface (/bss/v1
@@ -1220,7 +1259,7 @@ func (h *handler) getJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
-	if order == nil || !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, order.AccountID) {
+	if order == nil || !h.authorizeBSSRow(w, r, bss.ScopeTMFRead, order.AccountID, order.AccountKey) {
 		// Report a job outside the BSS outbox exactly like an unknown job.
 		// This prevents account-scoped OAuth clients from probing ACS job IDs.
 		if order == nil {

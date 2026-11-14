@@ -12,6 +12,7 @@
 package main
 
 import (
+	"acs/internal/accounts"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -121,7 +122,21 @@ func (h *handler) listBSSMappings(w http.ResponseWriter, r *http.Request) {
 		// callers of ListAll may not share that assumption.
 		items = []bss.AccountDeviceMapping{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	// An account ID is unique per customer, so the list says whose each
+	// account is: that customer is what a later call names (customer_id)
+	// to address the account.
+	type row struct {
+		bss.AccountDeviceMapping
+		AccountCustomerID *string `json:"account_customer_id"`
+	}
+	out := make([]row, len(items))
+	for i, m := range items {
+		out[i].AccountDeviceMapping = m
+		if m.AccountCustomerID != "" {
+			out[i].AccountCustomerID = &items[i].AccountCustomerID
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
 
 type createBSSMappingRequest struct {
@@ -144,6 +159,10 @@ func (h *handler) createBSSMapping(w http.ResponseWriter, r *http.Request) {
 	role := req.Role
 	if role == "" {
 		role = bss.RoleGateway
+	}
+	r, ok := h.namedAccount(w, r, req.AccountID)
+	if !ok {
+		return
 	}
 	mapping, err := h.bssMappings.AssignDevice(r.Context(), req.AccountID, req.OUISerial, role, req.ServicePlan)
 	if errors.Is(err, bss.ErrDeviceNotFound) {
@@ -182,6 +201,10 @@ func (h *handler) createBSSMapping(w http.ResponseWriter, r *http.Request) {
 // clearing a wedged one without going through the BSS adapter itself.
 func (h *handler) getBSSMappingHistory(w http.ResponseWriter, r *http.Request) {
 	accountID := r.PathValue("account_id")
+	r, ok := h.namedAccount(w, r, accountID)
+	if !ok {
+		return
+	}
 	items, err := h.bssMappings.AssignmentHistory(r.Context(), accountID)
 	if err != nil {
 		h.logger.Error("failed to fetch bss mapping history", "err", err, "account_id", accountID)
@@ -207,6 +230,10 @@ func (h *handler) deleteBSSMapping(w http.ResponseWriter, r *http.Request) {
 	reason := r.URL.Query().Get("reason")
 	if reason == "" {
 		http.Error(w, "reason query parameter is required", http.StatusBadRequest)
+		return
+	}
+	r, ok := h.namedAccount(w, r, accountID)
+	if !ok {
 		return
 	}
 	err := h.bssMappings.UnassignDevice(r.Context(), accountID, role, reason)
@@ -291,6 +318,12 @@ func (h *handler) createBSSWebhook(w http.ResponseWriter, r *http.Request) {
 	} else if err := h.bssWebhookNetPolicy.CheckHost(r.Context(), u.Hostname()); err != nil {
 		http.Error(w, "target_url host is not allowed: "+err.Error(), http.StatusBadRequest)
 		return
+	}
+	if req.AccountID != nil {
+		var ok bool
+		if r, ok = h.namedAccount(w, r, *req.AccountID); !ok {
+			return
+		}
 	}
 	sub, err := h.bssWebhooks.CreateSubscription(r.Context(), req.AccountID, req.TargetURL, req.Secret, req.EventTypes)
 	if err != nil {
@@ -542,7 +575,15 @@ func (h *handler) setBSSAccountCustomer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	actor := operatorFromRequest(r)
+	r, ok := h.namedAccount(w, r, accountID)
+	if !ok {
+		return
+	}
 	if err := h.bssMappings.AssignAccountOwner(r.Context(), accountID, strings.TrimSpace(req.CustomerID), "operator:"+actor); err != nil {
+		if errors.Is(err, bss.ErrAccountIDTaken) {
+			http.Error(w, "that customer already has an account "+accountID+": an account cannot be moved onto an existing one", http.StatusConflict)
+			return
+		}
 		h.logger.Error("failed to assign bss account customer", "err", err, "account_id", accountID)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -553,4 +594,37 @@ func (h *handler) setBSSAccountCustomer(w http.ResponseWriter, r *http.Request) 
 		h.logger.Error("failed to write audit record", "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// namedAccount settles which account an operator's account_id means.
+// Account IDs are unique per customer, so two customers can have an
+// account of the same ID. The operator names the customer with the
+// customer_id query parameter ("none" for the account no customer owns);
+// without it the ID must name exactly one account, else the answer is
+// 409 and the request does nothing. The returned request carries the
+// customer for everything that follows.
+func (h *handler) namedAccount(w http.ResponseWriter, r *http.Request, accountID string) (*http.Request, bool) {
+	ctx := r.Context()
+	switch named := strings.TrimSpace(r.URL.Query().Get("customer_id")); named {
+	case "":
+	case "none":
+		ctx = accounts.WithCustomer(ctx, "")
+	default:
+		if !h.customerExists(r, named) {
+			http.Error(w, "customer_id does not exist", http.StatusBadRequest)
+			return r, false
+		}
+		ctx = accounts.WithCustomer(ctx, named)
+	}
+	ctx, err := h.bssMappings.ScopeToAccount(ctx, accountID)
+	if errors.Is(err, accounts.ErrAmbiguous) {
+		http.Error(w, "account "+accountID+" exists for more than one customer: add ?customer_id=<customer> to say which (customer_id=none for the account no customer owns)", http.StatusConflict)
+		return r, false
+	}
+	if err != nil {
+		h.logger.Error("failed to resolve account", "err", err, "account_id", accountID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return r, false
+	}
+	return r.WithContext(ctx), true
 }

@@ -41,8 +41,13 @@ func TestBSSSetsSubscriberProfile(t *testing.T) {
 		!strings.Contains(rec.Body.String(), `"subscriber_name":"Thandi Nkosi"`) {
 		t.Fatalf("clear vip = %d %s", rec.Code, rec.Body)
 	}
-	if rec := put(tokB, "A.1", map[string]any{"subscriber_name": "Someone"}); rec.Code != http.StatusNotFound {
-		t.Fatalf("B renames A's subscriber = %d %s", rec.Code, rec.Body)
+	// "A.1" from B names B's own account of that ID: B's write lands
+	// there and A's subscriber is unchanged.
+	if rec := put(tokB, "A.1", map[string]any{"subscriber_name": "Someone"}); rec.Code != http.StatusOK {
+		t.Fatalf("B names a subscriber on its own A.1 = %d %s", rec.Code, rec.Body)
+	}
+	if rec := put(tokA, "A.1", map[string]any{"vip": false}); !strings.Contains(rec.Body.String(), `"subscriber_name":"Thandi Nkosi"`) {
+		t.Fatalf("A's subscriber changed by B's write: %s", rec.Body)
 	}
 	if rec := put(tokA, "A.1", map[string]any{"nickname": "x"}); rec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown field = %d", rec.Code)
