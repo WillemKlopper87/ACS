@@ -401,6 +401,10 @@ func (h *handler) listWebhookSubscriptions(w http.ResponseWriter, r *http.Reques
 
 func (h *handler) deleteWebhookSubscription(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !isUUID(id) {
+		writeError(w, http.StatusNotFound, "ErrNotFound", "webhook subscription not found")
+		return
+	}
 	sub, err := h.webhooks.SubscriptionByID(r.Context(), id)
 	if errors.Is(err, bss.ErrSubscriptionNotFound) {
 		writeError(w, http.StatusNotFound, "ErrNotFound", "webhook subscription not found")

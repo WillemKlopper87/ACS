@@ -71,7 +71,12 @@ func (h *handler) listEvents(w http.ResponseWriter, r *http.Request) {
 // for it: an account subscription by its account, a fleet-wide one only for
 // a fleet-wide client.
 func (h *handler) subscriptionFor(w http.ResponseWriter, r *http.Request, scope string) (*bss.WebhookSubscription, bool) {
-	sub, err := h.webhooks.SubscriptionByID(r.Context(), r.PathValue("id"))
+	id := r.PathValue("id")
+	if !isUUID(id) {
+		writeError(w, http.StatusNotFound, "ErrNotFound", "webhook subscription not found")
+		return nil, false
+	}
+	sub, err := h.webhooks.SubscriptionByID(r.Context(), id)
 	if errors.Is(err, bss.ErrSubscriptionNotFound) {
 		writeError(w, http.StatusNotFound, "ErrNotFound", "webhook subscription not found")
 		return nil, false
@@ -119,6 +124,10 @@ func (h *handler) redeliverWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	deliveryID := r.PathValue("delivery_id")
+	if !isUUID(deliveryID) {
+		writeError(w, http.StatusNotFound, "ErrNotFound", "webhook delivery not found")
+		return
+	}
 	if err := h.webhooks.Redeliver(r.Context(), sub.ID, deliveryID); errors.Is(err, bss.ErrDeliveryNotFound) {
 		writeError(w, http.StatusNotFound, "ErrNotFound", "webhook delivery not found")
 		return

@@ -13,6 +13,8 @@ import (
 
 	"acs/internal/bss"
 	"acs/internal/onboarding"
+
+	"github.com/google/uuid"
 )
 
 // defaultSaleTTL is how long a pre-provisioned sale waits for its CPE to
@@ -101,13 +103,22 @@ func (h *handler) saleResponse(o *onboarding.Onboarding) saleResponse {
 
 func ptr[T any](v T) *T { return &v }
 
+// isUUID reports whether a path id is a canonical UUID. Sale, webhook
+// subscription and delivery ids are uuid columns: anything else names no
+// row, and Postgres would refuse it (SQLSTATE 22P02) instead of finding
+// nothing, so handlers answer not found without querying.
+func isUUID(id string) bool {
+	_, err := uuid.Parse(id)
+	return err == nil && len(id) == 36
+}
+
 // getSale is GET /bss/v1/onboardings/{id}: where a sale is, for the
 // account's owner. Another customer's sale reads as not found.
 func (h *handler) getSale(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var o *onboarding.Onboarding
 	var err error
-	if h.onboarding != nil {
+	if h.onboarding != nil && isUUID(id) {
 		o, err = h.onboarding.Get(r.Context(), id)
 	}
 	if err != nil && !errors.Is(err, onboarding.ErrNotFound) {
@@ -199,7 +210,7 @@ func (h *handler) changeSale(w http.ResponseWriter, r *http.Request, action stri
 	id := r.PathValue("id")
 	var o *onboarding.Onboarding
 	var err error
-	if h.onboarding != nil {
+	if h.onboarding != nil && isUUID(id) {
 		o, err = h.onboarding.Get(r.Context(), id)
 	}
 	if err != nil && !errors.Is(err, onboarding.ErrNotFound) {
