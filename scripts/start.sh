@@ -115,8 +115,20 @@ fi
 echo "Public IP: $PUBLIC_IP"
 
 if [ "$PROFILE" = "lab" ]; then
-  FRONTEND_PUBLIC_URL="http://$PUBLIC_IP:5173"
-  API_PUBLIC_URL="http://$PUBLIC_IP:8080"
+  if [ -n "${ACS_LAB_PUBLIC_FRONTEND_URL:-}" ] || [ -n "${ACS_LAB_PUBLIC_API_URL:-}" ]; then
+    # The lab sits behind a TLS front door (docs/LAB-TLS-CLOUDFLARE.md): the
+    # console and API are reached by these https names, not by IP and port.
+    validate_https_origin ACS_LAB_PUBLIC_FRONTEND_URL
+    validate_https_origin ACS_LAB_PUBLIC_API_URL
+    if [ -n "${ACS_LAB_PUBLIC_BSS_URL:-}" ]; then
+      validate_https_origin ACS_LAB_PUBLIC_BSS_URL
+    fi
+    FRONTEND_PUBLIC_URL="${ACS_LAB_PUBLIC_FRONTEND_URL%/}"
+    API_PUBLIC_URL="${ACS_LAB_PUBLIC_API_URL%/}"
+  else
+    FRONTEND_PUBLIC_URL="http://$PUBLIC_IP:5173"
+    API_PUBLIC_URL="http://$PUBLIC_IP:8080"
+  fi
   export ACS_FRONTEND_BASE_URL="$FRONTEND_PUBLIC_URL"
 fi
 
@@ -305,6 +317,18 @@ cd "$ROOT/frontend/dist"
 nohup python3 "$ROOT/scripts/spa-server.py" 5173 "$ROOT/frontend/dist" "$API_PUBLIC_URL" > "$LOG_DIR/frontend.log" 2>&1 &
 echo $! > "$LOG_DIR/frontend.pid"
 wait_url "frontend" "${ACS_HEALTH_FRONTEND_URL:-http://127.0.0.1:5173/}" "$LOG_DIR/frontend.pid"
+
+if [ "$PROFILE" = "lab" ] && [ -n "${ACS_LAB_PUBLIC_FRONTEND_URL:-}" ] && [ -n "${ACS_LAB_PUBLIC_API_URL:-}" ] \
+   && [ -n "${ACS_LAB_PUBLIC_BSS_URL:-}" ] && [ -n "${ACS_LAB_TLS_EMAIL:-}" ]; then
+  echo "=== Starting the TLS front door (Caddy, docs/LAB-TLS.md) ==="
+  host_of() { python3 -c 'import sys; from urllib.parse import urlsplit; print(urlsplit(sys.argv[1]).hostname)' "$1"; }
+  export ACS_LAB_FRONTEND_HOST="$(host_of "$ACS_LAB_PUBLIC_FRONTEND_URL")"
+  export ACS_LAB_API_HOST="$(host_of "$ACS_LAB_PUBLIC_API_URL")"
+  export ACS_LAB_BSS_HOST="$(host_of "$ACS_LAB_PUBLIC_BSS_URL")"
+  (cd "$ROOT/infra" && docker compose --profile tls up -d caddy)
+  echo "Caddy asks Let's Encrypt for $ACS_LAB_FRONTEND_HOST, $ACS_LAB_API_HOST and $ACS_LAB_BSS_HOST on first start;"
+  echo "check 'docker compose --profile tls logs caddy' if https does not answer within a minute."
+fi
 
 echo "=== Whole-stack readiness ==="
 bash "$ROOT/scripts/healthcheck.sh"

@@ -25,6 +25,9 @@ export function DeviceSale({ device }: { device: Device }) {
   useEffect(load, [load]);
 
   if (latest === undefined) return null;
+  // An ended sale has released the device: it is in the pool again and can be
+  // claimed for a new sale. (A cancelled sale does not release its device.)
+  const released = latest?.state === "ENDED";
   return (
     <div className="panel">
       <h3>Sale and onboarding</h3>
@@ -34,6 +37,14 @@ export function DeviceSale({ device }: { device: Device }) {
           <p className="ob-hint">
             <Link to={`/onboarding/${onboardingTab(latest.state)}`}>Open in Onboarding</Link>
           </p>
+          {released && (
+            <div className="ob-toolbar">
+              <span className="dim">This sale has ended, so the device is back in the pool. Claim it to sell it again.</span>
+              <button className="btn" onClick={() => setClaiming(true)} disabled={!canManage(role)}>
+                Claim device
+              </button>
+            </div>
+          )}
         </>
       ) : (
         <div className="ob-toolbar">

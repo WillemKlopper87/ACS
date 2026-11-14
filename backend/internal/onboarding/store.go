@@ -521,8 +521,11 @@ type UnclaimedDevice struct {
 	LastInformAt *time.Time
 }
 
-// Unclaimed lists devices that reached the ACS without any onboarding, most
-// recently seen first: nobody recorded who they belong to.
+// Unclaimed lists devices nobody currently holds a sale for, most recently
+// seen first: ones that reached the ACS without any onboarding, and ones
+// released when their sale ended (End service frees the device completely).
+// Any other sale keeps its device out of this list, a cancelled one included:
+// cancelling does not release the device.
 func (r *Repository) Unclaimed(ctx context.Context, limit int) ([]UnclaimedDevice, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 500
@@ -531,7 +534,7 @@ func (r *Repository) Unclaimed(ctx context.Context, limit int) ([]UnclaimedDevic
 		SELECT d.id, d.oui_serial, COALESCE(d.manufacturer,''), COALESCE(d.product_class,''), COALESCE(d.serial_number,''),
 			COALESCE(d.online_status,''), d.last_inform_at
 		FROM devices d
-		WHERE NOT EXISTS (SELECT 1 FROM onboardings o WHERE o.device_id = d.id
+		WHERE NOT EXISTS (SELECT 1 FROM onboardings o WHERE (o.device_id = d.id AND o.state <> 'ENDED')
 				OR (o.device_id IS NULL AND o.state NOT IN ('IN_SERVICE','CANCELLED','ENDED') AND o.expected_serial = d.serial_number))
 		ORDER BY d.last_inform_at DESC NULLS LAST LIMIT $1`, limit)
 	if err != nil {
