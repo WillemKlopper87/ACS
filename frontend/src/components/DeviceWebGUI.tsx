@@ -132,6 +132,12 @@ export function DeviceWebGUI({ id, writable, unreachableNote }: { id: string; wr
             <iframe
               src={frameSrc}
               title="Device web GUI"
+              // The device's page is foreign content served through our API.
+              // No allow-same-origin: it gets an origin of its own and cannot
+              // read the console's session. The API sends the same policy as
+              // a header, so this holds if the frame is opened directly too.
+              sandbox="allow-forms allow-scripts allow-popups"
+              referrerPolicy="no-referrer"
               style={{
                 marginTop: "0.6rem",
                 width: "100%",

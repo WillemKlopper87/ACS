@@ -403,7 +403,7 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 				if claims, err := auth.VerifyJWT(oauthSigningSecret, bearer); err == nil && claims.Role == bssClientRole {
 					clientID := strings.TrimPrefix(claims.Subject, "bss-client:")
 					if !revoked(r.Context(), clientID) {
-						next.ServeHTTP(w, r)
+						next.ServeHTTP(w, withRateKey(r, "client:"+clientID))
 						return
 					}
 					writeError(w, http.StatusUnauthorized, "ErrUnauthorized", "oauth client has been revoked")
@@ -413,7 +413,7 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 		}
 
 		if token != "" && subtle.ConstantTimeCompare([]byte(got), []byte("Bearer "+token)) == 1 {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, withRateKey(r, "shared-token"))
 			return
 		}
 
@@ -421,21 +421,36 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 	})
 }
 
-// withRateLimit enforces a per-caller token bucket (build plan §7.3/§7b).
-// Runs after withAuth, so the key is the (already-verified) Authorization
-// header — every legitimately-authenticated caller shares one bucket
-// under today's single-shared-token model; that becomes genuinely
-// per-integration once individual BSS tokens exist. When auth itself is
-// disabled (no ACS_BSS_API_TOKEN configured — lab mode), there's no token
-// to key on, so this falls back to remote address as a coarser
-// defense-in-depth limit.
+type rateKeyCtx struct{}
+
+// withRateKey records who the caller was authenticated as, for the rate
+// limiter that runs after withAuth.
+func withRateKey(r *http.Request, key string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), rateKeyCtx{}, key))
+}
+
+// rateLimitKey is the bucket a request is counted in: the authenticated
+// client, or the caller's address where there is none (the token endpoint,
+// and lab mode with auth off).
+//
+// It is never the Authorization header itself. A client can mint a new
+// access token whenever it likes, and every token is a different header,
+// so a per-header bucket gave each token its own allowance; and on the
+// token endpoint every guessed client secret was a different header, so
+// guesses were not limited at all, each costing a bcrypt comparison.
+func rateLimitKey(r *http.Request) string {
+	if key, ok := r.Context().Value(rateKeyCtx{}).(string); ok && key != "" {
+		return key
+	}
+	return "addr:" + clientip.Of(r)
+}
+
+// withRateLimit enforces a token bucket per caller (build plan §7.3/§7b),
+// keyed by rateLimitKey. It runs after withAuth so that a request with a
+// bad token is refused before it can spend anyone's allowance.
 func withRateLimit(limiter *ratelimit.Limiter, metrics *observability.Metrics, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := r.Header.Get("Authorization")
-		if key == "" {
-			key = clientip.Of(r)
-		}
-		if !limiter.Allow(key) {
+		if !limiter.Allow(rateLimitKey(r)) {
 			metrics.RateLimitRejectedTotal.Inc()
 			// A token frees within 1/rate seconds; at the default 5/s and any
 			// rate of at least 1/s, a client retrying after a second gets in.

@@ -285,6 +285,7 @@ func main() {
 		permissions:         operators.NewPermissionRepository(db),
 		mfa:                 mfaRepo,
 		mfaRequired:         mfaRequired,
+		webGUISameOrigin:    os.Getenv("ACS_WEBGUI_ALLOW_SAME_ORIGIN") == "true",
 		mailer: mailer.New(mailer.Config{
 			Host: os.Getenv("ACS_SMTP_HOST"), Port: envOr("ACS_SMTP_PORT", "587"),
 			Username: os.Getenv("ACS_SMTP_USERNAME"), Password: os.Getenv("ACS_SMTP_PASSWORD"),
@@ -471,10 +472,13 @@ type handler struct {
 	// the set of roles that must use MFA (ACS_MFA_REQUIRED_ROLES).
 	mfa         *mfa.Repository
 	mfaRequired map[string]bool
-	logger      *slog.Logger
-	devices     *devices.Repository
-	jobs        *jobs.Repository
-	params      *parameters.Repository
+	// webGUISameOrigin turns off the sandbox on proxied device web pages
+	// (ACS_WEBGUI_ALLOW_SAME_ORIGIN=true; see isolateDeviceContent).
+	webGUISameOrigin bool
+	logger           *slog.Logger
+	devices          *devices.Repository
+	jobs             *jobs.Repository
+	params           *parameters.Repository
 	// wifiInsights serves the controller-style Wi-Fi overview (sampled by cmd/acs).
 	wifiInsights *wifiinsights.Repository
 	vendors      *adapters.Registry

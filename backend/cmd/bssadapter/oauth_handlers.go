@@ -4,6 +4,7 @@
 package main
 
 import (
+	"acs/internal/clientip"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -49,6 +50,9 @@ func (h *handler) issueOAuthToken(w http.ResponseWriter, r *http.Request) {
 
 	client, err := h.oauthClients.AuthenticateClient(r.Context(), clientID, clientSecret)
 	if err != nil {
+		// A failed client login used to leave no trace at all. The client
+		// ID is logged (it is not secret); the secret never is.
+		h.logger.Warn("oauth client authentication failed", "client_id", clientID, "remote", clientip.Of(r))
 		writeError(w, http.StatusUnauthorized, "invalid_client", "client authentication failed")
 		return
 	}

@@ -169,13 +169,58 @@ func (h *handler) proxyWebGUI(w http.ResponseWriter, r *http.Request) {
 	proxy.Director = func(req *http.Request) {
 		req.URL.Path = "/" + r.PathValue("path")
 		originalDirector(req)
+		// The operator's credential stops here. The browser ticket rides in
+		// the query string and a console session in Authorization; passing
+		// either on would hand a device (which can reach this API) a
+		// credential that opens other devices' consoles for its lifetime.
+		stripOperatorCredentials(req)
 		if cfg.Username != "" {
 			req.SetBasicAuth(cfg.Username, cfg.Password)
 		}
+	}
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		isolateDeviceContent(resp.Header, h.webGUISameOrigin)
+		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		h.logger.Warn("webgui proxy request failed — device likely unreachable", "err", err, "device_id", id, "base_url", cfg.BaseURL)
 		http.Error(w, "device web GUI unreachable: "+err.Error(), http.StatusBadGateway)
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// webGUISandbox is the Content-Security-Policy put on everything the web
+// GUI proxy returns. A device's pages are served from this API's own
+// origin, so without it a script on a compromised or malicious CPE runs
+// with that origin's privileges: where the console shares the origin (the
+// production layout) it can read the operator's session out of browser
+// storage. "sandbox" without allow-same-origin gives the page an origin of
+// its own: scripts and forms still work, but it cannot read this origin's
+// storage or cookies, or reach the console that frames it.
+const webGUISandbox = "sandbox allow-forms allow-scripts allow-popups"
+
+// isolateDeviceContent sets the headers that keep proxied device content
+// apart from the console. sameOrigin (ACS_WEBGUI_ALLOW_SAME_ORIGIN=true)
+// drops the sandbox for a lab where a device GUI needs its own cookies or
+// storage to work and the API is on a different origin from the console.
+func isolateDeviceContent(h http.Header, sameOrigin bool) {
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	if sameOrigin {
+		return
+	}
+	// Replace, not add: a device must not be able to widen the policy.
+	h.Set("Content-Security-Policy", webGUISandbox)
+	// A sandboxed page cannot use cookies anyway; do not let a device
+	// plant them on this origin.
+	h.Del("Set-Cookie")
+}
+
+// stripOperatorCredentials removes what authenticated the operator to this
+// API from a request about to be sent to a device.
+func stripOperatorCredentials(req *http.Request) {
+	req.Header.Del("Authorization")
+	q := req.URL.Query()
+	q.Del("token")
+	req.URL.RawQuery = q.Encode()
 }
