@@ -8,7 +8,8 @@ import { canAdmin } from "./auth/roles";
 import { ToastHost } from "./components/Toast";
 import { ConfirmHost } from "./components/ConfirmHost";
 import { GlobalSearch } from "./components/GlobalSearch";
-import { areaOf, screenTitle, visibleAreas, type Screen } from "./lib/nav";
+import { areaOf, isNaasOnly, screenTitle, visibleAreas, type Screen } from "./lib/nav";
+import { useSystemInfo } from "./lib/useSystemInfo";
 import { useApiReachable } from "./lib/apiHealth";
 import { useTheme, type Theme } from "./theme/useTheme";
 import { grafanaLink, openGatedGrafana } from "./lib/grafana";
@@ -110,7 +111,6 @@ function AppShell() {
   const screen: Screen = SCREEN_COMPONENT[fromPath] ? fromPath : "fleet";
   // The sidebar lists areas; the screens of the current area are tabs
   // above the content (lib/nav.ts).
-  const area = areaOf(screen);
   // A device's own pages sit under Inventory.
   const tabScreen: Screen = screen === "devices" ? "fleet" : screen;
   const setScreen = (s: Screen) => navigate("/" + s);
@@ -119,6 +119,11 @@ function AppShell() {
   const admin = canAdmin(role);
   const { theme, setTheme, themes } = useTheme();
   const apiReachable = useApiReachable();
+  // Standalone or through the NaaS platform (ACS_INTEGRATION_MODE).
+  const systemInfo = useSystemInfo(!authRequired || !!token);
+  const standalone = systemInfo?.integration_mode === "standalone";
+  const allAreas = visibleAreas(admin, standalone);
+  const area = allAreas.find((a) => a.id === areaOf(screen)?.id);
 
   if (authRequired && !token) {
     return <Login />;
@@ -135,7 +140,7 @@ function AppShell() {
         </div>
 
         <nav className="sidebar-nav" aria-label="Main">
-          {visibleAreas(admin).map((item) => (
+          {allAreas.map((item) => (
             <button
               key={item.id}
               className={area?.id === item.id ? "active" : ""}
@@ -195,6 +200,11 @@ function AppShell() {
               </button>
             </div>
           )}
+          {systemInfo && (
+            <div className="conn-indicator" title="Set by ACS_INTEGRATION_MODE and ACS_DEPLOYMENT_PROFILE on the server">
+              {standalone ? "Standalone" : "NaaS integration on"} · {systemInfo.deployment_profile}
+            </div>
+          )}
           <div
             className={`conn-indicator${apiReachable ? "" : " down"}`}
             title={apiReachable ? "Last API call reached the server" : "The last API call did not reach the server"}
@@ -232,11 +242,18 @@ function AppShell() {
               ))}
             </nav>
           )}
-          <ErrorBoundary key={screen}>
-            <Suspense fallback={<p className="dim">Loading…</p>}>
-              <ActiveScreen />
-            </Suspense>
-          </ErrorBoundary>
+          {standalone && isNaasOnly(screen) ? (
+            <div className="banner info">
+              This ACS is running on its own: the BSS / NaaS integration is switched off (<code>ACS_INTEGRATION_MODE=standalone</code>). Accounts, mappings
+              and integration clients are kept and work again when it is switched back on.
+            </div>
+          ) : (
+            <ErrorBoundary key={screen}>
+              <Suspense fallback={<p className="dim">Loading…</p>}>
+                <ActiveScreen />
+              </Suspense>
+            </ErrorBoundary>
+          )}
         </main>
       </div>
       <ToastHost />

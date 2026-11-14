@@ -18,6 +18,16 @@ describe("navigation areas", () => {
     expect(visibleAreas(false).length).toBe(AREAS.length - 1);
   });
 
+  it("leaves the BSS / NaaS screen out when the ACS runs on its own", () => {
+    const withNaas = visibleAreas(true).flatMap((a) => a.screens.map((s) => s.id));
+    const standalone = visibleAreas(true, true).flatMap((a) => a.screens.map((s) => s.id));
+    expect(withNaas).toContain("bss");
+    expect(standalone).not.toContain("bss");
+    // Only that screen goes; every other one is still there.
+    expect(standalone.length).toBe(withNaas.length - 1);
+    expect(standalone).toContain("operators");
+  });
+
   it("finds a screen's area, with a device's pages under Devices", () => {
     expect(areaOf("operations")?.id).toBe("activity");
     expect(areaOf("devices")?.id).toBe("devices");

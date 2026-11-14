@@ -361,6 +361,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How this ACS is being run
+         * @description integration_mode is the ACS_INTEGRATION_MODE switch: naas when the ACS is run through the ISP NaaS platform, standalone when it runs on its own (the BSS adapter then answers 503 and the console hides its BSS / NaaS screen).
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            integration_mode: "naas" | "standalone";
+                            /** @enum {string} */
+                            deployment_profile: "lab" | "production";
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login/mfa": {
         parameters: {
             query?: never;

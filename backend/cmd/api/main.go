@@ -86,6 +86,14 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	// The switch between running on its own and through the NaaS platform
+	// (internal/config.IntegrationMode).
+	integrationMode, err := config.IntegrationMode(os.Getenv)
+	if err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	logger.Info("integration mode", "ACS_INTEGRATION_MODE", integrationMode)
 
 	dsn := os.Getenv("ACS_POSTGRES_DSN")
 	if dsn == "" {
@@ -141,7 +149,12 @@ func main() {
 	}
 
 	internalServiceToken := os.Getenv("ACS_INTERNAL_SERVICE_TOKEN")
-	if len(jwtSecret) > 0 && internalServiceToken == "" {
+	if integrationMode == config.ModeStandalone {
+		// No adapter is calling in, so there is no service identity to
+		// accept: the token is ignored even if it is still configured.
+		internalServiceToken = ""
+	}
+	if len(jwtSecret) > 0 && internalServiceToken == "" && integrationMode == config.ModeNaaS {
 		logger.Warn("ACS_INTERNAL_SERVICE_TOKEN not set — cmd/bssadapter's own calls into this API (order dispatch, job status) will get 401'd once JWT auth is enabled, since it has no operator login. Set the same value here and on cmd/bssadapter.")
 	}
 
@@ -301,6 +314,8 @@ func main() {
 		mfa:                 mfaRepo,
 		mfaRequired:         mfaRequired,
 		webGUISameOrigin:    os.Getenv("ACS_WEBGUI_ALLOW_SAME_ORIGIN") == "true",
+		integrationMode:     integrationMode,
+		deploymentProfile:   profile,
 		mailer: mailer.New(mailer.Config{
 			Host: os.Getenv("ACS_SMTP_HOST"), Port: envOr("ACS_SMTP_PORT", "587"),
 			Username: os.Getenv("ACS_SMTP_USERNAME"), Password: os.Getenv("ACS_SMTP_PASSWORD"),
@@ -490,10 +505,15 @@ type handler struct {
 	// webGUISameOrigin turns off the sandbox on proxied device web pages
 	// (ACS_WEBGUI_ALLOW_SAME_ORIGIN=true; see isolateDeviceContent).
 	webGUISameOrigin bool
-	logger           *slog.Logger
-	devices          *devices.Repository
-	jobs             *jobs.Repository
-	params           *parameters.Repository
+	// integrationMode is "naas" or "standalone" (ACS_INTEGRATION_MODE);
+	// deploymentProfile is "lab" or "production". Both are reported to the
+	// console by GET /system/info.
+	integrationMode   string
+	deploymentProfile string
+	logger            *slog.Logger
+	devices           *devices.Repository
+	jobs              *jobs.Repository
+	params            *parameters.Repository
 	// wifiInsights serves the controller-style Wi-Fi overview (sampled by cmd/acs).
 	wifiInsights *wifiinsights.Repository
 	vendors      *adapters.Registry

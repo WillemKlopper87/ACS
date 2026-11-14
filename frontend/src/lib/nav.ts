@@ -86,8 +86,19 @@ export const AREAS: NavArea[] = [
 // Screens that are reached from another screen, not from the navigation.
 const TITLES: Partial<Record<Screen, string>> = { devices: "Device", account: "Account" };
 
-export function visibleAreas(admin: boolean): NavArea[] {
-  return AREAS.filter((area) => !area.adminOnly || admin);
+// Screens that only make sense when the ACS is run through the NaaS
+// platform (ACS_INTEGRATION_MODE=naas). On an ACS that runs on its own
+// they are left out of the navigation; nothing behind them is deleted.
+const NAAS_ONLY: Screen[] = ["bss"];
+
+export function isNaasOnly(screen: Screen): boolean {
+  return NAAS_ONLY.includes(screen);
+}
+
+export function visibleAreas(admin: boolean, standalone = false): NavArea[] {
+  return AREAS.filter((area) => !area.adminOnly || admin)
+    .map((area) => (standalone ? { ...area, screens: area.screens.filter((s) => !isNaasOnly(s.id)) } : area))
+    .filter((area) => area.screens.length > 0);
 }
 
 // The area a screen sits in. A device's own pages belong with Devices.

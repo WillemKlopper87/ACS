@@ -586,6 +586,23 @@ paths:
         "401": { description: Wrong username or password, content: { text/plain: { schema: { type: string } } } }
         "503": { description: "The operator's role must use MFA but this server cannot store MFA secrets (no ACS_CREDENTIAL_ENCRYPTION_KEY)" }
 
+  /api/v1/system/info:
+    get:
+      tags: [Auth]
+      summary: How this ACS is being run
+      description: "integration_mode is the ACS_INTEGRATION_MODE switch: naas when the ACS is run through the ISP NaaS platform, standalone when it runs on its own (the BSS adapter then answers 503 and the console hides its BSS / NaaS screen)."
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [integration_mode, deployment_profile]
+                properties:
+                  integration_mode: { type: string, enum: [naas, standalone] }
+                  deployment_profile: { type: string, enum: [lab, production] }
+
   /api/v1/auth/login/mfa:
     post:
       tags: [Auth]

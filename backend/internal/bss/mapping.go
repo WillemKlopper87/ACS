@@ -152,7 +152,24 @@ type AccountDeviceMapping struct {
 
 type Repository struct {
 	db *sql.DB
+	// requireAllocated: see RequireAllocatedDevices.
+	requireAllocated bool
 }
+
+// RequireAllocatedDevices turns on strict device ownership: an account
+// that belongs to a customer can take only a device the operator has
+// already allocated to that customer (devices.customer_id, set by the
+// device import or by an operator). A device with no customer is then
+// "not found" to every customer-bound caller, where it would otherwise
+// join whichever customer named its serial first. Serials are printed on
+// the box, so first-to-name is not proof of ownership.
+func (r *Repository) RequireAllocatedDevices(on bool) *Repository {
+	r.requireAllocated = on
+	return r
+}
+
+// AllocatedDevicesRequired reports whether strict device ownership is on.
+func (r *Repository) AllocatedDevicesRequired() bool { return r.requireAllocated }
 
 func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
@@ -221,7 +238,7 @@ func (r *Repository) AssignDeviceStatus(ctx context.Context, accountID, ouiSeria
 		return nil, fmt.Errorf("begin assignment: %w", err)
 	}
 	defer tx.Rollback()
-	deviceID, err := deviceForAccount(ctx, tx, ouiSerial, accountID)
+	deviceID, err := deviceForAccount(ctx, tx, ouiSerial, accountID, r.requireAllocated)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +310,7 @@ func (r *Repository) SwapDevice(ctx context.Context, accountID, role, newOUISeri
 		return nil, fmt.Errorf("release old assignment: %w", err)
 	}
 
-	newDeviceID, err := deviceForAccount(ctx, tx, newOUISerial, accountID)
+	newDeviceID, err := deviceForAccount(ctx, tx, newOUISerial, accountID, r.requireAllocated)
 	if err != nil {
 		return nil, err // deferred Rollback restores the old assignment
 	}

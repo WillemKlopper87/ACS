@@ -447,6 +447,7 @@ test("the header search finds a device from any screen and opens it", async ({ p
   await page.goto("/jobs");
 
   const search = page.getByRole("searchbox", { name: "Search for a device or subscriber" });
+  await expect(search).toBeVisible();
   await page.keyboard.press("Control+k");
   await expect(search).toBeFocused();
 
@@ -467,4 +468,22 @@ test("the header search finds a device from any screen and opens it", async ({ p
   await expect(page.getByText("Nothing matches")).toBeVisible();
   await search.press("Escape");
   await expect(page.getByRole("list", { name: "Search results" })).toHaveCount(0);
+});
+
+test("an ACS running on its own hides the BSS / NaaS screen and says so", async ({ page }) => {
+  await page.route(`${API}/api/v1/system/info`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integration_mode: "standalone", deployment_profile: "production" }) }),
+  );
+  await signIn(page);
+  await expect(page.getByText("Standalone · production")).toBeVisible();
+
+  await page.getByRole("button", { name: "Administration", exact: true }).click();
+  // The rest of the area is untouched; only the integration screen is gone.
+  await expect(page.getByRole("link", { name: "Operators" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Tenancy" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "BSS / NaaS" })).toHaveCount(0);
+
+  // An old bookmark explains itself instead of showing a broken screen.
+  await page.goto("/bss");
+  await expect(page.getByText("the BSS / NaaS integration is switched off")).toBeVisible();
 });

@@ -226,11 +226,55 @@ taken.
   cmd/acs. There is no re-encryption tool; rotating it orphans stored
   credential ciphertexts — rotate device credentials afterwards.
 
+## Standalone or NaaS: the integration switch
+
+`ACS_INTEGRATION_MODE` is `naas` (the default) or `standalone`. Set the same
+value for `cmd/api` and `cmd/bssadapter` and restart both.
+`gen-production-env.sh` asks for it as `ACS_PRODUCTION_INTEGRATION_MODE` and
+has no default, so it is a decision each time.
+
+- **Standalone** is for running the ACS on its own, for example while the
+  NaaS platform is still being developed or during an incident on that
+  side. The adapter stays up (so launchers and health checks are unchanged)
+  but answers `503 ErrIntegrationDisabled` on every integration route and
+  runs no webhook, reconciliation or order worker. The API stops accepting
+  the adapter's service token. The console hides BSS / NaaS and shows
+  "Standalone" in the sidebar.
+- **Switching back** to `naas` needs the adapter's production settings
+  (below). Nothing was deleted while it was off. Orders the platform tried
+  to place while it was off were refused with a 503, not queued: the
+  platform must resend them. Webhook deliveries that were pending resume.
+- **To check which mode is live:** the sidebar footer in the console, or
+  `curl http://127.0.0.1:8090/readyz` on the host (standalone says so), or
+  the `integration mode` line in the API log at start-up.
+
+Testing the NaaS platform against a live ACS: do it against a separate
+lab-profile ACS, not the production one. If it must be the production ACS,
+it has to be `naas` mode with the full production settings; there is no
+relaxed in-between, on purpose.
+
+## Strict device ownership (before a second ISP)
+
+By default an unassigned device joins the first ISP whose integration names
+its serial. `ACS_BSS_REQUIRE_ALLOCATED_DEVICES=true` on the adapter changes
+that: an ISP can map or pre-provision only a serial already allocated to
+it. Allocate serials with the device import (Administration → Tenancy →
+Bulk device import, with `customer_id`) or by setting the customer on a
+device. With it on:
+
+- a serial that is unknown, unallocated or another ISP's gets the same
+  refusal, so it cannot be used to probe other ISPs' stock;
+- a device whose sale has ended returns to the unassigned pool and must be
+  allocated again before it can be sold by an integration;
+- operators are not affected: sales and mappings made from the console work
+  as before.
+
 ## Production profile: operator and integration plane
 
 Under `ACS_DEPLOYMENT_PROFILE=production`, `cmd/api` and `cmd/bssadapter`
 refuse to start unless the strict settings are in place, and say which are
-missing. `scripts/gen-production-env.sh` writes them;
+missing. The four `ACS_BSS_*` rows and `ACS_TRUSTED_PROXY_CIDRS` apply only in
+`naas` mode; in `standalone` the adapter asks for nothing. `scripts/gen-production-env.sh` writes them;
 `scripts/security-preflight.sh` checks them before anything starts.
 
 | Setting | Required value | If it is wrong |

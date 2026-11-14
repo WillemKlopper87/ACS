@@ -374,3 +374,20 @@ func TestIntegration_JobsListNamesDevices(t *testing.T) {
 		t.Fatalf("alice's jobs: %+v", list.Items)
 	}
 }
+
+// The console asks how the ACS is run so it can hide what does not apply.
+func TestIntegration_SystemInfo(t *testing.T) {
+	e := newTestEnv(t)
+	e.operator("viewer", operators.RoleReadOnly)
+	if r := e.call("", "GET", "/api/v1/system/info", nil); r.code != 401 {
+		t.Errorf("without a session → %d, want 401", r.code)
+	}
+	// Unset reads as the defaults every deployment had before the switch.
+	if r := e.call("viewer", "GET", "/api/v1/system/info", nil); r.code != 200 || !strings.Contains(r.body, `"integration_mode":"naas"`) || !strings.Contains(r.body, `"deployment_profile":"lab"`) {
+		t.Errorf("defaults → %d %s", r.code, r.body)
+	}
+	e.h.integrationMode, e.h.deploymentProfile = "standalone", "production"
+	if r := e.call("viewer", "GET", "/api/v1/system/info", nil); !strings.Contains(r.body, `"integration_mode":"standalone"`) || !strings.Contains(r.body, `"deployment_profile":"production"`) {
+		t.Errorf("standalone production → %s", r.body)
+	}
+}

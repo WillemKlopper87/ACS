@@ -23,6 +23,25 @@ Contracts: [backend/openapi.yaml](backend/openapi.yaml) (operator API — a
 Go test fails if it drifts from the registered routes) and
 [backend/openapi-bssadapter.yaml](backend/openapi-bssadapter.yaml).
 
+## Standalone or through the NaaS platform
+
+One setting, `ACS_INTEGRATION_MODE`, switches between the two ways of
+running the ACS. It is read by `cmd/api`, `cmd/bssadapter`, the production
+scripts and (through the API) the console; change it and restart.
+
+| | `standalone` | `naas` (default) |
+|---|---|---|
+| Who drives the ACS | Operators, from the console | The ISP NaaS/BSS platform through `/bss/v1` and the TMF APIs, and operators |
+| `cmd/bssadapter` | Starts, reports healthy, answers every integration route `503 ErrIntegrationDisabled`, runs no workers, needs no credentials or database | Full service |
+| `cmd/api` | Accepts no service token | Accepts the adapter's service token on its five routes |
+| Production profile | Asks for none of the adapter's settings | Requires customer-bound clients, no shared token, a source allowlist |
+| Console | No BSS / NaaS screen; the sidebar shows "Standalone" | BSS / NaaS under Administration |
+
+Switching does not delete anything: accounts, mappings, OAuth clients and
+webhook subscriptions stay in the database and work again in `naas` mode.
+Devices, onboarding, jobs, templates, policies and rollouts are the same in
+both.
+
 ## Secure quick start
 
 Every service **fails closed**: a missing, placeholder (`change-me`), or
@@ -46,7 +65,8 @@ export ACS_PRODUCTION_ALLOWED_CIDRS=10.30.0.0/16,10.40.0.0/16
 export ACS_PRODUCTION_TLS_CERT=/etc/letsencrypt/live/acs.example/fullchain.pem
 export ACS_PRODUCTION_TLS_KEY=/etc/letsencrypt/live/acs.example/privkey.pem
 export ACS_PRODUCTION_USP_CLIENT_CA_CERT=/etc/acs/tls/usp-client-ca.pem
-export ACS_PRODUCTION_BSS_ALLOWED_CIDRS=198.51.100.0/24   # where the BSS/NaaS platform calls from
+export ACS_PRODUCTION_INTEGRATION_MODE=standalone         # or naas, with the line below
+# export ACS_PRODUCTION_BSS_ALLOWED_CIDRS=198.51.100.0/24 # naas only: where the platform calls from
 source scripts/gen-production-env.sh
 ```
 
@@ -93,7 +113,9 @@ reverse proxy in front of the API and console.
 |---|---|---|
 | `ACS_JWT_SIGNING_SECRET` (≥32 B) | api | Operator JWTs, browser tickets, transfer-URL tokens |
 | `ACS_CREDENTIAL_ENCRYPTION_KEY` (≥16 B) | api | Device/CLI/VPN credentials at rest; operators' two-step sign-in secrets |
-| `ACS_BSS_ALLOWED_CIDRS` (required in production) | bssadapter | Source networks the `/bss/v1` and `/tmf-api` routes accept calls from; others get `403 ErrSourceNotAllowed` before authentication. Unset in lab: any source. Behind a proxy, set `ACS_TRUSTED_PROXY_CIDRS` so the real caller is seen. |
+| `ACS_INTEGRATION_MODE` | api, bssadapter | `naas` (default) or `standalone`. See "Standalone or through the NaaS platform". |
+| `ACS_BSS_REQUIRE_ALLOCATED_DEVICES` (optional) | bssadapter | `true`: an ISP's integration can map or pre-provision only a device the operator has already allocated to that ISP (device import, or the device's customer set in the console). Off by default: an unassigned device joins the first ISP that names its serial. Turn it on before a second ISP is connected. |
+| `ACS_BSS_ALLOWED_CIDRS` (required in production with `naas`) | bssadapter | Source networks the `/bss/v1` and `/tmf-api` routes accept calls from; others get `403 ErrSourceNotAllowed` before authentication. Unset in lab: any source. Behind a proxy, set `ACS_TRUSTED_PROXY_CIDRS` so the real caller is seen. |
 | `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS` (required `true` in production) | bssadapter | Accept only OAuth clients bound to one customer: no shared token, no fleet-wide client. |
 | `ACS_WEBGUI_ALLOW_SAME_ORIGIN` (optional) | api | `true` turns off the sandbox on device web pages relayed by the web-GUI proxy. Lab only: without the sandbox a device's scripts run on the API's origin (`docs/SECURITY-ASSESSMENT-2026-11-14.md`, F1). |
 | `ACS_MFA_REQUIRED_ROLES` (optional) | api | Roles that must use two-step sign-in: a comma-separated list (`superadmin,manager`) or `all`. Unset: each operator chooses. Needs `ACS_CREDENTIAL_ENCRYPTION_KEY`. |

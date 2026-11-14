@@ -168,6 +168,16 @@ if [ "${ACS_INSECURE_DEV_MODE:-}" = "true" ]; then
   fail "ACS_INSECURE_DEV_MODE=true is forbidden in production"
 fi
 
+# The switch between running on its own and through the NaaS platform.
+# Unset means naas, as before the switch existed. Standalone asks for none
+# of the adapter's settings: it answers 503 and runs no workers.
+integration_mode="$(printf '%s' "${ACS_INTEGRATION_MODE:-naas}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+case "$integration_mode" in
+  naas|standalone) ;;
+  *) fail "ACS_INTEGRATION_MODE must be 'naas' or 'standalone' (got '${ACS_INTEGRATION_MODE:-}')" ;;
+esac
+
+if [ "$integration_mode" = "naas" ]; then
 # The BSS adapter: customer-bound OAuth clients only.
 require_nonempty ACS_BSS_OAUTH_SIGNING_SECRET
 if [ -n "${ACS_BSS_API_TOKEN:-}" ]; then
@@ -201,6 +211,7 @@ fi
 if [ -z "${ACS_TRUSTED_PROXY_CIDRS:-}" ]; then
   fail "ACS_TRUSTED_PROXY_CIDRS is required in production: name the ingress proxy so the adapter sees the real caller address"
 fi
+fi # integration_mode = naas
 
 # Operators: two-step sign-in for every role that can change devices.
 mfa_roles=",$(printf '%s' "${ACS_MFA_REQUIRED_ROLES:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]'),"
@@ -228,7 +239,11 @@ fi
 echo "Security preflight passed: production device transports and operator ingress requirements are configured."
 echo "Operator console/API: one HTTPS public origin -> loopback-only host listeners."
 echo "BSS adapter, USP health/metrics, Grafana and Prometheus remain host-local in this production profile."
-echo "BSS adapter: customer-bound OAuth clients only, no shared token, calls accepted from ACS_BSS_ALLOWED_CIDRS only."
+if [ "$integration_mode" = "naas" ]; then
+  echo "BSS adapter: customer-bound OAuth clients only, no shared token, calls accepted from ACS_BSS_ALLOWED_CIDRS only."
+else
+  echo "Integration mode: standalone. The BSS/NaaS adapter is switched off (503 on every integration route)."
+fi
 echo "Operators: two-step sign-in required for ${ACS_MFA_REQUIRED_ROLES}."
 echo "Note: production CWMP rejects the shared fleet Digest username; provision per-device Digest credentials or mTLS before connecting established CPEs."
 echo "Note: production USP requires each agent certificate to be pre-bound to its device, EndpointID, and MQTT response topic in usp_transport_principals."

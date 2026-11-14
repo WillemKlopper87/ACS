@@ -51,6 +51,12 @@ var errPreProvisionUnavailable = errors.New("pre-provisioning is not available")
 // the account (for a legacy unowned account, any customer).
 var errPreProvisionCustomer = errors.New("customer_id does not match the account's customer")
 
+// errPreProvisionNotAllocated: strict device ownership is on and the
+// serial is not one the operator has allocated to the caller's customer.
+// One message whether the serial is unknown, unallocated or another
+// customer's, so it cannot be used to probe other customers' stock.
+var errPreProvisionNotAllocated = errors.New("this serial is not allocated to your customer; ask the ACS operator to register it for you first")
+
 // onboardingRole maps the BSS role vocabulary onto the onboarding's; the
 // BSS role itself is kept for the account mapping.
 func onboardingRole(role string) string {
@@ -118,7 +124,25 @@ func (h *handler) preProvision(ctx context.Context, req preProvisionRequest) (*o
 	}
 	for _, owner := range owners {
 		if owner != nil && customerID != nil && *owner != *customerID {
+			if h.mappings.AllocatedDevicesRequired() {
+				return nil, errPreProvisionNotAllocated
+			}
 			return nil, errors.New("a device with this serial belongs to another customer")
+		}
+	}
+	// Strict device ownership: a customer's integration can pre-provision
+	// only a serial the operator has allocated to that customer. A sale is
+	// made by the integration itself, so without this any integration
+	// could reserve any serial that had not been seen yet.
+	if h.mappings.AllocatedDevicesRequired() && customerID != nil {
+		allocated := false
+		for _, owner := range owners {
+			if owner != nil && *owner == *customerID {
+				allocated = true
+			}
+		}
+		if !allocated {
+			return nil, errPreProvisionNotAllocated
 		}
 	}
 

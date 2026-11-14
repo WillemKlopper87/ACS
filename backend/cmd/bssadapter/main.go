@@ -87,9 +87,21 @@ func main() {
 		logger.Error("refusing to start", "err", err)
 		os.Exit(1)
 	}
+	// The switch between running on its own and through the NaaS platform.
+	// Standalone needs none of this adapter's settings, so it is decided
+	// before any of them is checked.
+	mode, err := config.IntegrationMode(os.Getenv)
+	if err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if mode == config.ModeStandalone {
+		runStandalone(logger)
+		return
+	}
 	if profile == config.ProfileProduction {
 		if problems := config.BSSProductionProblems(os.Getenv); len(problems) > 0 {
-			logger.Error(config.FormatProblems("cmd/bssadapter", problems))
+			logger.Error(config.FormatProblems("cmd/bssadapter", problems) + "\n" + config.StandaloneHint)
 			os.Exit(1)
 		}
 	}
@@ -205,7 +217,7 @@ func main() {
 
 	h := &handler{
 		logger:                logger,
-		mappings:              bss.NewRepository(db),
+		mappings:              bss.NewRepository(db).RequireAllocatedDevices(os.Getenv("ACS_BSS_REQUIRE_ALLOCATED_DEVICES") == "true"),
 		onboarding:            onboarding.NewRepository(db),
 		subscribers:           subscribers.NewRepository(db),
 		acs:                   bss.NewACSClient(acsBaseURL, 10*time.Second, internalServiceToken),

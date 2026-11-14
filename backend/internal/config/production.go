@@ -33,6 +33,38 @@ func DeploymentProfile(getenv func(string) string) (string, error) {
 	}
 }
 
+// The integration mode (ACS_INTEGRATION_MODE) is the switch between the
+// ACS running on its own and the ACS run through the ISP NaaS platform.
+//
+//   - "naas" (the default, and what every deployment did before the switch
+//     existed): the BSS adapter serves /bss/v1 and the TMF APIs, and the
+//     operator API accepts the adapter's service token.
+//   - "standalone": the ACS is run from its own console only. The adapter
+//     answers its integration routes with 503 and runs no workers, the
+//     operator API accepts no service token, the production profile asks
+//     for none of the adapter's settings, and the console hides the
+//     BSS / NaaS screen. Nothing is deleted: accounts, mappings and
+//     OAuth clients stay in the database and work again when the mode is
+//     switched back.
+const (
+	ModeNaaS       = "naas"
+	ModeStandalone = "standalone"
+)
+
+// IntegrationMode reads the mode. Unset means naas, so existing
+// deployments behave as before. An unknown value is an error.
+func IntegrationMode(getenv func(string) string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(getenv("ACS_INTEGRATION_MODE")))
+	switch mode {
+	case "":
+		return ModeNaaS, nil
+	case ModeNaaS, ModeStandalone:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("ACS_INTEGRATION_MODE must be %q or %q, got %q", ModeNaaS, ModeStandalone, mode)
+	}
+}
+
 // writeRoles are the operator roles that can change devices. Production
 // requires a second sign-in step for all of them.
 var writeRoles = []string{"superadmin", "manager", "noc"}
@@ -142,3 +174,7 @@ func isLoopbackListener(addr string) bool {
 func FormatProblems(service string, problems []string) string {
 	return fmt.Sprintf("%s cannot start with ACS_DEPLOYMENT_PROFILE=production:\n  - %s", service, strings.Join(problems, "\n  - "))
 }
+
+// StandaloneHint is appended to the adapter's production refusal: if the
+// NaaS integration is not in use, the answer is the switch, not the list.
+const StandaloneHint = "If this ACS is not connected to the NaaS platform, set ACS_INTEGRATION_MODE=standalone instead: none of the settings above are then needed."

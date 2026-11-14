@@ -114,3 +114,16 @@ func TestIsLoopbackListener(t *testing.T) {
 		}
 	}
 }
+
+func TestIntegrationMode(t *testing.T) {
+	for in, want := range map[string]string{"": ModeNaaS, "naas": ModeNaaS, " Standalone ": ModeStandalone} {
+		got, err := IntegrationMode(env("ACS_INTEGRATION_MODE", in))
+		if err != nil || got != want {
+			t.Errorf("mode %q = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	// A typo must not quietly leave the integration on (or off).
+	if _, err := IntegrationMode(env("ACS_INTEGRATION_MODE", "stand-alone")); err == nil {
+		t.Error("a misspelt mode was accepted")
+	}
+}

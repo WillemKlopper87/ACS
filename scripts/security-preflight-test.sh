@@ -104,4 +104,14 @@ expect_fail "two-step sign-in missing noc" env ACS_MFA_REQUIRED_ROLES=superadmin
 expect_fail "no credential encryption key" env ACS_CREDENTIAL_ENCRYPTION_KEY= bash "$PREFLIGHT"
 expect_fail "device web GUI sandbox disabled" env ACS_WEBGUI_ALLOW_SAME_ORIGIN=true bash "$PREFLIGHT"
 
+# The standalone switch: an ACS that runs on its own needs none of the
+# adapter's settings, but every operator-side rule still applies.
+standalone=(env ACS_INTEGRATION_MODE=standalone ACS_BSS_OAUTH_SIGNING_SECRET= ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS= ACS_BSS_ALLOWED_CIDRS= ACS_TRUSTED_PROXY_CIDRS=)
+expect_pass "standalone needs no BSS adapter settings" "${standalone[@]}" bash "$PREFLIGHT"
+expect_pass "integration mode written with capitals" env ACS_INTEGRATION_MODE=NaaS bash "$PREFLIGHT"
+expect_fail "standalone still requires two-step sign-in" "${standalone[@]}" ACS_MFA_REQUIRED_ROLES= bash "$PREFLIGHT"
+expect_fail "standalone still forbids insecure dev mode" "${standalone[@]}" ACS_INSECURE_DEV_MODE=true bash "$PREFLIGHT"
+expect_fail "unknown integration mode" env ACS_INTEGRATION_MODE=stand-alone bash "$PREFLIGHT"
+expect_fail "naas mode without its settings" env ACS_INTEGRATION_MODE=naas ACS_BSS_ALLOWED_CIDRS= bash "$PREFLIGHT"
+
 echo "security preflight regression matrix passed"

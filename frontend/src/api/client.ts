@@ -68,6 +68,7 @@ import type { components, paths } from "./generated";
 // when a second step is owed (cmd/api/mfa_handlers.go).
 export type Session = components["schemas"]["Session"];
 export type MFAChallenge = components["schemas"]["MFAChallenge"];
+export type SystemInfo = paths["/api/v1/system/info"]["get"]["responses"]["200"]["content"]["application/json"];
 export type MFAEnrollment = components["schemas"]["MFAEnrollment"];
 export type MFAStatus = components["schemas"]["MFAStatus"];
 type RecoveryCodes = components["schemas"]["MFARecoveryCodes"];
@@ -199,6 +200,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
+
+  // How this ACS is run: through the NaaS platform or on its own.
+  getSystemInfo: () => request<SystemInfo>("/api/v1/system/info"),
 
   // MFA login steps: each takes the mfa_token the password step returned.
   loginMFA: (mfaToken: string, code: string) =>

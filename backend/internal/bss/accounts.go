@@ -97,12 +97,14 @@ func (r *Repository) OwnedAccounts(ctx context.Context, customerID string) (map[
 // deviceForAccount resolves an oui_serial for a mapping write and applies
 // account ownership to the device: a device of another customer is not
 // found (no existence oracle across ISPs), and a device with no customer
-// joins the account's customer. Accounts without an owner keep the legacy
-// behaviour.
+// joins the account's customer, unless requireAllocated is set, in which
+// case it is not found either: only a device already allocated to the
+// account's customer can be taken (Repository.RequireAllocatedDevices).
+// Accounts without an owner keep the legacy behaviour.
 func deviceForAccount(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, ouiSerial, accountID string) (string, error) {
+}, ouiSerial, accountID string, requireAllocated bool) (string, error) {
 	var deviceID, deviceCustomer, owner string
 	err := q.QueryRowContext(ctx, `
 		SELECT d.id::text, COALESCE(d.customer_id::text, ''),
@@ -116,6 +118,10 @@ func deviceForAccount(ctx context.Context, q interface {
 	}
 	switch {
 	case owner == "":
+	case deviceCustomer == "" && requireAllocated:
+		// The same answer as for another customer's device: a caller must
+		// not learn which serials exist but are unallocated.
+		return "", fmt.Errorf("%w: %s", ErrDeviceNotFound, ouiSerial)
 	case deviceCustomer == "":
 		if _, err := q.ExecContext(ctx, `UPDATE devices SET customer_id = $2::uuid, last_updated_at = now() WHERE id = $1 AND customer_id IS NULL`,
 			deviceID, owner); err != nil {
