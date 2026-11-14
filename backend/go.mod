@@ -1,6 +1,6 @@
 module acs
 
-go 1.26.10
+go 1.26.11
 
 // Listen with plain TCP, not multipath TCP (Go's default since 1.24):
 // CVE-2026-98432, a Linux kernel use-after-free in IPv4 connection setup,
