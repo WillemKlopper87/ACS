@@ -33,7 +33,7 @@ scripts and (through the API) the console; change it and restart.
 |---|---|---|
 | Who drives the ACS | Operators, from the console | The ISP NaaS/BSS platform through `/bss/v1` and the TMF APIs, and operators |
 | `cmd/bssadapter` | Starts, reports healthy, answers every integration route `503 ErrIntegrationDisabled`, runs no workers, needs no credentials or database | Full service |
-| `cmd/api` | Accepts no service token | Accepts the adapter's service token on its five routes |
+| `cmd/api` | Accepts no service token | Accepts the adapter's service token on its six routes, confined to the customer each call names |
 | Production profile | Asks for none of the adapter's settings | Requires customer-bound clients, no shared token, a source allowlist |
 | Console | No BSS / NaaS screen; the sidebar shows "Standalone" | BSS / NaaS under Administration |
 
@@ -120,7 +120,8 @@ reverse proxy in front of the API and console.
 | `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS` (required `true` in production) | bssadapter | Accept only OAuth clients bound to one customer: no shared token, no fleet-wide client. |
 | `ACS_WEBGUI_ALLOW_SAME_ORIGIN` (optional) | api | `true` turns off the sandbox on device web pages relayed by the web-GUI proxy. Lab only: without the sandbox a device's scripts run on the API's origin (`docs/SECURITY-ASSESSMENT-2026-11-14.md`, F1). |
 | `ACS_MFA_REQUIRED_ROLES` (optional) | api | Roles that must use two-step sign-in: a comma-separated list (`superadmin,manager`) or `all`. Unset: each operator chooses. Needs `ACS_CREDENTIAL_ENCRYPTION_KEY`. |
-| `ACS_INTERNAL_SERVICE_TOKEN` (≥32 B) | api, bssadapter | Adapter → API machine identity (narrow route allowlist) |
+| `ACS_INTERNAL_SERVICE_TOKEN` (≥32 B) | api, bssadapter | Adapter → API machine identity (narrow route allowlist). Each call names the customer it acts for and reaches that customer's devices only. |
+| `ACS_SERVICE_CALLS_REQUIRE_CUSTOMER` (optional) | api | `true`: refuse an adapter call that names no customer. Default: `true` in the production profile with `naas`, otherwise `false` (fleet-wide clients and accounts nobody owns then still work). |
 | `ACS_DIGEST_USERNAME` / `ACS_DIGEST_PASSWORD` (≥16 B) **or** `ACS_MTLS_CA_CERT` | acs | CPE authentication |
 | `ACS_BSS_OAUTH_SIGNING_SECRET` (≥32 B) **or** `ACS_BSS_API_TOKEN` | bssadapter | Inbound BSS caller auth |
 

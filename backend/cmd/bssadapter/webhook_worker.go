@@ -106,7 +106,7 @@ func (h *handler) notifyTerminalOrders(ctx context.Context) {
 		return
 	}
 	for _, order := range orders {
-		status, err := h.acs.GetJobStatus(ctx, order.CommandKey)
+		status, err := h.acs.GetJobStatus(accounts.WithCustomer(ctx, order.Scope), order.CommandKey)
 		if err != nil {
 			h.logger.Warn("failed to check order job status for webhook notify", "err", err, "external_order_id", order.ExternalOrderID)
 			continue

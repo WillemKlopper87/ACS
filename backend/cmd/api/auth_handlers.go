@@ -102,6 +102,37 @@ func operatorClaims(ctx context.Context) (*auth.Claims, bool) {
 	return claims, ok && claims != nil
 }
 
+// actingCustomerHeader carries, on a call made with the internal service
+// token, the customer the adapter is acting for: the ISP whose
+// integration sent the request, or the owner of the order a worker is
+// handling (internal/bss/acsclient.go sets it).
+const actingCustomerHeader = "X-ACS-Acting-Customer"
+
+// serviceCallsRequireCustomer refuses a service call that names no
+// customer. main sets it: on by default in the production profile with
+// the NaaS integration, where every integration is bound to a customer
+// and so every call has one. Off, a call without the header reaches the
+// whole fleet, as all service calls did before.
+var serviceCallsRequireCustomer bool
+
+func looksLikeUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case i == 8 || i == 13 || i == 18 || i == 23:
+			if c != '-' {
+				return false
+			}
+		case (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // serviceSubject is the synthetic operator identity assigned to a request
 // authenticated via the internal service token rather than a real
 // operator JWT — shows up in audit records exactly like a normal
@@ -171,7 +202,21 @@ func withJWTAuth(secret []byte, internalServiceToken string, current func(contex
 				http.Error(w, "internal service token is not permitted on this route", http.StatusForbidden)
 				return
 			}
-			claims := &auth.Claims{Subject: serviceSubject, Role: operators.RoleSuperAdmin, IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
+			// The adapter says which customer it is acting for, and the
+			// call is then confined to that customer's devices exactly
+			// as a customer-scoped operator's would be (deviceScope). The
+			// token alone used to reach every device: an adapter tricked
+			// or taken over could write to any customer's CPE.
+			acting := strings.TrimSpace(r.Header.Get(actingCustomerHeader))
+			if acting != "" && !looksLikeUUID(acting) {
+				http.Error(w, actingCustomerHeader+" must be a customer ID", http.StatusBadRequest)
+				return
+			}
+			if acting == "" && serviceCallsRequireCustomer {
+				http.Error(w, "a service call must name the customer it acts for ("+actingCustomerHeader+")", http.StatusForbidden)
+				return
+			}
+			claims := &auth.Claims{Subject: serviceSubject, Role: operators.RoleSuperAdmin, CustomerID: acting, IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
 			next.ServeHTTP(w, r.WithContext(withOperatorClaims(r.Context(), claims)))
 			return
 		}
@@ -224,6 +269,15 @@ func isServiceRoute(r *http.Request) bool {
 	p := r.URL.Path
 	switch {
 	case r.Method == http.MethodPut && strings.HasPrefix(p, "/api/v1/devices/") && strings.HasSuffix(p, "/parameters"):
+		return true
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/v1/devices/") && strings.HasSuffix(p, "/parameters") && strings.Count(p, "/") == 5 &&
+		strings.TrimSpace(r.URL.Query().Get("paths")) != "":
+		// The values of named parameters, for reconciliation and the
+		// TMF640 service view (acsclient.GetParameters). Only with an
+		// explicit list of paths: the adapter does not get to read a
+		// device's whole parameter cache. This case was missing, so both
+		// of those reads were refused with 403 whenever operator
+		// authentication was on.
 		return true
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/v1/devices/") && strings.Count(p, "/") == 4:
 		return true // GET /api/v1/devices/{id}

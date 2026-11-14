@@ -433,6 +433,15 @@ func main() {
 	if corsOrigin == "*" {
 		logger.Warn("ACS_API_CORS_ORIGIN=* — any web origin may call this API with a stolen token; set it to the console's exact origin in production")
 	}
+	// Service calls name their customer (auth_handlers.go). Required by
+	// default where every integration is bound to one.
+	serviceCallsRequireCustomer = profile == config.ProfileProduction && integrationMode == config.ModeNaaS
+	if v := os.Getenv("ACS_SERVICE_CALLS_REQUIRE_CUSTOMER"); v != "" {
+		serviceCallsRequireCustomer = v == "true"
+	}
+	if internalServiceToken != "" {
+		logger.Info("BSS adapter service calls", "must_name_customer", serviceCallsRequireCustomer)
+	}
 	h.sessionCookies = sessionCookiesAllowed(corsOrigin, h.webGUISameOrigin)
 	if len(jwtSecret) > 0 && !h.sessionCookies {
 		logger.Warn("the console session is not kept in a cookie: ACS_API_CORS_ORIGIN is \"*\" or ACS_WEBGUI_ALLOW_SAME_ORIGIN=true. The console keeps it in memory and asks for a sign-in on every reload")

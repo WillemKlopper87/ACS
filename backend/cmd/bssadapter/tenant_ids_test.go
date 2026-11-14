@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -242,4 +243,63 @@ func acceptingACS() http.Handler {
 		w.WriteHeader(http.StatusAccepted)
 		json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-" + strconv.FormatInt(n.Add(1), 10)})
 	})
+}
+
+// The adapter tells the operator API which customer each call is for:
+// the integration's own on a request, the order's own when a worker
+// retries it or polls its job. The API confines the call to that
+// customer's devices (cmd/api, TestIntegration_ServiceCallsAreConfinedToTheirCustomer).
+func TestServiceCallsNameTheCustomer(t *testing.T) {
+	var mu sync.Mutex
+	seen := map[string][]string{} // acting customer -> calls
+	e := newBindingEnvWithACS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		acting := r.Header.Get(bss.ActingCustomerHeader)
+		seen[acting] = append(seen[acting], r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		if r.Method == http.MethodGet {
+			w.Write([]byte(`{"status":"QUEUED"}`))
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-" + strconv.Itoa(len(seen))})
+	}))
+	tokA, tokB := bindingToken(t, e.custA, false), bindingToken(t, e.custB, false)
+	for tok, serial := range map[string]string{tokA: "001122-DEV-A", tokB: "001122-DEV-B"} {
+		if rec := e.call(t, e.via(e.h.createMapping), http.MethodPost, "/bss/v1/mappings", tok, map[string]any{"account_id": "1001", "oui_serial": serial}); rec.Code != http.StatusOK {
+			t.Fatalf("map = %d %s", rec.Code, rec.Body)
+		}
+		if rec := e.call(t, e.via(e.h.createOrder), http.MethodPost, "/bss/v1/orders", tok,
+			map[string]any{"external_order_id": "ORD-1", "account_id": "1001", "action": "SUSPEND"}); rec.Code != http.StatusAccepted {
+			t.Fatalf("order = %d %s", rec.Code, rec.Body)
+		}
+	}
+	mu.Lock()
+	if len(seen[e.custA]) == 0 || len(seen[e.custB]) == 0 || len(seen[""]) != 0 {
+		t.Fatalf("requests: calls for A %v, for B %v, for nobody %v; want each ISP's calls named and none unnamed", seen[e.custA], seen[e.custB], seen[""])
+	}
+	seen = map[string][]string{}
+	mu.Unlock()
+
+	// Workers have no request: they act for the order's own customer.
+	if _, err := e.db.ExecContext(e.ctx, `UPDATE bss_orders SET status = 'PENDING_DISPATCH', command_key = NULL, last_attempt_at = now() - interval '1000 minutes'
+		WHERE order_scope = $1`, e.custA); err != nil {
+		t.Fatal(err)
+	}
+	e.h.reconcilePendingOrders(e.ctx)
+	e.h.notifyTerminalOrders(e.ctx)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen[""]) != 0 {
+		t.Fatalf("worker calls that named no customer: %v", seen[""])
+	}
+	retried := false
+	for _, c := range seen[e.custA] {
+		if strings.HasPrefix(c, "PUT ") {
+			retried = true
+		}
+	}
+	if !retried || len(seen[e.custB]) == 0 {
+		t.Fatalf("workers: for A %v (want the retried write), for B %v (want its job poll)", seen[e.custA], seen[e.custB])
+	}
 }

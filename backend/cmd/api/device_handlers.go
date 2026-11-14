@@ -125,6 +125,11 @@ func (h *handler) deviceScope(r *http.Request) (customerIDs []string, scoped boo
 		return nil, false, nil
 	}
 	claims, ok := operatorClaims(r.Context())
+	// The BSS adapter acting for one customer (withJWTAuth) is confined
+	// to that customer's devices, like an operator scoped to it.
+	if ok && claims.Subject == serviceSubject && claims.CustomerID != "" {
+		return []string{claims.CustomerID}, true, nil
+	}
 	if !ok || claims.Role == operators.RoleSuperAdmin {
 		return nil, false, nil
 	}

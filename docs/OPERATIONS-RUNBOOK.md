@@ -194,6 +194,34 @@ taken.
 |---|---|---|---|
 | — | — | — | no physical/staging drill recorded yet; CI rehearsal is automated |
 
+## The adapter's calls name their customer
+
+The BSS adapter reaches the operator API with one shared service token.
+Each call now also says which customer it is for, and the API lets it
+touch that customer's devices and their jobs only. The token by itself
+no longer reaches every device.
+
+- **Nothing to configure.** The adapter takes the customer from the
+  integration that sent the request, or from the order when a worker
+  retries it. In the production profile with `naas`, the API refuses a
+  call that names none. The API log line `BSS adapter service calls
+  must_name_customer=true` confirms it.
+- **Upgrade order**: restart the adapter before the API (the order the
+  rolling upgrade above already uses). A new adapter with an old API
+  works; an old adapter with a new production API is refused.
+- **If orders fail with `ErrACSUnreachable` (502) right after an
+  upgrade** and the API log shows `403` for the adapter: an old adapter
+  is still running, or the order belongs to an account no customer owns
+  (created from the console or by a fleet-wide client before the ISP's
+  client was bound). Assign the account to its customer
+  (`PUT /api/v1/bss/accounts/{id}/customer`). As a temporary measure
+  `ACS_SERVICE_CALLS_REQUIRE_CUSTOMER=false` on the API lets unnamed
+  calls through again.
+- **Fixed with this**: reading an account's reconciliation
+  (`GET /bss/v1/devices/{id}/reconciliation`) and the Wi-Fi values of a
+  TMF640 service returned 502 whenever operator authentication was on,
+  because the API refused the adapter's read of the named parameters.
+
 ## The console session is a cookie
 
 The console no longer keeps the operator's session token in browser
