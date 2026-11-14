@@ -47,7 +47,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 		gated := h.requirePermission(perm, fn)
 		mux.HandleFunc(method+" "+pattern, metrics.InstrumentHTTP(method+" "+pattern, h.requireRole(op, gated)))
 	}
-	mux.HandleFunc("GET /metrics", metrics.Handler().ServeHTTP)
+	mux.Handle("GET /metrics", observability.ProtectMetrics(observability.MetricsToken(), metrics.Handler()))
 	mux.Handle("GET /healthz", observability.LivenessHandler())
 	mux.Handle("GET /readyz", observability.ReadinessHandler(db))
 	mux.HandleFunc("POST /api/v1/auth/login", metrics.InstrumentHTTP("POST /api/v1/auth/login", h.login))

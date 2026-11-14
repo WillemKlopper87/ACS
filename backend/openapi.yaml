@@ -764,7 +764,18 @@ paths:
       description: >
         The session JWT is never placed in a URL. The two handshakes a browser cannot attach an
         Authorization header to (WebSocket, iframe) instead carry this audience-bound, short-lived
-        ticket in ?token=, and the backend accepts nothing else there.
+        ticket in ?token=, and the backend accepts nothing else there. A ticket is issued for one
+        purpose on one device and is refused anywhere else.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_id, purpose]
+              properties:
+                device_id: { type: string, description: "The device the ticket is for. It must be in the caller's scope (404 otherwise)." }
+                purpose: { type: string, enum: [cli, webgui], description: "cli: the console WebSocket. webgui: the device web-GUI proxy." }
       responses:
         "200":
           description: Ticket issued

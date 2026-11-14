@@ -17,7 +17,13 @@ func TestWithJWTAuth_CredentialPlacement(t *testing.T) {
 	const svc = "service-token-service-token-service-token"
 	now := time.Now().UTC()
 	session, _ := auth.SignJWT(secret, auth.Claims{Subject: "alice", Role: operators.RoleNOC, IssuedAt: now, ExpiresAt: now.Add(time.Hour)})
-	ticket, _ := auth.SignJWT(secret, auth.Claims{Subject: "alice", Role: operators.RoleNOC, Audience: auth.AudienceBrowserTicket, IssuedAt: now, ExpiresAt: now.Add(time.Minute)})
+	ticketFor := func(purpose, device string) string {
+		tok, _ := auth.SignJWT(secret, auth.Claims{Subject: "alice", Role: operators.RoleNOC, Audience: auth.AudienceBrowserTicket, IssuedAt: now, ExpiresAt: now.Add(time.Minute),
+			Resource: auth.BrowserTicketResource(purpose, device)})
+		return tok
+	}
+	ticket, guiTicket := ticketFor(auth.TicketPurposeCLI, "d1"), ticketFor(auth.TicketPurposeWebGUI, "d1")
+	unbound, _ := auth.SignJWT(secret, auth.Claims{Subject: "alice", Role: operators.RoleNOC, Audience: auth.AudienceBrowserTicket, IssuedAt: now, ExpiresAt: now.Add(time.Minute)})
 
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	h := withJWTAuth(secret, svc, nil, ok)
@@ -34,7 +40,13 @@ func TestWithJWTAuth_CredentialPlacement(t *testing.T) {
 		{"session token in query on normal route is refused", "GET", "/api/v1/devices", "", session, 401},
 		{"session token in query on WS route is refused (not a ticket)", "GET", "/api/v1/devices/d1/cli/connect", "", session, 401},
 		{"ticket in query on WS route", "GET", "/api/v1/devices/d1/cli/connect", "", ticket, 200},
-		{"ticket in query on proxy route", "GET", "/api/v1/devices/d1/webgui/proxy/index.html", "", ticket, 200},
+		{"ticket in query on proxy route", "GET", "/api/v1/devices/d1/webgui/proxy/index.html", "", guiTicket, 200},
+		// A ticket opens what it was issued for and nothing else (O4).
+		{"console ticket on another device is refused", "GET", "/api/v1/devices/d2/cli/connect", "", ticket, 401},
+		{"console ticket on the same device's web GUI is refused", "GET", "/api/v1/devices/d1/webgui/proxy/index.html", "", ticket, 401},
+		{"web-GUI ticket on the console is refused", "GET", "/api/v1/devices/d1/cli/connect", "", guiTicket, 401},
+		{"web-GUI ticket on another device is refused", "GET", "/api/v1/devices/d2/webgui/proxy/", "", guiTicket, 401},
+		{"a ticket bound to nothing is refused", "GET", "/api/v1/devices/d1/cli/connect", "", unbound, 401},
 		{"ticket in header on normal route is refused", "GET", "/api/v1/devices", ticket, "", 401},
 		{"ticket in query on normal route is refused", "GET", "/api/v1/devices", "", ticket, 401},
 		{"service token on allowed route", "PUT", "/api/v1/devices/d1/parameters", svc, "", 200},

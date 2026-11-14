@@ -8,7 +8,7 @@ points to the document that has the detail.
 
 - **19 commits**, 192 files, about 13,900 lines added and 990 removed.
   No pull request has been opened; nothing is merged to `main`.
-- **Five schema migrations** (0095 to 0099), all forward-only.
+- **Six schema migrations** (0095 to 0100), all forward-only.
 - **State of the checks at the last commit:** the Go suite passes against
   PostgreSQL (54 packages), the console's 189 unit tests and 16 browser
   tests pass, and the production preflight matrix passes.
@@ -23,7 +23,7 @@ points to the document that has the detail.
 | Live check of the stack | Done locally with a simulated CPE fleet; findings fixed or recorded |
 | Console look, feel and workflow | Redesign steps A to G built; no function removed |
 | Two-step sign-in (MFA) | Built |
-| Security assessment | 3 findings fixed at once; of 14 left open, 6 are now closed, 8 remain (1 medium, 7 low) |
+| Security assessment | 3 findings fixed at once; all 14 left open have since been addressed (three are built but need a setting turned on) |
 | Standalone / NaaS switch | Built |
 | Production profile enforcement | Built for the operator API and the BSS adapter |
 | Database login per service | Built, opt-in |
@@ -141,21 +141,21 @@ not a penetration test.
 | O1 | Medium | Production did not force the strict adapter settings | **Fixed**: enforced at start-up |
 | O2 | Medium | Account and order IDs shared one namespace across ISPs | **Fixed** (section 7) |
 | O3 | Medium | An ISP's client could claim any unassigned device by serial | **Built, off by default**: `ACS_BSS_REQUIRE_ALLOCATED_DEVICES=true` |
-| O4 | Medium | A browser ticket is not bound to one device or route | Open |
+| O4 | Medium | A browser ticket is not bound to one device or route | **Fixed**: a ticket is for one purpose on one device |
 | O5 | Medium | The adapter held a database login and a service token that each reached everything | **Fixed**: service token confined per customer (on by default in production); database logins per service (**opt-in**) |
 | O6 | Medium | Session token in browser storage | **Fixed** |
 | O7 | Medium | A resent order with a changed body was answered as accepted | **Fixed** |
-| O8 | Low | Webhooks may target plain `http://` | Open |
-| O9 | Low | `/metrics` needs no credentials | Open |
-| O10 | Low | Rate limits are per process, so replicas multiply them | Open |
-| O11 | Low | Sign-in timing reveals whether a username exists | Open |
-| O12 | Low | Operator passwords need only eight characters | Open |
-| O13 | Low | Token issuance and adapter reads are not audited | Open |
-| O14 | Info | Frontend container runs as root; images pinned by tag | Open |
+| O8 | Low | Webhooks may target plain `http://` | **Fixed**: 32-character secrets, `https` in production, secrets sealed at rest when a key is set |
+| O9 | Low | `/metrics` needs no credentials | **Built, off by default**: `ACS_METRICS_TOKEN` |
+| O10 | Low | Rate limits are per process, so replicas multiply them | **Fixed** for sign-in attempts; general rate limits are still per process |
+| O11 | Low | Sign-in timing reveals whether a username exists | **Fixed** |
+| O12 | Low | Operator passwords need only eight characters | **Fixed**: 12 characters and basic rules; no breached-password lookup |
+| O13 | Low | Token issuance and adapter reads are not audited | **Fixed**: token issuance audited; reads audited in summary |
+| O14 | Info | Frontend container runs as root; images pinned by tag | **Fixed** for the images this project builds; Compose third-party images still by tag |
 
-Earlier summaries in this work said every code finding taken on was
-closed. That is true of the ones worked on; O4 and O8 to O14 were never
-started and are still open.
+O4 and O8 to O14 were done after this summary was first written; the
+runbook section "Smaller hardening changes" says what each needs from
+whoever runs the ACS.
 
 ### What the fixes do
 
@@ -224,6 +224,7 @@ an ID first. Now each is unique per ISP.
 | 0097 | Event triggers run with the owner's rights (for per-service logins) |
 | 0098 | Account registry and internal keys; order key, scope and request digest |
 | 0099 | IDs unique per customer; source keys per customer / account |
+| 0100 | Sign-in attempt counts shared by all replicas |
 
 0098 and 0099 rewrite the account columns of the event table once. Back
 up first and run them in a quiet period.
@@ -322,7 +323,10 @@ These were not exercised and should not be read as covered:
   two ISPs' same-numbered accounts share the label.
 - **Device management plan** steps 2 to 10, and the optional console
   housekeeping.
-- **Security findings** O4 and O8 to O14.
+- **Not done within the findings**: a breached-password lookup (O12),
+  shared limits for the general API and adapter rate limiters (O10),
+  digest pins for the third-party images in the Compose file (O14), and
+  `/metrics` is not forced to need a token in production (O9).
 
 ## 12. Where the detail is
 

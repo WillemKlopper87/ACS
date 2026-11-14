@@ -303,3 +303,56 @@ func TestServiceCallsNameTheCustomer(t *testing.T) {
 		t.Fatalf("workers: for A %v (want the retried write), for B %v (want its job poll)", seen[e.custA], seen[e.custB])
 	}
 }
+
+// Reads are audited in summary (finding O13): after an interval the audit
+// trail says which client read which route for which customer, and how
+// often. A read that was refused is not counted.
+func TestReadsAreAuditedInSummary(t *testing.T) {
+	e, tokA, tokB := twoISPsSameAccount(t)
+	readAudits.take() // start from an empty interval
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /bss/v1/mappings/{account_id}", e.h.listMappings)
+	served := withAuth("", bindingSecret, func(_ context.Context, _ string) bool { return false }, mux)
+	get := func(tok, account string) int {
+		req := httptest.NewRequest(http.MethodGet, "/bss/v1/mappings/"+account, nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		served.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	get(tokA, "1001")
+	get(tokA, "1001")
+	get(tokB, "1001")
+	if code := get(tokB, "no-such-account"); code != http.StatusNotFound {
+		t.Fatalf("read of an unknown account = %d", code)
+	}
+	readAudits.flush(e.ctx, e.h.auditor, func(string, ...any) {})
+
+	rows, err := e.db.QueryContext(e.ctx, `SELECT details->>'customer_id', details->>'route', (details->>'reads')::int
+		FROM audit_log WHERE action = 'BSSReadsSummary' ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[string]int{}
+	for rows.Next() {
+		var customer, route string
+		var reads int
+		if err := rows.Scan(&customer, &route, &reads); err != nil {
+			t.Fatal(err)
+		}
+		if route != "GET /bss/v1/mappings/{account_id}" {
+			t.Errorf("route recorded as %q: want the pattern, never a path with an account ID in it", route)
+		}
+		got[customer] = reads
+	}
+	if got[e.custA] != 2 || got[e.custB] != 1 || len(got) != 2 {
+		t.Fatalf("read summary = %v, want A:2 B:1 (the refused read not counted)", got)
+	}
+	// Nothing is written twice.
+	readAudits.flush(e.ctx, e.h.auditor, func(string, ...any) {})
+	var n int
+	if err := e.db.QueryRowContext(e.ctx, `SELECT count(*) FROM audit_log WHERE action = 'BSSReadsSummary'`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("summary records after a second flush = %d (%v), want 2", n, err)
+	}
+}

@@ -194,6 +194,43 @@ taken.
 |---|---|---|---|
 | — | — | — | no physical/staging drill recorded yet; CI rehearsal is automated |
 
+## Smaller hardening changes (findings O4, O8 to O14)
+
+- **Remote shell and device web GUI tickets** are for one device and one
+  purpose. Nothing to do; a console older than the API cannot open either
+  until it is reloaded.
+- **Webhooks.** A new signing secret must be 32 characters or more. In
+  the production profile a new `http://` target is refused; existing
+  ones keep delivering, so list them and move them to `https`:
+  `select id, target_url from webhook_subscriptions where target_url like 'http://%'`.
+  With `ACS_BSS_SECRET_KEY` set on the adapter, signing secrets are stored
+  encrypted, and those already stored are encrypted the next time the
+  adapter starts (the log says how many). Set the same key on the API.
+  **Do not lose or change that key**: deliveries for sealed subscriptions
+  then fail with "the signing secret could not be opened" until each
+  subscription's secret is rotated.
+- **`/metrics`.** Set `ACS_METRICS_TOKEN` on every service and give
+  Prometheus the same value (`authorization: credentials_file: ...` in
+  each scrape job). Do both in one change: a service with the token and a
+  Prometheus without it shows the target as down. The CWMP listener is
+  reachable from device networks and serves `/metrics` too, so this
+  matters most there.
+- **Sign-in attempts** are counted in the database as well as in each
+  process (table `auth_attempt_windows`, which holds digests, not names).
+  If the database cannot be reached the per-process limit still applies.
+- **Passwords** set from now on need 12 characters and cannot be the
+  username, a run, or a common word with digits added. Existing passwords
+  are not checked until they are changed.
+- **Audit trail.** New actions: `BSSTokenIssued`, `BSSClientAuthFailed`,
+  and `BSSReadsSummary` (one row per client, customer and route for each
+  five minutes in which that client read that route).
+- **Console image** listens on **8080** as an unprivileged user (it was
+  80 as root). The Compose file maps it; a deployment with its own port
+  mapping or proxy upstream for the console container must change 80 to
+  8080.
+- **Base images** are pinned by digest. Dependabot raises them; a build
+  that cannot find a digest fails instead of using different content.
+
 ## A resent order must be the same order
 
 An integration that sends an `external_order_id` again gets the original

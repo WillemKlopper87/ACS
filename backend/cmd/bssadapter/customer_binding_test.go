@@ -251,6 +251,24 @@ func TestTokenCarriesTheCustomer(t *testing.T) {
 	if err != nil || claims.CustomerID != e.custA || claims.GlobalAccess {
 		t.Fatalf("claims = %+v, %v", claims, err)
 	}
+	// Issuing a token is on the audit trail, with the client and its
+	// customer; so is a refused attempt, without the secret (finding O13).
+	var actor, customer string
+	if err := e.db.QueryRowContext(e.ctx, `SELECT actor, details->>'customer_id' FROM audit_log WHERE action = 'BSSTokenIssued'`).Scan(&actor, &customer); err != nil ||
+		actor != "bss-client:"+client.ClientID || customer != e.custA {
+		t.Fatalf("token issuance audit: actor %q customer %q (%v)", actor, customer, err)
+	}
+	form.Set("client_secret", "not-the-secret")
+	bad := httptest.NewRequest(http.MethodPost, "/bss/v1/oauth/token", strings.NewReader(form.Encode()))
+	bad.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	e.h.issueOAuthToken(rec, bad)
+	var failed int
+	var leaked bool
+	if err := e.db.QueryRowContext(e.ctx, `SELECT count(*), COALESCE(bool_or(details::text LIKE '%not-the-secret%'), false) FROM audit_log WHERE action = 'BSSClientAuthFailed'`).Scan(&failed, &leaked); err != nil ||
+		rec.Code != http.StatusUnauthorized || failed != 1 || leaked {
+		t.Fatalf("refused token: status %d, audit records %d, secret in the record %v (%v)", rec.Code, failed, leaked, err)
+	}
 	if _, _, err := e.h.oauthClients.CreateClientWithPolicy(e.ctx, "bad", bss.OAuthPolicy{Scopes: []string{bss.ScopeTMFRead}, CustomerID: &e.custA, GlobalAccess: true}); err == nil {
 		t.Fatal("a client both global and customer-bound was accepted")
 	}

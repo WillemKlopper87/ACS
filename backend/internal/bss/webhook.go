@@ -10,10 +10,12 @@ package bss
 
 import (
 	"context"
+	"crypto/cipher"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,16 +48,21 @@ type WebhookDelivery struct {
 	Secret         string
 	// PreviousSecret signs too while a secret rotation overlaps.
 	PreviousSecret string
-	EventType      string
-	Payload        json.RawMessage
-	Status         string
-	Attempts       int
-	LastAttemptAt  *time.Time
-	CreatedAt      time.Time
+	// SecretError is set when the stored secret could not be opened.
+	SecretError   string
+	EventType     string
+	Payload       json.RawMessage
+	Status        string
+	Attempts      int
+	LastAttemptAt *time.Time
+	CreatedAt     time.Time
 }
 
 type WebhookRepository struct {
 	db *sql.DB
+	// aead seals signing secrets at rest (webhook_secrets.go); nil when
+	// no key is configured.
+	aead cipher.AEAD
 }
 
 func NewWebhookRepository(db *sql.DB) *WebhookRepository {
@@ -73,12 +80,21 @@ func (r *WebhookRepository) CreateSubscription(ctx context.Context, accountID *s
 		}
 		accountKey = &key
 	}
+	stored, err := r.sealSecret(id, secret)
+	if err != nil {
+		return nil, fmt.Errorf("seal webhook secret: %w", err)
+	}
 	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO webhook_subscriptions (id, account_id, account_key, target_url, secret, event_types)
 		VALUES ($1, $2, $6, $3, $4, $5)
 		RETURNING id, account_id, account_key::text, target_url, secret, event_types, created_at`,
-		id, accountID, targetURL, secret, store.StringArray(eventTypes), accountKey)
-	return scanSubscription(row)
+		id, accountID, targetURL, stored, store.StringArray(eventTypes), accountKey)
+	sub, err := scanSubscription(row)
+	if err != nil {
+		return nil, err
+	}
+	sub.Secret = secret // the caller's own value, not the stored form
+	return sub, nil
 }
 
 func (r *WebhookRepository) ListSubscriptions(ctx context.Context) ([]WebhookSubscription, error) {
@@ -285,6 +301,15 @@ func (r *WebhookRepository) DueDeliveries(ctx context.Context, limit int) ([]Web
 			t := lastAttempt.Time
 			d.LastAttemptAt = &t
 		}
+		// Opened here, to sign with. A secret that cannot be opened makes
+		// the delivery unsignable: it is returned with SecretError set and
+		// the worker records the attempt as failed.
+		if d.Secret, err = r.openSecret(d.SubscriptionID, d.Secret); err != nil {
+			d.SecretError = err.Error()
+		}
+		if d.PreviousSecret, err = r.openSecret(d.SubscriptionID, d.PreviousSecret); err != nil {
+			d.PreviousSecret = ""
+		}
 		out = append(out, d)
 	}
 	return out, rows.Err()
@@ -326,5 +351,10 @@ func scanSubscription(s scanner) (*WebhookSubscription, error) {
 	}
 	sub.AccountKey = accountKey.String
 	sub.EventTypes = []string(eventTypes)
+	// A sealed secret is opened only to sign a delivery (DueDeliveries);
+	// a listing never carries it.
+	if strings.HasPrefix(sub.Secret, sealedPrefix) {
+		sub.Secret = ""
+	}
 	return &sub, nil
 }

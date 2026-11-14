@@ -4,6 +4,7 @@
 package main
 
 import (
+	"acs/internal/auth"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -90,8 +91,8 @@ func (h *handler) resetOperatorPassword(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if len(req.NewPassword) < 8 {
-		http.Error(w, "new_password must be at least 8 characters", http.StatusBadRequest)
+	if err := auth.CheckPassword(req.NewPassword, ""); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
@@ -178,8 +179,8 @@ func (h *handler) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if len(req.NewPassword) < 8 {
-		http.Error(w, "new_password must be at least 8 characters", http.StatusBadRequest)
+	if err := auth.CheckPassword(req.NewPassword, ""); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

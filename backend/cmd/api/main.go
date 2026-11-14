@@ -279,6 +279,14 @@ func main() {
 		bssWebhookNetPolicy.AllowedCIDRs = cidrs
 	}
 
+	// A webhook created from the console is sealed like one the adapter
+	// creates, when this service has the key too (webhook_secrets.go);
+	// without it the adapter seals the secret when it next starts.
+	bssWebhooks, err := bss.NewWebhookRepository(db).WithSecretKey(os.Getenv("ACS_BSS_SECRET_KEY"))
+	if err != nil {
+		logger.Error("failed to set up webhook secret sealing", "err", err)
+		os.Exit(1)
+	}
 	h := &handler{
 		logger:              logger,
 		devices:             devices.NewRepository(db),
@@ -331,7 +339,7 @@ func main() {
 		dashboards:      dashboard.NewRepository(db),
 
 		bssMappings:     bss.NewRepository(db),
-		bssWebhooks:     bss.NewWebhookRepository(db),
+		bssWebhooks:     bssWebhooks,
 		bssOAuthClients: bss.NewOAuthRepository(db),
 		bssAdapterURL:   envOr("ACS_BSS_ADAPTER_URL", "http://localhost:8090"),
 		bssToken:        os.Getenv("ACS_BSS_API_TOKEN"),
@@ -442,6 +450,10 @@ func main() {
 	if internalServiceToken != "" {
 		logger.Info("BSS adapter service calls", "must_name_customer", serviceCallsRequireCustomer)
 	}
+	// What one process allows over the same time (a burst of 5, then one
+	// every 12 seconds), now for all replicas together.
+	h.sharedLoginLimit = ratelimit.NewShared(db, "login", 30, 5*time.Minute)
+	h.sharedMFALimit = ratelimit.NewShared(db, "mfa", 30, 5*time.Minute)
 	h.sessionCookies = sessionCookiesAllowed(corsOrigin, h.webGUISameOrigin)
 	if len(jwtSecret) > 0 && !h.sessionCookies {
 		logger.Warn("the console session is not kept in a cookie: ACS_API_CORS_ORIGIN is \"*\" or ACS_WEBGUI_ALLOW_SAME_ORIGIN=true. The console keeps it in memory and asks for a sign-in on every reload")
@@ -537,6 +549,10 @@ type handler struct {
 	firmwareBase string // base URL the CPE fetches Download URLs from (design doc v3 §9.4's "HTTPS static file host", local-disk stand-in — see internal/firmware doc comment)
 
 	operators *operators.Repository
+	// sharedLoginLimit and sharedMFALimit count sign-in attempts in the
+	// database, so the limit holds across replicas (finding O10). Nil in
+	// tests that do not set them: the per-process limiters then stand alone.
+	sharedLoginLimit, sharedMFALimit *ratelimit.Shared
 	// sessionCookies: issue the console's session as a cookie
 	// (session_cookie.go, sessionCookiesAllowed).
 	sessionCookies bool

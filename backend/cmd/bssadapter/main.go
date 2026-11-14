@@ -207,6 +207,18 @@ func main() {
 		webhookNetPolicy.AllowedCIDRs = cidrs
 	}
 
+	// Webhook signing secrets are sealed at rest under the same key as the
+	// sealed Wi-Fi handles, when it is set.
+	webhooks, err := bss.NewWebhookRepository(db).WithSecretKey(os.Getenv(secretstore.KeyEnv))
+	if err != nil {
+		logger.Error("failed to set up webhook secret sealing", "err", err)
+		os.Exit(1)
+	}
+	if n, sealErr := webhooks.SealStoredSecrets(context.Background()); sealErr != nil {
+		logger.Error("failed to seal stored webhook secrets", "err", sealErr)
+	} else if n > 0 {
+		logger.Info("sealed webhook signing secrets that were stored in the clear", "subscriptions", n)
+	}
 	secretStore, err := secretstore.New(db, os.Getenv(secretstore.KeyEnv))
 	if err != nil {
 		logger.Error("failed to initialize the secret store", "err", err)
@@ -234,14 +246,15 @@ func main() {
 		requireSecretHandles:  os.Getenv("ACS_BSS_REQUIRE_SECRET_HANDLES") == "true",
 		metrics:               metrics,
 		walledGarden:          walledGarden,
-		webhooks:              bss.NewWebhookRepository(db),
+		webhooks:              webhooks,
+		requireHTTPSWebhooks:  profile == config.ProfileProduction,
 		alertPolicies:         alerting.NewRepository(db),
 		alertIncidents:        alerting.NewIncidentRepository(db),
 		netPolicy:             webhookNetPolicy,
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /metrics", metrics.Handler().ServeHTTP)
+	mux.Handle("GET /metrics", observability.ProtectMetrics(observability.MetricsToken(), metrics.Handler()))
 	mux.Handle("GET /healthz", observability.LivenessHandler())
 	mux.Handle("GET /readyz", observability.ReadinessHandler(db))
 	mux.HandleFunc("POST /bss/v1/oauth/token", metrics.InstrumentHTTP("POST /bss/v1/oauth/token", h.issueOAuthToken))
@@ -303,6 +316,7 @@ func main() {
 	go h.runOrderReconcileLoop(ctx)
 	go h.runTMF641ReconcileLoop(ctx)
 	go h.runPreProvisionSyncLoop(ctx)
+	go h.runReadAuditLoop(ctx)
 
 	rateLimitPerSecond := envOrFloat("ACS_BSS_RATE_LIMIT_PER_SECOND", defaultRateLimitPerSecond)
 	rateLimitBurst := envOrInt("ACS_BSS_RATE_LIMIT_BURST", defaultRateLimitBurst)
@@ -442,7 +456,7 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 				if claims, err := auth.VerifyJWT(oauthSigningSecret, bearer); err == nil && claims.Role == bssClientRole {
 					clientID := strings.TrimPrefix(claims.Subject, "bss-client:")
 					if !revoked(r.Context(), clientID) {
-						next.ServeHTTP(w, withRateKey(withAccountScope(r, claims), "client:"+clientID))
+						auditedRead(next, w, withRateKey(withAccountScope(r, claims), "client:"+clientID), claims.Subject, claims.CustomerID)
 						return
 					}
 					writeError(w, http.StatusUnauthorized, "ErrUnauthorized", "oauth client has been revoked")
@@ -452,7 +466,7 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 		}
 
 		if token != "" && subtle.ConstantTimeCompare([]byte(got), []byte("Bearer "+token)) == 1 {
-			next.ServeHTTP(w, withRateKey(withNamedCustomer(r), "shared-token"))
+			auditedRead(next, w, withRateKey(withNamedCustomer(r), "shared-token"), "bss:shared-token", "")
 			return
 		}
 
@@ -619,6 +633,9 @@ type handler struct {
 	// controlled) may point (audit H-7) -- checked at subscription
 	// creation and again at delivery time.
 	netPolicy netguard.Policy
+	// requireHTTPSWebhooks refuses a new subscription with a plain-http
+	// target (production profile).
+	requireHTTPSWebhooks bool
 
 	// revocationMu/revocationCache back clientRevoked (audit P2.3): a
 	// short-TTL cache of oauth_clients.revoked_at, keyed by client_id, so

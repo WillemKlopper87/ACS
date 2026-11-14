@@ -1028,7 +1028,7 @@ export interface paths {
         put?: never;
         /**
          * Mint a 60-second browser ticket for the console WebSocket / web-GUI iframe handshake
-         * @description The session JWT is never placed in a URL. The two handshakes a browser cannot attach an Authorization header to (WebSocket, iframe) instead carry this audience-bound, short-lived ticket in ?token=, and the backend accepts nothing else there.
+         * @description The session JWT is never placed in a URL. The two handshakes a browser cannot attach an Authorization header to (WebSocket, iframe) instead carry this audience-bound, short-lived ticket in ?token=, and the backend accepts nothing else there. A ticket is issued for one purpose on one device and is refused anywhere else.
          */
         post: {
             parameters: {
@@ -1037,7 +1037,19 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description The device the ticket is for. It must be in the caller's scope (404 otherwise). */
+                        device_id: string;
+                        /**
+                         * @description cli: the console WebSocket. webgui: the device web-GUI proxy.
+                         * @enum {string}
+                         */
+                        purpose: "cli" | "webgui";
+                    };
+                };
+            };
             responses: {
                 /** @description Ticket issued */
                 200: {

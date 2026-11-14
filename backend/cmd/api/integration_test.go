@@ -825,7 +825,7 @@ func TestIntegration_BrowserTicketTokenVersion(t *testing.T) {
 
 	mintTicket := func() string {
 		t.Helper()
-		r := e.call("alice", "POST", "/api/v1/auth/ticket", nil)
+		r := e.call("alice", "POST", "/api/v1/auth/ticket", map[string]string{"device_id": devA, "purpose": "webgui"})
 		if r.code != 200 {
 			t.Fatalf("mint ticket → %d %s", r.code, r.body)
 		}
@@ -961,7 +961,7 @@ func TestIntegration_ServiceIdentity(t *testing.T) {
 	if r := e.call(testServiceToken, "POST", "/api/v1/auth/operators", map[string]string{"username": "x", "password": "y", "role": "noc"}); r.code != 403 {
 		t.Errorf("service create operator → %d, want 403", r.code)
 	}
-	if r := e.call(testServiceToken, "POST", "/api/v1/auth/ticket", nil); r.code != 403 {
+	if r := e.call(testServiceToken, "POST", "/api/v1/auth/ticket", map[string]string{"device_id": "d", "purpose": "cli"}); r.code != 403 {
 		t.Errorf("service mint browser ticket → %d, want 403", r.code)
 	}
 }

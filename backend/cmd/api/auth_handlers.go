@@ -237,6 +237,13 @@ func withJWTAuth(secret []byte, internalServiceToken string, current func(contex
 			http.Error(w, "wrong token type for this route", http.StatusUnauthorized)
 			return
 		}
+		// A ticket opens the one thing it was issued for: this purpose on
+		// this device. One minted for a device's console is no key to
+		// another device, nor to the same device's web GUI.
+		if fromQuery && claims.Resource != browserTicketResource(r) {
+			http.Error(w, "this ticket was issued for something else", http.StatusUnauthorized)
+			return
+		}
 		if current != nil && !current(r.Context(), claims) {
 			if fromCookie {
 				clearSessionCookie(w)
@@ -259,6 +266,19 @@ func isBrowserTicketRoute(r *http.Request) bool {
 		return false
 	}
 	return strings.HasSuffix(p, "/cli/connect") || strings.Contains(p, "/webgui/proxy/")
+}
+
+// browserTicketResource is what a ticket must have been issued for to be
+// accepted on this request (a browser-ticket route): the route's purpose
+// and the device in its path.
+func browserTicketResource(r *http.Request) string {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/devices/")
+	deviceID, tail, _ := strings.Cut(rest, "/")
+	purpose := auth.TicketPurposeWebGUI
+	if tail == "cli/connect" {
+		purpose = auth.TicketPurposeCLI
+	}
+	return auth.BrowserTicketResource(purpose, deviceID)
 }
 
 // isServiceRoute is the allowlist for the internal service token — the
@@ -395,6 +415,20 @@ func (h *handler) issueBrowserTicket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service identities cannot mint browser tickets", http.StatusForbidden)
 		return
 	}
+	// A ticket is for one purpose on one device, and only for a device the
+	// operator may see.
+	var req struct {
+		DeviceID string `json:"device_id"`
+		Purpose  string `json:"purpose"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.DeviceID) == "" ||
+		(req.Purpose != auth.TicketPurposeCLI && req.Purpose != auth.TicketPurposeWebGUI) {
+		http.Error(w, `send device_id and purpose ("cli" or "webgui"): a ticket opens one thing on one device`, http.StatusBadRequest)
+		return
+	}
+	if _, ok := h.getScopedDevice(w, r, strings.TrimSpace(req.DeviceID)); !ok {
+		return
+	}
 	now := time.Now().UTC()
 	// audit P1.5: a ticket carries the operator's token version from the
 	// parent session JWT that authenticated this request, not the zero
@@ -409,6 +443,7 @@ func (h *handler) issueBrowserTicket(w http.ResponseWriter, r *http.Request) {
 	ticket, err := auth.SignJWT(h.jwtSecret, auth.Claims{
 		Subject: claims.Subject, Role: claims.Role, Audience: auth.AudienceBrowserTicket,
 		IssuedAt: now, ExpiresAt: now.Add(browserTicketTTL), Version: claims.Version,
+		Resource: auth.BrowserTicketResource(req.Purpose, strings.TrimSpace(req.DeviceID)),
 	})
 	if err != nil {
 		h.logger.Error("failed to sign browser ticket", "err", err, "username", claims.Subject)
@@ -496,7 +531,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username and password are required", http.StatusBadRequest)
 		return
 	}
-	if !loginLimiter.Allow(strings.ToLower(strings.TrimSpace(req.Username)) + "|" + clientIP(r)) {
+	if key := strings.ToLower(strings.TrimSpace(req.Username)) + "|" + clientIP(r); !loginLimiter.Allow(key) || !h.sharedAllow(r, h.sharedLoginLimit, key) {
 		h.metrics.RateLimitRejectedTotal.Inc()
 		http.Error(w, "too many login attempts — try again shortly", http.StatusTooManyRequests)
 		return
@@ -506,7 +541,10 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Same response whether the username doesn't exist or the
 		// password is wrong — a distinct "no such user" response would
-		// let a caller enumerate valid usernames.
+		// let a caller enumerate valid usernames. The same time, too: a
+		// wrong password costs a hash comparison, so an unknown name is
+		// made to cost one as well.
+		auth.BurnPasswordCheck(req.Password)
 		http.Error(w, "invalid username or password", http.StatusUnauthorized)
 		return
 	}
@@ -609,6 +647,10 @@ func (h *handler) createOperator(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Username == "" || req.Password == "" || !operators.ValidRole(req.Role) {
 		http.Error(w, "username, password, and a valid role (superadmin, manager, noc, readonly) are required", http.StatusBadRequest)
+		return
+	}
+	if err := auth.CheckPassword(req.Password, req.Username); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -714,4 +756,19 @@ func bootstrapAdmin(ctx context.Context, h *handler, username, password string) 
 	}
 	_, err = h.operators.Create(ctx, username, "", string(hash), operators.RoleSuperAdmin)
 	return err
+}
+
+// sharedAllow applies the limit that all replicas share (finding O10),
+// after the in-memory one. A database fault is logged and does not refuse
+// the attempt.
+func (h *handler) sharedAllow(r *http.Request, limit *ratelimit.Shared, key string) bool {
+	return h.sharedAllowCtx(r.Context(), limit, key)
+}
+
+func (h *handler) sharedAllowCtx(ctx context.Context, limit *ratelimit.Shared, key string) bool {
+	ok, err := limit.Allow(ctx, key)
+	if err != nil {
+		h.logger.Error("shared attempt limit unavailable; the per-process limit still applies", "err", err)
+	}
+	return ok
 }

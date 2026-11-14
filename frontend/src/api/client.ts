@@ -791,9 +791,14 @@ export const api = {
   // iframe) get a 60-second, audience-bound ticket minted just before
   // use; the backend accepts nothing else in ?token=. Returns null when
   // auth is disabled (dev mode) so the URL builders omit the param.
-  browserTicket: async (): Promise<string | null> => {
+  // A ticket is for one purpose on one device; the API refuses it
+  // anywhere else.
+  browserTicket: async (deviceId: string, purpose: "cli" | "webgui"): Promise<string | null> => {
     if (!getAuthState().signedIn) return null;
-    const { ticket } = await request<{ ticket: string }>("/api/v1/auth/ticket", { method: "POST" });
+    const { ticket } = await request<{ ticket: string }>("/api/v1/auth/ticket", {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId, purpose }),
+    });
     return ticket;
   },
 
@@ -805,7 +810,7 @@ export const api = {
   // Async because it first mints a browser ticket for the handshake.
   cliConnectURL: async (deviceId: string, credentialId: string) => {
     const wsBase = BASE_URL.replace(/^http/, "ws");
-    const ticket = await api.browserTicket();
+    const ticket = await api.browserTicket(deviceId, "cli");
     const qs = new URLSearchParams({ credential_id: credentialId, ...(ticket ? { token: ticket } : {}) });
     return `${wsBase}/api/v1/devices/${deviceId}/cli/connect?${qs.toString()}`;
   },
@@ -818,7 +823,7 @@ export const api = {
   deleteWebGUIConfig: (deviceId: string) => request<void>(`/api/v1/devices/${deviceId}/webgui`, { method: "DELETE" }),
   // Iframe src — same ticket handshake as the WS URL above.
   webGUIProxyURL: async (deviceId: string) => {
-    const ticket = await api.browserTicket();
+    const ticket = await api.browserTicket(deviceId, "webgui");
     const qs = ticket ? `?token=${encodeURIComponent(ticket)}` : "";
     return `${BASE_URL}/api/v1/devices/${deviceId}/webgui/proxy/${qs}`;
   },

@@ -360,8 +360,10 @@ export function Operators() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                minLength={12}
                 autoComplete="new-password"
               />
+              <small className="dim">At least 12 characters; not the username or a common word with digits added.</small>
             </label>
             <label className="field">
               <span>Role</span>
@@ -386,16 +388,16 @@ export function Operators() {
         <Drawer title={`Reset password for ${resetTarget.username}`} onClose={() => setResetTarget(null)}>
           <form onSubmit={onResetPassword}>
             <div className="form-row" style={{ marginTop: 0 }}>
-              <input aria-label="New password (min 8 characters)"
+              <input aria-label="New password (at least 12 characters)"
                 type="password"
-                placeholder="New password (min 8 characters)"
+                placeholder="New password (at least 12 characters)"
                 value={resetPassword}
                 onChange={(e) => setResetPassword(e.target.value)}
                 required
                 minLength={8}
                 autoComplete="new-password"
               />
-              <button type="submit" className="btn primary" disabled={resetPassword.length < 8}>
+              <button type="submit" className="btn primary" disabled={resetPassword.length < 12}>
                 Set new password
               </button>
             </div>

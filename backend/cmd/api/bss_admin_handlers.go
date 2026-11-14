@@ -13,6 +13,8 @@ package main
 
 import (
 	"acs/internal/accounts"
+	"acs/internal/config"
+	"acs/internal/observability"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -312,8 +314,15 @@ func (h *handler) createBSSWebhook(w http.ResponseWriter, r *http.Request) {
 	// audit H-7: same SSRF gate as bssadapter's own creation endpoint —
 	// target_url is operator-controlled here too, and a config saved
 	// through this panel shouldn't be held to a weaker standard.
-	if u, err := url.Parse(req.TargetURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+	if err := bss.CheckWebhookSecret(req.Secret); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if u, err := url.Parse(req.TargetURL); err != nil {
 		http.Error(w, "target_url must be a valid http/https URL", http.StatusBadRequest)
+		return
+	} else if err := bss.CheckWebhookScheme(u.Scheme, h.deploymentProfile == config.ProfileProduction); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	} else if err := h.bssWebhookNetPolicy.CheckHost(r.Context(), u.Hostname()); err != nil {
 		http.Error(w, "target_url host is not allowed: "+err.Error(), http.StatusBadRequest)
@@ -383,6 +392,9 @@ func (h *handler) getBSSHealth(w http.ResponseWriter, r *http.Request) {
 	resp := bssHealthResponse{AdapterURL: h.bssAdapterURL, TokenConfigured: h.bssToken != ""}
 	start := time.Now()
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, h.bssAdapterURL+"/metrics", nil)
+	if token := observability.MetricsToken(); err == nil && token != "" {
+		req.Header.Set("Authorization", "Bearer "+token) // the adapter's /metrics may need it (ACS_METRICS_TOKEN)
+	}
 	if err != nil {
 		resp.Error = err.Error()
 		writeJSON(w, http.StatusOK, resp)

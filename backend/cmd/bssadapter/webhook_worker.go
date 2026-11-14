@@ -217,6 +217,10 @@ func (h *handler) sendWebhookDelivery(ctx context.Context, client *http.Client, 
 	// Fresh timestamp per attempt, not per delivery: a retry an hour later
 	// must still land inside the consumer's freshness window, while any
 	// captured copy of an earlier attempt falls outside it.
+	if d.SecretError != "" {
+		h.logger.Error("webhook delivery cannot be signed", "delivery_id", d.ID, "reason", d.SecretError)
+		return false, "the signing secret could not be opened"
+	}
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	signature := "v1," + webhookSignature(d.Secret, d.ID, timestamp, d.Payload)
 	if d.PreviousSecret != "" {
@@ -352,9 +356,16 @@ func (h *handler) createWebhookSubscription(w http.ResponseWriter, r *http.Reque
 	} else if !h.authorizeBSSAccount(w, r, bss.ScopeTMFWrite, *req.AccountID) {
 		return
 	}
+	if err := bss.CheckWebhookSecret(req.Secret); err != nil {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", err.Error())
+		return
+	}
 	// audit H-7: validate at save time too, not only at delivery.
-	if u, err := url.Parse(req.TargetURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+	if u, err := url.Parse(req.TargetURL); err != nil {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "target_url must be a valid http/https URL")
+		return
+	} else if err := bss.CheckWebhookScheme(u.Scheme, h.requireHTTPSWebhooks); err != nil {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", err.Error())
 		return
 	} else if err := h.netPolicy.CheckHost(r.Context(), u.Hostname()); err != nil {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "target_url host is not allowed: "+err.Error())

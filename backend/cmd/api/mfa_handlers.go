@@ -10,6 +10,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -168,8 +169,13 @@ func (h *handler) operatorFromMFAToken(w http.ResponseWriter, r *http.Request, a
 
 // allowMFAAttempt applies the per-operator guess limit.
 func (h *handler) allowMFAAttempt(w http.ResponseWriter, op *operators.Operator) bool {
+	// The per-process limit first, then the one every replica shares.
 	if mfaLimiter.Allow(op.ID) {
-		return true
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if h.sharedAllowCtx(ctx, h.sharedMFALimit, op.ID) {
+			return true
+		}
 	}
 	h.metrics.RateLimitRejectedTotal.Inc()
 	http.Error(w, "too many code attempts — wait a minute and try again", http.StatusTooManyRequests)

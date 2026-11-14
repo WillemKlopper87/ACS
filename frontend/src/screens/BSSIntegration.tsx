@@ -398,7 +398,7 @@ export function BSSIntegration() {
             <form onSubmit={createWebhook} className="form-row" style={{ flexWrap: "wrap" }}>
               <input aria-label="account_id (optional)" placeholder="Account ID (optional)" value={webhookAccountId} onChange={(e) => setWebhookAccountId(e.target.value)} />
               <input aria-label="https://target-url" placeholder="https://target-url" value={webhookTargetUrl} onChange={(e) => setWebhookTargetUrl(e.target.value)} required />
-              <input aria-label="HMAC secret" placeholder="Signing secret" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} required />
+              <input aria-label="HMAC secret" placeholder="Signing secret (32+ characters)" minLength={32} value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} required />
               <button type="submit" className="btn primary">Create</button>
             </form>
             {webhooks.length === 0 ? (

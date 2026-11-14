@@ -189,6 +189,10 @@ delivery with it — details in `bss-integration-guide.md` §4.3.
 link-local targets are refused with `400`, so a receiver on your laptop
 needs a public tunnel or an operator-configured allowlist.
 
+The `secret` must be at least 32 characters: it is the only thing that
+lets your receiver tell a real event from a forged one. In a production
+deployment `target_url` must be `https`.
+
 `account_id` scopes the subscription to one account. A customer-bound
 client must set it; a subscription without one is fleet-wide and needs a
 global client.

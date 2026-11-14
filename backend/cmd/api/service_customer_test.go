@@ -5,8 +5,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"acs/internal/operators"
+	"acs/internal/ratelimit"
+	"acs/internal/tenancy"
 )
 
 // The BSS adapter's service token used to reach every device. A call now
@@ -119,5 +122,62 @@ func TestIntegration_ServiceCallsAreConfinedToTheirCustomer(t *testing.T) {
 	r.Body.Close()
 	if r.StatusCode != 200 {
 		t.Fatalf("superadmin with the header = %d, want it ignored (200)", r.StatusCode)
+	}
+}
+
+// A browser ticket is minted only for a device the operator may see
+// (finding O4): otherwise it would be a way to get a credential naming
+// another customer's device.
+func TestIntegration_BrowserTicketNeedsADeviceInScope(t *testing.T) {
+	e := newTestEnv(t)
+	custA, custB := e.customer("ISP A"), e.customer("ISP B")
+	devA, devB := e.device("BT0001A", &custA), e.device("BT0002B", &custB)
+	e.operator("alice", operators.RoleManager, tenancy.Scope{Type: tenancy.ScopeCustomer, ID: custA})
+	if r := e.call("alice", "POST", "/api/v1/auth/ticket", map[string]string{"device_id": devA, "purpose": "cli"}); r.code != 200 {
+		t.Fatalf("ticket for own device = %d %s", r.code, r.body)
+	}
+	if r := e.call("alice", "POST", "/api/v1/auth/ticket", map[string]string{"device_id": devB, "purpose": "cli"}); r.code != 404 {
+		t.Fatalf("ticket for another customer's device = %d, want 404", r.code)
+	}
+	for _, body := range []map[string]string{{"device_id": devA}, {"purpose": "cli"}, {"device_id": devA, "purpose": "everything"}} {
+		if r := e.call("alice", "POST", "/api/v1/auth/ticket", body); r.code != 400 {
+			t.Fatalf("ticket with %v = %d, want 400", body, r.code)
+		}
+	}
+}
+
+// Operator passwords have a floor when they are set (finding O12), and an
+// unknown username costs the same hash comparison as a wrong password
+// (finding O11).
+func TestIntegration_PasswordRulesAndSignInTiming(t *testing.T) {
+	savedLogin := loginLimiter
+	loginLimiter = ratelimit.New(1000, 1000, time.Minute)
+	t.Cleanup(func() { loginLimiter = savedLogin })
+	e := newTestEnv(t)
+	e.operator("root", operators.RoleSuperAdmin)
+	create := func(username, password string) resp {
+		return e.call("root", "POST", "/api/v1/auth/operators", map[string]string{"username": username, "password": password, "role": "readonly"})
+	}
+	for password, why := range map[string]string{
+		"short-pw-1":       "12 characters",
+		"Password2026!":    "common word",
+		"newoperator-9999": "username",
+		"111111111111":     "repeated",
+	} {
+		if r := create("newoperator", password); r.code != 400 || !strings.Contains(r.body, why) {
+			t.Errorf("password %q = %d %s, want 400 mentioning %q", password, r.code, r.body, why)
+		}
+	}
+	if r := create("newoperator", "blue-Kettle-49-rain"); r.code/100 != 2 {
+		t.Fatalf("a good password = %d %s", r.code, r.body)
+	}
+
+	start := time.Now()
+	r := e.call("", "POST", "/api/v1/auth/login", map[string]string{"username": "nobody-by-this-name", "password": "whatever-it-is"})
+	if r.code != 401 {
+		t.Fatalf("unknown username = %d", r.code)
+	}
+	if d := time.Since(start); d < 5*time.Millisecond {
+		t.Fatalf("unknown username answered in %v: no hash comparison was made, so timing tells it from a wrong password", d)
 	}
 }

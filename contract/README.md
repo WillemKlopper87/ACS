@@ -75,6 +75,11 @@ ErrIdempotencyKeyReused`, where it used to answer `202` with the original
 order. An identical resend is unchanged. No recorded exchange shows the
 old answer. This too is a changed meaning.
 
+**Not yet released: webhook subscriptions.** The same build refuses a
+new subscription whose `secret` is shorter than 32 characters, and, in
+the production profile, one whose `target_url` is plain `http` (both
+`400 ErrInvalidRequest`). Existing subscriptions are unaffected.
+
 **Versioned.** The contract is tagged `bss-contract-v<major>.<minor>.<patch>`
 (`bss-contract-v1.0.0`, `v1.0.1`, `v1.1.0`, `v1.1.1`, `v1.2.0`, `v1.2.1`). A tag never moves. Within a major version, changes only add
 (fields, endpoints, and codes that only a new endpoint or parameter can return); a removal or a changed
