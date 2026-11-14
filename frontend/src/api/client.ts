@@ -541,6 +541,7 @@ export const api = {
 
   listAlertPolicies: () => request<{items: import("./types").AlertPolicy[]}>("/api/v1/alert-policies"),
   createAlertPolicy: (input: Partial<import("./types").AlertPolicy>) => request<import("./types").AlertPolicy>("/api/v1/alert-policies", {method:"POST", body:JSON.stringify(input)}),
+  deleteAlertPolicy: (id: string) => request<void>(`/api/v1/alert-policies/${id}`, { method: "DELETE" }),
   listAlertIncidents: (state="") => request<{items: import("./types").AlertIncident[]}>(`/api/v1/alert-incidents${state ? `?state=${encodeURIComponent(state)}` : ""}`),
   updateAlertIncident: (id: string, state: string) => request<void>(`/api/v1/alert-incidents/${id}?state=${encodeURIComponent(state)}`, {method:"PATCH"}),
 

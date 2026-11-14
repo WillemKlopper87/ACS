@@ -5,6 +5,7 @@ import type { DashboardAlarm, DashboardData, DashboardWidget } from "../api/type
 import { timeAgo } from "../lib/format";
 import { toast } from "../lib/toast";
 import { groupCountsByVendor } from "../lib/vendorFamily";
+import { plainLabel } from "../lib/labels";
 
 // Customizable fleet dashboard (admin-platform backlog). Charts follow the
 // dataviz skill's method: form picked by the data's job (grouped counts →
@@ -37,7 +38,7 @@ function RankedBarChart({ data, toneByKey }: { data: Record<string, number>; ton
       {entries.map(([key, n]) => (
         <div key={key} style={{ marginBottom: "2px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", marginBottom: "0.15rem" }}>
-            <span>{key}</span>
+            <span title={key}>{plainLabel(key)}</span>
             <span className="dim" style={{ fontFamily: "var(--font-mono)" }}>{n}</span>
           </div>
           <div style={{ height: "16px", background: "var(--surface-3)", borderRadius: "4px" }}>
@@ -117,7 +118,7 @@ function AlarmList({ alarms }: { alarms: DashboardAlarm[] }) {
 const WIDGET_TITLE: Record<string, string> = {
   status: "Devices by online status",
   reachability: "Devices by reachability",
-  inform_recency: "Inform recency",
+  inform_recency: "Last check-in",
   alarms: "Active alarms",
   group_by: "Fleet breakdown",
   firmware: "Firmware status",
@@ -260,7 +261,7 @@ export function Dashboard() {
             )}
 
             {enabled.includes("inform_recency") && (
-              <div className="panel"><h3>Inform recency</h3><RankedBarChart data={data.inform_recency} /></div>
+              <div className="panel"><h3>Last check-in</h3><RankedBarChart data={data.inform_recency} /></div>
             )}
 
             {enabled.includes("group_by") && (

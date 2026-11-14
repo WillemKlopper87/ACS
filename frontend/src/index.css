@@ -1039,6 +1039,11 @@ input:focus, select.chip:focus {
 
 /* --- Page bar and drawer: the list-screen pattern (docs/CONSOLE-REDESIGN-AND-MFA.md) --- */
 .page-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.9rem; }
+.page-actions { display: flex; gap: 0.5rem; flex: none; }
+.section-title { margin: 1.4rem 0 0.6rem; }
+.section-title.first { margin-top: 0.2rem; }
+.row-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.form-section { margin: 1rem 0 0.2rem; font-size: 0.8rem; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.04em; }
 .page-lede { margin: 0; color: var(--ink-dim); font-size: 0.88rem; max-width: 60rem; }
 .drawer-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 50; display: flex; justify-content: flex-end; }
 .drawer {
