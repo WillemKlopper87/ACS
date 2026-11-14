@@ -69,21 +69,26 @@ func (h *handler) listEvents(w http.ResponseWriter, r *http.Request) {
 
 // subscriptionFor resolves a webhook subscription and authorizes the caller
 // for it: an account subscription by its account, a fleet-wide one only for
-// a fleet-wide client.
+// a fleet-wide client. An id that names no subscription is answered only
+// after the caller is authorized, as the sale routes do, and a caller
+// limited to its own accounts gets the answer it gets for another
+// customer's subscription, so ids are no existence oracle.
 func (h *handler) subscriptionFor(w http.ResponseWriter, r *http.Request, scope string) (*bss.WebhookSubscription, bool) {
 	id := r.PathValue("id")
-	if !isUUID(id) {
-		writeError(w, http.StatusNotFound, "ErrNotFound", "webhook subscription not found")
-		return nil, false
+	var sub *bss.WebhookSubscription
+	if isUUID(id) {
+		var err error
+		sub, err = h.webhooks.SubscriptionByID(r.Context(), id)
+		if err != nil && !errors.Is(err, bss.ErrSubscriptionNotFound) {
+			h.logger.Error("failed to resolve webhook subscription", "err", err, "id", id)
+			writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+			return nil, false
+		}
 	}
-	sub, err := h.webhooks.SubscriptionByID(r.Context(), id)
-	if errors.Is(err, bss.ErrSubscriptionNotFound) {
-		writeError(w, http.StatusNotFound, "ErrNotFound", "webhook subscription not found")
-		return nil, false
-	}
-	if err != nil {
-		h.logger.Error("failed to resolve webhook subscription", "err", err)
-		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+	if sub == nil {
+		if h.authorizeBSSAccount(w, r, scope, "") {
+			writeError(w, http.StatusNotFound, "ErrNotFound", "webhook subscription not found")
+		}
 		return nil, false
 	}
 	if sub.AccountID == nil {
