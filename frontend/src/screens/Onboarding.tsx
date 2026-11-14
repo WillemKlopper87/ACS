@@ -17,6 +17,7 @@ import { fmtTime, timeAgo } from "../lib/format";
 import { ONBOARDING_TABS, onboardingTab, parsePLMNs, STATE_LABEL, stateTone, type OnboardingTabId } from "../lib/onboarding";
 import { toast } from "../lib/toast";
 import { customerName, useCustomers } from "../lib/useCustomers";
+import { confirmDialog } from "../lib/confirm";
 
 type TabId = OnboardingTabId | "unclaimed" | "sites" | "plans";
 const TAB_IDS: TabId[] = [...ONBOARDING_TABS.map((t) => t.id), "unclaimed", "sites", "plans"];
@@ -83,7 +84,7 @@ export function Onboarding() {
   const templateName = (id: string) => templates.find((t) => t.id === id)?.name ?? id.slice(0, 8);
 
   async function act(o: OnboardingRecord, action: "retry" | "cancel") {
-    if (action === "cancel" && !window.confirm(`Cancel the onboarding of ${o.expected_serial}? The serial can then be sold again.`)) return;
+    if (action === "cancel" && !(await confirmDialog(`Cancel the onboarding of ${o.expected_serial}? The serial can then be sold again.`))) return;
     try {
       await (action === "retry" ? api.retryOnboarding(o.id) : api.cancelOnboarding(o.id));
       toast(action === "retry" ? "Checks will run again on the next check-in" : "Onboarding cancelled", "info");

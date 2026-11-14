@@ -1,4 +1,6 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import type { MFAChallenge, MFAEnrollment, Session } from "../api/client";
+import { MfaCodeInput, MfaSetup, RecoveryCodes } from "../components/Mfa";
 import { useAuth } from "../auth/useAuth";
 import { api, ApiError } from "../api/client";
 
@@ -127,6 +129,134 @@ function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
   );
 }
 
+// The MFA token lasts five minutes. When it has run out the server says
+// so with a 401 that is not about the code; send the operator back to the
+// password step with that message instead of leaving them retyping codes.
+function stepExpired(err: unknown): string | null {
+  return err instanceof ApiError && err.status === 401 && /expired/i.test(err.message) ? err.message : null;
+}
+
+interface MfaStepProps {
+  username: string;
+  mfaToken: string;
+  onRestart: (message?: string) => void;
+}
+
+// Second step for an operator with MFA on: a code from the app, or a
+// recovery code.
+function MfaVerifyStep({ username, mfaToken, onRestart }: MfaStepProps) {
+  const { acceptSession } = useAuth();
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      acceptSession(username, await api.loginMFA(mfaToken, code));
+    } catch (err) {
+      const expired = stepExpired(err);
+      if (expired) return onRestart(expired);
+      setCode("");
+      setError(err instanceof ApiError ? err.message : "Could not check the code");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <AuthCard>
+      <form onSubmit={onSubmit}>
+        <p className="auth-note">
+          Enter the six-digit code from your authenticator app for <strong>{username}</strong>. Lost your phone? Enter one of your recovery codes instead.
+        </p>
+        <MfaCodeInput value={code} onChange={setCode} />
+        {error && <div className="banner error" style={{ marginBottom: 0 }}>{error}</div>}
+        <button type="submit" className="btn primary" disabled={submitting || !code.trim()}>
+          {submitting ? "Checking…" : "Verify"}
+        </button>
+        <button type="button" className="btn" onClick={() => onRestart()}>
+          Back to sign in
+        </button>
+      </form>
+    </AuthCard>
+  );
+}
+
+// First sign-in for a role that must use MFA: set it up, prove it with a
+// code, keep the recovery codes, then continue to the console.
+function MfaEnrollStep({ username, mfaToken, onRestart }: MfaStepProps) {
+  const { acceptSession } = useAuth();
+  const [enrollment, setEnrollment] = useState<MFAEnrollment | null>(null);
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [session, setSession] = useState<(Session & { recovery_codes: string[] }) | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .loginMFAEnroll(mfaToken)
+      .then((e) => !cancelled && setEnrollment(e))
+      .catch((err) => {
+        if (cancelled) return;
+        const expired = stepExpired(err);
+        if (expired) onRestart(expired);
+        else setError(err instanceof ApiError ? err.message : "Could not start MFA set-up");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // onRestart is recreated each render; the token is what this depends on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mfaToken]);
+
+  if (session) {
+    return (
+      <AuthCard>
+        <RecoveryCodes codes={session.recovery_codes} onDone={() => acceptSession(username, session)} doneLabel="I have saved these codes — continue" />
+      </AuthCard>
+    );
+  }
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      setSession(await api.loginMFAConfirm(mfaToken, code));
+    } catch (err) {
+      const expired = stepExpired(err);
+      if (expired) return onRestart(expired);
+      setCode("");
+      setError(err instanceof ApiError ? err.message : "Could not check the code");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <AuthCard>
+      <form onSubmit={onSubmit}>
+        <p className="auth-note">
+          Your account must use a second sign-in step. Set it up now for <strong>{username}</strong>.
+        </p>
+        {enrollment ? <MfaSetup uri={enrollment.otpauth_uri} secret={enrollment.secret} /> : !error && <p className="auth-note">Preparing…</p>}
+        {enrollment && <MfaCodeInput value={code} onChange={setCode} autoFocus={false} />}
+        {error && <div className="banner error" style={{ marginBottom: 0 }}>{error}</div>}
+        <button type="submit" className="btn primary" disabled={submitting || !enrollment || !code.trim()}>
+          {submitting ? "Checking…" : "Turn on and sign in"}
+        </button>
+        <button type="button" className="btn" onClick={() => onRestart()}>
+          Back to sign in
+        </button>
+      </form>
+    </AuthCard>
+  );
+}
+
 export function Login() {
   const { login } = useAuth();
   const [username, setUsername] = useState("");
@@ -134,17 +264,31 @@ export function Login() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [forgotPassword, setForgotPassword] = useState(false);
+  const [challenge, setChallenge] = useState<MFAChallenge | null>(null);
 
   const resetToken = new URLSearchParams(window.location.search).get("token");
   if (resetToken) return <ResetPasswordForm token={resetToken} />;
   if (forgotPassword) return <ForgotPasswordForm onBack={() => setForgotPassword(false)} />;
+  if (challenge) {
+    const restart = (message?: string) => {
+      setChallenge(null);
+      setPassword("");
+      setError(message ?? null);
+    };
+    return challenge.mfa === "enroll" ? (
+      <MfaEnrollStep username={username} mfaToken={challenge.mfa_token} onRestart={restart} />
+    ) : (
+      <MfaVerifyStep username={username} mfaToken={challenge.mfa_token} onRestart={restart} />
+    );
+  }
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
-      await login(username, password);
+      // A right password may still owe a second step.
+      setChallenge(await login(username, password));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Login failed");
     } finally {

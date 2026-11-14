@@ -31,6 +31,7 @@ import { deviceLink, gatewayName, isMeshSatellite, satelliteReachabilityNote, sa
 import { skippedNote, unsupportedReason } from "../lib/diagnostics";
 import { SubNav } from "../components/SubNav";
 import { deviceCapabilities, devicePath, visibleSections, type DeviceSectionId } from "../lib/deviceSections";
+import { confirmDialog } from "../lib/confirm";
 
 // What each sub-page reads on open and on every poll, so a page loads only
 // what it shows (the single-page layout fired ~23 calls on open, close to
@@ -311,13 +312,13 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
       return `AddObject queued: ${res.command_key} — watch Recent jobs for the new instance number`;
     });
 
-  const handleDeleteObject = () => {
+  const handleDeleteObject = async () => {
     const path = objectPath.trim();
     if (!path.endsWith(".")) {
       toast('Object path must end in "." (e.g. Device.WiFi.SSID.3.)', "error");
       return;
     }
-    if (!window.confirm(`Delete object instance "${path}" from this device? This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Delete object instance "${path}" from this device? This cannot be undone.`))) return;
     withBusy(async () => {
       const res = await api.deleteObject(id, path);
       setObjectPath("");
@@ -354,17 +355,17 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
       return `Upload requested: ${res.command_key} — file lands on receipt once the CPE pushes it`;
     });
 
-  const handleFirmwarePush = () => {
+  const handleFirmwarePush = async () => {
     const img = firmwareImages.find((i) => i.id === firmwareImageId);
     if (!img) return;
     // Same class of action as a reboot or factory reset — it interrupts
     // service and, on a device the ACS can only reach when it checks in,
     // is awkward to undo.
     if (
-      !window.confirm(
+      !(await confirmDialog(
         `Push ${img.vendor} ${img.model} v${img.version} (${img.channel}) to ${device?.oui_serial}? ` +
           `The device downloads and applies it, then reboots.`,
-      )
+      ))
     ) {
       return;
     }
@@ -400,19 +401,19 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
     }
   }
 
-  const handleReboot = () => {
+  const handleReboot = async () => {
     // A mesh satellite comes back only once its backhaul rejoins (8–11 min
     // for a Beacon 3.1 in the field test, once needing manual recovery).
-    if (satellite && !window.confirm(`Reboot ${device?.label || device?.oui_serial}?\n\n${satelliteRebootWarning(meshGatewayName)}`)) return;
+    if (satellite && !(await confirmDialog(`Reboot ${device?.label || device?.oui_serial}?\n\n${satelliteRebootWarning(meshGatewayName)}`))) return;
     return withBusy(async () => {
       const res = await api.rebootDevice(id);
       return `Reboot queued: ${res.command_key} — watch for a fresh Inform once it comes back up`;
     });
   };
 
-  const handleFactoryReset = () => {
+  const handleFactoryReset = async () => {
     const meshWarning = satellite ? `\n\n${satelliteRebootWarning(meshGatewayName)} A reset satellite may also need re-pairing with the gateway.` : "";
-    if (!window.confirm(`Factory reset ${device?.oui_serial}? This wipes the device back to defaults and cannot be undone.${meshWarning}`)) return;
+    if (!(await confirmDialog(`Factory reset ${device?.oui_serial}? This wipes the device back to defaults and cannot be undone.${meshWarning}`))) return;
     withBusy(async () => {
       const res = await api.factoryResetDevice(id);
       return `Factory reset queued: ${res.command_key}`;

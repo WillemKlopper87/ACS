@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { getAuthState, setAuthenticated, clearAuth, subscribe, type AuthState } from "./tokenStore";
-import { api } from "../api/client";
+import { api, isMFAChallenge, type Session } from "../api/client";
 import { AuthContext } from "./context";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -10,8 +10,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (username: string, password: string) => {
     const resp = await api.login(username, password);
+    if (isMFAChallenge(resp)) return resp;
     setAuthenticated(resp.token, username, resp.role);
+    return null;
   };
+
+  const acceptSession = (username: string, session: Session) => setAuthenticated(session.token, username, session.role);
 
   // Revoke server-side first, then clear locally. The local clear runs
   // either way: if the revoke call fails (API down, token already
@@ -29,5 +33,5 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  return <AuthContext.Provider value={{ ...state, login, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ ...state, login, acceptSession, logout }}>{children}</AuthContext.Provider>;
 }

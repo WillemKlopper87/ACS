@@ -84,7 +84,8 @@ reverse proxy in front of the API and console.
 | Variable | Service | Purpose |
 |---|---|---|
 | `ACS_JWT_SIGNING_SECRET` (≥32 B) | api | Operator JWTs, browser tickets, transfer-URL tokens |
-| `ACS_CREDENTIAL_ENCRYPTION_KEY` (≥16 B) | api | Device/CLI/VPN credentials at rest |
+| `ACS_CREDENTIAL_ENCRYPTION_KEY` (≥16 B) | api | Device/CLI/VPN credentials at rest; operators' two-step sign-in secrets |
+| `ACS_MFA_REQUIRED_ROLES` (optional) | api | Roles that must use two-step sign-in: a comma-separated list (`superadmin,manager`) or `all`. Unset: each operator chooses. Needs `ACS_CREDENTIAL_ENCRYPTION_KEY`. |
 | `ACS_INTERNAL_SERVICE_TOKEN` (≥32 B) | api, bssadapter | Adapter → API machine identity (narrow route allowlist) |
 | `ACS_DIGEST_USERNAME` / `ACS_DIGEST_PASSWORD` (≥16 B) **or** `ACS_MTLS_CA_CERT` | acs | CPE authentication |
 | `ACS_BSS_OAUTH_SIGNING_SECRET` (≥32 B) **or** `ACS_BSS_API_TOKEN` | bssadapter | Inbound BSS caller auth |

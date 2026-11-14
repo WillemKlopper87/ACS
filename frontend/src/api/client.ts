@@ -64,8 +64,19 @@ import type { components, paths } from "./generated";
 // request/response types from `paths` like LoginResponse below instead
 // of re-declaring them by hand; the hand-written types in types.ts are
 // legacy to be migrated over time.
+// A correct password answers with a session, or with an MFA challenge
+// when a second step is owed (cmd/api/mfa_handlers.go).
+export type Session = components["schemas"]["Session"];
+export type MFAChallenge = components["schemas"]["MFAChallenge"];
+export type MFAEnrollment = components["schemas"]["MFAEnrollment"];
+export type MFAStatus = components["schemas"]["MFAStatus"];
+type RecoveryCodes = components["schemas"]["MFARecoveryCodes"];
 type LoginResponse =
   paths["/api/v1/auth/login"]["post"]["responses"]["200"]["content"]["application/json"];
+
+export function isMFAChallenge(r: LoginResponse): r is MFAChallenge {
+  return "mfa" in r;
+}
 type DeviceSatellitesResponse =
   paths["/api/v1/devices/{id}/satellites"]["get"]["responses"]["200"]["content"]["application/json"];
 type DiagnosticQueueResponse =
@@ -138,7 +149,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // the backend has operator auth enabled (build plan §4 Phase 6) and
   // wants a fresh login. Login's own 401 (wrong password) is a normal
   // rejected-credentials error, not a "you need to log in" signal.
-  if (res.status === 401 && path !== LOGIN_PATH) {
+  if (res.status === 401 && !path.startsWith(LOGIN_PATH)) {
     clearAuth();
     markAuthRequired();
   }
@@ -188,6 +199,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password }),
     }),
+
+  // MFA login steps: each takes the mfa_token the password step returned.
+  loginMFA: (mfaToken: string, code: string) =>
+    request<Session>(`${LOGIN_PATH}/mfa`, { method: "POST", body: JSON.stringify({ mfa_token: mfaToken, code }) }),
+  loginMFAEnroll: (mfaToken: string) =>
+    request<MFAEnrollment>(`${LOGIN_PATH}/mfa/enroll`, { method: "POST", body: JSON.stringify({ mfa_token: mfaToken }) }),
+  loginMFAConfirm: (mfaToken: string, code: string) =>
+    request<Session & RecoveryCodes>(`${LOGIN_PATH}/mfa/confirm`, { method: "POST", body: JSON.stringify({ mfa_token: mfaToken, code }) }),
+
+  // The signed-in operator's own MFA.
+  getMFA: () => request<MFAStatus>("/api/v1/auth/mfa"),
+  enrollMFA: () => request<MFAEnrollment>("/api/v1/auth/mfa/enroll", { method: "POST" }),
+  confirmMFA: (code: string) => request<RecoveryCodes>("/api/v1/auth/mfa/confirm", { method: "POST", body: JSON.stringify({ code }) }),
+  disableMFA: (code: string) => request<void>("/api/v1/auth/mfa/disable", { method: "POST", body: JSON.stringify({ code }) }),
+  regenerateRecoveryCodes: (code: string) =>
+    request<RecoveryCodes>("/api/v1/auth/mfa/recovery-codes", { method: "POST", body: JSON.stringify({ code }) }),
+  // Lost phone: a superadmin removes another operator's MFA.
+  resetOperatorMFA: (operatorId: string) => request<void>(`/api/v1/auth/operators/${operatorId}/mfa`, { method: "DELETE" }),
 
   // Revokes every session of the caller server-side. Signing out used to
   // be purely local (clearAuth), which left a captured token valid until

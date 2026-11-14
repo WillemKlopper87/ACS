@@ -6,6 +6,7 @@ import { AuthProvider } from "./auth/AuthContext";
 import { useAuth } from "./auth/useAuth";
 import { canAdmin } from "./auth/roles";
 import { ToastHost } from "./components/Toast";
+import { ConfirmHost } from "./components/ConfirmHost";
 import { useApiReachable } from "./lib/apiHealth";
 import { useTheme, type Theme } from "./theme/useTheme";
 import { grafanaLink, openGatedGrafana } from "./lib/grafana";
@@ -28,7 +29,7 @@ async function openGrafana() {
   if (problem) toast(problem, "error");
 }
 
-type Screen = "dashboard" | "fleet" | "devices" | "onboarding" | "control" | "operations" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help" | "alerting";
+type Screen = "dashboard" | "fleet" | "devices" | "onboarding" | "control" | "operations" | "health" | "jobs" | "groups" | "schedules" | "policies" | "rollouts" | "audit" | "captures" | "operators" | "templates" | "tenancy" | "reports" | "bss" | "help" | "alerting" | "account";
 
 const THEME_LABEL: Record<Theme, string> = { dark: "Dark", light: "Light", unfold: "Unfold", fluent: "Fluent 2" };
 
@@ -142,6 +143,7 @@ const SCREEN_COMPONENT: Record<Screen, ComponentType> = {
   bss: screen(() => import("./screens/BSSIntegration"), "BSSIntegration"),
   help: screen(() => import("./screens/Help"), "Help"),
   alerting: screen(() => import("./screens/Alerting"), "Alerting"),
+  account: screen(() => import("./screens/Account"), "Account"),
 };
 
 function AppShell() {
@@ -265,9 +267,9 @@ function AppShell() {
           </select>
           {token && (
             <div className="conn-indicator" style={{ justifyContent: "space-between" }}>
-              <span>
+              <button className="account-link" onClick={() => setScreen("account")} title="Your account and two-step sign-in" aria-current={screen === "account" ? "page" : undefined}>
                 {username} <span style={{ color: "var(--ink-faint)" }}>({role})</span>
-              </span>
+              </button>
               <button className="btn ghost sm" onClick={logout}>
                 Sign out
               </button>
@@ -298,7 +300,7 @@ function AppShell() {
                 ← Back
               </button>
             )}
-            <h1 className="page-title">{screen === "devices" ? "Device" : NAV.find((item) => item.id === screen)?.label}</h1>
+            <h1 className="page-title">{screen === "devices" ? "Device" : screen === "account" ? "Account" : NAV.find((item) => item.id === screen)?.label}</h1>
           </div>
           <ErrorBoundary key={screen}>
             <Suspense fallback={<p className="dim">Loading…</p>}>
@@ -308,6 +310,7 @@ function AppShell() {
         </main>
       </div>
       <ToastHost />
+      <ConfirmHost />
     </div>
   );
 }

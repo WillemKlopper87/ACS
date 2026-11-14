@@ -3,6 +3,7 @@ import { api, ApiError } from "../api/client";
 import type { BSSAdapterCallResult, BSSHealth, BSSMapping, BSSOAuthClient, BSSStats, BSSUnassignReason, BSSWebhookSubscription } from "../api/types";
 import { toast } from "../lib/toast";
 import { customerName, useCustomers } from "../lib/useCustomers";
+import { confirmDialog } from "../lib/confirm";
 
 // BSS integration admin panel (admin-platform backlog): a superadmin view
 // onto the BSS-facing adapter (internal/bss, cmd/bssadapter — see
@@ -167,7 +168,7 @@ export function BSSIntegration() {
   async function revokeOAuthClient(id: string, name: string) {
     // Revoking is immediate and irreversible: whatever BSS system holds
     // this client_id stops being able to authenticate the moment it lands.
-    if (!window.confirm(`Revoke OAuth2 client "${name}"? Any BSS integration using it stops authenticating immediately. This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Revoke OAuth2 client "${name}"? Any BSS integration using it stops authenticating immediately. This cannot be undone.`))) return;
     try {
       await api.revokeBSSOAuthClient(id);
       await loadSetup();
@@ -243,7 +244,7 @@ export function BSSIntegration() {
   }
 
   async function deleteWebhook(id: string, target: string) {
-    if (!window.confirm(`Delete the webhook subscription to ${target}? Events will stop being delivered there.`)) return;
+    if (!(await confirmDialog(`Delete the webhook subscription to ${target}? Events will stop being delivered there.`))) return;
     try {
       await api.deleteBSSWebhook(id);
       await loadSetup();

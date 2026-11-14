@@ -8,6 +8,7 @@ import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
 import { useCustomers, customerName } from "../lib/useCustomers";
+import { confirmDialog } from "../lib/confirm";
 
 export function Policies() {
   const { role } = useAuth();
@@ -79,7 +80,7 @@ export function Policies() {
   }
 
   async function onDelete(p: Policy) {
-    if (!window.confirm(`Delete policy "${p.name}"? Devices will stop being corrected back to "${p.desired_value}". This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Delete policy "${p.name}"? Devices will stop being corrected back to "${p.desired_value}". This cannot be undone.`))) return;
     try {
       await api.deletePolicy(p.id);
       toast("Policy deleted", "info");

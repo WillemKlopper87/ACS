@@ -328,19 +328,13 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description Login succeeded */
+                /** @description The password was right. Either a session (token), or, when a second step is owed, an MFA challenge (mfa and mfa_token) and no session. */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            token: string;
-                            role: components["schemas"]["Role"];
-                            username?: string;
-                            /** Format: date-time */
-                            expires_at: string;
-                        };
+                        "application/json": components["schemas"]["Session"] | components["schemas"]["MFAChallenge"];
                     };
                 };
                 /** @description Wrong username or password */
@@ -352,9 +346,469 @@ export interface paths {
                         "text/plain": string;
                     };
                 };
+                /** @description The operator's role must use MFA but this server cannot store MFA secrets (no ACS_CREDENTIAL_ENCRYPTION_KEY) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Second login step: exchange the MFA token and a code for a session
+         * @description code is the six-digit code from the authenticator app, or a one-time recovery code. Each is accepted once. Guesses are limited per operator (429).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MFALoginRequest"];
+                };
+            };
+            responses: {
+                /** @description Signed in */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Session"];
+                    };
+                };
+                /** @description Wrong or already used code, or the MFA token expired (start again with the password) */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Too many code attempts */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login/mfa/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start MFA set-up at login, for a role that must use MFA
+         * @description Takes the mfa_token of an "enroll" challenge. Returns the secret to add to an authenticator app. Nothing is enabled until /auth/login/mfa/confirm.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        mfa_token: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MFAEnrollment"];
+                    };
+                };
+                /** @description The MFA token is wrong or expired */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login/mfa/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish MFA set-up at login with a first code, and sign in */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MFALoginRequest"];
+                };
+            };
+            responses: {
+                /** @description Signed in. recovery_codes are shown this once. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Session"] & {
+                            recovery_codes: string[];
+                        };
+                    };
+                };
+                /** @description Wrong code, or the MFA token expired */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Too many code attempts */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The signed-in operator's MFA status */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MFAStatus"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start setting up MFA for the signed-in operator
+         * @description Returns a new secret each time until it is confirmed. Nothing is enabled, and login is unchanged, until /auth/mfa/confirm.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MFAEnrollment"];
+                    };
+                };
+                /** @description MFA is already enabled */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description This server cannot store MFA secrets (no ACS_CREDENTIAL_ENCRYPTION_KEY) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turn MFA on by proving the app shows the right code */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MFACode"];
+                };
+            };
+            responses: {
+                /** @description MFA is on. recovery_codes are shown this once. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MFARecoveryCodes"];
+                    };
+                };
+                /** @description Wrong code (the session stays valid) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description No set-up in progress, or MFA is already enabled */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turn the signed-in operator's MFA off (needs a current code) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MFACode"];
+                };
+            };
+            responses: {
+                /** @description MFA is off */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Wrong code (the session stays valid) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description MFA is required for this role, or is not enabled */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/recovery-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace the signed-in operator's recovery codes (needs a current code) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MFACode"];
+                };
+            };
+            responses: {
+                /** @description The new codes, shown this once. The old ones stop working. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MFARecoveryCodes"];
+                    };
+                };
+                /** @description Wrong code (the session stays valid) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/operators/{id}/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Reset another operator's MFA, for a lost phone (superadmin)
+         * @description Removes the operator's MFA and recovery codes and ends their sessions. If their role must use MFA they set it up again at their next login. Audited as OperatorMFAReset.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["OperatorId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Reset */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Operator not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -8094,7 +8548,51 @@ export interface components {
          * @enum {string}
          */
         Permission: "devices.write" | "connection_request" | "diagnostics.run" | "firmware.manage" | "template.manage" | "policy.manage" | "schedule.manage" | "group.manage" | "credential.manage" | "cli.access" | "bulk_actions" | "upload.request" | "tenancy.manage";
+        Session: {
+            token: string;
+            role: components["schemas"]["Role"];
+            username?: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        MFAChallenge: {
+            /**
+             * @description verify: send a code to /auth/login/mfa. enroll: the role must use MFA and it is not set up; use /auth/login/mfa/enroll then /confirm.
+             * @enum {string}
+             */
+            mfa: "verify" | "enroll";
+            /** @description Valid for five minutes and only on the /auth/login/mfa routes. It is not a session. */
+            mfa_token: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        MFALoginRequest: {
+            mfa_token: string;
+            code: string;
+        };
+        MFACode: {
+            /** @description A current code from the authenticator app */
+            code: string;
+        };
+        MFAEnrollment: {
+            /** @description Base32 secret, for typing into an app that cannot scan */
+            secret: string;
+            /** @description otpauth://totp/… link to show as a QR code */
+            otpauth_uri: string;
+        };
+        MFARecoveryCodes: {
+            recovery_codes: string[];
+        };
+        MFAStatus: {
+            enabled: boolean;
+            /** @description The operator's role must use MFA (ACS_MFA_REQUIRED_ROLES) */
+            required: boolean;
+            /** @description False when the server has no key to store MFA secrets with */
+            available: boolean;
+            recovery_codes_left: number;
+        };
         Operator: {
+            mfa_enabled?: boolean;
             id?: string;
             username?: string;
             email?: string;

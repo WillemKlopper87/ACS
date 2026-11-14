@@ -7,11 +7,12 @@ import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
-import { useEscape } from "../lib/hotkeys";
 import { useCustomers, customerName } from "../lib/useCustomers";
 import { DevicePicker } from "../components/DevicePicker";
+import { Drawer } from "../components/Drawer";
 import { StatusBadge } from "../components/StatusBadge";
 import type { Device } from "../api/types";
+import { confirmDialog } from "../lib/confirm";
 
 export function DeviceGroups() {
   const { role } = useAuth();
@@ -33,6 +34,7 @@ export function DeviceGroups() {
   const [customerId, setCustomerId] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [creatingOpen, setCreatingOpen] = useState(false);
   const customers = useCustomers();
 
   async function load() {
@@ -58,8 +60,6 @@ export function DeviceGroups() {
 
   const deviceById = useMemo(() => new Map(fleet.map((d) => [d.id, d])), [fleet]);
 
-  useEscape(() => setSelected(null), selected !== null);
-
   async function openGroup(g: DeviceGroup) {
     try {
       const full = await api.getDeviceGroup(g.id);
@@ -79,6 +79,7 @@ export function DeviceGroups() {
       setName("");
       setDescription("");
       setCustomerId("");
+      setCreatingOpen(false);
       await load();
     } catch (e) {
       setCreateError(e instanceof ApiError ? e.message : "Failed to create group");
@@ -89,7 +90,7 @@ export function DeviceGroups() {
 
   async function onDelete(g: DeviceGroup) {
     const members = g.member_count === 1 ? "1 member" : `${g.member_count} members`;
-    if (!window.confirm(`Delete group "${g.name}" (${members})? Templates, schedules and rollouts that target it will lose their target. This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Delete group "${g.name}" (${members})? Templates, schedules and rollouts that target it will lose their target. This cannot be undone.`))) return;
     try {
       await api.deleteDeviceGroup(g.id);
       if (selected?.id === g.id) setSelected(null);
@@ -222,9 +223,15 @@ export function DeviceGroups() {
         </div>
       )}
 
-      <div className="split two-col">
-        <div className="panel">
-          <h3>Create group</h3>
+      <div className="page-bar">
+        <p className="page-lede">A group is a named set of devices you can target with a bulk action, a template or a schedule.</p>
+        <button className="btn primary" onClick={() => setCreatingOpen(true)} disabled={!writable}>
+          New group
+        </button>
+      </div>
+
+      {creatingOpen && (
+        <Drawer title="New group" onClose={() => setCreatingOpen(false)}>
           <form onSubmit={onCreate}>
             <div className="form-row">
               <label className="field">
@@ -256,19 +263,11 @@ export function DeviceGroups() {
               </button>
             </div>
           </form>
-        </div>
+        </Drawer>
+      )}
 
-        <div className="panel">
-          <h3>
-            {selected ? `Members — ${selected.name}` : "Select a group"}
-            {selected && (
-              <button className="close-detail" onClick={() => setSelected(null)}>
-                ✕
-              </button>
-            )}
-          </h3>
-          {selected ? (
-            <>
+      {selected && !picking && (
+        <Drawer title={`${selected.name} — members`} onClose={() => setSelected(null)} wide>
               <div className="form-row">
                 <button className="btn primary" onClick={() => setPicking(true)} disabled={!writable}>
                   Add devices…
@@ -317,14 +316,8 @@ export function DeviceGroups() {
                   );
                 })}
               </ul>
-            </>
-          ) : (
-            <p className="dim" style={{ margin: 0 }}>
-              Click a group in the table below to manage its members.
-            </p>
-          )}
-        </div>
-      </div>
+        </Drawer>
+      )}
 
       {picking && selected && (
         <DevicePicker

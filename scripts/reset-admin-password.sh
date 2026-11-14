@@ -26,6 +26,15 @@ if [ -z "$UPDATED" ]; then
     "INSERT INTO operators (id, username, email, password_hash, role) VALUES (gen_random_uuid(), '$ACS_BOOTSTRAP_ADMIN_USERNAME', NULL, '$HASH', 'superadmin');"
 fi
 
+# Break-glass covers a lost phone too: clear the admin's two-step sign-in
+# and end their sessions. If ACS_MFA_REQUIRED_ROLES names their role, the
+# next sign-in sets it up again.
+echo "Clearing two-step sign-in for $ACS_BOOTSTRAP_ADMIN_USERNAME..."
+docker exec infra-postgres-1 psql -U acs -d acs -q -c \
+  "DELETE FROM operator_mfa_recovery_codes WHERE operator_id = (SELECT id FROM operators WHERE username = '$ACS_BOOTSTRAP_ADMIN_USERNAME');
+   DELETE FROM operator_mfa WHERE operator_id = (SELECT id FROM operators WHERE username = '$ACS_BOOTSTRAP_ADMIN_USERNAME');
+   UPDATE operators SET token_version = token_version + 1 WHERE username = '$ACS_BOOTSTRAP_ADMIN_USERNAME';"
+
 echo ""
 echo "Done. Log in with:"
 echo "  Username: $ACS_BOOTSTRAP_ADMIN_USERNAME"

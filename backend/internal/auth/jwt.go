@@ -59,6 +59,14 @@ const (
 	AudienceGrafanaSession = "grafana-session"
 )
 
+// AudienceMFAVerify and AudienceMFAEnroll mark the token a correct
+// password earns when a second step is still owed: a code, or setting MFA
+// up first. Neither is a session; only the /auth/login/mfa routes take them.
+const (
+	AudienceMFAVerify = "mfa-verify"
+	AudienceMFAEnroll = "mfa-enroll"
+)
+
 type jwtPayload struct {
 	Subject      string   `json:"sub"`
 	Role         string   `json:"role"`

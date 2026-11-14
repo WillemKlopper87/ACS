@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { VPNConcentrator, VPNPeer } from "../api/types";
 import { toast } from "../lib/toast";
+import { confirmDialog } from "../lib/confirm";
 
 export function VPNTunnel({ id, writable }: { id: string; writable: boolean }) {
   const [peer, setPeer] = useState<VPNPeer | null>(null);
@@ -58,7 +59,7 @@ export function VPNTunnel({ id, writable }: { id: string; writable: boolean }) {
 
   async function handleRevoke() {
     if (!peer) return;
-    if (!window.confirm("Revoke this device's VPN peer? Its overlay IP becomes available for reallocation.")) return;
+    if (!(await confirmDialog("Revoke this device's VPN peer? Its overlay IP becomes available for reallocation."))) return;
     setBusy(true);
     try {
       await api.revokeVPNPeer(peer.id);

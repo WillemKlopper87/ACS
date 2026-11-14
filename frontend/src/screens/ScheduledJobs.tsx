@@ -8,6 +8,7 @@ import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
 import { useCustomers, customerName } from "../lib/useCustomers";
+import { confirmDialog } from "../lib/confirm";
 
 const JOB_TYPES = ["GET_PARAMETER", "SET_PARAMETER", "DIAGNOSTICS_PING", "CONNECTION_REQUEST"];
 
@@ -89,7 +90,7 @@ export function ScheduledJobs() {
   }
 
   async function onDelete(sj: ScheduledJob) {
-    if (!window.confirm(`Delete schedule "${sj.name}"? It will stop running ${sj.job_type} every ${sj.interval_seconds}s. This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Delete schedule "${sj.name}"? It will stop running ${sj.job_type} every ${sj.interval_seconds}s. This cannot be undone.`))) return;
     try {
       await api.deleteScheduledJob(sj.id);
       toast("Schedule deleted", "info");

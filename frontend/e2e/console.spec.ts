@@ -362,3 +362,66 @@ test("ownership masks the subscriber until Show, and Back returns to the previou
   await page.getByRole("button", { name: "Back to the previous page" }).click();
   await expect(page).toHaveURL(/\/devices\/dev-1\/ownership$/);
 });
+
+test("two-step sign-in asks for a code, survives a wrong one, and reaches the console", async ({ page }) => {
+  // Registered after mockAPI, so these win for the login routes.
+  await page.route(`${API}/api/v1/auth/login`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ mfa: "verify", mfa_token: "mfa-token", expires_at: new Date(Date.now() + 300_000).toISOString() }) }),
+  );
+  await page.route(`${API}/api/v1/auth/login/mfa`, (route) => {
+    const body = route.request().postDataJSON() as { mfa_token: string; code: string };
+    if (body.mfa_token === "mfa-token" && body.code === "123456") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ token: "e2e-token", role: "superadmin", expires_at: new Date(Date.now() + 3600_000).toISOString() }) });
+    }
+    return route.fulfill({ status: 401, contentType: "text/plain", body: "that code is not valid — check the app and try the next one" });
+  });
+
+  await page.goto("/");
+  await page.getByLabel("Username").fill("e2e-operator");
+  await page.getByLabel("Password").fill("right-password");
+  await page.getByRole("button", { name: "Sign in" }).click();
+
+  // The password alone does not open the console.
+  await expect(page.getByText("six-digit code")).toBeVisible();
+  await expect(page.getByRole("navigation")).toHaveCount(0);
+
+  await page.getByLabel("Code").fill("000000");
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect(page.getByText("that code is not valid")).toBeVisible();
+  // A wrong code is not a sign-out: the prompt is still there.
+  await expect(page.getByRole("button", { name: "Verify" })).toBeVisible();
+
+  await page.getByLabel("Code").fill("123456");
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect(page.getByRole("navigation")).toBeVisible();
+
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations.filter((v) => v.impact === "critical")).toEqual([]);
+});
+
+test("a destructive action asks in the console's own dialog, and Escape means no", async ({ page }) => {
+  let deleted = false;
+  await page.route(`${API}/api/v1/device-groups`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [{ id: "g-1", name: "Pilot", member_count: 2, created_at: new Date().toISOString() }] }) }),
+  );
+  await page.route(`${API}/api/v1/device-groups/g-1`, (route) => {
+    if (route.request().method() === "DELETE") deleted = true;
+    return route.fulfill({ status: 204, body: "" });
+  });
+  await signIn(page);
+  await page.goto("/groups");
+  await page.getByRole("button", { name: "Delete" }).click();
+
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText('Delete group "Pilot" (2 members)?');
+  // Focus starts on the safe choice.
+  await expect(dialog.getByRole("button", { name: "Keep as it is" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  expect(deleted).toBe(false);
+
+  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  expect(deleted).toBe(true);
+});

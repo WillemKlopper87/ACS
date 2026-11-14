@@ -226,6 +226,35 @@ taken.
   cmd/acs. There is no re-encryption tool; rotating it orphans stored
   credential ciphertexts — rotate device credentials afterwards.
 
+## Operator two-step sign-in (MFA)
+
+Operators can add a code from an authenticator app as a second sign-in
+step (their name in the sidebar → Account). `ACS_MFA_REQUIRED_ROLES`
+on cmd/api makes it mandatory for the roles it lists (`superadmin,manager`,
+or `all`): such an operator sets it up at their next sign-in and cannot
+turn it off. cmd/api refuses to start with that variable set and no
+`ACS_CREDENTIAL_ENCRYPTION_KEY`, since the secrets are sealed with it.
+
+- **Lost phone, another admin available:** Administration → Operators →
+  *Reset two-step* on their row. They are signed out; the reset is audited
+  as `OperatorMFAReset`.
+- **Lost phone, no other admin:** `scripts/reset-admin-password.sh` clears
+  the bootstrap admin's two-step sign-in as well as resetting the password.
+- **Recovery codes:** ten are shown once at set-up; each signs in once.
+  Only hashes are stored, so they cannot be read back, only replaced
+  (Account → New recovery codes).
+- **Rotating `ACS_CREDENTIAL_ENCRYPTION_KEY`** makes stored two-step
+  secrets unreadable: affected operators cannot pass the second step.
+  Reset them as above (or run the break-glass script) after the rotation.
+- **Clock:** codes depend on time. Keep the API host on NTP; one 30-second
+  step of drift either way is tolerated.
+- Audit actions: `OperatorMFAEnabled`, `OperatorMFADisabled`,
+  `OperatorMFAReset`, `OperatorMFAFailed`, `OperatorMFARecoveryCodeUsed`,
+  `OperatorMFARecoveryCodesRegenerated`.
+
+Devices and BSS/NaaS OAuth clients are not affected: this is the operator
+console's sign-in only.
+
 ## Alert responses
 
 | Alert | First moves |

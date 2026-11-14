@@ -3,6 +3,7 @@ package main
 import (
 	"acs/internal/bulkdata"
 	"acs/internal/bulkops"
+	"acs/internal/mfa"
 	"database/sql"
 	"net/http"
 
@@ -21,6 +22,11 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	}
 	if h.bulkOps == nil {
 		h.bulkOps = bulkops.NewRepository(db, h.jobs)
+	}
+	if h.mfa == nil {
+		// No key: status reads work, enrolment is refused (main.go passes
+		// the real key).
+		h.mfa, _ = mfa.NewRepository(db, "")
 	}
 	mux := http.NewServeMux()
 	// route(method, pattern, minRole, fn) wraps a handler with both HTTP
@@ -45,6 +51,17 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	mux.Handle("GET /healthz", observability.LivenessHandler())
 	mux.Handle("GET /readyz", observability.ReadinessHandler(db))
 	mux.HandleFunc("POST /api/v1/auth/login", metrics.InstrumentHTTP("POST /api/v1/auth/login", h.login))
+	// MFA (mfa_handlers.go). The three login steps are public: each takes
+	// the short-lived token the password step returned.
+	mux.HandleFunc("POST /api/v1/auth/login/mfa", metrics.InstrumentHTTP("POST /api/v1/auth/login/mfa", h.loginMFA))
+	mux.HandleFunc("POST /api/v1/auth/login/mfa/enroll", metrics.InstrumentHTTP("POST /api/v1/auth/login/mfa/enroll", h.loginMFAEnroll))
+	mux.HandleFunc("POST /api/v1/auth/login/mfa/confirm", metrics.InstrumentHTTP("POST /api/v1/auth/login/mfa/confirm", h.loginMFAConfirm))
+	route("GET", "/api/v1/auth/mfa", ro, h.getMFA)
+	route("POST", "/api/v1/auth/mfa/enroll", ro, h.enrollMFA)
+	route("POST", "/api/v1/auth/mfa/confirm", ro, h.confirmMFA)
+	route("POST", "/api/v1/auth/mfa/disable", ro, h.disableMFA)
+	route("POST", "/api/v1/auth/mfa/recovery-codes", ro, h.regenerateMFARecoveryCodes)
+	route("DELETE", "/api/v1/auth/operators/{id}/mfa", admin, h.resetOperatorMFA)
 	route("POST", "/api/v1/auth/ticket", ro, h.issueBrowserTicket) // audit P1.4 — see issueBrowserTicket
 	route("POST", "/api/v1/auth/logout", ro, h.logout)             // revokes every session of the caller
 	// The Grafana gate (grafana_gate.go): a ticket for a signed-in

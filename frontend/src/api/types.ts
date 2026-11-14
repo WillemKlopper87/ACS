@@ -306,6 +306,8 @@ export type Role = "readonly" | "noc" | "manager" | "superadmin";
 
 export interface Operator {
   id: string;
+  /** The operator signs in with a second step (authenticator app). */
+  mfa_enabled?: boolean;
   username: string;
   email?: string;
   role: Role;

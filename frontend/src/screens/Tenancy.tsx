@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { Region, Customer, Project, ImportResult } from "../api/types";
 import { toast } from "../lib/toast";
+import { confirmDialog } from "../lib/confirm";
 
 // Multi-tenancy management (admin-platform backlog): regions/customers/
 // projects are the org chart (superadmin-only structural CRUD, enforced
@@ -86,7 +87,7 @@ export function Tenancy() {
   // became an unhandled promise rejection, load() never ran, and the
   // operator saw the row sit there with no indication anything failed.
   async function remove(kind: string, name: string, del: () => Promise<void>) {
-    if (!window.confirm(`Delete ${kind} "${name}"? This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Delete ${kind} "${name}"? This cannot be undone.`))) return;
     try {
       await del();
       toast(`Deleted ${kind} "${name}"`, "info");

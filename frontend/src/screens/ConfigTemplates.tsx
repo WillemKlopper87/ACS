@@ -9,6 +9,7 @@ import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
 import { useEscape } from "../lib/hotkeys";
 import { useCustomers, customerName } from "../lib/useCustomers";
+import { confirmDialog } from "../lib/confirm";
 
 const emptyRow: TemplateParameter = { name: "", value: "", type: "string" };
 
@@ -110,7 +111,7 @@ export function ConfigTemplates() {
   }
 
   async function onDelete(t: ConfigTemplate) {
-    if (!window.confirm(`Delete template "${t.name}"? Its ${t.parameters.length} parameter${t.parameters.length === 1 ? "" : "s"} can no longer be applied. This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Delete template "${t.name}"? Its ${t.parameters.length} parameter${t.parameters.length === 1 ? "" : "s"} can no longer be applied. This cannot be undone.`))) return;
     try {
       await api.deleteTemplate(t.id);
       if (selected?.id === t.id) setSelected(null);

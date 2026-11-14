@@ -341,6 +341,31 @@ const SECTIONS: Section[] = [
     ),
   },
   {
+    id: "two-step-sign-in",
+    group: "Getting started",
+    title: "Two-step sign-in",
+    audience: "everyone",
+    keywords: "mfa 2fa two factor two-step authenticator totp code recovery lost phone sign in login security",
+    body: (
+      <>
+        <p>
+          Two-step sign-in asks for a six-digit code from an authenticator app on your phone after your password.
+          Turn it on from your name at the bottom of the sidebar (<strong>Account</strong>): scan the code with
+          Google Authenticator, Microsoft Authenticator, 1Password or a similar app, then enter the code it shows.
+        </p>
+        <p>
+          You are given ten <strong>recovery codes</strong> once. Keep them somewhere safe: each signs you in one
+          time if you lose your phone. You can make a new set from Account; the old ones stop working.
+        </p>
+        <p>
+          Lost your phone and your recovery codes? Ask a superadmin to use <strong>Reset two-step</strong> on your
+          row under Administration → Operators. Your administrator may require two-step sign-in for your role, in
+          which case you set it up at your next sign-in and cannot turn it off.
+        </p>
+      </>
+    ),
+  },
+  {
     id: "fleet-control",
     group: "Devices",
     title: "Bulk actions",

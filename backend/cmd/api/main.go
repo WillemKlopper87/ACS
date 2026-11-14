@@ -14,6 +14,7 @@ import (
 	"acs/internal/bulkdata"
 	"acs/internal/bulkops"
 	"acs/internal/clientip"
+	"acs/internal/mfa"
 	"context"
 	"errors"
 	"log/slog"
@@ -132,6 +133,17 @@ func main() {
 	credentialsRepo, err := credentials.NewRepository(db, os.Getenv("ACS_CREDENTIAL_ENCRYPTION_KEY"))
 	if err != nil {
 		logger.Error("failed to initialize credential encryption", "err", err)
+		os.Exit(1)
+	}
+	mfaRepo, err := mfa.NewRepository(db, os.Getenv("ACS_CREDENTIAL_ENCRYPTION_KEY"))
+	if err != nil {
+		logger.Error("failed to initialize MFA secret encryption", "err", err)
+		os.Exit(1)
+	}
+	mfaRequired := mfaRequiredRoles(os.Getenv("ACS_MFA_REQUIRED_ROLES"))
+	if len(mfaRequired) > 0 && !mfaRepo.Available() {
+		// Fail closed at startup rather than at each login.
+		logger.Error("ACS_MFA_REQUIRED_ROLES is set but ACS_CREDENTIAL_ENCRYPTION_KEY is not: MFA secrets cannot be stored")
 		os.Exit(1)
 	}
 	if !credentialsRepo.Encrypted() {
@@ -271,6 +283,8 @@ func main() {
 		templates:           templates.NewRepository(db),
 		cli:                 cliRepo,
 		permissions:         operators.NewPermissionRepository(db),
+		mfa:                 mfaRepo,
+		mfaRequired:         mfaRequired,
 		mailer: mailer.New(mailer.Config{
 			Host: os.Getenv("ACS_SMTP_HOST"), Port: envOr("ACS_SMTP_PORT", "587"),
 			Username: os.Getenv("ACS_SMTP_USERNAME"), Password: os.Getenv("ACS_SMTP_PASSWORD"),
@@ -453,10 +467,14 @@ type handler struct {
 	// bulkOps records fan-outs (bulk actions, template applies) so their
 	// progress can be read back; built in registerRoutes when unset.
 	bulkOps *bulkops.Repository
-	logger  *slog.Logger
-	devices *devices.Repository
-	jobs    *jobs.Repository
-	params  *parameters.Repository
+	// mfa holds operators' sealed authenticator secrets; mfaRequired is
+	// the set of roles that must use MFA (ACS_MFA_REQUIRED_ROLES).
+	mfa         *mfa.Repository
+	mfaRequired map[string]bool
+	logger      *slog.Logger
+	devices     *devices.Repository
+	jobs        *jobs.Repository
+	params      *parameters.Repository
 	// wifiInsights serves the controller-style Wi-Fi overview (sampled by cmd/acs).
 	wifiInsights *wifiinsights.Repository
 	vendors      *adapters.Registry

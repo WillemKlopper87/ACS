@@ -223,7 +223,9 @@ func isPublicRoute(r *http.Request) bool {
 	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/bulk-data/") && strings.HasSuffix(r.URL.Path, "/receive") {
 		return true
 	} // receiver-bound, expiring Basic credential is verified by the handler
-	if r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/login" {
+	if r.Method == http.MethodPost && (r.URL.Path == "/api/v1/auth/login" || strings.HasPrefix(r.URL.Path, "/api/v1/auth/login/mfa")) {
+		// The MFA login steps carry their own short-lived, audience-bound
+		// token in the body (mfa_handlers.go); there is no session yet.
 		return true
 	}
 	if r.Method == http.MethodPost && (r.URL.Path == "/api/v1/auth/password-reset/request" || r.URL.Path == "/api/v1/auth/password-reset/confirm") {
@@ -442,21 +444,9 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now().UTC()
-	claims := auth.Claims{Subject: op.Username, Role: op.Role, IssuedAt: now, ExpiresAt: now.Add(jwtTTL), Version: op.TokenVersion}
-	token, err := auth.SignJWT(h.jwtSecret, claims)
-	if err != nil {
-		h.logger.Error("failed to sign JWT", "err", err, "username", op.Username)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := h.auditor.Record(r.Context(), op.Username, "", "OperatorLogin", map[string]any{"role": op.Role}); err != nil {
-		h.logger.Error("failed to write audit record", "err", err)
-	}
-	h.logger.Info("operator logged in", "username", op.Username, "role", op.Role)
-
-	writeJSON(w, http.StatusOK, loginResponse{Token: token, Role: op.Role, ExpiresAt: claims.ExpiresAt.Format(time.RFC3339)})
+	// A correct password earns a session only when no second step is
+	// owed (mfa_handlers.go).
+	h.afterPassword(w, r, op)
 }
 
 // logout revokes every session of the calling operator (audit "missing
@@ -518,6 +508,7 @@ type operatorResponse struct {
 	// Null for an active operator; the offboarding timestamp otherwise
 	// (audit 2026-09-04 P1.4).
 	DisabledAt *string `json:"disabled_at"`
+	MFAEnabled bool    `json:"mfa_enabled"`
 }
 
 func toOperatorResponse(op operators.Operator) operatorResponse {
@@ -607,9 +598,17 @@ func (h *handler) listOperators(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	withMFA, err := h.mfa.EnabledSet(r.Context())
+	if err != nil {
+		h.logger.Error("failed to list MFA status", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	out := make([]operatorResponse, 0, len(ops))
 	for _, op := range ops {
-		out = append(out, toOperatorResponse(op))
+		resp := toOperatorResponse(op)
+		resp.MFAEnabled = withMFA[op.ID]
+		out = append(out, resp)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }

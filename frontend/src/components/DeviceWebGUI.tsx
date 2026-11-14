@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { WebGUIConfig } from "../api/types";
 import { toast } from "../lib/toast";
+import { confirmDialog } from "../lib/confirm";
 
 export function DeviceWebGUI({ id, writable, unreachableNote }: { id: string; writable: boolean; unreachableNote?: string }) {
   const [config, setConfig] = useState<WebGUIConfig | null>(null);
@@ -68,7 +69,7 @@ export function DeviceWebGUI({ id, writable, unreachableNote }: { id: string; wr
   }
 
   async function handleDelete() {
-    if (!window.confirm("Remove this device's web GUI configuration?")) return;
+    if (!(await confirmDialog("Remove this device's web GUI configuration?"))) return;
     try {
       await api.deleteWebGUIConfig(id);
       setConfig({ configured: false });

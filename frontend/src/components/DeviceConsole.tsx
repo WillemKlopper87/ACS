@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { Job } from "../api/types";
+import { confirmDialog } from "../lib/confirm";
 
 type Line = {
   kind: "input" | "output" | "error" | "info";
@@ -146,7 +147,7 @@ export function DeviceConsole({ id, writable }: { id: string; writable: boolean 
         return runQueue(`addobject ${args[0]}`, () => api.addObject(id, args[0]));
       case "delobject":
         if (args.length !== 1 || !args[0].endsWith(".")) return print("error", 'usage: delobject <path.N.> (must end in ".")');
-        if (!window.confirm(`Delete object instance "${args[0]}"? This cannot be undone.`)) return;
+        if (!(await confirmDialog(`Delete object instance "${args[0]}"? This cannot be undone.`))) return;
         return runQueue(`delobject ${args[0]}`, () => api.deleteObject(id, args[0]));
       case "ping":
         if (args.length !== 1) return print("error", "usage: ping <host>");
@@ -157,7 +158,7 @@ export function DeviceConsole({ id, writable }: { id: string; writable: boolean 
       case "reboot":
         return runQueue("reboot", () => api.rebootDevice(id));
       case "factory-reset":
-        if (!window.confirm("Factory reset this device? This wipes it back to defaults and cannot be undone.")) return;
+        if (!(await confirmDialog("Factory reset this device? This wipes it back to defaults and cannot be undone."))) return;
         return runQueue("factory-reset", () => api.factoryResetDevice(id));
       case "schedule-inform": {
         const seconds = Number(args[0]);

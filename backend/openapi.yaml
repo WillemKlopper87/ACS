@@ -576,18 +576,124 @@ paths:
                 password: { type: string }
       responses:
         "200":
-          description: Login succeeded
+          description: "The password was right. Either a session (token), or, when a second step is owed, an MFA challenge (mfa and mfa_token) and no session."
           content:
             application/json:
               schema:
-                type: object
-                required: [token, role, expires_at]
-                properties:
-                  token: { type: string }
-                  role: { $ref: "#/components/schemas/Role" }
-                  username: { type: string }
-                  expires_at: { type: string, format: date-time }
+                oneOf:
+                  - $ref: "#/components/schemas/Session"
+                  - $ref: "#/components/schemas/MFAChallenge"
         "401": { description: Wrong username or password, content: { text/plain: { schema: { type: string } } } }
+        "503": { description: "The operator's role must use MFA but this server cannot store MFA secrets (no ACS_CREDENTIAL_ENCRYPTION_KEY)" }
+
+  /api/v1/auth/login/mfa:
+    post:
+      tags: [Auth]
+      summary: "Second login step: exchange the MFA token and a code for a session"
+      description: "code is the six-digit code from the authenticator app, or a one-time recovery code. Each is accepted once. Guesses are limited per operator (429)."
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MFALoginRequest" } } }
+      responses:
+        "200": { description: Signed in, content: { application/json: { schema: { $ref: "#/components/schemas/Session" } } } }
+        "401": { description: "Wrong or already used code, or the MFA token expired (start again with the password)" }
+        "429": { description: Too many code attempts }
+
+  /api/v1/auth/login/mfa/enroll:
+    post:
+      tags: [Auth]
+      summary: "Start MFA set-up at login, for a role that must use MFA"
+      description: "Takes the mfa_token of an \"enroll\" challenge. Returns the secret to add to an authenticator app. Nothing is enabled until /auth/login/mfa/confirm."
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [mfa_token], properties: { mfa_token: { type: string } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MFAEnrollment" } } } }
+        "401": { description: The MFA token is wrong or expired }
+
+  /api/v1/auth/login/mfa/confirm:
+    post:
+      tags: [Auth]
+      summary: "Finish MFA set-up at login with a first code, and sign in"
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MFALoginRequest" } } }
+      responses:
+        "200":
+          description: "Signed in. recovery_codes are shown this once."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Session"
+                  - { type: object, required: [recovery_codes], properties: { recovery_codes: { type: array, items: { type: string } } } }
+        "401": { description: "Wrong code, or the MFA token expired" }
+        "429": { description: Too many code attempts }
+
+  /api/v1/auth/mfa:
+    get:
+      tags: [Auth]
+      summary: The signed-in operator's MFA status
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MFAStatus" } } } }
+
+  /api/v1/auth/mfa/enroll:
+    post:
+      tags: [Auth]
+      summary: Start setting up MFA for the signed-in operator
+      description: "Returns a new secret each time until it is confirmed. Nothing is enabled, and login is unchanged, until /auth/mfa/confirm."
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MFAEnrollment" } } } }
+        "409": { description: MFA is already enabled }
+        "503": { description: This server cannot store MFA secrets (no ACS_CREDENTIAL_ENCRYPTION_KEY) }
+
+  /api/v1/auth/mfa/confirm:
+    post:
+      tags: [Auth]
+      summary: Turn MFA on by proving the app shows the right code
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MFACode" } } }
+      responses:
+        "200": { description: "MFA is on. recovery_codes are shown this once.", content: { application/json: { schema: { $ref: "#/components/schemas/MFARecoveryCodes" } } } }
+        "403": { description: "Wrong code (the session stays valid)" }
+        "409": { description: "No set-up in progress, or MFA is already enabled" }
+
+  /api/v1/auth/mfa/disable:
+    post:
+      tags: [Auth]
+      summary: "Turn the signed-in operator's MFA off (needs a current code)"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MFACode" } } }
+      responses:
+        "204": { description: MFA is off }
+        "403": { description: "Wrong code (the session stays valid)" }
+        "409": { description: "MFA is required for this role, or is not enabled" }
+
+  /api/v1/auth/mfa/recovery-codes:
+    post:
+      tags: [Auth]
+      summary: "Replace the signed-in operator's recovery codes (needs a current code)"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MFACode" } } }
+      responses:
+        "200": { description: "The new codes, shown this once. The old ones stop working.", content: { application/json: { schema: { $ref: "#/components/schemas/MFARecoveryCodes" } } } }
+        "403": { description: "Wrong code (the session stays valid)" }
+
+  /api/v1/auth/operators/{id}/mfa:
+    delete:
+      tags: [Auth]
+      summary: "Reset another operator's MFA, for a lost phone (superadmin)"
+      description: "Removes the operator's MFA and recovery codes and ends their sessions. If their role must use MFA they set it up again at their next login. Audited as OperatorMFAReset."
+      parameters: [{ $ref: "#/components/parameters/OperatorId" }]
+      responses:
+        "204": { description: Reset }
+        "404": { description: Operator not found }
 
   /api/v1/grafana/ticket:
     post:
@@ -3189,9 +3295,62 @@ components:
         - tenancy.manage
       description: The curated ~13 highest-stakes capabilities role_permissions can configure independent of the rank gate.
 
+    Session:
+      type: object
+      required: [token, role, expires_at]
+      properties:
+        token: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        username: { type: string }
+        expires_at: { type: string, format: date-time }
+
+    MFAChallenge:
+      type: object
+      required: [mfa, mfa_token, expires_at]
+      properties:
+        mfa: { type: string, enum: [verify, enroll], description: "verify: send a code to /auth/login/mfa. enroll: the role must use MFA and it is not set up; use /auth/login/mfa/enroll then /confirm." }
+        mfa_token: { type: string, description: "Valid for five minutes and only on the /auth/login/mfa routes. It is not a session." }
+        expires_at: { type: string, format: date-time }
+
+    MFALoginRequest:
+      type: object
+      required: [mfa_token, code]
+      properties:
+        mfa_token: { type: string }
+        code: { type: string }
+
+    MFACode:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, description: A current code from the authenticator app }
+
+    MFAEnrollment:
+      type: object
+      required: [secret, otpauth_uri]
+      properties:
+        secret: { type: string, description: "Base32 secret, for typing into an app that cannot scan" }
+        otpauth_uri: { type: string, description: "otpauth://totp/… link to show as a QR code" }
+
+    MFARecoveryCodes:
+      type: object
+      required: [recovery_codes]
+      properties:
+        recovery_codes: { type: array, items: { type: string } }
+
+    MFAStatus:
+      type: object
+      required: [enabled, required, available, recovery_codes_left]
+      properties:
+        enabled: { type: boolean }
+        required: { type: boolean, description: "The operator's role must use MFA (ACS_MFA_REQUIRED_ROLES)" }
+        available: { type: boolean, description: "False when the server has no key to store MFA secrets with" }
+        recovery_codes_left: { type: integer }
+
     Operator:
       type: object
       properties:
+        mfa_enabled: { type: boolean }
         id: { type: string }
         username: { type: string }
         email: { type: string }

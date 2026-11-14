@@ -11,6 +11,7 @@ import { fmtTime, timeAgo } from "../lib/format";
 import { itemStatus, progressText, sortItems } from "../lib/bulkOperations";
 import { toast } from "../lib/toast";
 import { useLive } from "../lib/useLive";
+import { confirmDialog } from "../lib/confirm";
 
 // The record of every bulk action and template apply: how far each has
 // got, which devices failed and why, and the two things an operator can
@@ -57,7 +58,7 @@ export function BulkOperations() {
   const change = async (action: "cancel" | "retry") => {
     if (!detail) return;
     const op = detail.operation;
-    if (action === "cancel" && !window.confirm(`Cancel the ${op.queued} job${op.queued === 1 ? "" : "s"} still queued for "${op.label}"? Jobs already sent to a device will finish.`)) return;
+    if (action === "cancel" && !(await confirmDialog(`Cancel the ${op.queued} job${op.queued === 1 ? "" : "s"} still queued for "${op.label}"? Jobs already sent to a device will finish.`))) return;
     setBusy(true);
     try {
       if (action === "cancel") {

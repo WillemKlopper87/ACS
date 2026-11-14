@@ -7,6 +7,7 @@ import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canAdmin } from "../auth/roles";
 import { toast } from "../lib/toast";
+import { confirmDialog } from "../lib/confirm";
 
 const ROLES: Role[] = ["readonly", "noc", "manager", "superadmin"];
 const ROLE_TONE: Record<Role, string> = { superadmin: "pill-warn", manager: "pill-ok", noc: "pill-ok", readonly: "pill-neutral" };
@@ -132,10 +133,10 @@ export function Operators() {
     const disabling = !op.disabled_at;
     if (
       disabling &&
-      !window.confirm(
+      !(await confirmDialog(
         `Disable "${op.username}"? They are signed out immediately and cannot sign in again until re-enabled. ` +
           `Their audit history is kept.`,
-      )
+      ))
     ) {
       return;
     }
@@ -152,6 +153,21 @@ export function Operators() {
   // fresh closure per render would rebuild the memoized column defs.
   const toggleDisabledRef = useRef(toggleDisabled);
   toggleDisabledRef.current = toggleDisabled;
+
+  // Lost phone: remove an operator's two-step sign-in. They are signed
+  // out, and set it up again at their next sign-in if their role needs it.
+  async function resetMfa(op: Operator) {
+    if (!(await confirmDialog(`Reset two-step sign-in for "${op.username}"? Their authenticator and recovery codes stop working and they are signed out.`))) return;
+    try {
+      await api.resetOperatorMFA(op.id);
+      toast(`Two-step sign-in reset for "${op.username}"`, "success");
+      await load();
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Failed to reset two-step sign-in", "error");
+    }
+  }
+  const onResetMfaRef = useRef(resetMfa);
+  onResetMfaRef.current = resetMfa;
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -244,6 +260,12 @@ export function Operators() {
           ),
       },
       {
+        id: "mfa",
+        header: "Two-step",
+        accessorFn: (op) => (op.mfa_enabled ? 1 : 0),
+        cell: ({ row }) => (row.original.mfa_enabled ? <span className="pill pill-ok">on</span> : <span className="dim">off</span>),
+      },
+      {
         accessorKey: "created_at",
         header: "Created",
         cell: ({ getValue }) => {
@@ -259,6 +281,11 @@ export function Operators() {
             <button className="btn sm" onClick={() => setResetTarget(row.original)}>
               Reset password
             </button>
+            {row.original.mfa_enabled && (
+              <button className="btn sm" onClick={() => onResetMfaRef.current(row.original)} title="For a lost phone: removes their two-step sign-in and signs them out">
+                Reset two-step
+              </button>
+            )}
             {row.original.role !== "superadmin" && (
               <button className="btn sm" onClick={() => openScopes(row.original)}>
                 Scopes
