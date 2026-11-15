@@ -7,6 +7,8 @@ import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canAdmin } from "../auth/roles";
 import { toast } from "../lib/toast";
+import { confirmDialog } from "../lib/confirm";
+import { Drawer } from "../components/Drawer";
 
 const ROLES: Role[] = ["readonly", "noc", "manager", "superadmin"];
 const ROLE_TONE: Record<Role, string> = { superadmin: "pill-warn", manager: "pill-ok", noc: "pill-ok", readonly: "pill-neutral" };
@@ -48,6 +50,7 @@ export function Operators() {
   const [newRole, setNewRole] = useState<Role>("noc");
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [creatingOpen, setCreatingOpen] = useState(false);
 
   const [matrix, setMatrix] = useState<RolePermissionsMatrix | null>(null);
   const [resetTarget, setResetTarget] = useState<Operator | null>(null);
@@ -132,10 +135,10 @@ export function Operators() {
     const disabling = !op.disabled_at;
     if (
       disabling &&
-      !window.confirm(
+      !(await confirmDialog(
         `Disable "${op.username}"? They are signed out immediately and cannot sign in again until re-enabled. ` +
           `Their audit history is kept.`,
-      )
+      ))
     ) {
       return;
     }
@@ -153,6 +156,21 @@ export function Operators() {
   const toggleDisabledRef = useRef(toggleDisabled);
   toggleDisabledRef.current = toggleDisabled;
 
+  // Lost phone: remove an operator's two-step sign-in. They are signed
+  // out, and set it up again at their next sign-in if their role needs it.
+  async function resetMfa(op: Operator) {
+    if (!(await confirmDialog(`Reset two-step sign-in for "${op.username}"? Their authenticator and recovery codes stop working and they are signed out.`))) return;
+    try {
+      await api.resetOperatorMFA(op.id);
+      toast(`Two-step sign-in reset for "${op.username}"`, "success");
+      await load();
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Failed to reset two-step sign-in", "error");
+    }
+  }
+  const onResetMfaRef = useRef(resetMfa);
+  onResetMfaRef.current = resetMfa;
+
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
     setCreateError(null);
@@ -164,6 +182,7 @@ export function Operators() {
       setEmail("");
       setPassword("");
       setNewRole("noc");
+      setCreatingOpen(false);
       await load();
     } catch (e) {
       setCreateError(e instanceof ApiError ? e.message : "Failed to create operator");
@@ -244,6 +263,12 @@ export function Operators() {
           ),
       },
       {
+        id: "mfa",
+        header: "Two-step",
+        accessorFn: (op) => (op.mfa_enabled ? 1 : 0),
+        cell: ({ row }) => (row.original.mfa_enabled ? <span className="pill pill-ok">on</span> : <span className="dim">off</span>),
+      },
+      {
         accessorKey: "created_at",
         header: "Created",
         cell: ({ getValue }) => {
@@ -259,6 +284,11 @@ export function Operators() {
             <button className="btn sm" onClick={() => setResetTarget(row.original)}>
               Reset password
             </button>
+            {row.original.mfa_enabled && (
+              <button className="btn sm" onClick={() => onResetMfaRef.current(row.original)} title="For a lost phone: removes their two-step sign-in and signs them out">
+                Reset two-step
+              </button>
+            )}
             {row.original.role !== "superadmin" && (
               <button className="btn sm" onClick={() => openScopes(row.original)}>
                 Scopes
@@ -298,12 +328,21 @@ export function Operators() {
         </div>
       )}
 
-      <div className="panel">
-        <h3>Create operator</h3>
-        <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
-          readonly can only view; noc/manager's exact capabilities are set in the permission matrix below; superadmin
-          can also manage operators and permissions. Email is optional — only needed for self-service password reset.
+      <div className="page-bar">
+        <p className="page-lede">
+          Who can sign in, and what each role may do. <strong>readonly</strong> can only view; <strong>noc</strong> and <strong>manager</strong> get the
+          capabilities ticked in the matrix below; <strong>superadmin</strong> also manages operators and permissions.
         </p>
+        <button className="btn primary" onClick={() => setCreatingOpen(true)}>
+          New operator
+        </button>
+      </div>
+
+      {creatingOpen && (
+        <Drawer title="New operator" onClose={() => setCreatingOpen(false)} wide>
+          <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
+            Email is optional: it is only used for the self-service password reset link.
+          </p>
         <form onSubmit={onCreate}>
           <div className="form-row">
             <label className="field">
@@ -321,8 +360,10 @@ export function Operators() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                minLength={12}
                 autoComplete="new-password"
               />
+              <small className="dim">At least 12 characters; not the username or a common word with digits added.</small>
             </label>
             <label className="field">
               <span>Role</span>
@@ -340,47 +381,40 @@ export function Operators() {
             </button>
           </div>
         </form>
-      </div>
+        </Drawer>
+      )}
 
       {resetTarget && (
-        <div className="panel" style={{ marginTop: "1.1rem" }}>
-          <h3>
-            Reset password for {resetTarget.username}
-            <button className="close-detail" onClick={() => setResetTarget(null)}>✕</button>
-          </h3>
+        <Drawer title={`Reset password for ${resetTarget.username}`} onClose={() => setResetTarget(null)}>
           <form onSubmit={onResetPassword}>
             <div className="form-row" style={{ marginTop: 0 }}>
-              <input aria-label="New password (min 8 characters)"
+              <input aria-label="New password (at least 12 characters)"
                 type="password"
-                placeholder="New password (min 8 characters)"
+                placeholder="New password (at least 12 characters)"
                 value={resetPassword}
                 onChange={(e) => setResetPassword(e.target.value)}
                 required
                 minLength={8}
                 autoComplete="new-password"
               />
-              <button type="submit" className="btn primary" disabled={resetPassword.length < 8}>
+              <button type="submit" className="btn primary" disabled={resetPassword.length < 12}>
                 Set new password
               </button>
             </div>
           </form>
-        </div>
+        </Drawer>
       )}
 
       {scopeTarget && (
-        <div className="panel" style={{ marginTop: "1.1rem" }}>
-          <h3>
-            Scopes for {scopeTarget.username}
-            <button className="close-detail" onClick={() => setScopeTarget(null)}>✕</button>
-          </h3>
+        <Drawer title={`Scopes for ${scopeTarget.username}`} onClose={() => setScopeTarget(null)} wide>
           <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
-            No scopes selected means unrestricted (sees the whole fleet) — this is the default for every operator. A
-            region scope covers every customer under it automatically.
+            An operator sees only the devices of the customers ticked here; a region covers every customer under it.
+            With nothing ticked and no global access they see no devices at all. Superadmins always see everything.
           </p>
           <div className="form-row" style={{ marginTop: 0 }}>
             <label className="dim" style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.82rem" }}>
               <input type="checkbox" checked={globalAccess} onChange={(e) => setGlobalAccess(e.target.checked)} />
-              Explicit global access — fleet-wide regardless of scopes below (audit P0.1: never inferred from an empty scope list)
+              Global access: the whole fleet, whatever is ticked below
             </label>
             <button className="btn" onClick={saveGlobalAccess}>
               Save global access
@@ -417,7 +451,7 @@ export function Operators() {
           <button className="btn primary" style={{ marginTop: "0.75rem" }} onClick={saveScopes}>
             Save scopes
           </button>
-        </div>
+        </Drawer>
       )}
 
       {loading && items.length === 0 ? (
@@ -432,8 +466,7 @@ export function Operators() {
         <div className="panel" style={{ marginTop: "1.1rem", overflowX: "auto" }}>
           <h3>Role permissions</h3>
           <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
-            superadmin always has every permission (not shown/configurable). Toggling here takes effect immediately —
-            these are enforced on the server, this UI is not the security boundary.
+            Superadmin always has every permission. Changes here take effect immediately.
           </p>
           <table style={{ fontFamily: "var(--font-ui)" }}>
             <thead>

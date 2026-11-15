@@ -12,6 +12,22 @@ SECRETS_FILE="${HOME}/.acs-secrets.env"
 : "${ACS_PRODUCTION_TLS_CERT:?set ACS_PRODUCTION_TLS_CERT to the server full-chain PEM}"
 : "${ACS_PRODUCTION_TLS_KEY:?set ACS_PRODUCTION_TLS_KEY to the server private-key PEM}"
 : "${ACS_PRODUCTION_USP_CLIENT_CA_CERT:?set ACS_PRODUCTION_USP_CLIENT_CA_CERT to the USP agent client CA PEM}"
+# The switch: is this ACS run on its own, or through the ISP NaaS platform?
+# There is no default here: it decides what else is asked for and what the
+# adapter will accept, so it is chosen, not inherited.
+: "${ACS_PRODUCTION_INTEGRATION_MODE:?set ACS_PRODUCTION_INTEGRATION_MODE to standalone (the ACS on its own) or naas (through the NaaS platform)}"
+case "$ACS_PRODUCTION_INTEGRATION_MODE" in
+  standalone) ;;
+  naas)
+    # The networks the BSS/NaaS platform calls the adapter from. The adapter
+    # answers its integration routes to these only.
+    : "${ACS_PRODUCTION_BSS_ALLOWED_CIDRS:?set ACS_PRODUCTION_BSS_ALLOWED_CIDRS to the source CIDRs of the BSS/NaaS platform}"
+    ;;
+  *)
+    echo "ACS_PRODUCTION_INTEGRATION_MODE must be standalone or naas (got '$ACS_PRODUCTION_INTEGRATION_MODE')" >&2
+    exit 1
+    ;;
+esac
 
 case "$ACS_PRODUCTION_BIND_ADDRESS" in
   0.0.0.0|::|"[::]"|"")
@@ -57,6 +73,32 @@ upsert_export ACS_USP_ALLOWED_CIDRS "$ACS_PRODUCTION_ALLOWED_CIDRS"
 upsert_export ACS_AUTH_ALLOW_BASIC "false"
 upsert_export ACS_CWMP_ALLOW_SHARED_ESTABLISHED "false"
 
+# Operator and integration plane (docs/SECURITY-ASSESSMENT-2026-11-14.md, O1).
+# cmd/api and cmd/bssadapter refuse to start under the production profile
+# without these.
+#
+# The adapter: customer-bound OAuth clients only, no shared token, calls
+# accepted only from the platform's networks, listening on loopback behind
+# the HTTPS ingress, which is the one proxy trusted to report the caller.
+upsert_export ACS_INTEGRATION_MODE "$ACS_PRODUCTION_INTEGRATION_MODE"
+upsert_export ACS_BSS_ADDR "127.0.0.1:8090"
+upsert_export ACS_BSS_API_TOKEN ""
+if [ "$ACS_PRODUCTION_INTEGRATION_MODE" = "naas" ]; then
+  upsert_export ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS "true"
+  upsert_export ACS_BSS_ALLOWED_CIDRS "$ACS_PRODUCTION_BSS_ALLOWED_CIDRS"
+  upsert_export ACS_TRUSTED_PROXY_CIDRS "${ACS_PRODUCTION_TRUSTED_PROXY_CIDRS:-127.0.0.1/32,::1/128}"
+fi
+# The console: two-step sign-in for every role that can change devices,
+# and device web pages kept in their sandbox.
+upsert_export ACS_MFA_REQUIRED_ROLES "${ACS_PRODUCTION_MFA_REQUIRED_ROLES:-superadmin,manager,noc}"
+upsert_export ACS_WEBGUI_ALLOW_SAME_ORIGIN "false"
+# /metrics answers only a scraper with this token. Kept if it already
+# exists, so re-running this script does not change it under a running
+# Prometheus; scripts/start.sh gives Prometheus the same value.
+if ! grep -q '^export ACS_METRICS_TOKEN="[^"]\{32,\}"' "$SECRETS_FILE"; then
+  upsert_export ACS_METRICS_TOKEN "$(openssl rand -hex 32)"
+fi
+
 chmod 600 "$SECRETS_FILE"
 # Regenerate the systemd companion from the final persisted values.
 # shellcheck disable=SC1091
@@ -68,3 +110,9 @@ echo "  allowed CIDRs: $ACS_PRODUCTION_ALLOWED_CIDRS"
 echo "  CWMP: https://${ACS_PRODUCTION_BIND_ADDRESS}:7547/cwmp"
 echo "  USP WebSocket: wss://${ACS_PRODUCTION_BIND_ADDRESS}:9877/usp"
 echo "  USP MQTT TLS: ${ACS_PRODUCTION_BIND_ADDRESS}:8883"
+if [ "$ACS_PRODUCTION_INTEGRATION_MODE" = "naas" ]; then
+  echo "  Integration: through the NaaS platform; customer-bound OAuth clients only, from $ACS_PRODUCTION_BSS_ALLOWED_CIDRS"
+else
+  echo "  Integration: standalone; the BSS/NaaS adapter is switched off"
+fi
+echo "  Operators: two-step sign-in required for ${ACS_PRODUCTION_MFA_REQUIRED_ROLES:-superadmin,manager,noc}"

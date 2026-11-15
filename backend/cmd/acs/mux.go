@@ -49,7 +49,7 @@ func newACSMux(cwmpHandler http.HandlerFunc, metrics *observability.Metrics, db 
 	cwmpHandler = bootstrapCWMPGuard(cwmpHandler, metrics, db)
 	cwmpHandler = bootstrapCWMPGraduationGuard(cwmpHandler, metrics, db)
 	mux.HandleFunc("/", metrics.InstrumentHTTP(cwmpRouteLabel, productionCWMPGuard(cwmpHandler)))
-	mux.Handle("GET /metrics", metrics.Handler())
+	mux.Handle("GET /metrics", observability.ProtectMetrics(observability.MetricsToken(), metrics.Handler()))
 	mux.Handle("GET /healthz", observability.LivenessHandler())
 	mux.Handle("GET /readyz", observability.ReadinessHandler(db))
 	return mux

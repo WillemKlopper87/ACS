@@ -1,6 +1,7 @@
 package subscribers
 
 import (
+	"acs/internal/accounts/accountstest"
 	"context"
 	"database/sql"
 	"errors"
@@ -44,8 +45,8 @@ func seed(t *testing.T, ctx context.Context, db *sql.DB, cust, serial, account, 
 		VALUES (gen_random_uuid(), $1, 'A4FC77', 'FastMile', $2, 'Nokia', $3, $4) RETURNING id`, "A4FC77-FastMile-"+serial, serial, cust, site).Scan(&dev); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, 'gateway', now())`, account, dev, "A4FC77-FastMile-"+serial); err != nil {
+	if _, err := db.ExecContext(ctx, accountstest.EnsureCTE("$1")+`INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, role, assigned_at)
+		VALUES (gen_random_uuid(), $1, (SELECT id FROM acct), $2, $3, 'gateway', now())`, account, dev, "A4FC77-FastMile-"+serial); err != nil {
 		t.Fatal(err)
 	}
 	return dev

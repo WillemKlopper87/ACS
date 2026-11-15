@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts"
 	"crypto/subtle"
 	"errors"
 	"net/http"
@@ -113,14 +114,14 @@ func (h *handler) authorizeBSSAccount(w http.ResponseWriter, r *http.Request, re
 		return ok && h.bssScopeAllowed(w, claims, requiredScope) && h.accountAllowed(w, r, claims, accountID)
 	}
 	if h.token == "" && len(h.oauthSigningSecret) == 0 {
-		return true
+		return h.scopeToAccount(w, r, accountID)
 	}
 
 	got := r.Header.Get("Authorization")
 	if h.token != "" {
 		want := "Bearer " + h.token
 		if len(got) == len(want) && subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1 {
-			return true
+			return h.scopeToAccount(w, r, accountID)
 		}
 	}
 	bearer, ok := strings.CutPrefix(got, "Bearer ")
@@ -179,8 +180,11 @@ func (h *handler) authorizeBSSFleet(w http.ResponseWriter, r *http.Request) bool
 // clients keep the account-list and global-access rules.
 func (h *handler) accountAllowed(w http.ResponseWriter, r *http.Request, claims *auth.Claims, accountID string) bool {
 	if claims == nil || claims.CustomerID == "" {
-		return tmfAccountAllowed(w, claims, accountID)
+		return tmfAccountAllowed(w, claims, accountID) && h.scopeToAccount(w, r, accountID)
 	}
+	// A bound client's IDs are its customer's. withAuth has normally said
+	// so already; saying it here too keeps the gate self-sufficient.
+	*r = *r.WithContext(accounts.WithCustomer(r.Context(), claims.CustomerID))
 	accountID = strings.TrimSpace(accountID)
 	if accountID == "" || (len(claims.AccountIDs) > 0 && !tmfAccountAllowed(httptestDiscard{}, claims, accountID)) {
 		writeError(w, http.StatusNotFound, "ErrNotFound", "resource not found")
@@ -203,6 +207,76 @@ func (h *handler) accountAllowed(w http.ResponseWriter, r *http.Request, claims 
 		writeError(w, http.StatusNotFound, "ErrNotFound", "resource not found")
 		return false
 	}
+	return true
+}
+
+// authorizeTMFRow and authorizeBSSRow are the gate for a row the handler
+// found by the row's own ID (a service, an order, a subscription). The
+// row's account ID is not enough to authorize on: two customers can use
+// the same ID, so a caller could present a row of another customer whose
+// account happens to share an ID with one of its own. After the usual
+// gate, the account that ID names for this caller must be the very
+// account the row belongs to; anything else is 404.
+func (h *handler) authorizeTMFRow(w http.ResponseWriter, r *http.Request, requiredScope, accountID, accountKey string) bool {
+	return h.authorizeTMF(w, r, requiredScope, accountID) && h.sameAccount(w, r, accountID, accountKey)
+}
+
+func (h *handler) authorizeBSSRow(w http.ResponseWriter, r *http.Request, requiredScope, accountID, accountKey string) bool {
+	return h.authorizeBSSAccount(w, r, requiredScope, accountID) && h.sameAccount(w, r, accountID, accountKey)
+}
+
+func (h *handler) sameAccount(w http.ResponseWriter, r *http.Request, accountID, accountKey string) bool {
+	if h.mappings == nil {
+		return true // handler unit tests without a database
+	}
+	key, err := h.mappings.AccountKey(r.Context(), accountID)
+	if err != nil {
+		h.logger.Error("failed to resolve account", "err", err, "account_id", accountID)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return false
+	}
+	if key != accountKey {
+		writeError(w, http.StatusNotFound, "ErrNotFound", "resource not found")
+		return false
+	}
+	return true
+}
+
+// ambiguousID answers a lookup by an order ID (or a TMF641 externalId)
+// that more than one customer uses, from a caller that did not say which
+// customer it means. It reports whether it wrote the response.
+func ambiguousID(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, accounts.ErrAmbiguous) {
+		return false
+	}
+	writeError(w, http.StatusConflict, "ErrAccountAmbiguous",
+		"this ID is used by more than one customer; name the customer with the customer_id query parameter")
+	return true
+}
+
+// scopeToAccount is the last step of the account gate for a caller that
+// is not bound to a customer (a global client, the shared token, the lab
+// profile). Account IDs are unique per customer, so such a caller either
+// named the customer (withNamedCustomer) or the ID must name exactly one
+// account; if it does not, the answer is 409, never a guess. The rest of
+// the request then runs in that account's customer, so an order ID in the
+// same request is looked up there too.
+func (h *handler) scopeToAccount(w http.ResponseWriter, r *http.Request, accountID string) bool {
+	if h.mappings == nil {
+		return true // handler unit tests without a database
+	}
+	ctx, err := h.mappings.ScopeToAccount(r.Context(), accountID)
+	if errors.Is(err, accounts.ErrAmbiguous) {
+		writeError(w, http.StatusConflict, "ErrAccountAmbiguous",
+			"this account_id is used by more than one customer; name the customer with the customer_id query parameter (\"none\" for the account no customer owns)")
+		return false
+	}
+	if err != nil {
+		h.logger.Error("failed to resolve account", "err", err, "account_id", accountID)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return false
+	}
+	*r = *r.WithContext(ctx)
 	return true
 }
 

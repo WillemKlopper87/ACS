@@ -1,5 +1,6 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { Job } from "../api/types";
 import { DataTable } from "../components/DataTable";
@@ -7,6 +8,11 @@ import { StatusBadge } from "../components/StatusBadge";
 import { durationSeconds, fmtTime, timeAgo } from "../lib/format";
 import { useLive } from "../lib/useLive";
 import { useSlashFocus } from "../lib/hotkeys";
+import { useAuth } from "../auth/useAuth";
+import { canWrite } from "../auth/roles";
+import { plainLabel } from "../lib/labels";
+import { toast } from "../lib/toast";
+import { canCancelJob, canRetryJob } from "../lib/jobActions";
 
 export function Jobs() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -35,6 +41,31 @@ export function Jobs() {
   }, [load]);
 
   const [live, setLive] = useLive(() => load(true), 5000);
+  const writable = canWrite(useAuth().role);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  // The server decides what may be cancelled or retried (a job owned by a
+  // rollout or an order is refused there); its reason is shown as it is.
+  const act = useCallback(
+    async (job: Job, action: "cancel" | "retry") => {
+      setBusy(job.command_key);
+      try {
+        if (action === "cancel") {
+          await api.cancelJob(job.command_key);
+          toast(`Cancelled ${job.command_key}`, "success");
+        } else {
+          const fresh = await api.retryJob(job.command_key);
+          toast(`Queued again as ${fresh.command_key}`, "success");
+        }
+        await load(true);
+      } catch (e) {
+        toast(e instanceof ApiError ? e.message : `Could not ${action} the job`, "error");
+      } finally {
+        setBusy(null);
+      }
+    },
+    [load],
+  );
   useSlashFocus(searchRef);
 
   const types = useMemo(() => [...new Set(jobs.map((j) => j.type))].sort(), [jobs]);
@@ -44,7 +75,7 @@ export function Jobs() {
     const q = search.toLowerCase();
     return jobs.filter(
       (j) =>
-        (!q || `${j.command_key} ${j.device_id} ${j.fault_string ?? ""}`.toLowerCase().includes(q)) &&
+        (!q || `${j.command_key} ${j.device_id} ${j.oui_serial ?? ""} ${j.device_label ?? ""} ${j.fault_string ?? ""}`.toLowerCase().includes(q)) &&
         (!typeFilter || j.type === typeFilter) &&
         (!statusFilter || j.status === statusFilter),
     );
@@ -59,14 +90,54 @@ export function Jobs() {
 
   const columns = useMemo<ColumnDef<Job, any>[]>(
     () => [
-      { accessorKey: "command_key", header: "Command Key" },
+      { accessorKey: "command_key", header: "Job" },
       {
         accessorKey: "device_id",
         header: "Device",
-        cell: ({ getValue }) => <span className="dim">{(getValue() as string).slice(0, 8)}…</span>,
+        // The name an operator knows the device by, then its serial; the
+        // internal ID only if the API sent neither.
+        cell: ({ row }) => {
+          const j = row.original;
+          return (
+            <Link to={`/devices/${j.device_id}`} title={j.oui_serial ?? "Open this device"}>
+              {j.device_label || j.oui_serial || `${j.device_id.slice(0, 8)}…`}
+            </Link>
+          );
+        },
       },
-      { accessorKey: "type", header: "Type", cell: ({ getValue }) => <span className="dim">{getValue() as string}</span> },
+      {
+        accessorKey: "type",
+        header: "Action",
+        cell: ({ getValue }) => (
+          <span className="dim" title={getValue() as string}>
+            {plainLabel(getValue() as string)}
+          </span>
+        ),
+      },
       { accessorKey: "status", header: "Status", cell: ({ getValue }) => <StatusBadge value={getValue() as string} /> },
+      {
+        id: "actions",
+        header: "",
+        enableSorting: false,
+        cell: ({ row }) => {
+          const j = row.original;
+          if (canCancelJob(j.status)) {
+            return (
+              <button className="btn" disabled={!writable || busy === j.command_key} onClick={() => act(j, "cancel")} aria-label={`Cancel ${j.command_key}`}>
+                Cancel
+              </button>
+            );
+          }
+          if (canRetryJob(j)) {
+            return (
+              <button className="btn" disabled={!writable || busy === j.command_key} onClick={() => act(j, "retry")} aria-label={`Retry ${j.command_key}`}>
+                Retry
+              </button>
+            );
+          }
+          return null;
+        },
+      },
       {
         accessorKey: "created_at",
         header: "Created",
@@ -98,7 +169,7 @@ export function Jobs() {
         ),
       },
     ],
-    [],
+    [writable, busy, act],
   );
 
   return (
@@ -134,12 +205,12 @@ export function Jobs() {
             <circle cx="11" cy="11" r="7" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <input aria-label="Filter by command_key, device, fault" ref={searchRef} placeholder="Filter by command_key, device, fault… (press /)" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input aria-label="Filter by job, device or fault" ref={searchRef} placeholder="Filter by job, device or fault… (press /)" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <select className="chip" aria-label="Filter by job type" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-          <option value="">All types</option>
+          <option value="">All actions</option>
           {types.map((t) => (
-            <option key={t} value={t}>{t}</option>
+            <option key={t} value={t}>{plainLabel(t)}</option>
           ))}
         </select>
         <select className="chip" aria-label="Filter by status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>

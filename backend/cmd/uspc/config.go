@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/config"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -126,6 +127,12 @@ func loadConfig(getenv func(string) string, log *slog.Logger) (serviceConfig, er
 	}
 	if profile == deploymentProfileProduction && clientCA == "" {
 		problems = append(problems, "ACS_DEPLOYMENT_PROFILE=production requires ACS_USP_CLIENT_CA_CERT for mTLS agent authentication")
+	}
+
+	if profile == deploymentProfileProduction {
+		if p := config.MetricsTokenProblem(getenv); p != "" {
+			problems = append(problems, p)
+		}
 	}
 
 	postgresDSN := getenv("ACS_USP_POSTGRES_DSN")

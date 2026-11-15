@@ -18,16 +18,18 @@ describe("tokenStore", () => {
   it("starts unauthenticated with authRequired=false when nothing is persisted", async () => {
     const { getAuthState } = await freshTokenStore();
     const s = getAuthState();
+    expect(s.signedIn).toBe(false);
     expect(s.token).toBeNull();
     expect(s.username).toBeNull();
     expect(s.role).toBeNull();
     expect(s.authRequired).toBe(false);
   });
 
-  it("setAuthenticated stores token/username/role and marks authRequired", async () => {
+  it("setAuthenticated signs in, holds the token in memory and marks authRequired", async () => {
     const { setAuthenticated, getAuthState } = await freshTokenStore();
     setAuthenticated("tok-123", "alice", "manager");
     const s = getAuthState();
+    expect(s.signedIn).toBe(true);
     expect(s.token).toBe("tok-123");
     expect(s.username).toBe("alice");
     expect(s.role).toBe("manager");
@@ -44,6 +46,7 @@ describe("tokenStore", () => {
     mod.setAuthenticated("tok-123", "alice", "manager");
     mod.clearAuth();
     const s = mod.getAuthState();
+    expect(s.signedIn).toBe(false);
     expect(s.token).toBeNull();
     expect(s.username).toBeNull();
     expect(s.role).toBeNull();
@@ -58,14 +61,48 @@ describe("tokenStore", () => {
     expect(mod2.getAuthState().authRequired).toBe(true);
   });
 
-  it("a valid persisted token survives a reload", async () => {
+  // The session is a cookie no script can read (security assessment O6).
+  // Nothing that can act as the operator may reach browser storage.
+  it("never writes the token to browser storage", async () => {
+    const mod = await freshTokenStore();
+    mod.setAuthenticated("tok-123", "alice", "manager");
+    const stored = localStorage.getItem("acs_auth") ?? "";
+    expect(stored).not.toContain("tok-123");
+    expect(JSON.parse(stored)).toEqual({ signedIn: true, username: "alice", role: "manager", authRequired: true });
+    for (let i = 0; i < sessionStorage.length; i++) {
+      expect(sessionStorage.getItem(sessionStorage.key(i) as string)).not.toContain("tok-123");
+    }
+  });
+
+  it("a reload keeps who is signed in but not the token", async () => {
     const mod1 = await freshTokenStore();
     mod1.setAuthenticated("tok-123", "alice", "manager");
 
     const mod2 = await freshTokenStore();
     const s = mod2.getAuthState();
-    expect(s.token).toBe("tok-123");
+    expect(s.signedIn).toBe(true);
+    expect(s.username).toBe("alice");
+    expect(s.token).toBeNull();
     expect(s.authRequired).toBe(true);
+  });
+
+  it("forgetToken drops the in-memory token once the cookie is confirmed and stays signed in", async () => {
+    const mod = await freshTokenStore();
+    mod.setAuthenticated("tok-123", "alice", "manager");
+    mod.forgetToken();
+    const s = mod.getAuthState();
+    expect(s.token).toBeNull();
+    expect(s.signedIn).toBe(true);
+  });
+
+  it("a token stored by an earlier console version is removed and that operator signs in again", async () => {
+    localStorage.setItem("acs_auth", JSON.stringify({ token: "old-token", username: "alice", role: "manager", authRequired: true }));
+    const { getAuthState } = await freshTokenStore();
+    const s = getAuthState();
+    expect(s.signedIn).toBe(false);
+    expect(s.token).toBeNull();
+    expect(s.authRequired).toBe(true);
+    expect(localStorage.getItem("acs_auth")).not.toContain("old-token");
   });
 
   it("markAuthRequired is idempotent once already true — no redundant notify", async () => {

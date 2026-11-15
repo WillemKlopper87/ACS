@@ -26,6 +26,13 @@ Three names under a zone you control. The examples use `example.com`:
 | `lab-api.example.com` | `127.0.0.1:8080` | the console's API calls |
 | `lab-bss.example.com` | `127.0.0.1:8090` | the NaaS / BSS integration |
 
+Keep the console and API names under the same registrable domain (both under
+`example.com` here). The operator session is a `SameSite=Strict` cookie set by
+the API: a browser sends it from the console only when the two names are the
+same site. A console on one domain and an API on another signs in and then gets
+`401` on every call. `ACS_API_CORS_ORIGIN` must be the console's exact origin
+(`start.sh` sets it from `ACS_LAB_PUBLIC_FRONTEND_URL`).
+
 If the zone already serves another app (a wildcard record, names such as
 `www` or `admin`), use names that app does not own. An explicit record beats a
 wildcard. Browsers also send a cookie that app set for the whole zone

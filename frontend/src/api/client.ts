@@ -13,6 +13,8 @@ import type {
   BSSOAuthClientCreateResult,
   BSSWebhookSubscription,
   BulkActionResponse,
+  BulkOperation,
+  BulkOperationDetail,
   CaptureEvent,
   CaptureProtocol,
   CaptureSession,
@@ -62,8 +64,20 @@ import type { components, paths } from "./generated";
 // request/response types from `paths` like LoginResponse below instead
 // of re-declaring them by hand; the hand-written types in types.ts are
 // legacy to be migrated over time.
+// A correct password answers with a session, or with an MFA challenge
+// when a second step is owed (cmd/api/mfa_handlers.go).
+export type Session = components["schemas"]["Session"];
+export type MFAChallenge = components["schemas"]["MFAChallenge"];
+export type SystemInfo = paths["/api/v1/system/info"]["get"]["responses"]["200"]["content"]["application/json"];
+export type MFAEnrollment = components["schemas"]["MFAEnrollment"];
+export type MFAStatus = components["schemas"]["MFAStatus"];
+type RecoveryCodes = components["schemas"]["MFARecoveryCodes"];
 type LoginResponse =
   paths["/api/v1/auth/login"]["post"]["responses"]["200"]["content"]["application/json"];
+
+export function isMFAChallenge(r: LoginResponse): r is MFAChallenge {
+  return "mfa" in r;
+}
 type DeviceSatellitesResponse =
   paths["/api/v1/devices/{id}/satellites"]["get"]["responses"]["200"]["content"]["application/json"];
 type DiagnosticQueueResponse =
@@ -105,6 +119,46 @@ class ApiError extends Error {
 }
 
 const LOGIN_PATH = "/api/v1/auth/login";
+const CSRF_HEADER = "X-ACS-CSRF";
+
+// Every call goes out with the session cookie ("include"). An API that
+// allows any origin (ACS_API_CORS_ORIGIN="*", local experiments) cannot
+// accept a credentialed request at all, and the browser reports that as a
+// failed fetch. The call is then repeated once without credentials; if
+// that works, this page stops sending them. Such an API issues no cookie
+// either, so nothing is lost: the session is the in-memory bearer token.
+let sendCredentials = true;
+
+async function apiFetch(path: string, init: RequestInit): Promise<Response> {
+  if (!sendCredentials) return fetch(`${BASE_URL}${path}`, { ...init, credentials: "omit" });
+  try {
+    return await fetch(`${BASE_URL}${path}`, { ...init, credentials: "include" });
+  } catch (e) {
+    let res: Response;
+    try {
+      res = await fetch(`${BASE_URL}${path}`, { ...init, credentials: "omit" });
+    } catch {
+      throw e; // unreachable either way
+    }
+    sendCredentials = false;
+    return res;
+  }
+}
+
+// cookieSessionWorks asks the API who the caller is, sending only the
+// cookie. True means the browser kept the cookie and sends it back, so
+// the console needs no token of its own.
+export async function cookieSessionWorks(): Promise<boolean> {
+  if (!sendCredentials) return false;
+  try {
+    const res = await fetch(`${BASE_URL}/api/v1/auth/session`, { credentials: "include", headers: { [CSRF_HEADER]: "1" } });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { via?: string };
+    return body.via === "cookie";
+  } catch {
+    return false;
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const { token } = getAuthState();
@@ -117,6 +171,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...(init?.headers as Record<string, string> | undefined),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  // The session is a cookie (auth/tokenStore.ts). The API accepts a
+  // state-changing request that relies on it only with this header, which
+  // a page on another origin cannot add.
+  headers[CSRF_HEADER] = "1";
 
   // A thrown fetch means the API is unreachable (DNS, connection
   // refused, TLS, or a rejected CORS preflight); any HTTP response —
@@ -124,7 +182,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // sidebar's connection dot reports.
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}${path}`, { ...init, headers });
+    res = await apiFetch(path, { ...init, headers });
   } catch (e) {
     markApiReachable(false);
     throw e;
@@ -136,7 +194,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // the backend has operator auth enabled (build plan §4 Phase 6) and
   // wants a fresh login. Login's own 401 (wrong password) is a normal
   // rejected-credentials error, not a "you need to log in" signal.
-  if (res.status === 401 && path !== LOGIN_PATH) {
+  if (res.status === 401 && !path.startsWith(LOGIN_PATH)) {
     clearAuth();
     markAuthRequired();
   }
@@ -158,7 +216,7 @@ async function download(path: string, fallbackFilename: string) {
   const { token } = getAuthState();
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    res = await apiFetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
   } catch (e) {
     markApiReachable(false);
     throw e;
@@ -180,6 +238,15 @@ async function download(path: string, fallbackFilename: string) {
   URL.revokeObjectURL(url);
 }
 
+// accountCustomerQuery names the customer that owns an account, for the
+// operator routes that address an account by its ID. undefined: the caller
+// does not know (the ID then has to be unambiguous). null or "": the
+// account nobody owns.
+export function accountCustomerQuery(accountCustomerId: string | null | undefined, lead: "?" | "&"): string {
+  if (accountCustomerId === undefined) return "";
+  return `${lead}customer_id=${encodeURIComponent(accountCustomerId || "none")}`;
+}
+
 export const api = {
   login: (username: string, password: string) =>
     request<LoginResponse>(LOGIN_PATH, {
@@ -187,11 +254,34 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
 
+  // How this ACS is run: through the NaaS platform or on its own.
+  getSystemInfo: () => request<SystemInfo>("/api/v1/system/info"),
+
+  // MFA login steps: each takes the mfa_token the password step returned.
+  loginMFA: (mfaToken: string, code: string) =>
+    request<Session>(`${LOGIN_PATH}/mfa`, { method: "POST", body: JSON.stringify({ mfa_token: mfaToken, code }) }),
+  loginMFAEnroll: (mfaToken: string) =>
+    request<MFAEnrollment>(`${LOGIN_PATH}/mfa/enroll`, { method: "POST", body: JSON.stringify({ mfa_token: mfaToken }) }),
+  loginMFAConfirm: (mfaToken: string, code: string) =>
+    request<Session & RecoveryCodes>(`${LOGIN_PATH}/mfa/confirm`, { method: "POST", body: JSON.stringify({ mfa_token: mfaToken, code }) }),
+
+  // The signed-in operator's own MFA.
+  getMFA: () => request<MFAStatus>("/api/v1/auth/mfa"),
+  enrollMFA: () => request<MFAEnrollment>("/api/v1/auth/mfa/enroll", { method: "POST" }),
+  confirmMFA: (code: string) => request<RecoveryCodes>("/api/v1/auth/mfa/confirm", { method: "POST", body: JSON.stringify({ code }) }),
+  disableMFA: (code: string) => request<void>("/api/v1/auth/mfa/disable", { method: "POST", body: JSON.stringify({ code }) }),
+  regenerateRecoveryCodes: (code: string) =>
+    request<RecoveryCodes>("/api/v1/auth/mfa/recovery-codes", { method: "POST", body: JSON.stringify({ code }) }),
+  // Lost phone: a superadmin removes another operator's MFA.
+  resetOperatorMFA: (operatorId: string) => request<void>(`/api/v1/auth/operators/${operatorId}/mfa`, { method: "DELETE" }),
+
   // Revokes every session of the caller server-side. Signing out used to
   // be purely local (clearAuth), which left a captured token valid until
   // its own expiry — on a shared machine that is the whole point of
   // signing out.
   logout: () => request<void>("/api/v1/auth/logout", { method: "POST" }),
+  /** Who the caller is signed in as; the console cannot read its own session cookie. */
+  session: () => request<components["schemas"]["SessionInfo"]>("/api/v1/auth/session"),
 
   listDevices: (page = 1, pageSize = 100) =>
     request<{ items: Device[]; total: number }>(`/api/v1/devices?page=${page}&page_size=${pageSize}`),
@@ -208,10 +298,16 @@ export const api = {
   revealDeviceSubscriber: (id: string) =>
     request<components["schemas"]["SubscriberSummary"]>(`/api/v1/devices/${id}/subscriber/reveal`, { method: "POST" }),
 
-  getAccountProfile: (accountId: string) => request<AccountProfile>(`/api/v1/accounts/${encodeURIComponent(accountId)}/profile`),
+  // An account ID is unique per customer, so calls that address an
+  // account say whose it is (accountCustomerQuery).
+  getAccountProfile: (accountId: string, accountCustomerId?: string | null) =>
+    request<AccountProfile>(`/api/v1/accounts/${encodeURIComponent(accountId)}/profile${accountCustomerQuery(accountCustomerId, "?")}`),
 
-  updateAccountProfile: (accountId: string, body: { subscriber_name?: string; vip?: boolean }) =>
-    request<AccountProfile>(`/api/v1/accounts/${encodeURIComponent(accountId)}/profile`, { method: "PUT", body: JSON.stringify(body) }),
+  updateAccountProfile: (accountId: string, body: { subscriber_name?: string; vip?: boolean }, accountCustomerId?: string | null) =>
+    request<AccountProfile>(`/api/v1/accounts/${encodeURIComponent(accountId)}/profile${accountCustomerQuery(accountCustomerId, "?")}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
 
   getDevicesSummary: () => request<{ groups: DeviceGroupCount[] }>("/api/v1/devices/summary"),
 
@@ -293,6 +389,10 @@ export const api = {
 
   getDeviceParameters: (id: string) =>
     request<{ parameters: ParameterCache }>(`/api/v1/devices/${id}/parameters`),
+  // Only the named parameters. The whole cache of a gateway is thousands
+  // of entries; a screen that shows a handful should ask for a handful.
+  getDeviceParametersByName: (id: string, names: string[]) =>
+    request<{ parameters: ParameterCache }>(`/api/v1/devices/${id}/parameters?paths=${encodeURIComponent(names.join(","))}`),
 
   putDeviceParameters: (
     id: string,
@@ -456,6 +556,18 @@ export const api = {
     request<QueueResponse>(`/api/v1/devices/${id}/factory-reset`, { method: "POST" }),
 
   listJobs: () => request<{ items: Job[]; total: number }>("/api/v1/jobs"),
+  // Cancel works on a job that is still queued; retry queues a new job
+  // with the payload of one that failed, timed out or was cancelled.
+  cancelJob: (commandKey: string) => request<Job>(`/api/v1/jobs/${encodeURIComponent(commandKey)}/cancel`, { method: "POST" }),
+  retryJob: (commandKey: string) => request<Job>(`/api/v1/jobs/${encodeURIComponent(commandKey)}/retry`, { method: "POST" }),
+
+  listBulkOperations: (page = 1, pageSize = 50) =>
+    request<{ items: BulkOperation[]; total: number }>(`/api/v1/bulk-operations?page=${page}&page_size=${pageSize}`),
+  getBulkOperation: (id: string) => request<BulkOperationDetail>(`/api/v1/bulk-operations/${encodeURIComponent(id)}`),
+  cancelBulkOperation: (id: string) =>
+    request<BulkOperationDetail>(`/api/v1/bulk-operations/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  retryFailedBulkOperation: (id: string) =>
+    request<BulkOperationDetail>(`/api/v1/bulk-operations/${encodeURIComponent(id)}/retry-failed`, { method: "POST" }),
 
   listDeviceJobs: (id: string) =>
     request<{ items: Job[]; total: number }>(`/api/v1/devices/${id}/jobs`),
@@ -498,6 +610,7 @@ export const api = {
 
   listAlertPolicies: () => request<{items: import("./types").AlertPolicy[]}>("/api/v1/alert-policies"),
   createAlertPolicy: (input: Partial<import("./types").AlertPolicy>) => request<import("./types").AlertPolicy>("/api/v1/alert-policies", {method:"POST", body:JSON.stringify(input)}),
+  deleteAlertPolicy: (id: string) => request<void>(`/api/v1/alert-policies/${id}`, { method: "DELETE" }),
   listAlertIncidents: (state="") => request<{items: import("./types").AlertIncident[]}>(`/api/v1/alert-incidents${state ? `?state=${encodeURIComponent(state)}` : ""}`),
   updateAlertIncident: (id: string, state: string) => request<void>(`/api/v1/alert-incidents/${id}?state=${encodeURIComponent(state)}`, {method:"PATCH"}),
 
@@ -678,9 +791,14 @@ export const api = {
   // iframe) get a 60-second, audience-bound ticket minted just before
   // use; the backend accepts nothing else in ?token=. Returns null when
   // auth is disabled (dev mode) so the URL builders omit the param.
-  browserTicket: async (): Promise<string | null> => {
-    if (!getAuthState().token) return null;
-    const { ticket } = await request<{ ticket: string }>("/api/v1/auth/ticket", { method: "POST" });
+  // A ticket is for one purpose on one device; the API refuses it
+  // anywhere else.
+  browserTicket: async (deviceId: string, purpose: "cli" | "webgui"): Promise<string | null> => {
+    if (!getAuthState().signedIn) return null;
+    const { ticket } = await request<{ ticket: string }>("/api/v1/auth/ticket", {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId, purpose }),
+    });
     return ticket;
   },
 
@@ -692,7 +810,7 @@ export const api = {
   // Async because it first mints a browser ticket for the handshake.
   cliConnectURL: async (deviceId: string, credentialId: string) => {
     const wsBase = BASE_URL.replace(/^http/, "ws");
-    const ticket = await api.browserTicket();
+    const ticket = await api.browserTicket(deviceId, "cli");
     const qs = new URLSearchParams({ credential_id: credentialId, ...(ticket ? { token: ticket } : {}) });
     return `${wsBase}/api/v1/devices/${deviceId}/cli/connect?${qs.toString()}`;
   },
@@ -705,7 +823,7 @@ export const api = {
   deleteWebGUIConfig: (deviceId: string) => request<void>(`/api/v1/devices/${deviceId}/webgui`, { method: "DELETE" }),
   // Iframe src — same ticket handshake as the WS URL above.
   webGUIProxyURL: async (deviceId: string) => {
-    const ticket = await api.browserTicket();
+    const ticket = await api.browserTicket(deviceId, "webgui");
     const qs = ticket ? `?token=${encodeURIComponent(ticket)}` : "";
     return `${BASE_URL}/api/v1/devices/${deviceId}/webgui/proxy/${qs}`;
   },
@@ -713,13 +831,15 @@ export const api = {
   // --- BSS integration admin panel (admin-platform backlog) ---
   listBSSMappings: () => request<{ items: BSSMapping[] }>("/api/v1/bss/mappings"),
   /** Ends the account's active assignment in that role; audited with the reason. */
-  unassignBSSMapping: (accountId: string, role: string, reason: string) =>
-    request<void>(`/api/v1/bss/mappings/${encodeURIComponent(accountId)}/${encodeURIComponent(role)}?reason=${encodeURIComponent(reason)}`, {
-      method: "DELETE",
-    }),
+  unassignBSSMapping: (accountId: string, role: string, reason: string, accountCustomerId?: string | null) =>
+    request<void>(
+      `/api/v1/bss/mappings/${encodeURIComponent(accountId)}/${encodeURIComponent(role)}?reason=${encodeURIComponent(reason)}${accountCustomerQuery(accountCustomerId, "&")}`,
+      { method: "DELETE" },
+    ),
 
-  createBSSMapping: (accountId: string, ouiSerial: string, servicePlan?: string) =>
-    request<BSSMapping>("/api/v1/bss/mappings", {
+  /** customerId: create (or use) that customer's account of this ID; omitted, the ID must name one account or a new unowned one. */
+  createBSSMapping: (accountId: string, ouiSerial: string, servicePlan?: string, customerId?: string) =>
+    request<BSSMapping>(`/api/v1/bss/mappings${customerId ? `?customer_id=${encodeURIComponent(customerId)}` : ""}`, {
       method: "POST",
       body: JSON.stringify({ account_id: accountId, oui_serial: ouiSerial, service_plan: servicePlan }),
     }),

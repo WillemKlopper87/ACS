@@ -477,3 +477,33 @@ func scanDevice(s scanner) (*Device, error) {
 	d.LastInformEventCodes = []string(eventCodes)
 	return &d, nil
 }
+
+// Identity is what a list shows in place of a device's internal ID.
+type Identity struct {
+	OUISerial string
+	Label     string
+}
+
+// IdentitiesByID returns the serial and label of each device in ids, for
+// lists (jobs, for one) that hold only device IDs. Unknown IDs are simply
+// absent from the result.
+func (r *Repository) IdentitiesByID(ctx context.Context, ids []string) (map[string]Identity, error) {
+	out := map[string]Identity{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.QueryContext(ctx, `SELECT id::text, oui_serial, COALESCE(label, '') FROM devices WHERE id::text = ANY($1)`, store.StringArray(ids))
+	if err != nil {
+		return nil, fmt.Errorf("look up device identities: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var ident Identity
+		if err := rows.Scan(&id, &ident.OUISerial, &ident.Label); err != nil {
+			return nil, fmt.Errorf("scan device identity: %w", err)
+		}
+		out[id] = ident
+	}
+	return out, rows.Err()
+}

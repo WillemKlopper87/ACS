@@ -14,6 +14,7 @@
 package main
 
 import (
+	"acs/internal/accounts"
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
@@ -21,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -78,7 +80,44 @@ func main() {
 		logger.Info("forwarding headers are trusted from these proxies only", "ACS_TRUSTED_PROXY_CIDRS", v)
 	}
 
-	dsn := os.Getenv("ACS_POSTGRES_DSN")
+	// The production profile makes the strict settings a property of the
+	// deployment rather than something to remember per host
+	// (docs/SECURITY-ASSESSMENT-2026-11-14.md, O1).
+	profile, err := config.DeploymentProfile(os.Getenv)
+	if err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	// The switch between running on its own and through the NaaS platform.
+	// Standalone needs none of this adapter's settings, so it is decided
+	// before any of them is checked.
+	mode, err := config.IntegrationMode(os.Getenv)
+	if err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if mode == config.ModeStandalone {
+		runStandalone(logger)
+		return
+	}
+	if profile == config.ProfileProduction {
+		if problems := config.BSSProductionProblems(os.Getenv); len(problems) > 0 {
+			logger.Error(config.FormatProblems("cmd/bssadapter", problems) + "\n" + config.StandaloneHint)
+			os.Exit(1)
+		}
+	}
+	// Source networks the integration surface accepts calls from. Unset
+	// (lab) accepts any; production requires it.
+	allowedSources, err := netguard.ParseCIDRList(strings.ReplaceAll(os.Getenv("ACS_BSS_ALLOWED_CIDRS"), " ", ""))
+	if err != nil {
+		logger.Error("ACS_BSS_ALLOWED_CIDRS is invalid", "err", err)
+		os.Exit(1)
+	}
+	if len(allowedSources) > 0 {
+		logger.Info("BSS and TMF routes accept calls from these networks only", "ACS_BSS_ALLOWED_CIDRS", os.Getenv("ACS_BSS_ALLOWED_CIDRS"))
+	}
+
+	dsn, _ := store.ServiceDSN(os.Getenv, "ACS_BSS_POSTGRES_DSN")
 	if dsn == "" {
 		logger.Error("ACS_POSTGRES_DSN is required")
 		os.Exit(1)
@@ -168,6 +207,18 @@ func main() {
 		webhookNetPolicy.AllowedCIDRs = cidrs
 	}
 
+	// Webhook signing secrets are sealed at rest under the same key as the
+	// sealed Wi-Fi handles, when it is set.
+	webhooks, err := bss.NewWebhookRepository(db).WithSecretKey(os.Getenv(secretstore.KeyEnv))
+	if err != nil {
+		logger.Error("failed to set up webhook secret sealing", "err", err)
+		os.Exit(1)
+	}
+	if n, sealErr := webhooks.SealStoredSecrets(context.Background()); sealErr != nil {
+		logger.Error("failed to seal stored webhook secrets", "err", sealErr)
+	} else if n > 0 {
+		logger.Info("sealed webhook signing secrets that were stored in the clear", "subscriptions", n)
+	}
 	secretStore, err := secretstore.New(db, os.Getenv(secretstore.KeyEnv))
 	if err != nil {
 		logger.Error("failed to initialize the secret store", "err", err)
@@ -179,7 +230,7 @@ func main() {
 
 	h := &handler{
 		logger:                logger,
-		mappings:              bss.NewRepository(db),
+		mappings:              bss.NewRepository(db).RequireAllocatedDevices(os.Getenv("ACS_BSS_REQUIRE_ALLOCATED_DEVICES") == "true"),
 		onboarding:            onboarding.NewRepository(db),
 		subscribers:           subscribers.NewRepository(db),
 		acs:                   bss.NewACSClient(acsBaseURL, 10*time.Second, internalServiceToken),
@@ -195,14 +246,15 @@ func main() {
 		requireSecretHandles:  os.Getenv("ACS_BSS_REQUIRE_SECRET_HANDLES") == "true",
 		metrics:               metrics,
 		walledGarden:          walledGarden,
-		webhooks:              bss.NewWebhookRepository(db),
+		webhooks:              webhooks,
+		requireHTTPSWebhooks:  profile == config.ProfileProduction,
 		alertPolicies:         alerting.NewRepository(db),
 		alertIncidents:        alerting.NewIncidentRepository(db),
 		netPolicy:             webhookNetPolicy,
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /metrics", metrics.Handler().ServeHTTP)
+	mux.Handle("GET /metrics", observability.ProtectMetrics(observability.MetricsToken(), metrics.Handler()))
 	mux.Handle("GET /healthz", observability.LivenessHandler())
 	mux.Handle("GET /readyz", observability.ReadinessHandler(db))
 	mux.HandleFunc("POST /bss/v1/oauth/token", metrics.InstrumentHTTP("POST /bss/v1/oauth/token", h.issueOAuthToken))
@@ -264,10 +316,18 @@ func main() {
 	go h.runOrderReconcileLoop(ctx)
 	go h.runTMF641ReconcileLoop(ctx)
 	go h.runPreProvisionSyncLoop(ctx)
+	go h.runReadAuditLoop(ctx)
 
 	rateLimitPerSecond := envOrFloat("ACS_BSS_RATE_LIMIT_PER_SECOND", defaultRateLimitPerSecond)
 	rateLimitBurst := envOrInt("ACS_BSS_RATE_LIMIT_BURST", defaultRateLimitBurst)
 	limiter := ratelimit.New(rateLimitPerSecond, rateLimitBurst, rateLimitIdleTTL)
+	if os.Getenv(ratelimit.SharedEnv) == "true" {
+		sharedRateLimit = ratelimit.NewSynced(db, "bss", rateLimitPerSecond, rateLimitBurst, 10*time.Second)
+		go sharedRateLimit.Run(ctx, func(err error) {
+			logger.Error("shared rate limit unavailable; the per-process limit still applies", "err", err)
+		})
+		logger.Info("request rate limit is shared across replicas", ratelimit.SharedEnv, "true")
+	}
 
 	addr := envOr("ACS_BSS_ADDR", ":8090")
 	server := &http.Server{
@@ -276,7 +336,7 @@ func main() {
 		// missing token is rejected (401) without ever touching the rate
 		// limiter — otherwise an attacker could spray distinct bogus
 		// tokens to dodge a per-token bucket entirely.
-		Handler:           withProblemMediaType(withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(mux)))),
+		Handler:           withProblemMediaType(withSourceAllowlist(allowedSources, logger, withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(mux))))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second, // every BSS route is a small JSON exchange
 		WriteTimeout:      60 * time.Second,
@@ -393,7 +453,7 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 			(r.Method == http.MethodGet && r.URL.Path == "/metrics") ||
 			(r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz")) ||
 			(r.Method == http.MethodPost && r.URL.Path == "/bss/v1/oauth/token") {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, withNamedCustomer(r))
 			return
 		}
 		got := r.Header.Get("Authorization")
@@ -403,7 +463,7 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 				if claims, err := auth.VerifyJWT(oauthSigningSecret, bearer); err == nil && claims.Role == bssClientRole {
 					clientID := strings.TrimPrefix(claims.Subject, "bss-client:")
 					if !revoked(r.Context(), clientID) {
-						next.ServeHTTP(w, r)
+						auditedRead(next, w, withRateKey(withAccountScope(r, claims), "client:"+clientID), claims.Subject, claims.CustomerID)
 						return
 					}
 					writeError(w, http.StatusUnauthorized, "ErrUnauthorized", "oauth client has been revoked")
@@ -413,7 +473,7 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 		}
 
 		if token != "" && subtle.ConstantTimeCompare([]byte(got), []byte("Bearer "+token)) == 1 {
-			next.ServeHTTP(w, r)
+			auditedRead(next, w, withRateKey(withNamedCustomer(r), "shared-token"), "bss:shared-token", "")
 			return
 		}
 
@@ -421,21 +481,109 @@ func withAuth(token string, oauthSigningSecret []byte, revoked func(context.Cont
 	})
 }
 
-// withRateLimit enforces a per-caller token bucket (build plan §7.3/§7b).
-// Runs after withAuth, so the key is the (already-verified) Authorization
-// header — every legitimately-authenticated caller shares one bucket
-// under today's single-shared-token model; that becomes genuinely
-// per-integration once individual BSS tokens exist. When auth itself is
-// disabled (no ACS_BSS_API_TOKEN configured — lab mode), there's no token
-// to key on, so this falls back to remote address as a coarser
-// defense-in-depth limit.
+// withAccountScope says whose accounts the IDs in a request name
+// (internal/accounts). Account and order IDs are unique per customer, so:
+//
+//   - a client bound to a customer always means that customer's, whatever
+//     the request says;
+//   - a global client may name the customer (withNamedCustomer), and
+//     otherwise an ID has to be unambiguous;
+//   - a client limited to a list of account IDs may not name a customer:
+//     its list is of IDs, and letting it pick the customer would let it
+//     reach every customer's account of a listed ID.
+func withAccountScope(r *http.Request, claims *auth.Claims) *http.Request {
+	switch {
+	case claims.CustomerID != "":
+		return r.WithContext(accounts.WithCustomer(r.Context(), claims.CustomerID))
+	case claims.GlobalAccess:
+		return withNamedCustomer(r)
+	}
+	return r
+}
+
+// withNamedCustomer applies the customer a fleet-wide caller names with
+// the customer_id (customerId) query parameter; "none" means the accounts
+// no customer owns.
+func withNamedCustomer(r *http.Request) *http.Request {
+	q := r.URL.Query()
+	named := strings.TrimSpace(q.Get("customer_id"))
+	if named == "" {
+		named = strings.TrimSpace(q.Get("customerId"))
+	}
+	switch named {
+	case "":
+		return r
+	case "none":
+		return r.WithContext(accounts.WithCustomer(r.Context(), ""))
+	}
+	return r.WithContext(accounts.WithCustomer(r.Context(), named))
+}
+
+// withSourceAllowlist refuses calls to the integration surface (/bss/v1
+// and /tmf-api) from outside the allowed networks, before authentication,
+// so a stolen client secret is of no use from anywhere else and a caller
+// outside learns nothing about which credentials exist. An empty list
+// allows every source. Health and metrics are not part of the integration
+// surface and are left to the listener's own binding.
+//
+// The caller's address is clientip.Of: the connecting address, or the one
+// a proxy listed in ACS_TRUSTED_PROXY_CIDRS reports.
+func withSourceAllowlist(allowed []*net.IPNet, logger *slog.Logger, next http.Handler) http.Handler {
+	if len(allowed) == 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/bss/v1/") && !strings.HasPrefix(r.URL.Path, "/tmf-api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		source := clientip.Of(r)
+		ip := net.ParseIP(source)
+		for _, n := range allowed {
+			if ip != nil && n.Contains(ip) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		logger.Warn("BSS call refused: source is outside ACS_BSS_ALLOWED_CIDRS", "source", source, "path", r.URL.Path)
+		writeError(w, http.StatusForbidden, "ErrSourceNotAllowed", "calls are not accepted from this network")
+	})
+}
+
+type rateKeyCtx struct{}
+
+// withRateKey records who the caller was authenticated as, for the rate
+// limiter that runs after withAuth.
+func withRateKey(r *http.Request, key string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), rateKeyCtx{}, key))
+}
+
+// rateLimitKey is the bucket a request is counted in: the authenticated
+// client, or the caller's address where there is none (the token endpoint,
+// and lab mode with auth off).
+//
+// It is never the Authorization header itself. A client can mint a new
+// access token whenever it likes, and every token is a different header,
+// so a per-header bucket gave each token its own allowance; and on the
+// token endpoint every guessed client secret was a different header, so
+// guesses were not limited at all, each costing a bcrypt comparison.
+func rateLimitKey(r *http.Request) string {
+	if key, ok := r.Context().Value(rateKeyCtx{}).(string); ok && key != "" {
+		return key
+	}
+	return "addr:" + clientip.Of(r)
+}
+
+// sharedRateLimit makes the request limit hold across replicas
+// (ratelimit.Synced). Nil unless ACS_SHARED_RATE_LIMIT=true.
+var sharedRateLimit *ratelimit.Synced
+
+// withRateLimit enforces a token bucket per caller (build plan §7.3/§7b),
+// keyed by rateLimitKey. It runs after withAuth so that a request with a
+// bad token is refused before it can spend anyone's allowance.
 func withRateLimit(limiter *ratelimit.Limiter, metrics *observability.Metrics, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := r.Header.Get("Authorization")
-		if key == "" {
-			key = clientip.Of(r)
-		}
-		if !limiter.Allow(key) {
+		if key := rateLimitKey(r); !limiter.Allow(key) || !sharedRateLimit.Allow(key) {
 			metrics.RateLimitRejectedTotal.Inc()
 			// A token frees within 1/rate seconds; at the default 5/s and any
 			// rate of at least 1/s, a client retrying after a second gets in.
@@ -496,6 +644,9 @@ type handler struct {
 	// controlled) may point (audit H-7) -- checked at subscription
 	// creation and again at delivery time.
 	netPolicy netguard.Policy
+	// requireHTTPSWebhooks refuses a new subscription with a plain-http
+	// target (production profile).
+	requireHTTPSWebhooks bool
 
 	// revocationMu/revocationCache back clientRevoked (audit P2.3): a
 	// short-TTL cache of oauth_clients.revoked_at, keyed by client_id, so
@@ -841,6 +992,49 @@ type orderResponse struct {
 // could not produce the response (a further failure resolving the
 // order's job status), in which case it has already written the error
 // response itself.
+// respondWithExistingOrderFor answers a repeated external_order_id for the
+// account the caller was authorized for. Two things make a repeat not a
+// retry, and both are refused with 409 rather than answered with the
+// original order:
+//
+//   - the ID belongs to another of the caller's accounts: the caller would
+//     be told its order was accepted when none was placed, and handed
+//     another account's command_key and job status;
+//   - the request differs from the one the order was accepted with
+//     (requestDigest): an integration that amends an order and resends it
+//     under the same ID would be told the amendment was accepted, when
+//     the device was sent the original. An amendment is a new order.
+//
+// Same rules as the TMF640 PATCH key.
+func (h *handler) respondWithExistingOrderFor(w http.ResponseWriter, r *http.Request, accountID, externalOrderID, requestDigest string, existing *bss.OrderRecord) bool {
+	if existing.AccountID != accountID {
+		writeError(w, http.StatusConflict, "ErrIdempotencyKeyReused", "this external_order_id was already used for another order")
+		return false
+	}
+	if !h.sameOrderRequest(w, r, existing, requestDigest, "external_order_id") {
+		return false
+	}
+	return h.respondWithExistingOrder(w, r, externalOrderID, existing)
+}
+
+// sameOrderRequest writes the 409 for a repeated order ID whose request
+// changed, and reports whether the repeat is a true retry.
+func (h *handler) sameOrderRequest(w http.ResponseWriter, r *http.Request, existing *bss.OrderRecord, requestDigest, idName string) bool {
+	err := h.mappings.SameRequest(r.Context(), existing.ID, requestDigest)
+	if errors.Is(err, bss.ErrOrderRequestChanged) {
+		h.logger.Warn("order ID resent with a different request", "external_order_id", existing.ExternalOrderID, "account_id", existing.AccountID)
+		writeError(w, http.StatusConflict, "ErrIdempotencyKeyReused",
+			"this "+idName+" was already used for a different request; the original order stands. Send a changed order under a new "+idName)
+		return false
+	}
+	if err != nil {
+		h.logger.Error("failed to compare a repeated order with the original", "err", err, "external_order_id", existing.ExternalOrderID)
+		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
+		return false
+	}
+	return true
+}
+
 func (h *handler) respondWithExistingOrder(w http.ResponseWriter, r *http.Request, externalOrderID string, existing *bss.OrderRecord) bool {
 	if existing.Status != bss.OrderStatusDispatched {
 		// Still PENDING_DISPATCH or DEAD_LETTERED -- there is no
@@ -926,10 +1120,11 @@ func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
 // unwrapped, per errors.Is), the caller is responsible for routing to
 // its own idempotent-response path -- this function only dispatches, it
 // does not know how to shape either caller's response.
-func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID, action, deviceID string, params []bss.ParameterWrite) (commandKey string, err error) {
+func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID, action, deviceID string, params []bss.ParameterWrite, requestDigest string) (commandKey string, err error) {
 	// Write-ahead: the order's intent, including exactly what dispatch
 	// would send, is durable before dispatch is attempted (design S3).
-	if err := h.mappings.InsertPending(ctx, externalOrderID, accountID, action, deviceID, params); err != nil {
+	orderID, err := h.mappings.InsertPending(ctx, externalOrderID, accountID, action, deviceID, params, requestDigest)
+	if err != nil {
 		// ErrOrderAlreadyExists is the expected idempotent-retry race --
 		// the caller routes it to its own existing-order response, not
 		// an error worth logging here. Any other InsertPending failure
@@ -943,7 +1138,7 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 
 	commandKey, err = h.acs.SetParametersWithIdempotency(ctx, deviceID, params, "bss:"+externalOrderID+":set-parameters")
 	if err != nil {
-		if markErr := h.mappings.MarkDispatchFailed(ctx, externalOrderID, err.Error()); markErr != nil {
+		if markErr := h.mappings.MarkDispatchFailed(ctx, orderID, err.Error()); markErr != nil {
 			h.logger.Error("failed to record dispatch failure", "err", markErr, "external_order_id", externalOrderID)
 		}
 		// ErrACSUnreachable maps to its own 502 at the caller with no
@@ -963,7 +1158,7 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 	// for it, which can double-dispatch in this narrow window (design S3's
 	// disclosed residual: one UPDATE statement wide, not the open-ended
 	// "any future BSS retry" window this design replaces).
-	if err := h.mappings.MarkDispatched(ctx, externalOrderID, commandKey); err != nil {
+	if err := h.mappings.MarkDispatched(ctx, orderID, commandKey); err != nil {
 		h.logger.Error("failed to record order dispatched -- reconciler retry may double-dispatch",
 			"err", err, "external_order_id", externalOrderID, "command_key", commandKey)
 	}
@@ -1036,13 +1231,16 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFExecute, req.AccountID) {
 		return
 	}
+	// What this request asks for, in the caller's terms. A repeat of the
+	// order ID is a retry only if it asks for the same.
+	digest := bss.RequestDigest("order", req.Action, roleOrDefault(req.Role), req.ServiceType, req.Parameters)
 
 	if existing, err := h.mappings.FindOrder(r.Context(), req.ExternalOrderID); err != nil {
 		h.logger.Error("failed to check order idempotency", "err", err, "external_order_id", req.ExternalOrderID)
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	} else if existing != nil {
-		h.respondWithExistingOrder(w, r, req.ExternalOrderID, existing)
+		h.respondWithExistingOrderFor(w, r, req.AccountID, req.ExternalOrderID, digest, existing)
 		return
 	}
 
@@ -1078,7 +1276,7 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	commandKey, err := h.dispatchOrder(r.Context(), req.ExternalOrderID, req.AccountID, req.Action, mapping.DeviceID, params)
+	commandKey, err := h.dispatchOrder(r.Context(), req.ExternalOrderID, req.AccountID, req.Action, mapping.DeviceID, params, digest)
 	if err != nil {
 		if errors.Is(err, bss.ErrOrderAlreadyExists) {
 			// A genuine race: another request for the same
@@ -1092,7 +1290,7 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 				return
 			}
-			h.respondWithExistingOrder(w, r, req.ExternalOrderID, existing)
+			h.respondWithExistingOrderFor(w, r, req.AccountID, req.ExternalOrderID, digest, existing)
 			return
 		}
 		if errors.Is(err, bss.ErrACSUnreachable) {
@@ -1121,7 +1319,7 @@ func (h *handler) getJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
-	if order == nil || !h.authorizeBSSAccount(w, r, bss.ScopeTMFRead, order.AccountID) {
+	if order == nil || !h.authorizeBSSRow(w, r, bss.ScopeTMFRead, order.AccountID, order.AccountKey) {
 		// Report a job outside the BSS outbox exactly like an unknown job.
 		// This prevents account-scoped OAuth clients from probing ACS job IDs.
 		if order == nil {

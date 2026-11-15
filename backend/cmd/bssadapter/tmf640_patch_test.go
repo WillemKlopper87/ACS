@@ -114,6 +114,18 @@ func TestTMF640PatchDispatchesOnceAndMonitorFollowsTheJob(t *testing.T) {
 	if acs.dispatches != 1 {
 		t.Fatalf("dispatches = %d, want 1 for a retried PATCH", acs.dispatches)
 	}
+	// The same change spelled with other spacing is the same request; a
+	// different change under the same key is not a retry (finding O7): it
+	// is refused, and the device is sent nothing more.
+	if code, _, body := call(http.MethodPatch, service, "intent-1", `{ "state" : "inactive" }`); code != http.StatusAccepted {
+		t.Fatalf("retried PATCH with other spacing = %d %s", code, body)
+	}
+	if code, _, body := call(http.MethodPatch, service, "intent-1", `{"state":"active"}`); code != http.StatusConflict || !strings.Contains(body, "ErrIdempotencyKeyReused") {
+		t.Fatalf("a different change under the same key = %d %s, want 409 ErrIdempotencyKeyReused", code, body)
+	}
+	if acs.dispatches != 1 {
+		t.Fatalf("dispatches = %d after a refused change, want 1", acs.dispatches)
+	}
 
 	monitor := tmfMonitorBasePath + "intent-1"
 	if _, mon, _ = call(http.MethodGet, monitor, "", ""); mon.State != "InProgress" {

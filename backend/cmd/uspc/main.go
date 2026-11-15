@@ -306,7 +306,7 @@ func startTransports(ctx context.Context, ws *mtp.WebSocket, mq *mtp.MQTT, h *ha
 // still coming up.
 func startHTTPServer(addr string, metrics *observability.Metrics, ready *atomic.Bool) (*http.Server, <-chan error) {
 	mux := http.NewServeMux()
-	mux.Handle("GET /metrics", metrics.Handler())
+	mux.Handle("GET /metrics", observability.ProtectMetrics(observability.MetricsToken(), metrics.Handler()))
 	mux.Handle("GET /healthz", observability.LivenessHandler())
 	mux.Handle("GET /readyz", readinessHandler(ready))
 

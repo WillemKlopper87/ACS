@@ -71,9 +71,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	dsn := os.Getenv("ACS_POSTGRES_DSN")
+	dsn, dsnSource := store.ServiceDSN(os.Getenv, "ACS_CWMP_POSTGRES_DSN")
 	if dsn == "" {
 		logger.Error("ACS_POSTGRES_DSN is required (e.g. postgres://acs:acs@localhost:5432/acs?sslmode=disable)")
+		os.Exit(1)
+	}
+	// With its own login the gateway does not own the schema and cannot
+	// change it: cmd/migrate does that, as the owner, before the services
+	// start. ACS_DB_MIGRATIONS=check says the same for a shared login.
+	migrations := os.Getenv("ACS_DB_MIGRATIONS")
+	if migrations == "" {
+		migrations = "apply"
+		if dsnSource == "ACS_CWMP_POSTGRES_DSN" {
+			migrations = "check"
+		}
+	}
+	if migrations != "apply" && migrations != "check" {
+		logger.Error("ACS_DB_MIGRATIONS must be \"apply\" or \"check\"", "got", migrations)
 		os.Exit(1)
 	}
 
@@ -100,11 +114,19 @@ func main() {
 	}
 	defer db.Close()
 
-	if err := store.Migrate(ctx, db); err != nil {
-		logger.Error("failed to apply migrations", "err", err)
-		os.Exit(1)
+	if migrations == "check" {
+		if err := store.RequireMigrated(ctx, db); err != nil {
+			logger.Error("refusing to start", "err", err)
+			os.Exit(1)
+		}
+		logger.Info("migrations verified, none applied", "dsn_from", dsnSource)
+	} else {
+		if err := store.Migrate(ctx, db); err != nil {
+			logger.Error("failed to apply migrations", "err", err)
+			os.Exit(1)
+		}
+		logger.Info("migrations applied")
 	}
-	logger.Info("migrations applied")
 
 	credRepo, err := credentials.NewRepository(db, os.Getenv("ACS_CREDENTIAL_ENCRYPTION_KEY"))
 	if err != nil {

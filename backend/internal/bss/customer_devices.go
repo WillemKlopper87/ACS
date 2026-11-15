@@ -29,6 +29,8 @@ func (r *Repository) CustomerDevices(ctx context.Context, customerID, after stri
 		  FROM devices d
 		  LEFT JOIN account_device_mappings m ON m.device_id = d.id AND m.unassigned_at IS NULL
 		 WHERE d.customer_id = $1::uuid AND d.oui_serial > $2
+		   -- Text IDs are safe here: the device is already limited to one
+		   -- customer, and an ID is unique within a customer.
 		   AND ($4::text[] IS NULL OR m.account_id = ANY($4::text[]))
 		 ORDER BY d.oui_serial LIMIT $3`, customerID, after, limit, store.StringArray(accounts))
 	if err != nil {

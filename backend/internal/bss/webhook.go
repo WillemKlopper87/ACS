@@ -10,14 +10,17 @@ package bss
 
 import (
 	"context"
+	"crypto/cipher"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"acs/internal/accounts"
 	"acs/internal/store"
 )
 
@@ -27,8 +30,10 @@ var ErrSubscriptionNotFound = errors.New("webhook subscription not found")
 // here for the same reason as AccountDeviceMapping — the admin panel
 // encodes this struct directly.
 type WebhookSubscription struct {
-	ID         string    `json:"id"`
-	AccountID  *string   `json:"account_id"` // nil = fleet-wide
+	ID        string  `json:"id"`
+	AccountID *string `json:"account_id"` // nil = fleet-wide
+	// AccountKey is the registry key of the account ("" when fleet-wide).
+	AccountKey string    `json:"-"`
 	TargetURL  string    `json:"target_url"`
 	Secret     string    `json:"secret"`
 	EventTypes []string  `json:"event_types"`
@@ -43,16 +48,21 @@ type WebhookDelivery struct {
 	Secret         string
 	// PreviousSecret signs too while a secret rotation overlaps.
 	PreviousSecret string
-	EventType      string
-	Payload        json.RawMessage
-	Status         string
-	Attempts       int
-	LastAttemptAt  *time.Time
-	CreatedAt      time.Time
+	// SecretError is set when the stored secret could not be opened.
+	SecretError   string
+	EventType     string
+	Payload       json.RawMessage
+	Status        string
+	Attempts      int
+	LastAttemptAt *time.Time
+	CreatedAt     time.Time
 }
 
 type WebhookRepository struct {
 	db *sql.DB
+	// aead seals signing secrets at rest (webhook_secrets.go); nil when
+	// no key is configured.
+	aead cipher.AEAD
 }
 
 func NewWebhookRepository(db *sql.DB) *WebhookRepository {
@@ -61,16 +71,34 @@ func NewWebhookRepository(db *sql.DB) *WebhookRepository {
 
 func (r *WebhookRepository) CreateSubscription(ctx context.Context, accountID *string, targetURL, secret string, eventTypes []string) (*WebhookSubscription, error) {
 	id := uuid.New().String()
+	// A fleet-wide subscription names no account, by ID or by key.
+	var accountKey *string
+	if accountID != nil {
+		key, err := accounts.Ensure(ctx, r.db, *accountID)
+		if err != nil {
+			return nil, err
+		}
+		accountKey = &key
+	}
+	stored, err := r.sealSecret(id, secret)
+	if err != nil {
+		return nil, fmt.Errorf("seal webhook secret: %w", err)
+	}
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO webhook_subscriptions (id, account_id, target_url, secret, event_types)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, account_id, target_url, secret, event_types, created_at`,
-		id, accountID, targetURL, secret, store.StringArray(eventTypes))
-	return scanSubscription(row)
+		INSERT INTO webhook_subscriptions (id, account_id, account_key, target_url, secret, event_types)
+		VALUES ($1, $2, $6, $3, $4, $5)
+		RETURNING id, account_id, account_key::text, target_url, secret, event_types, created_at`,
+		id, accountID, targetURL, stored, store.StringArray(eventTypes), accountKey)
+	sub, err := scanSubscription(row)
+	if err != nil {
+		return nil, err
+	}
+	sub.Secret = secret // the caller's own value, not the stored form
+	return sub, nil
 }
 
 func (r *WebhookRepository) ListSubscriptions(ctx context.Context) ([]WebhookSubscription, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, account_id, target_url, secret, event_types, created_at FROM webhook_subscriptions ORDER BY created_at ASC`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, account_id, account_key::text, target_url, secret, event_types, created_at FROM webhook_subscriptions ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list webhook subscriptions: %w", err)
 	}
@@ -92,9 +120,13 @@ func (r *WebhookRepository) ListSubscriptions(ctx context.Context) ([]WebhookSub
 // account-scoped BSS OAuth client must never discover another integration's
 // fleet receiver through an account listing.
 func (r *WebhookRepository) ListSubscriptionsForAccount(ctx context.Context, accountID string) ([]WebhookSubscription, error) {
+	accountKey, err := accounts.Resolve(ctx, r.db, accountID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, account_id, target_url, secret, event_types, created_at
-		FROM webhook_subscriptions WHERE account_id = $1 ORDER BY created_at ASC`, accountID)
+		SELECT id, account_id, account_key::text, target_url, secret, event_types, created_at
+		FROM webhook_subscriptions WHERE account_key = $1 ORDER BY created_at ASC`, accountKey)
 	if err != nil {
 		return nil, fmt.Errorf("list account webhook subscriptions: %w", err)
 	}
@@ -114,9 +146,10 @@ func (r *WebhookRepository) ListSubscriptionsForAccount(ctx context.Context, acc
 // destructive action. It deliberately returns ErrSubscriptionNotFound so the
 // caller can make both missing and cross-account rows non-enumerable.
 func (r *WebhookRepository) SubscriptionByID(ctx context.Context, id string) (*WebhookSubscription, error) {
+	scoped, scope := scopeArgs(ctx)
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, account_id, target_url, secret, event_types, created_at
-		FROM webhook_subscriptions WHERE id = $1`, id)
+		SELECT id, account_id, account_key::text, target_url, secret, event_types, created_at
+		FROM webhook_subscriptions WHERE id = $1 AND ($2 = false OR `+subscriptionOwner+` = $3)`, id, scoped, scope)
 	s, err := scanSubscription(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrSubscriptionNotFound
@@ -143,11 +176,15 @@ func (r *WebhookRepository) DeleteSubscription(ctx context.Context, id string) e
 // eventType for accountID — fleet-wide (account_id NULL) or scoped to
 // this specific account, and only if eventType is in its event_types.
 func (r *WebhookRepository) MatchingSubscriptions(ctx context.Context, accountID, eventType string) ([]WebhookSubscription, error) {
+	accountKey, err := accounts.Resolve(ctx, r.db, accountID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, account_id, target_url, secret, event_types, created_at
+		SELECT id, account_id, account_key::text, target_url, secret, event_types, created_at
 		FROM webhook_subscriptions
-		WHERE (account_id IS NULL OR account_id = $1) AND $2 = ANY(event_types)`,
-		accountID, eventType)
+		WHERE (account_key IS NULL OR account_key = $1) AND $2 = ANY(event_types)`,
+		accountKey, eventType)
 	if err != nil {
 		return nil, fmt.Errorf("match webhook subscriptions: %w", err)
 	}
@@ -194,7 +231,7 @@ func (r *WebhookRepository) DispatchTMFEvents(ctx context.Context, since time.Ti
 			       e.event_time, e.source_key, e.payload, e.seq, e.customer_id, s.id AS subscription_id
 			FROM tmf_events e
 			JOIN webhook_subscriptions s
-			  ON (s.account_id IS NULL OR s.account_id = e.account_id)
+			  ON (s.account_key IS NULL OR s.account_key = e.account_key)
 			 AND e.event_type = ANY(s.event_types)
 			LEFT JOIN tmf_webhook_dispatches d
 			  ON d.event_id = e.id AND d.subscription_id = s.id
@@ -264,6 +301,15 @@ func (r *WebhookRepository) DueDeliveries(ctx context.Context, limit int) ([]Web
 			t := lastAttempt.Time
 			d.LastAttemptAt = &t
 		}
+		// Opened here, to sign with. A secret that cannot be opened makes
+		// the delivery unsignable: it is returned with SecretError set and
+		// the worker records the attempt as failed.
+		if d.Secret, err = r.openSecret(d.SubscriptionID, d.Secret); err != nil {
+			d.SecretError = err.Error()
+		}
+		if d.PreviousSecret, err = r.openSecret(d.SubscriptionID, d.PreviousSecret); err != nil {
+			d.PreviousSecret = ""
+		}
 		out = append(out, d)
 	}
 	return out, rows.Err()
@@ -295,14 +341,20 @@ func (r *WebhookRepository) MarkAttemptFailed(ctx context.Context, id, reason st
 
 func scanSubscription(s scanner) (*WebhookSubscription, error) {
 	var sub WebhookSubscription
-	var accountID sql.NullString
+	var accountID, accountKey sql.NullString
 	var eventTypes store.StringArray
-	if err := s.Scan(&sub.ID, &accountID, &sub.TargetURL, &sub.Secret, &eventTypes, &sub.CreatedAt); err != nil {
+	if err := s.Scan(&sub.ID, &accountID, &accountKey, &sub.TargetURL, &sub.Secret, &eventTypes, &sub.CreatedAt); err != nil {
 		return nil, fmt.Errorf("scan webhook subscription: %w", err)
 	}
 	if accountID.Valid {
 		sub.AccountID = &accountID.String
 	}
+	sub.AccountKey = accountKey.String
 	sub.EventTypes = []string(eventTypes)
+	// A sealed secret is opened only to sign a delivery (DueDeliveries);
+	// a listing never carries it.
+	if strings.HasPrefix(sub.Secret, sealedPrefix) {
+		sub.Secret = ""
+	}
 	return &sub, nil
 }

@@ -27,7 +27,7 @@ func (h *handler) getTMF638Service(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
-	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, mapping.AccountID) {
+	if !h.authorizeTMFRow(w, r, bss.ScopeTMFRead, mapping.AccountID, mapping.AccountKey) {
 		return
 	}
 	service, err := h.serviceFromMapping(r, mapping)

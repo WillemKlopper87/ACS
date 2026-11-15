@@ -64,8 +64,7 @@ export function DeviceOnboardingPanel({
       </h3>
 
       <p className="dim" style={{ marginTop: 0, marginBottom: "0.85rem", fontSize: "0.82rem" }}>
-        Follow the evidence in order: reachability/authentication, device-bound identity, model discovery, then Connection Request and operations.
-        Vendor guidance is scoped to the detected device so one firmware quirk does not become a fleet-wide workaround.
+        Work through the checks in order. Vendor notes apply to this device's model only.
       </p>
 
       <div

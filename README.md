@@ -23,6 +23,25 @@ Contracts: [backend/openapi.yaml](backend/openapi.yaml) (operator API — a
 Go test fails if it drifts from the registered routes) and
 [backend/openapi-bssadapter.yaml](backend/openapi-bssadapter.yaml).
 
+## Standalone or through the NaaS platform
+
+One setting, `ACS_INTEGRATION_MODE`, switches between the two ways of
+running the ACS. It is read by `cmd/api`, `cmd/bssadapter`, the production
+scripts and (through the API) the console; change it and restart.
+
+| | `standalone` | `naas` (default) |
+|---|---|---|
+| Who drives the ACS | Operators, from the console | The ISP NaaS/BSS platform through `/bss/v1` and the TMF APIs, and operators |
+| `cmd/bssadapter` | Starts, reports healthy, answers every integration route `503 ErrIntegrationDisabled`, runs no workers, needs no credentials or database | Full service |
+| `cmd/api` | Accepts no service token | Accepts the adapter's service token on its six routes, confined to the customer each call names |
+| Production profile | Asks for none of the adapter's settings | Requires customer-bound clients, no shared token, a source allowlist |
+| Console | No BSS / NaaS screen; the sidebar shows "Standalone" | BSS / NaaS under Administration |
+
+Switching does not delete anything: accounts, mappings, OAuth clients and
+webhook subscriptions stay in the database and work again in `naas` mode.
+Devices, onboarding, jobs, templates, policies and rollouts are the same in
+both.
+
 ## Secure quick start
 
 Every service **fails closed**: a missing, placeholder (`change-me`), or
@@ -46,8 +65,17 @@ export ACS_PRODUCTION_ALLOWED_CIDRS=10.30.0.0/16,10.40.0.0/16
 export ACS_PRODUCTION_TLS_CERT=/etc/letsencrypt/live/acs.example/fullchain.pem
 export ACS_PRODUCTION_TLS_KEY=/etc/letsencrypt/live/acs.example/privkey.pem
 export ACS_PRODUCTION_USP_CLIENT_CA_CERT=/etc/acs/tls/usp-client-ca.pem
+export ACS_PRODUCTION_INTEGRATION_MODE=standalone         # or naas, with the line below
+# export ACS_PRODUCTION_BSS_ALLOWED_CIDRS=198.51.100.0/24 # naas only: where the platform calls from
 source scripts/gen-production-env.sh
 ```
+
+The production profile also covers the operator and integration plane, and
+`cmd/api` and `cmd/bssadapter` refuse to start without it: the BSS adapter
+accepts customer-bound OAuth clients only (no shared token), answers its
+integration routes only to `ACS_BSS_ALLOWED_CIDRS`, and every operator role
+that can change devices must use two-step sign-in. `scripts/security-preflight.sh`
+reports every missing setting at once.
 
 This requires readable TLS material, refuses wildcard listener addresses,
 uses TLS 1.2 or newer, disables Basic/plaintext transport, restricts CWMP and USP
@@ -84,8 +112,20 @@ reverse proxy in front of the API and console.
 | Variable | Service | Purpose |
 |---|---|---|
 | `ACS_JWT_SIGNING_SECRET` (≥32 B) | api | Operator JWTs, browser tickets, transfer-URL tokens |
-| `ACS_CREDENTIAL_ENCRYPTION_KEY` (≥16 B) | api | Device/CLI/VPN credentials at rest |
-| `ACS_INTERNAL_SERVICE_TOKEN` (≥32 B) | api, bssadapter | Adapter → API machine identity (narrow route allowlist) |
+| `ACS_CREDENTIAL_ENCRYPTION_KEY` (≥16 B) | api | Device/CLI/VPN credentials at rest; operators' two-step sign-in secrets |
+| `ACS_CWMP_POSTGRES_DSN`, `ACS_API_POSTGRES_DSN`, `ACS_BSS_POSTGRES_DSN`, `ACS_USP_POSTGRES_DSN` (optional) | acs, api, bssadapter, uspc | A database login per service, each with only the tables that service uses, instead of the shared `ACS_POSTGRES_DSN`. Written by `scripts/db-service-roles.sh`; see "Separate database logins per service" in the runbook. `cmd/acs` then verifies the schema at start instead of migrating it (`ACS_DB_MIGRATIONS=check`). |
+| `ACS_INTEGRATION_MODE` | api, bssadapter | `naas` (default) or `standalone`. See "Standalone or through the NaaS platform". |
+| `ACS_BSS_REQUIRE_ALLOCATED_DEVICES` (optional) | bssadapter | `true`: an ISP's integration can map or pre-provision only a device the operator has already allocated to that ISP (device import, or the device's customer set in the console). Off by default: an unassigned device joins the first ISP that names its serial. Turn it on before a second ISP is connected. |
+| `ACS_BSS_ALLOWED_CIDRS` (required in production with `naas`) | bssadapter | Source networks the `/bss/v1` and `/tmf-api` routes accept calls from; others get `403 ErrSourceNotAllowed` before authentication. Unset in lab: any source. Behind a proxy, set `ACS_TRUSTED_PROXY_CIDRS` so the real caller is seen. |
+| `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS` (required `true` in production) | bssadapter | Accept only OAuth clients bound to one customer: no shared token, no fleet-wide client. |
+| `ACS_WEBGUI_ALLOW_SAME_ORIGIN` (optional) | api | `true` turns off the sandbox on device web pages relayed by the web-GUI proxy. Lab only: without the sandbox a device's scripts run on the API's origin (`docs/SECURITY-ASSESSMENT-2026-11-14.md`, F1). |
+| `ACS_METRICS_TOKEN` (≥32 chars; required in production) | acs, api, bssadapter, uspc | With it set, `/metrics` needs `Authorization: Bearer <token>`. `scripts/gen-production-env.sh` generates it and `scripts/start.sh` renders the Prometheus configuration with it. Unset (lab only): `/metrics` is open. |
+| `ACS_PASSWORD_BREACH_CHECK_URL` (optional) | api | A Have I Been Pwned style range endpoint (`https://api.pwnedpasswords.com/range/`, or a copy inside the network). When set, a new operator password is refused if it appears in published breaches. Only the first five characters of the password's SHA-1 digest are sent. If the service cannot be reached the password is accepted on the other rules. |
+| `ACS_SHARED_RATE_LIMIT` (optional) | api, bssadapter | `true`: the request rate limit holds across replicas (one small database exchange a second per process). Set it when a service runs as more than one replica. |
+| `ACS_BSS_SECRET_KEY` (≥32 B, optional) | bssadapter, acs, api | Seals Wi-Fi secret handles and, with it set, webhook signing secrets at rest. Set the same value on the API so that a webhook created from the console is sealed at once. |
+| `ACS_MFA_REQUIRED_ROLES` (optional) | api | Roles that must use two-step sign-in: a comma-separated list (`superadmin,manager`) or `all`. Unset: each operator chooses. Needs `ACS_CREDENTIAL_ENCRYPTION_KEY`. |
+| `ACS_INTERNAL_SERVICE_TOKEN` (≥32 B) | api, bssadapter | Adapter → API machine identity (narrow route allowlist). Each call names the customer it acts for and reaches that customer's devices only. |
+| `ACS_SERVICE_CALLS_REQUIRE_CUSTOMER` (optional) | api | `true`: refuse an adapter call that names no customer. Default: `true` in the production profile with `naas`, otherwise `false` (fleet-wide clients and accounts nobody owns then still work). |
 | `ACS_DIGEST_USERNAME` / `ACS_DIGEST_PASSWORD` (≥16 B) **or** `ACS_MTLS_CA_CERT` | acs | CPE authentication |
 | `ACS_BSS_OAUTH_SIGNING_SECRET` (≥32 B) **or** `ACS_BSS_API_TOKEN` | bssadapter | Inbound BSS caller auth |
 
@@ -95,7 +135,10 @@ allowlist for the web-GUI proxy and console bridge),
 controller's WebSocket/MQTT listeners; identity-level allowlisting is
 unconditional — pre-register a device via the bulk-import API before
 its first USP contact),
-`ACS_API_CORS_ORIGIN` (defaults to `ACS_FRONTEND_BASE_URL`),
+`ACS_API_CORS_ORIGIN` (defaults to `ACS_FRONTEND_BASE_URL`; the console's
+exact origin. The console's session is a cookie, which needs one exact
+origin on the same site as the API: `*` is refused in production and, in
+the lab, makes the console ask for a sign-in on every reload),
 `ACS_UPLOAD_MAX_BYTES`, `ACS_DB_MAX_OPEN_CONNS`, `ACS_RETENTION_*_DAYS`,
 `ACS_TLS_CERT`/`ACS_TLS_KEY`. The full variable reference is in
 [deployment-testing-onboarding-guide.md](deployment-testing-onboarding-guide.md) §7.

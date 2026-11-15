@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts"
 	"context"
 	"encoding/json"
 	"errors"
@@ -45,6 +46,9 @@ func (h *handler) reconcileTMF641Orders(ctx context.Context) {
 }
 
 func (h *handler) resumeTMF641Item(ctx context.Context, work bss.ServiceOrderWork) error {
+	// The order's IDs are its customer's, whoever runs the item: the
+	// request that placed it, or this worker long after.
+	ctx = accounts.WithCustomer(ctx, work.Order.Scope)
 	var req tmf641OrderRequest
 	if err := json.Unmarshal(work.Order.RawRequest, &req); err != nil {
 		return h.finishTMF641Item(ctx, work.Item, "FAILED", "stored service order request is invalid")
@@ -125,7 +129,7 @@ func (h *handler) resumeTMF641Item(ctx context.Context, work bss.ServiceOrderWor
 			return h.finishTMF641Item(ctx, work.Item, "FAILED", err.Error())
 		}
 		externalID := req.ExternalID + ":" + itoa(work.Item.Seq)
-		_, err = h.dispatchOrder(ctx, externalID, req.AccountID, "MODIFY_WIFI", mapping.DeviceID, params)
+		_, err = h.dispatchOrder(ctx, externalID, req.AccountID, "MODIFY_WIFI", mapping.DeviceID, params, "")
 		if err != nil && !errors.Is(err, bss.ErrOrderAlreadyExists) {
 			// dispatchOrder has already durably written a PENDING_DISPATCH row
 			// for transient ACS failures; its outbox owns retry from here.

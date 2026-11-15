@@ -37,6 +37,8 @@ vi.mock("../api/client", () => {
     getDevice: () => Promise.resolve(router),
     listDeviceSatellites: () => Promise.resolve({ items: [], total: 0 }),
     getDeviceParameters: () => Promise.resolve({ parameters: {} }),
+    getDeviceParametersByName: () =>
+      Promise.resolve({ parameters: { "Device.DeviceInfo.SoftwareVersion": { value: "2.3.1", updated_at: "2026-11-14T00:00:00Z", source: "inform" } } }),
     getParameterNames: () => Promise.resolve({ names: { "Device.WiFi.SSID.1.SSID": true, "Device.DeviceInfo.SerialNumber": false } }),
     listDeviceJobs: () => Promise.resolve({ items: [{ command_key: "reboot_1", type: "REBOOT", status: "SUCCESS" }] }),
   };
@@ -74,6 +76,10 @@ describe("device workspace", () => {
       expect(calls).not.toContain(notNeeded);
     }
     expect(calls).toContain("getParameterNames");
+    // The health row reads a few named parameters, never the whole cache.
+    expect(calls).toContain("getDeviceParametersByName");
+    expect(await screen.findByText("2.3.1")).toBeTruthy();
+    expect(screen.queryByText("Wi-Fi clients")).toBeNull(); // not reported, so not shown
     expect(screen.queryByText("Object management")).toBeNull();
     expect(screen.queryByText("Ping")).toBeNull();
   });

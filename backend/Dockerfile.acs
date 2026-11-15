@@ -7,7 +7,10 @@
 # non-stdlib runtime dependencies are pure Go (pgx, prometheus client,
 # golang.org/x/*), so there's nothing that needs libc, and no shell/package
 # manager needs to ship in the runtime image at all.
-FROM golang:1.26-alpine AS build
+# Base images are pinned by digest as well as by tag: a tag can be moved
+# to different content, a digest cannot. Dependabot (docker) raises the
+# digest when the tag is updated.
+FROM golang:1.26-alpine@sha256:30b1e546a9c7fa3b747c2bdba3a0c7bdf3a02ebb4c5b8405d2f948d7e8aac4ec AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -17,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/acs ./c
 # distroless "static" (not "base"): still ships ca-certificates (needed for
 # mTLS CA verification and any outbound TLS) and a non-root "nonroot" user,
 # without glibc this statically-linked binary doesn't need.
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 COPY --from=build /out/acs /app/acs
 # :7547 CWMP/SOAP (the CPE fleet); :3478/udp STUN (RFC 5389, optional NAT
 # detection) — both documented in deployment-testing-onboarding-guide.md §1.

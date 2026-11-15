@@ -5,6 +5,7 @@ import type { DashboardAlarm, DashboardData, DashboardWidget } from "../api/type
 import { timeAgo } from "../lib/format";
 import { toast } from "../lib/toast";
 import { groupCountsByVendor } from "../lib/vendorFamily";
+import { plainLabel } from "../lib/labels";
 
 // Customizable fleet dashboard (admin-platform backlog). Charts follow the
 // dataviz skill's method: form picked by the data's job (grouped counts →
@@ -32,12 +33,27 @@ function RankedBarChart({ data, toneByKey }: { data: Record<string, number>; ton
   const entries = Object.entries(data).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
   const max = Math.max(...entries.map(([, n]) => n), 1);
   if (entries.length === 0) return <p className="dim" style={{ margin: 0, fontSize: "0.82rem" }}>No data yet.</p>;
+  // One category is a fact, not a comparison: a full-width bar for it
+  // says nothing a number does not say better.
+  if (entries.length === 1) {
+    const [key, n] = entries[0];
+    return (
+      <p className="single-value" title={key}>
+        <span className="single-dot" style={{ background: toneByKey?.[key] ?? "var(--accent)" }} aria-hidden="true" />
+        <strong>{plainLabel(key)}</strong>
+        <span className="dim">
+          {" "}
+          — all {n} device{n === 1 ? "" : "s"}
+        </span>
+      </p>
+    );
+  }
   return (
     <div>
       {entries.map(([key, n]) => (
         <div key={key} style={{ marginBottom: "2px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", marginBottom: "0.15rem" }}>
-            <span>{key}</span>
+            <span title={key}>{plainLabel(key)}</span>
             <span className="dim" style={{ fontFamily: "var(--font-mono)" }}>{n}</span>
           </div>
           <div style={{ height: "16px", background: "var(--surface-3)", borderRadius: "4px" }}>
@@ -117,7 +133,7 @@ function AlarmList({ alarms }: { alarms: DashboardAlarm[] }) {
 const WIDGET_TITLE: Record<string, string> = {
   status: "Devices by online status",
   reachability: "Devices by reachability",
-  inform_recency: "Inform recency",
+  inform_recency: "Last check-in",
   alarms: "Active alarms",
   group_by: "Fleet breakdown",
   firmware: "Firmware status",
@@ -138,7 +154,7 @@ export function Dashboard() {
     queryKey: ["dashboard"],
     queryFn: async () => {
       const [d, l] = await Promise.all([api.getDashboard(), api.getDashboardLayout()]);
-      return { data: d, layout: l.widgets };
+      return { data: d, layout: l.widgets ?? [] };
     },
     refetchInterval: live ? 10_000 : false,
   });
@@ -260,7 +276,7 @@ export function Dashboard() {
             )}
 
             {enabled.includes("inform_recency") && (
-              <div className="panel"><h3>Inform recency</h3><RankedBarChart data={data.inform_recency} /></div>
+              <div className="panel"><h3>Last check-in</h3><RankedBarChart data={data.inform_recency} /></div>
             )}
 
             {enabled.includes("group_by") && (
@@ -285,24 +301,23 @@ export function Dashboard() {
               </div>
             )}
 
-            {enabled.includes("temperature") && (
+            {/* A widget with nothing to report does not take a panel: it is
+                one line under the grid (below). */}
+            {enabled.includes("temperature") && data.temperature && data.temperature.length > 0 && (
               <div className="panel">
                 <h3>Temperature</h3>
-                {!data.temperature || data.temperature.length === 0 ? (
-                  <p className="dim" style={{ margin: 0, fontSize: "0.82rem" }}>
-                    No device in scope reports a temperature parameter.
-                  </p>
-                ) : (
-                  data.temperature.map((t, i) => (
-                    <div className="param-row" key={i}>
-                      <span className="path">{t.DeviceID.slice(0, 8)}… <span className="dim">· {t.ParameterName}</span></span>
-                      <span>{t.Value}</span>
-                    </div>
-                  ))
-                )}
+                {data.temperature.map((t, i) => (
+                  <div className="param-row" key={i}>
+                    <span className="path">{t.DeviceID.slice(0, 8)}… <span className="dim">· {t.ParameterName}</span></span>
+                    <span>{t.Value}</span>
+                  </div>
+                ))}
               </div>
             )}
           </div>
+          {enabled.includes("temperature") && (!data.temperature || data.temperature.length === 0) && (
+            <p className="dim dashboard-quiet">Temperature: no device in scope reports one.</p>
+          )}
         </>
       ) : null}
     </section>

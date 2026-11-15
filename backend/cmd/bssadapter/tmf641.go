@@ -305,7 +305,7 @@ func (h *handler) createTMF641Order(w http.ResponseWriter, r *http.Request) {
 				}
 				break
 			}
-			if _, dispatchErr := h.dispatchOrder(r.Context(), req.ExternalID+":"+strconv.Itoa(i), req.AccountID, "MODIFY_WIFI", mapping.DeviceID, params); dispatchErr != nil {
+			if _, dispatchErr := h.dispatchOrder(r.Context(), req.ExternalID+":"+strconv.Itoa(i), req.AccountID, "MODIFY_WIFI", mapping.DeviceID, params, ""); dispatchErr != nil {
 				_ = h.mappings.UpdateServiceOrderItem(r.Context(), items[i].ID, "FAILED", dispatchErr.Error())
 				items[i].Status = "FAILED"
 				for j := i + 1; j < len(items); j++ {
@@ -340,6 +340,9 @@ func (h *handler) getTMF641Order(w http.ResponseWriter, r *http.Request) {
 	// {id} is the order's id (its href) or the BSS's externalId.
 	id := strings.TrimSpace(r.PathValue("id"))
 	order, err := h.mappings.FindServiceOrderByRef(r.Context(), id)
+	if ambiguousID(w, err) {
+		return
+	}
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
@@ -348,7 +351,7 @@ func (h *handler) getTMF641Order(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "ErrNotFound", "no such service order")
 		return
 	}
-	if !h.authorizeTMF(w, r, bss.ScopeTMFRead, order.AccountID) {
+	if !h.authorizeTMFRow(w, r, bss.ScopeTMFRead, order.AccountID, order.AccountKey) {
 		return
 	}
 	items, err := h.mappings.ServiceOrderItems(r.Context(), order.ID)
@@ -393,6 +396,9 @@ func (h *handler) cancelTMF641Order(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	order, err := h.mappings.FindServiceOrderByRef(r.Context(), id)
+	if ambiguousID(w, err) {
+		return
+	}
 	if err != nil {
 		writeError(w, 500, "ErrInternal", "internal error")
 		return
@@ -401,7 +407,7 @@ func (h *handler) cancelTMF641Order(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "ErrNotFound", "no such service order")
 		return
 	}
-	if !h.authorizeTMF(w, r, bss.ScopeTMFExecute, order.AccountID) {
+	if !h.authorizeTMFRow(w, r, bss.ScopeTMFExecute, order.AccountID, order.AccountKey) {
 		return
 	}
 	id = order.ID

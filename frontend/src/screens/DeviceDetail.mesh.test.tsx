@@ -50,6 +50,8 @@ vi.mock("../api/client", () => {
     getDevice: (id: string) => Promise.resolve(id === "gw-1" ? gateway : beacon),
     listDeviceSatellites: () => Promise.resolve({ items: [], total: 0 }),
     getDeviceParameters: () => Promise.resolve({ parameters: {} }),
+    getDeviceParametersByName: () =>
+      Promise.resolve({ parameters: { "Device.DeviceInfo.SoftwareVersion": { value: "2.3.1", updated_at: "2026-11-14T00:00:00Z", source: "inform" } } }),
     getParameterNames: () => Promise.resolve({ names: {} }),
     getWebGUIConfig: () => Promise.resolve({ configured: false }),
     rebootDevice,

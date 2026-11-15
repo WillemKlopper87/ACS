@@ -87,12 +87,16 @@ func (r *WebhookRepository) Redeliver(ctx context.Context, subscriptionID, deliv
 // RotateSecret replaces a subscription's signing secret. Until the overlap
 // ends, deliveries are signed with both the new and the previous secret.
 func (r *WebhookRepository) RotateSecret(ctx context.Context, subscriptionID, newSecret string, overlap time.Duration) (time.Time, error) {
+	stored, err := r.sealSecret(subscriptionID, newSecret)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("seal webhook secret: %w", err)
+	}
 	var until time.Time
-	err := r.db.QueryRowContext(ctx, `
+	err = r.db.QueryRowContext(ctx, `
 		UPDATE webhook_subscriptions
 		   SET previous_secret = secret, previous_secret_expires_at = now() + $3::interval, secret = $2
 		 WHERE id = $1
-		RETURNING previous_secret_expires_at`, subscriptionID, newSecret, fmt.Sprintf("%d seconds", int(overlap.Seconds()))).Scan(&until)
+		RETURNING previous_secret_expires_at`, subscriptionID, stored, fmt.Sprintf("%d seconds", int(overlap.Seconds()))).Scan(&until)
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, ErrSubscriptionNotFound
 	}

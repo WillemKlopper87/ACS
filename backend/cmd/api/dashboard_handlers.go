@@ -273,6 +273,10 @@ func (h *handler) setDashboardLayout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
+	if req.Widgets == nil {
+		http.Error(w, "widgets is required (send an empty list to hide every widget)", http.StatusBadRequest)
+		return
+	}
 	if err := h.dashboards.SaveLayout(r.Context(), op, req.Widgets); err != nil {
 		h.logger.Error("failed to save dashboard layout", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

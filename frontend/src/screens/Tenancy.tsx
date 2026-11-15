@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { Region, Customer, Project, ImportResult } from "../api/types";
 import { toast } from "../lib/toast";
+import { confirmDialog } from "../lib/confirm";
 
 // Multi-tenancy management (admin-platform backlog): regions/customers/
 // projects are the org chart (superadmin-only structural CRUD, enforced
@@ -86,7 +87,7 @@ export function Tenancy() {
   // became an unhandled promise rejection, load() never ran, and the
   // operator saw the row sit there with no indication anything failed.
   async function remove(kind: string, name: string, del: () => Promise<void>) {
-    if (!window.confirm(`Delete ${kind} "${name}"? This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Delete ${kind} "${name}"? This cannot be undone.`))) return;
     try {
       await del();
       toast(`Deleted ${kind} "${name}"`, "info");
@@ -204,9 +205,7 @@ export function Tenancy() {
         <div className="panel">
           <h3>Bulk device import</h3>
           <p className="dim" style={{ marginTop: 0, fontSize: "0.8rem" }}>
-            Pre-registers devices ahead of their first check-in — required columns/fields: manufacturer, oui,
-            product_class, serial_number; customer_id and tags are optional. When the real device later Informs, it
-            enriches this same row rather than creating a duplicate.
+            Registers devices before they first check in, so each lands in the right customer. Needs manufacturer, oui, product_class and serial_number; customer_id and tags are optional.
           </p>
           <form onSubmit={runImport}>
             <div className="form-row" style={{ marginTop: 0 }}>

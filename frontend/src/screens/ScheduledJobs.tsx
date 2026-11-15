@@ -8,6 +8,8 @@ import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
 import { useCustomers, customerName } from "../lib/useCustomers";
+import { confirmDialog } from "../lib/confirm";
+import { Drawer } from "../components/Drawer";
 
 const JOB_TYPES = ["GET_PARAMETER", "SET_PARAMETER", "DIAGNOSTICS_PING", "CONNECTION_REQUEST"];
 
@@ -27,6 +29,7 @@ export function ScheduledJobs() {
   const [customerId, setCustomerId] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [creatingOpen, setCreatingOpen] = useState(false);
   const customers = useCustomers();
 
   async function load() {
@@ -70,6 +73,7 @@ export function ScheduledJobs() {
       setName("");
       setTargetId("");
       setCustomerId("");
+      setCreatingOpen(false);
       await load();
     } catch (e) {
       setCreateError(e instanceof ApiError ? e.message : "Failed to create schedule");
@@ -89,7 +93,7 @@ export function ScheduledJobs() {
   }
 
   async function onDelete(sj: ScheduledJob) {
-    if (!window.confirm(`Delete schedule "${sj.name}"? It will stop running ${sj.job_type} every ${sj.interval_seconds}s. This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Delete schedule "${sj.name}"? It will stop running ${sj.job_type} every ${sj.interval_seconds}s. This cannot be undone.`))) return;
     try {
       await api.deleteScheduledJob(sj.id);
       toast("Schedule deleted", "info");
@@ -155,8 +159,15 @@ export function ScheduledJobs() {
         </div>
       )}
 
-      <div className="panel">
-        <h3>Create scheduled job</h3>
+      <div className="page-bar">
+        <p className="page-lede">A scheduled job repeats one action on a device or a group at a fixed interval.</p>
+        <button className="btn primary" onClick={() => setCreatingOpen(true)} disabled={!writable}>
+          New scheduled job
+        </button>
+      </div>
+
+      {creatingOpen && (
+        <Drawer title="New scheduled job" onClose={() => setCreatingOpen(false)} wide>
         <form onSubmit={onCreate}>
           <div className="form-row">
             <label className="field">
@@ -225,7 +236,8 @@ export function ScheduledJobs() {
             </button>
           </div>
         </form>
-      </div>
+        </Drawer>
+      )}
 
       {loading && items.length === 0 ? (
         <div className="loading">Loading scheduled jobs…</div>

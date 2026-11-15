@@ -108,7 +108,11 @@ var rules = []rule{
 	{"webhook_deliveries", func(p Policy) int { return p.WebhookDeliveriesDays },
 		"status <> 'PENDING' AND created_at < $1", "id"},
 	{"jobs", func(p Policy) int { return p.FinishedJobsDays },
-		"status IN ('SUCCESS', 'FAILED', 'TIMEOUT') AND completed_at IS NOT NULL AND completed_at < $1", "id"},
+		"status IN ('SUCCESS', 'FAILED', 'TIMEOUT', 'CANCELLED') AND completed_at IS NOT NULL AND completed_at < $1", "id"},
+	// A bulk operation is only a view over its jobs, so it goes when they
+	// do (its items cascade).
+	{"bulk_operations", func(p Policy) int { return p.FinishedJobsDays },
+		"created_at < $1", "id"},
 	{"uploaded_files", func(p Policy) int { return p.StaleUploadSlotsDays },
 		"status = 'PENDING' AND created_at < $1", "id"},
 	{"password_reset_tokens", func(p Policy) int { return p.ResetTokensDays },

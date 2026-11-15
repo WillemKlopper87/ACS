@@ -37,6 +37,10 @@ const DEVICE = {
 // mockAPI wires a hermetic backend: happy-path login, one device, empty
 // collections for everything else so no screen crashes on load.
 async function mockAPI(page: Page) {
+  // Like the real API, a sign-in leaves a session cookie that the console
+  // cannot read and that outlives a page load. The mock keeps it as a flag
+  // (a mocked response cannot set a real cookie).
+  let cookieSession: { username: string } | null = null;
   await page.route(`${API}/**`, async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
@@ -47,7 +51,15 @@ async function mockAPI(page: Page) {
     // Unauthenticated requests get 401 (excluding the public auth
     // routes) — that is what flips the console into its login state,
     // exactly like the real fail-closed API.
-    const authed = !!route.request().headers()["authorization"];
+    const authed = !!route.request().headers()["authorization"] || cookieSession !== null;
+    if (method === "GET" && path === "/api/v1/auth/session") {
+      if (!cookieSession) return route.fulfill({ status: 401, contentType: "text/plain", body: "missing bearer token" });
+      return json({ auth_required: true, username: cookieSession.username, role: "superadmin", via: "cookie", expires_at: new Date(Date.now() + 3600_000).toISOString() });
+    }
+    if (method === "POST" && path === "/api/v1/auth/logout") {
+      cookieSession = null;
+      return route.fulfill({ status: 204 });
+    }
     if (!authed && !path.startsWith("/api/v1/auth/")) {
       return route.fulfill({ status: 401, contentType: "text/plain", body: "missing bearer token" });
     }
@@ -55,7 +67,14 @@ async function mockAPI(page: Page) {
     if (method === "POST" && path === "/api/v1/auth/login") {
       const body = route.request().postDataJSON() as { username: string; password: string };
       if (body.password === "right-password") {
-        return json({ token: "e2e-token", role: "superadmin", username: body.username, expires_at: new Date(Date.now() + 3600_000).toISOString() });
+        cookieSession = { username: body.username };
+        return json({
+          token: "e2e-token",
+          role: "superadmin",
+          username: body.username,
+          expires_at: new Date(Date.now() + 3600_000).toISOString(),
+          session_cookie: true,
+        });
       }
       return route.fulfill({ status: 401, contentType: "text/plain", body: "invalid username or password" });
     }
@@ -77,7 +96,7 @@ async function signIn(page: Page) {
   await page.getByLabel("Username").fill("e2e-operator");
   await page.getByLabel("Password").fill("right-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("navigation")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -95,15 +114,23 @@ test("wrong password shows the API error, right password reaches the console", a
 
   await page.getByLabel("Password").fill("right-password");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("button", { name: "Inventory", exact: true })).toBeVisible();
+  // The sidebar lists areas; Inventory is the first tab of Devices.
+  await expect(page.getByRole("button", { name: "Devices", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Inventory", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(page.getByText("001349-NR7101-S1")).toBeVisible();
 });
 
 test("screens are URL-routed and the browser back button works", async ({ page }) => {
   await signIn(page);
-  await page.getByRole("button", { name: "Jobs", exact: true }).click();
+  // An area in the sidebar lands on its first screen; its other screens
+  // are tabs, each with the URL it always had.
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
   await expect(page).toHaveURL(/\/jobs$/);
-  await page.getByRole("button", { name: "Dashboard" }).click();
+  await page.getByRole("link", { name: "Bulk operations" }).click();
+  await expect(page).toHaveURL(/\/operations$/);
+  await page.getByRole("link", { name: "Jobs", exact: true }).click();
+  await expect(page).toHaveURL(/\/jobs$/);
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(page.getByText("job success rate")).toBeVisible();
   await page.goBack();
@@ -151,7 +178,7 @@ test("login page has no critical accessibility violations", async ({ page }) => 
 test("fleet and dashboard have no critical accessibility violations", async ({ page }) => {
   await signIn(page);
   await expectNoSeriousA11y(page, "fleet");
-  await page.getByRole("button", { name: "Dashboard" }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page.getByText("job success rate")).toBeVisible();
   await expectNoSeriousA11y(page, "dashboard");
 });
@@ -223,7 +250,7 @@ test("subscriber lookup finds a caller and the device shows who it serves", asyn
   });
   await page.route(`${API}/api/v1/devices/dev-1`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...DEVICE, subscriber: sub }) }));
-  await page.route(`${API}/api/v1/accounts/ACC-1001/profile`, (route) => {
+  await page.route(`${API}/api/v1/accounts/ACC-1001/profile?customer_id=none`, (route) => {
     if (route.request().method() === "PUT") {
       profileBody = route.request().postDataJSON();
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ account_id: "ACC-1001", vip: false }) });
@@ -319,12 +346,14 @@ test("an admin removes an account-device mapping with a reason", async ({ page }
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items }) });
   });
   await signIn(page);
-  await page.getByRole("button", { name: "BSS / NaaS" }).click();
+  await page.getByRole("button", { name: "Administration", exact: true }).click();
+  await page.getByRole("link", { name: "BSS / NaaS" }).click();
   await page.getByRole("button", { name: `Remove ${DEVICE.oui_serial} from TEST-0001` }).click();
   await page.getByLabel("Reason for removing").selectOption("return");
   await page.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(page.getByText("No mappings yet.")).toBeVisible();
-  expect(removed).toBe("/api/v1/bss/mappings/TEST-0001/gateway?reason=return");
+  // The console names whose account it is: this one has no customer.
+  expect(removed).toBe("/api/v1/bss/mappings/TEST-0001/gateway?reason=return&customer_id=none");
 });
 
 // Ownership shows who the device serves with the name masked and the
@@ -341,7 +370,7 @@ test("ownership masks the subscriber until Show, and Back returns to the previou
     return route.fulfill({ status: 200, contentType: "application/json",
       body: JSON.stringify({ ...sub, site: { name: "Home", street: "12 Rivonia Rd", suburb: "Sandton", city: "Johannesburg", postal_code: "2196" } }) });
   });
-  await page.route(`${API}/api/v1/accounts/ACC-1001/profile`, (route) =>
+  await page.route(`${API}/api/v1/accounts/ACC-1001/profile?customer_id=none`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ account_id: "ACC-1001", display_name: "Thandi Nkosi", name_source: "bss", vip: true }) }));
 
   await signIn(page);
@@ -358,7 +387,161 @@ test("ownership masks the subscriber until Show, and Back returns to the previou
   await expectNoSeriousA11y(page, "ownership");
   await page.screenshot({ path: "test-results/ownership-revealed.png" });
 
-  await page.getByRole("button", { name: "Inventory" }).click();
+  await page.getByRole("link", { name: "Inventory", exact: true }).click();
   await page.getByRole("button", { name: "Back to the previous page" }).click();
   await expect(page).toHaveURL(/\/devices\/dev-1\/ownership$/);
+});
+
+test("two-step sign-in asks for a code, survives a wrong one, and reaches the console", async ({ page }) => {
+  // Registered after mockAPI, so these win for the login routes.
+  await page.route(`${API}/api/v1/auth/login`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ mfa: "verify", mfa_token: "mfa-token", expires_at: new Date(Date.now() + 300_000).toISOString() }) }),
+  );
+  await page.route(`${API}/api/v1/auth/login/mfa`, (route) => {
+    const body = route.request().postDataJSON() as { mfa_token: string; code: string };
+    if (body.mfa_token === "mfa-token" && body.code === "123456") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ token: "e2e-token", role: "superadmin", expires_at: new Date(Date.now() + 3600_000).toISOString() }) });
+    }
+    return route.fulfill({ status: 401, contentType: "text/plain", body: "that code is not valid — check the app and try the next one" });
+  });
+
+  await page.goto("/");
+  await page.getByLabel("Username").fill("e2e-operator");
+  await page.getByLabel("Password").fill("right-password");
+  await page.getByRole("button", { name: "Sign in" }).click();
+
+  // The password alone does not open the console.
+  await expect(page.getByText("six-digit code")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main" })).toHaveCount(0);
+
+  await page.getByLabel("Code").fill("000000");
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect(page.getByText("that code is not valid")).toBeVisible();
+  // A wrong code is not a sign-out: the prompt is still there.
+  await expect(page.getByRole("button", { name: "Verify" })).toBeVisible();
+
+  await page.getByLabel("Code").fill("123456");
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
+
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations.filter((v) => v.impact === "critical")).toEqual([]);
+});
+
+test("a destructive action asks in the console's own dialog, and Escape means no", async ({ page }) => {
+  let deleted = false;
+  await page.route(`${API}/api/v1/device-groups`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [{ id: "g-1", name: "Pilot", member_count: 2, created_at: new Date().toISOString() }] }) }),
+  );
+  await page.route(`${API}/api/v1/device-groups/g-1`, (route) => {
+    if (route.request().method() === "DELETE") deleted = true;
+    return route.fulfill({ status: 204, body: "" });
+  });
+  await signIn(page);
+  await page.goto("/groups");
+  await page.getByRole("button", { name: "Delete" }).click();
+
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText('Delete group "Pilot" (2 members)?');
+  // Focus starts on the safe choice.
+  await expect(dialog.getByRole("button", { name: "Keep as it is" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  expect(deleted).toBe(false);
+
+  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  expect(deleted).toBe(true);
+});
+
+test("the header search finds a device from any screen and opens it", async ({ page }) => {
+  let asked = "";
+  await page.route(`${API}/api/v1/lookup**`, (route) => {
+    asked = new URL(route.request().url()).searchParams.get("q") ?? "";
+    const items = asked === "nkosi" ? [{ device_id: "dev-1", oui_serial: DEVICE.oui_serial, manufacturer: "Zyxel", model: "NR7101", subscriber_name: "Thandi Nkosi", account_id: "ACC-1001", vip: false, matched: ["name"] }] : [];
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items, count: items.length }) });
+  });
+  await signIn(page);
+  // Not from Inventory: the point is that it works wherever you are.
+  await page.goto("/jobs");
+
+  const search = page.getByRole("searchbox", { name: "Search for a device or subscriber" });
+  await expect(search).toBeVisible();
+  await page.keyboard.press("Control+k");
+  await expect(search).toBeFocused();
+
+  // Nothing is looked up until Enter: lookups by name are audited.
+  await search.fill("nkosi");
+  expect(asked).toBe("");
+  await search.press("Enter");
+  const results = page.getByRole("list", { name: "Search results" });
+  await expect(results.getByText("Thandi Nkosi")).toBeVisible();
+  expect(asked).toBe("nkosi");
+
+  await results.getByRole("listitem").click();
+  await expect(page).toHaveURL(/\/devices\/dev-1\/overview$/);
+  await expect(results).toHaveCount(0);
+
+  await search.fill("nobody");
+  await search.press("Enter");
+  await expect(page.getByText("Nothing matches")).toBeVisible();
+  await search.press("Escape");
+  await expect(page.getByRole("list", { name: "Search results" })).toHaveCount(0);
+});
+
+test("an ACS running on its own hides the BSS / NaaS screen and says so", async ({ page }) => {
+  await page.route(`${API}/api/v1/system/info`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integration_mode: "standalone", deployment_profile: "production" }) }),
+  );
+  await signIn(page);
+  await expect(page.getByText("Standalone · production")).toBeVisible();
+
+  await page.getByRole("button", { name: "Administration", exact: true }).click();
+  // The rest of the area is untouched; only the integration screen is gone.
+  await expect(page.getByRole("link", { name: "Operators" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Tenancy" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "BSS / NaaS" })).toHaveCount(0);
+
+  // An old bookmark explains itself instead of showing a broken screen.
+  await page.goto("/bss");
+  await expect(page.getByText("the BSS / NaaS integration is switched off")).toBeVisible();
+});
+
+// The session is a cookie the page cannot read (security assessment O6):
+// nothing that could act as the operator is left in browser storage, the
+// token from the sign-in is forgotten once the cookie is confirmed, and a
+// reload keeps the operator signed in.
+test("the session is not kept in browser storage and survives a reload", async ({ page }) => {
+  await signIn(page);
+  await expect
+    .poll(async () => {
+      let withToken = 0;
+      const seen = (r: { url(): string; headers(): Record<string, string> }) => {
+        if (r.url().startsWith(API) && r.headers()["authorization"]) withToken++;
+      };
+      page.on("request", seen);
+      await page.getByRole("button", { name: "Activity", exact: true }).click();
+      await page.getByRole("button", { name: "Devices", exact: true }).click();
+      await page.waitForTimeout(300);
+      page.off("request", seen);
+      return withToken;
+    })
+    .toBe(0);
+  const stored = await page.evaluate(() => JSON.stringify(localStorage) + JSON.stringify(sessionStorage) + document.cookie);
+  expect(stored).not.toContain("e2e-token");
+
+  let csrfMissing = 0;
+  page.on("request", (r) => {
+    if (r.url().startsWith(API) && !r.headers()["x-acs-csrf"]) csrfMissing++;
+  });
+  await page.reload();
+  await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
+  await expect(page.getByText("001349-NR7101-S1")).toBeVisible();
+  expect(csrfMissing).toBe(0);
+
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page.getByText("Sign in to continue.")).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("Sign in to continue.")).toBeVisible();
 });

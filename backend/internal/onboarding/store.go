@@ -1,6 +1,7 @@
 package onboarding
 
 import (
+	"acs/internal/accounts"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -393,9 +394,13 @@ func (r *Repository) Retry(ctx context.Context, id string) error {
 // OpenBSSSales returns the open (not IN_SERVICE or CANCELLED) BSS sales of
 // an account in a role.
 func (r *Repository) OpenBSSSales(ctx context.Context, accountRef, role string) ([]Onboarding, error) {
+	// An account reference is the customer's own ID: a caller acting for
+	// one customer sees that customer's sales only.
+	scoped, customer := accounts.ScopeFilter(ctx)
 	rows, err := r.db.QueryContext(ctx, `SELECT `+onboardingColumns+` FROM onboardings
 		WHERE source = 'bss' AND account_ref = $1 AND bss_role = $2 AND state NOT IN ('IN_SERVICE', 'CANCELLED', 'ENDED')
-		ORDER BY created_at`, accountRef, role)
+		  AND ($3 = false OR COALESCE(customer_id::text, '') = $4)
+		ORDER BY created_at`, accountRef, role, scoped, customer)
 	if err != nil {
 		return nil, fmt.Errorf("open BSS sales: %w", err)
 	}

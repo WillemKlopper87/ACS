@@ -461,7 +461,9 @@ def record_lifecycle(token, cust):
     long_body = {"subscriber_name": "x" * 121}
     status, resp = call(BSS, "PUT", path, long_body, token)
     exchanges.append(exchange("PUT", path, status, resp, False, {"subscriber_name": "x" * 121}))
-    # An account another customer owns: a second ISP claims it with its first write.
+    # An account ID another customer uses. IDs are per customer: a second ISP
+    # registers "rival.0001" with its first write, and the same ID from this
+    # customer is this customer's own account (200), not the rival's.
     status, rival = call(API, "POST", "/api/v1/customers", {"name": "Rival ISP"}, ADMIN)
     assert status in (200, 201), (status, rival)
     status, rc = call(API, "POST", "/api/v1/bss/oauth-clients",
@@ -475,8 +477,8 @@ def record_lifecycle(token, cust):
     status, resp = call(BSS, "PUT", other, {"vip": True}, token)
     exchanges.append(exchange("PUT", other, status, resp, False, {"vip": True}))
     record("subscriber-profile", "PUT /bss/v1/accounts/{id}/subscriber (1.2): set the display name and VIP flag, change one field "
-           "(the other is kept), clear the name with an empty string, a name over 120 characters (400), and an account of "
-           "another customer (404). A first write to an account nobody owns claims it, as a mapping does. Optional: the BSS stays the record and a name it sends is read-only in the console.", exchanges)
+           "(the other is kept), clear the name with an empty string, a name over 120 characters (400), and an account ID "
+           "another customer also uses (200: IDs are per customer, so this is this customer's own account). A first write registers the account, as a mapping does. Optional: the BSS stays the record and a name it sends is read-only in the console.", exchanges)
 
     # --- End service: the sale ends (ENDED), its mapping ends, the device is released
     sale_id, href, account = in_service_sale(token, cust, 20)

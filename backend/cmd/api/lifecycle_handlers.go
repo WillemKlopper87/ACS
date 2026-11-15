@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,7 +66,8 @@ func (h *handler) publishSaleEvent(r *http.Request, o *onboarding.Onboarding, to
 	if o.CustomerID != nil {
 		_, err = h.bssMappings.CreateCustomerEvent(r.Context(), *o.CustomerID, key, o.AccountRef, deref(o.DeviceID), "OnboardingStateChangeEvent", payload, at)
 	} else {
-		_, err = h.bssMappings.CreateEvent(r.Context(), key, o.AccountRef, deref(o.DeviceID), "", "OnboardingStateChangeEvent", payload, at)
+		// A sale with no customer names an account nobody owns.
+		_, err = h.bssMappings.CreateEvent(accounts.WithCustomer(r.Context(), ""), key, o.AccountRef, deref(o.DeviceID), "", "OnboardingStateChangeEvent", payload, at)
 	}
 	if err != nil {
 		h.logger.Error("failed to publish onboarding event", "err", err, "onboarding_id", o.ID)

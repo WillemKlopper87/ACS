@@ -90,8 +90,7 @@ func (h *handler) resetOperatorPassword(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if len(req.NewPassword) < 8 {
-		http.Error(w, "new_password must be at least 8 characters", http.StatusBadRequest)
+	if !h.acceptablePassword(w, r, req.NewPassword, "") {
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
@@ -178,8 +177,7 @@ func (h *handler) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if len(req.NewPassword) < 8 {
-		http.Error(w, "new_password must be at least 8 characters", http.StatusBadRequest)
+	if !h.acceptablePassword(w, r, req.NewPassword, "") {
 		return
 	}
 

@@ -118,20 +118,23 @@ func end(ctx context.Context, tx *sql.Tx, req EndRequest) (*EndResult, error) {
 
 	rows, err := tx.QueryContext(ctx, `UPDATE account_device_mappings SET unassigned_at = now(), unassign_reason = $2, updated_at = now()
 		WHERE device_id = $1 AND unassigned_at IS NULL
-		RETURNING account_id, role, COALESCE(service_plan, '')`, res.DeviceID, req.Reason)
+		RETURNING account_id, account_key::text, role, COALESCE(service_plan, '')`, res.DeviceID, req.Reason)
 	if err != nil {
 		return nil, fmt.Errorf("end mappings: %w", err)
 	}
+	// Accounts are followed by their key; res.Accounts reports their IDs.
 	seen := map[string]bool{}
+	var accountKeys []string
 	for rows.Next() {
-		var account, role, plan string
-		if err := rows.Scan(&account, &role, &plan); err != nil {
+		var account, accountKey, role, plan string
+		if err := rows.Scan(&account, &accountKey, &role, &plan); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		if !seen[account] {
-			seen[account] = true
+		if !seen[accountKey] {
+			seen[accountKey] = true
 			res.Accounts = append(res.Accounts, account)
+			accountKeys = append(accountKeys, accountKey)
 		}
 		if res.MappingRole == "" || role == bss.RoleGateway {
 			res.MappingRole, res.MappingPlan = role, plan
@@ -155,16 +158,17 @@ func end(ctx context.Context, tx *sql.Tx, req EndRequest) (*EndResult, error) {
 	if req.KeepProfiles {
 		return res, nil
 	}
-	for _, account := range res.Accounts {
+	for i, account := range res.Accounts {
+		accountKey := accountKeys[i]
 		var remaining bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM account_device_mappings WHERE account_id = $1 AND unassigned_at IS NULL)`,
-			account).Scan(&remaining); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM account_device_mappings WHERE account_key = $1 AND unassigned_at IS NULL)`,
+			accountKey).Scan(&remaining); err != nil {
 			return nil, err
 		}
 		if remaining {
 			continue
 		}
-		archived, err := archiveProfile(ctx, tx, account, req.Actor, text)
+		archived, err := archiveProfile(ctx, tx, accountKey, req.Actor, text)
 		if err != nil {
 			return nil, err
 		}
@@ -206,14 +210,14 @@ func lockInService(ctx context.Context, tx *sql.Tx, onboardingID string) (string
 
 // archiveProfile moves an account's profile, if it holds anything, to the
 // archive and removes it.
-func archiveProfile(ctx context.Context, tx *sql.Tx, account, actor, reason string) (bool, error) {
-	out, err := tx.ExecContext(ctx, `INSERT INTO account_profile_archive (account_id, display_name, name_source, vip, reason, archived_by)
-		SELECT account_id, display_name, name_source, vip, $2, $3 FROM account_profiles
-		 WHERE account_id = $1 AND (display_name IS NOT NULL OR vip)`, account, reason, actor)
+func archiveProfile(ctx context.Context, tx *sql.Tx, accountKey, actor, reason string) (bool, error) {
+	out, err := tx.ExecContext(ctx, `INSERT INTO account_profile_archive (account_id, account_key, display_name, name_source, vip, reason, archived_by)
+		SELECT account_id, account_key, display_name, name_source, vip, $2, $3 FROM account_profiles
+		 WHERE account_key = $1 AND (display_name IS NOT NULL OR vip)`, accountKey, reason, actor)
 	if err != nil {
 		return false, fmt.Errorf("archive subscriber profile: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM account_profiles WHERE account_id = $1`, account); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM account_profiles WHERE account_key = $1`, accountKey); err != nil {
 		return false, fmt.Errorf("remove subscriber profile: %w", err)
 	}
 	n, _ := out.RowsAffected()

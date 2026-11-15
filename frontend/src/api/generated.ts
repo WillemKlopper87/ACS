@@ -328,19 +328,13 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description Login succeeded */
+                /** @description The password was right. Either a session (token), or, when a second step is owed, an MFA challenge (mfa and mfa_token) and no session. */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            token: string;
-                            role: components["schemas"]["Role"];
-                            username?: string;
-                            /** Format: date-time */
-                            expires_at: string;
-                        };
+                        "application/json": components["schemas"]["Session"] | components["schemas"]["MFAChallenge"];
                     };
                 };
                 /** @description Wrong username or password */
@@ -352,9 +346,513 @@ export interface paths {
                         "text/plain": string;
                     };
                 };
+                /** @description The operator's role must use MFA but this server cannot store MFA secrets (no ACS_CREDENTIAL_ENCRYPTION_KEY) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How this ACS is being run
+         * @description integration_mode is the ACS_INTEGRATION_MODE switch: naas when the ACS is run through the ISP NaaS platform, standalone when it runs on its own (the BSS adapter then answers 503 and the console hides its BSS / NaaS screen).
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            integration_mode: "naas" | "standalone";
+                            /** @enum {string} */
+                            deployment_profile: "lab" | "production";
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Second login step: exchange the MFA token and a code for a session
+         * @description code is the six-digit code from the authenticator app, or a one-time recovery code. Each is accepted once. Guesses are limited per operator (429).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MFALoginRequest"];
+                };
+            };
+            responses: {
+                /** @description Signed in */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Session"];
+                    };
+                };
+                /** @description Wrong or already used code, or the MFA token expired (start again with the password) */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Too many code attempts */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login/mfa/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start MFA set-up at login, for a role that must use MFA
+         * @description Takes the mfa_token of an "enroll" challenge. Returns the secret to add to an authenticator app. Nothing is enabled until /auth/login/mfa/confirm.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        mfa_token: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MFAEnrollment"];
+                    };
+                };
+                /** @description The MFA token is wrong or expired */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login/mfa/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish MFA set-up at login with a first code, and sign in */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MFALoginRequest"];
+                };
+            };
+            responses: {
+                /** @description Signed in. recovery_codes are shown this once. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Session"] & {
+                            recovery_codes: string[];
+                        };
+                    };
+                };
+                /** @description Wrong code, or the MFA token expired */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Too many code attempts */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The signed-in operator's MFA status */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MFAStatus"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start setting up MFA for the signed-in operator
+         * @description Returns a new secret each time until it is confirmed. Nothing is enabled, and login is unchanged, until /auth/mfa/confirm.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MFAEnrollment"];
+                    };
+                };
+                /** @description MFA is already enabled */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description This server cannot store MFA secrets (no ACS_CREDENTIAL_ENCRYPTION_KEY) */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turn MFA on by proving the app shows the right code */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MFACode"];
+                };
+            };
+            responses: {
+                /** @description MFA is on. recovery_codes are shown this once. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MFARecoveryCodes"];
+                    };
+                };
+                /** @description Wrong code (the session stays valid) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description No set-up in progress, or MFA is already enabled */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Turn the signed-in operator's MFA off (needs a current code) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MFACode"];
+                };
+            };
+            responses: {
+                /** @description MFA is off */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Wrong code (the session stays valid) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description MFA is required for this role, or is not enabled */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/recovery-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace the signed-in operator's recovery codes (needs a current code) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["MFACode"];
+                };
+            };
+            responses: {
+                /** @description The new codes, shown this once. The old ones stop working. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MFARecoveryCodes"];
+                    };
+                };
+                /** @description Wrong code (the session stays valid) */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/operators/{id}/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Reset another operator's MFA, for a lost phone (superadmin)
+         * @description Removes the operator's MFA and recovery codes and ends their sessions. If their role must use MFA they set it up again at their next login. Audited as OperatorMFAReset.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: components["parameters"]["OperatorId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Reset */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Operator not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -530,7 +1028,7 @@ export interface paths {
         put?: never;
         /**
          * Mint a 60-second browser ticket for the console WebSocket / web-GUI iframe handshake
-         * @description The session JWT is never placed in a URL. The two handshakes a browser cannot attach an Authorization header to (WebSocket, iframe) instead carry this audience-bound, short-lived ticket in ?token=, and the backend accepts nothing else there.
+         * @description The session JWT is never placed in a URL. The two handshakes a browser cannot attach an Authorization header to (WebSocket, iframe) instead carry this audience-bound, short-lived ticket in ?token=, and the backend accepts nothing else there. A ticket is issued for one purpose on one device and is refused anywhere else.
          */
         post: {
             parameters: {
@@ -539,7 +1037,19 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description The device the ticket is for. It must be in the caller's scope (404 otherwise). */
+                        device_id: string;
+                        /**
+                         * @description cli: the console WebSocket. webgui: the device web-GUI proxy.
+                         * @enum {string}
+                         */
+                        purpose: "cli" | "webgui";
+                    };
+                };
+            };
             responses: {
                 /** @description Ticket issued */
                 200: {
@@ -571,6 +1081,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who the caller is signed in as. The console asks this when it loads, since it cannot read its own session cookie */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SessionInfo"];
+                    };
+                };
+                /** @description Not signed in */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/plain": string;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/logout": {
         parameters: {
             query?: never;
@@ -580,7 +1135,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Revoke every session of the calling operator (bumps token_version; outstanding JWTs stop verifying) */
+        /** Revoke every session of the calling operator (bumps token_version; outstanding JWTs stop verifying) and remove the session cookie */
         post: {
             parameters: {
                 query?: never;
@@ -1900,7 +2455,10 @@ export interface paths {
     };
     "/api/v1/accounts/{account_id}/profile": {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                customer_id?: components["parameters"]["AccountCustomer"];
+            };
             header?: never;
             path: {
                 account_id: string;
@@ -1910,7 +2468,10 @@ export interface paths {
         /** Read an account's subscriber profile (name and VIP) */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                    customer_id?: components["parameters"]["AccountCustomer"];
+                };
                 header?: never;
                 path: {
                     account_id: string;
@@ -1935,12 +2496,22 @@ export interface paths {
                     };
                     content?: never;
                 };
+                /** @description The account_id names accounts of more than one customer; say which with customer_id */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         /** Fill in a subscriber name the BSS has not sent, or set VIP (subscriber.manage) */
         put: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                    customer_id?: components["parameters"]["AccountCustomer"];
+                };
                 header?: never;
                 path: {
                     account_id: string;
@@ -3753,6 +4324,325 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{command_key}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a job that is still queued
+         * @description Only a QUEUED job can be cancelled: once an RPC has gone out the device may already have acted on it. Jobs that belong to a firmware rollout, a BSS order, an onboarding, a credential rotation or the ACS itself are refused. Needs the permission that queuing a job of this type needs. Audited as JobCancelled.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    command_key: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The job, now CANCELLED */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Job"];
+                    };
+                };
+                /** @description Missing the permission this job type needs */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not queued any more, or managed by a rollout, order, onboarding or the system (the body says which) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{command_key}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue a new job with the payload of one that failed, timed out or was cancelled
+         * @description The original job is left as it is. Refused for job types that are not safe to repeat unchanged (firmware and file transfers, ADD_OBJECT, FACTORY_RESET, PARAMETER_DISCOVERY), for jobs managed by a rollout, order, onboarding or the system, and for a job whose payload held a secret, which is erased when a job finishes. Audited as JobRetried.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    command_key: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The new job */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Job"];
+                    };
+                };
+                /** @description Missing the permission this job type needs, or the payload writes a protected parameter */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not retryable (the body says why) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bulk-operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List bulk operations, newest first
+         * @description A bulk operation is the record of one bulk action or template apply. A scoped operator sees an operation only through the devices in their scope: counts cover those devices alone.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    page?: number;
+                    page_size?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["BulkOperation"][];
+                            total: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bulk-operations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One bulk operation with the latest job of each device */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BulkOperationDetail"];
+                    };
+                };
+                /** @description Not found, or no device of it is in the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bulk-operations/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel the operation's jobs that are still queued
+         * @description Jobs already sent to a device are left to finish. Needs bulk_actions, or template.manage for a template apply.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The operation as it now stands */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BulkOperationDetail"] & {
+                            /** @description Jobs cancelled by this call */
+                            cancelled: number;
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bulk-operations/{id}/retry-failed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue a new job for every device whose job failed or timed out
+         * @description Each retried item then follows its new job. A cancelled job and a device that was never queued are not retried. Needs bulk_actions, or template.manage for a template apply.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The operation as it now stands */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BulkOperationDetail"] & {
+                            retried: number;
+                            /** @description Failed items left as they were, counted by reason */
+                            skipped: {
+                                [key: string]: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -6334,13 +7224,20 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        widgets?: components["schemas"]["DashboardWidget"][];
+                        widgets: components["schemas"]["DashboardWidget"][];
                     };
                 };
             };
             responses: {
                 /** @description Saved */
                 204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The widget list is missing. Send an empty list to hide every widget. */
+                400: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -6389,7 +7286,10 @@ export interface paths {
         /** Assign a device to an account in a role from the console (superadmin) — same role-addressable assignment as POST /bss/v1/mappings; a role already filled for the account returns 409 */
         post: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                    customer_id?: components["parameters"]["AccountCustomer"];
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
@@ -6436,7 +7336,10 @@ export interface paths {
         /** Full assignment history for an account (superadmin) — current and released assignments, oldest first */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                    customer_id?: components["parameters"]["AccountCustomer"];
+                };
                 header?: never;
                 path: {
                     account_id: string;
@@ -6481,6 +7384,8 @@ export interface paths {
             parameters: {
                 query: {
                     reason: "rma" | "upgrade" | "return" | "moved" | "corrected";
+                    /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                    customer_id?: components["parameters"]["AccountCustomer"];
                 };
                 header?: never;
                 path: {
@@ -6612,7 +7517,10 @@ export interface paths {
         /** Assign a BSS account to an ACS customer (superadmin) — for accounts used before customer binding, which a bound client may not claim, or to move an account */
         put: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+                    customer_id?: components["parameters"]["AccountCustomer"];
+                };
                 header?: never;
                 path: {
                     account_id: string;
@@ -6636,6 +7544,13 @@ export interface paths {
                 };
                 /** @description Missing or unknown customer_id */
                 400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The account_id names accounts of more than one customer and the customer_id query parameter did not say which; or the customer being assigned to already has an account of this ID (an account cannot be moved onto an existing one) */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -7775,7 +8690,67 @@ export interface components {
          * @enum {string}
          */
         Permission: "devices.write" | "connection_request" | "diagnostics.run" | "firmware.manage" | "template.manage" | "policy.manage" | "schedule.manage" | "group.manage" | "credential.manage" | "cli.access" | "bulk_actions" | "upload.request" | "tenancy.manage";
+        Session: {
+            /** @description The session as a bearer token, for clients that send an Authorization header. The console does not keep it: its session is the acs_session cookie set by the same response. */
+            token: string;
+            role: components["schemas"]["Role"];
+            username?: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** @description Whether this response also set the acs_session cookie. */
+            session_cookie?: boolean;
+        };
+        SessionInfo: {
+            /** @description False when operator authentication is switched off; the other fields are then absent. */
+            auth_required: boolean;
+            username?: string;
+            role?: components["schemas"]["Role"];
+            /** Format: date-time */
+            expires_at?: string;
+            /**
+             * @description How the caller authenticated.
+             * @enum {string}
+             */
+            via?: "cookie" | "bearer";
+        };
+        MFAChallenge: {
+            /**
+             * @description verify: send a code to /auth/login/mfa. enroll: the role must use MFA and it is not set up; use /auth/login/mfa/enroll then /confirm.
+             * @enum {string}
+             */
+            mfa: "verify" | "enroll";
+            /** @description Valid for five minutes and only on the /auth/login/mfa routes. It is not a session. */
+            mfa_token: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        MFALoginRequest: {
+            mfa_token: string;
+            code: string;
+        };
+        MFACode: {
+            /** @description A current code from the authenticator app */
+            code: string;
+        };
+        MFAEnrollment: {
+            /** @description Base32 secret, for typing into an app that cannot scan */
+            secret: string;
+            /** @description otpauth://totp/… link to show as a QR code */
+            otpauth_uri: string;
+        };
+        MFARecoveryCodes: {
+            recovery_codes: string[];
+        };
+        MFAStatus: {
+            enabled: boolean;
+            /** @description The operator's role must use MFA (ACS_MFA_REQUIRED_ROLES) */
+            required: boolean;
+            /** @description False when the server has no key to store MFA secrets with */
+            available: boolean;
+            recovery_codes_left: number;
+        };
         Operator: {
+            mfa_enabled?: boolean;
             id?: string;
             username?: string;
             email?: string;
@@ -7883,6 +8858,8 @@ export interface components {
         SubscriberSummary: {
             device_id: string;
             account_id?: string;
+            /** @description The customer that owns the account; absent when nobody does. Pass it as customer_id to address this account. */
+            account_customer_id?: string;
             subscriber_name?: string;
             vip: boolean;
             site?: components["schemas"]["SubscriberSite"];
@@ -8023,7 +9000,58 @@ export interface components {
             summary?: string;
             body?: string | null;
         };
+        BulkOperation: {
+            id: string;
+            /** @enum {string} */
+            kind: "BULK_ACTION" | "TEMPLATE_APPLY";
+            action: string;
+            /** @description What was asked, in words. Parameter names only, never values. */
+            label: string;
+            group_id?: string | null;
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * @description RUNNING while any job is queued or in flight
+             * @enum {string}
+             */
+            state: "RUNNING" | "FINISHED";
+            total: number;
+            queued: number;
+            running: number;
+            succeeded: number;
+            /** @description FAILED or TIMEOUT */
+            failed: number;
+            cancelled: number;
+            /** @description Devices for which no job could be created */
+            not_queued: number;
+            /** @description Devices whose job has been pruned by retention */
+            unknown: number;
+        };
+        BulkOperationItem: {
+            /** @description The device ID as requested */
+            device_id: string;
+            oui_serial?: string;
+            device_label?: string;
+            /** @description The latest job for this device */
+            command_key?: string;
+            job_type?: string;
+            job_status?: components["schemas"]["JobStatus"];
+            fault_string?: string;
+            /** @description Why no job was queued */
+            error?: string;
+            detail?: string;
+            retries: number;
+        };
+        BulkOperationDetail: {
+            operation: components["schemas"]["BulkOperation"];
+            items: components["schemas"]["BulkOperationItem"][];
+        };
+        /** @enum {string} */
+        JobStatus: "QUEUED" | "RPC_SENT" | "IN_PROGRESS" | "AWAITING_TRANSFER_COMPLETE" | "AWAITING_DIAGNOSTICS_COMPLETE" | "SUCCESS" | "FAILED" | "TIMEOUT" | "CANCELLED";
         BulkActionResponse: {
+            /** @description The bulk operation recording this fan-out (GET /api/v1/bulk-operations/{id}) */
+            bulk_operation_id?: string;
             action?: string;
             requested?: number;
             succeeded?: number;
@@ -8040,9 +9068,12 @@ export interface components {
         Job: {
             command_key?: string;
             device_id?: string;
+            /** @description The device's serial identity. Set on GET /jobs; absent on a single-job read. */
+            oui_serial?: string;
+            /** @description The operator's name for the device, when it has one. Set on GET /jobs. */
+            device_label?: string;
             type?: string;
-            /** @enum {string} */
-            status?: "QUEUED" | "RPC_SENT" | "IN_PROGRESS" | "AWAITING_TRANSFER_COMPLETE" | "AWAITING_DIAGNOSTICS_COMPLETE" | "SUCCESS" | "FAILED" | "TIMEOUT";
+            status?: components["schemas"]["JobStatus"];
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */
@@ -8487,7 +9518,10 @@ export interface components {
         };
         BSSMapping: {
             id?: string;
+            /** @description The ISP's own account ID. Unique per customer: two customers can have an account of the same ID. */
             account_id?: string;
+            /** @description The customer that owns the account (null: nobody does). Listed mappings carry it; pass it as customer_id to address this account. */
+            account_customer_id?: string | null;
             device_id?: string;
             oui_serial?: string;
             service_plan?: string;
@@ -8644,6 +9678,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description Which customer's account the account_id means. Account IDs are unique per customer, so two customers can have an account of the same ID. Give the customer's ID, or "none" for the account no customer owns. Not needed while the ID names one account only; when it names more than one and this is absent, the answer is 409 and nothing is done. */
+        AccountCustomer: string;
         /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
         DeviceId: string;
         OperatorId: string;

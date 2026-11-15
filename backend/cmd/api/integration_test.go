@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts/accountstest"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -433,11 +434,11 @@ func TestIntegration_H3SubResourceIsolation(t *testing.T) {
 	})
 
 	t.Run("a BSS-mapped device stays with its account's customer", func(t *testing.T) {
-		if _, err := e.db.ExecContext(e.ctx, `INSERT INTO bss_accounts (account_id, customer_id, claimed_by) VALUES ('acct-s6', $1, 'test')`, custB); err != nil {
+		if _, err := e.db.ExecContext(e.ctx, accountstest.OwnSQL("'acct-s6'"), custB); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.db.ExecContext(e.ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at)
-			SELECT gen_random_uuid(), 'acct-s6', id, oui_serial, 'gateway', now() FROM devices WHERE id = $1`, devB); err != nil {
+		if _, err := e.db.ExecContext(e.ctx, accountstest.EnsureCTE("'acct-s6'")+`INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, role, assigned_at)
+			SELECT gen_random_uuid(), 'acct-s6', (SELECT id FROM acct), id, oui_serial, 'gateway', now() FROM devices WHERE id = $1`, devB); err != nil {
 			t.Fatal(err)
 		}
 		e.operator("root", operators.RoleSuperAdmin)
@@ -824,7 +825,7 @@ func TestIntegration_BrowserTicketTokenVersion(t *testing.T) {
 
 	mintTicket := func() string {
 		t.Helper()
-		r := e.call("alice", "POST", "/api/v1/auth/ticket", nil)
+		r := e.call("alice", "POST", "/api/v1/auth/ticket", map[string]string{"device_id": devA, "purpose": "webgui"})
 		if r.code != 200 {
 			t.Fatalf("mint ticket → %d %s", r.code, r.body)
 		}
@@ -960,7 +961,7 @@ func TestIntegration_ServiceIdentity(t *testing.T) {
 	if r := e.call(testServiceToken, "POST", "/api/v1/auth/operators", map[string]string{"username": "x", "password": "y", "role": "noc"}); r.code != 403 {
 		t.Errorf("service create operator → %d, want 403", r.code)
 	}
-	if r := e.call(testServiceToken, "POST", "/api/v1/auth/ticket", nil); r.code != 403 {
+	if r := e.call(testServiceToken, "POST", "/api/v1/auth/ticket", map[string]string{"device_id": "d", "purpose": "cli"}); r.code != 403 {
 		t.Errorf("service mint browser ticket → %d, want 403", r.code)
 	}
 }

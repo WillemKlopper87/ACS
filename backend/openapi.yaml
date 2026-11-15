@@ -40,6 +40,7 @@ servers:
 
 security:
   - bearerAuth: []
+  - sessionCookie: []
   - {}
 
 tags:
@@ -61,6 +62,8 @@ tags:
     description: AddObject/DeleteObject — provisioning new instances
   - name: Jobs
     description: The durable ACS-initiated work queue every write endpoint feeds
+  - name: Bulk operations
+    description: The record of a bulk action or template apply — progress, cancel what is queued, retry what failed
   - name: Device Groups
     description: Curated named device sets, used by bulk actions/schedules/templates
   - name: Scheduled Jobs
@@ -574,18 +577,141 @@ paths:
                 password: { type: string }
       responses:
         "200":
-          description: Login succeeded
+          description: "The password was right. Either a session (token), or, when a second step is owed, an MFA challenge (mfa and mfa_token) and no session."
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Session"
+                  - $ref: "#/components/schemas/MFAChallenge"
+        "401": { description: Wrong username or password, content: { text/plain: { schema: { type: string } } } }
+        "503": { description: "The operator's role must use MFA but this server cannot store MFA secrets (no ACS_CREDENTIAL_ENCRYPTION_KEY)" }
+
+  /api/v1/system/info:
+    get:
+      tags: [Auth]
+      summary: How this ACS is being run
+      description: "integration_mode is the ACS_INTEGRATION_MODE switch: naas when the ACS is run through the ISP NaaS platform, standalone when it runs on its own (the BSS adapter then answers 503 and the console hides its BSS / NaaS screen)."
+      responses:
+        "200":
+          description: OK
           content:
             application/json:
               schema:
                 type: object
-                required: [token, role, expires_at]
+                required: [integration_mode, deployment_profile]
                 properties:
-                  token: { type: string }
-                  role: { $ref: "#/components/schemas/Role" }
-                  username: { type: string }
-                  expires_at: { type: string, format: date-time }
-        "401": { description: Wrong username or password, content: { text/plain: { schema: { type: string } } } }
+                  integration_mode: { type: string, enum: [naas, standalone] }
+                  deployment_profile: { type: string, enum: [lab, production] }
+
+  /api/v1/auth/login/mfa:
+    post:
+      tags: [Auth]
+      summary: "Second login step: exchange the MFA token and a code for a session"
+      description: "code is the six-digit code from the authenticator app, or a one-time recovery code. Each is accepted once. Guesses are limited per operator (429)."
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MFALoginRequest" } } }
+      responses:
+        "200": { description: Signed in, content: { application/json: { schema: { $ref: "#/components/schemas/Session" } } } }
+        "401": { description: "Wrong or already used code, or the MFA token expired (start again with the password)" }
+        "429": { description: Too many code attempts }
+
+  /api/v1/auth/login/mfa/enroll:
+    post:
+      tags: [Auth]
+      summary: "Start MFA set-up at login, for a role that must use MFA"
+      description: "Takes the mfa_token of an \"enroll\" challenge. Returns the secret to add to an authenticator app. Nothing is enabled until /auth/login/mfa/confirm."
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [mfa_token], properties: { mfa_token: { type: string } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MFAEnrollment" } } } }
+        "401": { description: The MFA token is wrong or expired }
+
+  /api/v1/auth/login/mfa/confirm:
+    post:
+      tags: [Auth]
+      summary: "Finish MFA set-up at login with a first code, and sign in"
+      security: []
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MFALoginRequest" } } }
+      responses:
+        "200":
+          description: "Signed in. recovery_codes are shown this once."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Session"
+                  - { type: object, required: [recovery_codes], properties: { recovery_codes: { type: array, items: { type: string } } } }
+        "401": { description: "Wrong code, or the MFA token expired" }
+        "429": { description: Too many code attempts }
+
+  /api/v1/auth/mfa:
+    get:
+      tags: [Auth]
+      summary: The signed-in operator's MFA status
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MFAStatus" } } } }
+
+  /api/v1/auth/mfa/enroll:
+    post:
+      tags: [Auth]
+      summary: Start setting up MFA for the signed-in operator
+      description: "Returns a new secret each time until it is confirmed. Nothing is enabled, and login is unchanged, until /auth/mfa/confirm."
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MFAEnrollment" } } } }
+        "409": { description: MFA is already enabled }
+        "503": { description: This server cannot store MFA secrets (no ACS_CREDENTIAL_ENCRYPTION_KEY) }
+
+  /api/v1/auth/mfa/confirm:
+    post:
+      tags: [Auth]
+      summary: Turn MFA on by proving the app shows the right code
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MFACode" } } }
+      responses:
+        "200": { description: "MFA is on. recovery_codes are shown this once.", content: { application/json: { schema: { $ref: "#/components/schemas/MFARecoveryCodes" } } } }
+        "403": { description: "Wrong code (the session stays valid)" }
+        "409": { description: "No set-up in progress, or MFA is already enabled" }
+
+  /api/v1/auth/mfa/disable:
+    post:
+      tags: [Auth]
+      summary: "Turn the signed-in operator's MFA off (needs a current code)"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MFACode" } } }
+      responses:
+        "204": { description: MFA is off }
+        "403": { description: "Wrong code (the session stays valid)" }
+        "409": { description: "MFA is required for this role, or is not enabled" }
+
+  /api/v1/auth/mfa/recovery-codes:
+    post:
+      tags: [Auth]
+      summary: "Replace the signed-in operator's recovery codes (needs a current code)"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MFACode" } } }
+      responses:
+        "200": { description: "The new codes, shown this once. The old ones stop working.", content: { application/json: { schema: { $ref: "#/components/schemas/MFARecoveryCodes" } } } }
+        "403": { description: "Wrong code (the session stays valid)" }
+
+  /api/v1/auth/operators/{id}/mfa:
+    delete:
+      tags: [Auth]
+      summary: "Reset another operator's MFA, for a lost phone (superadmin)"
+      description: "Removes the operator's MFA and recovery codes and ends their sessions. If their role must use MFA they set it up again at their next login. Audited as OperatorMFAReset."
+      parameters: [{ $ref: "#/components/parameters/OperatorId" }]
+      responses:
+        "204": { description: Reset }
+        "404": { description: Operator not found }
 
   /api/v1/grafana/ticket:
     post:
@@ -638,7 +764,18 @@ paths:
       description: >
         The session JWT is never placed in a URL. The two handshakes a browser cannot attach an
         Authorization header to (WebSocket, iframe) instead carry this audience-bound, short-lived
-        ticket in ?token=, and the backend accepts nothing else there.
+        ticket in ?token=, and the backend accepts nothing else there. A ticket is issued for one
+        purpose on one device and is refused anywhere else.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_id, purpose]
+              properties:
+                device_id: { type: string, description: "The device the ticket is for. It must be in the caller's scope (404 otherwise)." }
+                purpose: { type: string, enum: [cli, webgui], description: "cli: the console WebSocket. webgui: the device web-GUI proxy." }
       responses:
         "200":
           description: Ticket issued
@@ -651,10 +788,18 @@ paths:
                   expires_in: { type: integer, description: Seconds until the ticket expires }
         "403": { description: Service identities cannot mint tickets, content: { text/plain: { schema: { type: string } } } }
 
+  /api/v1/auth/session:
+    get:
+      tags: [Auth]
+      summary: Who the caller is signed in as. The console asks this when it loads, since it cannot read its own session cookie
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SessionInfo" } } } }
+        "401": { description: Not signed in, content: { text/plain: { schema: { type: string } } } }
+
   /api/v1/auth/logout:
     post:
       tags: [Auth]
-      summary: Revoke every session of the calling operator (bumps token_version; outstanding JWTs stop verifying)
+      summary: Revoke every session of the calling operator (bumps token_version; outstanding JWTs stop verifying) and remove the session cookie
       responses:
         "204": { description: Sessions revoked }
         "400": { description: No operator session to revoke, content: { text/plain: { schema: { type: string } } } }
@@ -1083,12 +1228,14 @@ paths:
   /api/v1/accounts/{account_id}/profile:
     parameters:
       - { name: account_id, in: path, required: true, schema: { type: string } }
+      - { $ref: "#/components/parameters/AccountCustomer" }
     get:
       tags: [Devices]
       summary: Read an account's subscriber profile (name and VIP)
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AccountProfile" } } } }
         "404": { description: The account is outside the caller's scope }
+        "409": { description: "The account_id names accounts of more than one customer; say which with customer_id" }
     put:
       tags: [Devices]
       summary: Fill in a subscriber name the BSS has not sent, or set VIP (subscriber.manage)
@@ -1759,6 +1906,89 @@ paths:
       parameters: [{ name: command_key, in: path, required: true, schema: { type: string } }]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "404": { description: Not found }
+
+  /api/v1/jobs/{command_key}/cancel:
+    post:
+      tags: [Jobs]
+      summary: Cancel a job that is still queued
+      description: "Only a QUEUED job can be cancelled: once an RPC has gone out the device may already have acted on it. Jobs that belong to a firmware rollout, a BSS order, an onboarding, a credential rotation or the ACS itself are refused. Needs the permission that queuing a job of this type needs. Audited as JobCancelled."
+      parameters: [{ name: command_key, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: "The job, now CANCELLED", content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "403": { description: Missing the permission this job type needs }
+        "404": { description: Not found }
+        "409": { description: "Not queued any more, or managed by a rollout, order, onboarding or the system (the body says which)" }
+
+  /api/v1/jobs/{command_key}/retry:
+    post:
+      tags: [Jobs]
+      summary: Queue a new job with the payload of one that failed, timed out or was cancelled
+      description: "The original job is left as it is. Refused for job types that are not safe to repeat unchanged (firmware and file transfers, ADD_OBJECT, FACTORY_RESET, PARAMETER_DISCOVERY), for jobs managed by a rollout, order, onboarding or the system, and for a job whose payload held a secret, which is erased when a job finishes. Audited as JobRetried."
+      parameters: [{ name: command_key, in: path, required: true, schema: { type: string } }]
+      responses:
+        "202": { description: The new job, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "403": { description: "Missing the permission this job type needs, or the payload writes a protected parameter" }
+        "404": { description: Not found }
+        "409": { description: "Not retryable (the body says why)" }
+
+  # --- Bulk operations ---
+  /api/v1/bulk-operations:
+    get:
+      tags: [Bulk operations]
+      summary: List bulk operations, newest first
+      description: "A bulk operation is the record of one bulk action or template apply. A scoped operator sees an operation only through the devices in their scope: counts cover those devices alone."
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, required: [items, total], properties: { items: { type: array, items: { $ref: "#/components/schemas/BulkOperation" } }, total: { type: integer } } } } } }
+
+  /api/v1/bulk-operations/{id}:
+    get:
+      tags: [Bulk operations]
+      summary: One bulk operation with the latest job of each device
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BulkOperationDetail" } } } }
+        "404": { description: "Not found, or no device of it is in the caller's scope" }
+
+  /api/v1/bulk-operations/{id}/cancel:
+    post:
+      tags: [Bulk operations]
+      summary: Cancel the operation's jobs that are still queued
+      description: "Jobs already sent to a device are left to finish. Needs bulk_actions, or template.manage for a template apply."
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: The operation as it now stands
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/BulkOperationDetail"
+                  - { type: object, required: [cancelled], properties: { cancelled: { type: integer, description: Jobs cancelled by this call } } }
+        "404": { description: Not found }
+
+  /api/v1/bulk-operations/{id}/retry-failed:
+    post:
+      tags: [Bulk operations]
+      summary: Queue a new job for every device whose job failed or timed out
+      description: "Each retried item then follows its new job. A cancelled job and a device that was never queued are not retried. Needs bulk_actions, or template.manage for a template apply."
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "202":
+          description: The operation as it now stands
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/BulkOperationDetail"
+                  - type: object
+                    required: [retried, skipped]
+                    properties:
+                      retried: { type: integer }
+                      skipped: { type: object, additionalProperties: { type: integer }, description: "Failed items left as they were, counted by reason" }
         "404": { description: Not found }
 
   # --- Device Groups ---
@@ -2515,9 +2745,10 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object, properties: { widgets: { type: array, items: { $ref: "#/components/schemas/DashboardWidget" } } } }
+            schema: { type: object, required: [widgets], properties: { widgets: { type: array, items: { $ref: "#/components/schemas/DashboardWidget" } } } }
       responses:
         "204": { description: Saved }
+        "400": { description: The widget list is missing. Send an empty list to hide every widget. }
 
   # --- BSS Admin ---
   /api/v1/bss/mappings:
@@ -2529,6 +2760,8 @@ paths:
     post:
       tags: [BSS Admin]
       summary: Assign a device to an account in a role from the console (superadmin) — same role-addressable assignment as POST /bss/v1/mappings; a role already filled for the account returns 409
+      parameters:
+        - { $ref: "#/components/parameters/AccountCustomer" }
       requestBody:
         required: true
         content:
@@ -2548,7 +2781,9 @@ paths:
     get:
       tags: [BSS Admin]
       summary: Full assignment history for an account (superadmin) — current and released assignments, oldest first
-      parameters: [{ name: account_id, in: path, required: true, schema: { type: string } }]
+      parameters:
+        - { name: account_id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/AccountCustomer" }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: "#/components/schemas/BSSMapping" } } } } } } }
 
@@ -2560,6 +2795,7 @@ paths:
         - { name: account_id, in: path, required: true, schema: { type: string } }
         - { name: role, in: path, required: true, schema: { type: string, enum: [gateway, ont, extender, stb, ata, other] } }
         - { name: reason, in: query, required: true, schema: { type: string, enum: [rma, upgrade, return, moved, corrected] } }
+        - { $ref: "#/components/parameters/AccountCustomer" }
       responses:
         "204": { description: Unassigned }
         "400": { description: Missing or invalid reason }
@@ -2609,7 +2845,9 @@ paths:
     put:
       tags: [BSS Admin]
       summary: Assign a BSS account to an ACS customer (superadmin) — for accounts used before customer binding, which a bound client may not claim, or to move an account
-      parameters: [{ name: account_id, in: path, required: true, schema: { type: string } }]
+      parameters:
+        - { name: account_id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/AccountCustomer" }
       requestBody:
         required: true
         content:
@@ -2622,6 +2860,7 @@ paths:
       responses:
         "204": { description: Assigned }
         "400": { description: Missing or unknown customer_id }
+        "409": { description: "The account_id names accounts of more than one customer and the customer_id query parameter did not say which; or the customer being assigned to already has an account of this ID (an account cannot be moved onto an existing one)" }
 
   /api/v1/bss/oauth-clients/{id}:
     delete:
@@ -2922,8 +3161,31 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: "From POST /api/v1/auth/login. Enforcement is opt-in — see the top-level description."
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: acs_session
+      description: >-
+        The operator console's session: set by a successful sign-in, HttpOnly,
+        SameSite=Strict, scoped to /api/. A request authenticated by it (one
+        with no bearer token) must carry the X-ACS-CSRF header if it changes
+        anything, must come from the console's origin when the browser
+        reports one, and is not accepted on the console WebSocket or the
+        web-GUI proxy, which need a browser ticket. Not issued when
+        ACS_API_CORS_ORIGIN is "*" or ACS_WEBGUI_ALLOW_SAME_ORIGIN=true.
 
   parameters:
+    AccountCustomer:
+      name: customer_id
+      in: query
+      required: false
+      schema: { type: string }
+      description: >-
+        Which customer's account the account_id means. Account IDs are unique
+        per customer, so two customers can have an account of the same ID.
+        Give the customer's ID, or "none" for the account no customer owns.
+        Not needed while the ID names one account only; when it names more
+        than one and this is absent, the answer is 409 and nothing is done.
     DeviceId:
       name: id
       in: path
@@ -3104,9 +3366,73 @@ components:
         - tenancy.manage
       description: The curated ~13 highest-stakes capabilities role_permissions can configure independent of the rank gate.
 
+    Session:
+      type: object
+      required: [token, role, expires_at]
+      properties:
+        token: { type: string, description: "The session as a bearer token, for clients that send an Authorization header. The console does not keep it: its session is the acs_session cookie set by the same response." }
+        role: { $ref: "#/components/schemas/Role" }
+        username: { type: string }
+        expires_at: { type: string, format: date-time }
+        session_cookie: { type: boolean, description: "Whether this response also set the acs_session cookie." }
+
+    SessionInfo:
+      type: object
+      required: [auth_required]
+      properties:
+        auth_required: { type: boolean, description: "False when operator authentication is switched off; the other fields are then absent." }
+        username: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        expires_at: { type: string, format: date-time }
+        via: { type: string, enum: [cookie, bearer], description: "How the caller authenticated." }
+
+    MFAChallenge:
+      type: object
+      required: [mfa, mfa_token, expires_at]
+      properties:
+        mfa: { type: string, enum: [verify, enroll], description: "verify: send a code to /auth/login/mfa. enroll: the role must use MFA and it is not set up; use /auth/login/mfa/enroll then /confirm." }
+        mfa_token: { type: string, description: "Valid for five minutes and only on the /auth/login/mfa routes. It is not a session." }
+        expires_at: { type: string, format: date-time }
+
+    MFALoginRequest:
+      type: object
+      required: [mfa_token, code]
+      properties:
+        mfa_token: { type: string }
+        code: { type: string }
+
+    MFACode:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, description: A current code from the authenticator app }
+
+    MFAEnrollment:
+      type: object
+      required: [secret, otpauth_uri]
+      properties:
+        secret: { type: string, description: "Base32 secret, for typing into an app that cannot scan" }
+        otpauth_uri: { type: string, description: "otpauth://totp/… link to show as a QR code" }
+
+    MFARecoveryCodes:
+      type: object
+      required: [recovery_codes]
+      properties:
+        recovery_codes: { type: array, items: { type: string } }
+
+    MFAStatus:
+      type: object
+      required: [enabled, required, available, recovery_codes_left]
+      properties:
+        enabled: { type: boolean }
+        required: { type: boolean, description: "The operator's role must use MFA (ACS_MFA_REQUIRED_ROLES)" }
+        available: { type: boolean, description: "False when the server has no key to store MFA secrets with" }
+        recovery_codes_left: { type: integer }
+
     Operator:
       type: object
       properties:
+        mfa_enabled: { type: boolean }
         id: { type: string }
         username: { type: string }
         email: { type: string }
@@ -3209,6 +3535,7 @@ components:
       properties:
         device_id: { type: string }
         account_id: { type: string }
+        account_customer_id: { type: string, description: "The customer that owns the account; absent when nobody does. Pass it as customer_id to address this account." }
         subscriber_name: { type: string }
         vip: { type: boolean }
         site: { $ref: "#/components/schemas/SubscriberSite" }
@@ -3343,9 +3670,57 @@ components:
         summary: { type: string }
         body: { type: string, nullable: true }
 
+    BulkOperation:
+      type: object
+      required: [id, kind, action, label, created_by, created_at, state, total, queued, running, succeeded, failed, cancelled, not_queued, unknown]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [BULK_ACTION, TEMPLATE_APPLY] }
+        action: { type: string }
+        label: { type: string, description: "What was asked, in words. Parameter names only, never values." }
+        group_id: { type: string, nullable: true }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        state: { type: string, enum: [RUNNING, FINISHED], description: RUNNING while any job is queued or in flight }
+        total: { type: integer }
+        queued: { type: integer }
+        running: { type: integer }
+        succeeded: { type: integer }
+        failed: { type: integer, description: FAILED or TIMEOUT }
+        cancelled: { type: integer }
+        not_queued: { type: integer, description: Devices for which no job could be created }
+        unknown: { type: integer, description: Devices whose job has been pruned by retention }
+
+    BulkOperationItem:
+      type: object
+      required: [device_id, retries]
+      properties:
+        device_id: { type: string, description: The device ID as requested }
+        oui_serial: { type: string }
+        device_label: { type: string }
+        command_key: { type: string, description: The latest job for this device }
+        job_type: { type: string }
+        job_status: { $ref: "#/components/schemas/JobStatus" }
+        fault_string: { type: string }
+        error: { type: string, description: Why no job was queued }
+        detail: { type: string }
+        retries: { type: integer }
+
+    BulkOperationDetail:
+      type: object
+      required: [operation, items]
+      properties:
+        operation: { $ref: "#/components/schemas/BulkOperation" }
+        items: { type: array, items: { $ref: "#/components/schemas/BulkOperationItem" } }
+
+    JobStatus:
+      type: string
+      enum: [QUEUED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, AWAITING_DIAGNOSTICS_COMPLETE, SUCCESS, FAILED, TIMEOUT, CANCELLED]
+
     BulkActionResponse:
       type: object
       properties:
+        bulk_operation_id: { type: string, description: "The bulk operation recording this fan-out (GET /api/v1/bulk-operations/{id})" }
         action: { type: string }
         requested: { type: integer }
         succeeded: { type: integer }
@@ -3365,8 +3740,10 @@ components:
       properties:
         command_key: { type: string }
         device_id: { type: string }
+        oui_serial: { type: string, description: "The device's serial identity. Set on GET /jobs; absent on a single-job read." }
+        device_label: { type: string, description: "The operator's name for the device, when it has one. Set on GET /jobs." }
         type: { type: string }
-        status: { type: string, enum: [QUEUED, RPC_SENT, IN_PROGRESS, AWAITING_TRANSFER_COMPLETE, AWAITING_DIAGNOSTICS_COMPLETE, SUCCESS, FAILED, TIMEOUT] }
+        status: { $ref: "#/components/schemas/JobStatus" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         completed_at: { type: string, format: date-time, nullable: true }
@@ -3788,7 +4165,8 @@ components:
       type: object
       properties:
         id: { type: string }
-        account_id: { type: string }
+        account_id: { type: string, description: "The ISP's own account ID. Unique per customer: two customers can have an account of the same ID." }
+        account_customer_id: { type: string, nullable: true, description: "The customer that owns the account (null: nobody does). Listed mappings carry it; pass it as customer_id to address this account." }
         device_id: { type: string }
         oui_serial: { type: string }
         service_plan: { type: string }

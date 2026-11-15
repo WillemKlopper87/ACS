@@ -7,9 +7,12 @@
 # GRAFANA_BIND/PROMETHEUS_BIND to 0.0.0.0 so those UIs are reachable on
 # the same public IP at :3000 and :9090. Do not use that exposure model as
 # the production hardening target.
+# Images are pinned by digest as well as by tag: a tag can be moved to
+# different content, a digest cannot. Dependabot (docker-compose) raises
+# the digest when a tag is updated.
 services:
   postgres:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:1018733457011bf88d81db98cf43aac6d5150afc18787dbe204771fedf80ff95
     environment:
       POSTGRES_USER: acs
       POSTGRES_PASSWORD: ${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}
@@ -30,7 +33,7 @@ services:
   # prometheus.yml targets host.docker.internal, which Docker Desktop
   # resolves to the host machine.
   prometheus:
-    image: prom/prometheus:v2.55.1
+    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
     ports:
       # Localhost by default. scripts/start.sh sets PROMETHEUS_BIND=0.0.0.0
       # only when ACS_PROMETHEUS_PUBLIC=1 (the dev quickstart does this).
@@ -49,7 +52,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   alertmanager:
-    image: prom/alertmanager:v0.27.0
+    image: prom/alertmanager:v0.27.0@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5
     ports:
       - "127.0.0.1:9093:9093"
     # ACS_ALERT_WEBHOOK_URL is substituted into the config template at
@@ -71,7 +74,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   grafana:
-    image: grafana/grafana:11.3.1
+    image: grafana/grafana:11.3.1@sha256:fa801ab6e1ae035135309580891e09f7eb94d1abdbd2106bdc288030b028158c
     ports:
       # 127.0.0.1 unless deliberately overridden (audit P1.5):
       # scripts/start.sh sets GRAFANA_BIND=0.0.0.0 only when
@@ -121,7 +124,7 @@ services:
   # services. Host network so it can reach them and bind 80 and 443 (Linux).
   # scripts/start.sh starts it when the ACS_LAB_* names are set.
   caddy:
-    image: caddy:2.10.2-alpine
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
     profiles: ["tls"]
     network_mode: host
     restart: unless-stopped
@@ -136,7 +139,7 @@ services:
       - acs_caddy_config:/config
 
   prosody:
-    image: prosodyim/prosody:0.12
+    image: prosodyim/prosody:0.12@sha256:01c1fb2dfeb129e8d20edcea5723f4133bee6e715e9c037f3e9ca2110096e4c9
     profiles: ["xmpp"]
     restart: unless-stopped
     ports:
@@ -246,7 +249,7 @@ services:
         VITE_API_BASE_URL: http://localhost:8080
     profiles: ["containerized"]
     ports:
-      - "127.0.0.1:5173:80"
+      - "127.0.0.1:5173:8080"
     depends_on:
       - api
 

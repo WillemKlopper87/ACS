@@ -9,11 +9,13 @@ import (
 func envMap(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 
 func validProductionEnv() map[string]string {
-	return map[string]string{"ACS_DEPLOYMENT_PROFILE": "production", "ACS_ADDR": "10.0.0.5:7547", "ACS_TLS_CERT": "cert.pem", "ACS_TLS_KEY": "key.pem", "ACS_TLS_MIN_VERSION": "1.2", "ACS_CWMP_ALLOWED_CIDRS": "10.0.0.0/8"}
+	return map[string]string{"ACS_DEPLOYMENT_PROFILE": "production", "ACS_ADDR": "10.0.0.5:7547", "ACS_TLS_CERT": "cert.pem", "ACS_TLS_KEY": "key.pem", "ACS_TLS_MIN_VERSION": "1.2", "ACS_CWMP_ALLOWED_CIDRS": "10.0.0.0/8",
+		"ACS_METRICS_TOKEN": "a-scrape-token-of-thirty-two-chars-0123"}
 }
 
 func TestProductionDevicePlaneFailsClosed(t *testing.T) {
-	for _, key := range []string{"ACS_TLS_CERT", "ACS_CWMP_ALLOWED_CIDRS"} {
+	// The last one: /metrics is on the listener the device networks reach.
+	for _, key := range []string{"ACS_TLS_CERT", "ACS_CWMP_ALLOWED_CIDRS", "ACS_METRICS_TOKEN"} {
 		t.Run(key, func(t *testing.T) {
 			e := validProductionEnv()
 			delete(e, key)

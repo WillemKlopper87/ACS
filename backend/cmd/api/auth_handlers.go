@@ -102,6 +102,37 @@ func operatorClaims(ctx context.Context) (*auth.Claims, bool) {
 	return claims, ok && claims != nil
 }
 
+// actingCustomerHeader carries, on a call made with the internal service
+// token, the customer the adapter is acting for: the ISP whose
+// integration sent the request, or the owner of the order a worker is
+// handling (internal/bss/acsclient.go sets it).
+const actingCustomerHeader = "X-ACS-Acting-Customer"
+
+// serviceCallsRequireCustomer refuses a service call that names no
+// customer. main sets it: on by default in the production profile with
+// the NaaS integration, where every integration is bound to a customer
+// and so every call has one. Off, a call without the header reaches the
+// whole fleet, as all service calls did before.
+var serviceCallsRequireCustomer bool
+
+func looksLikeUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case i == 8 || i == 13 || i == 18 || i == 23:
+			if c != '-' {
+				return false
+			}
+		case (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // serviceSubject is the synthetic operator identity assigned to a request
 // authenticated via the internal service token rather than a real
 // operator JWT — shows up in audit records exactly like a normal
@@ -132,9 +163,29 @@ func withJWTAuth(secret []byte, internalServiceToken string, current func(contex
 		}
 
 		token, fromQuery, ok := bearerToken(r)
+		// The console's session cookie, when there is no bearer token
+		// (session_cookie.go). The browser attaches a cookie by itself, so
+		// a request that relies on one has to show it came from the
+		// console.
+		fromCookie := false
+		if !ok {
+			if token, ok = sessionCookieToken(r); ok {
+				fromCookie = true
+			}
+		}
 		if !ok {
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
 			return
+		}
+		if fromCookie {
+			if isBrowserTicketRoute(r) {
+				http.Error(w, "this route needs a browser ticket", http.StatusUnauthorized)
+				return
+			}
+			if !isSafeMethod(r.Method) && r.Header.Get(csrfHeader) == "" {
+				http.Error(w, "a request that relies on the session cookie needs the "+csrfHeader+" header", http.StatusForbidden)
+				return
+			}
 		}
 		// A credential in the URL is accepted on exactly the two routes a
 		// browser cannot send a header to (audit P1.4), and then only a
@@ -151,13 +202,30 @@ func withJWTAuth(secret []byte, internalServiceToken string, current func(contex
 				http.Error(w, "internal service token is not permitted on this route", http.StatusForbidden)
 				return
 			}
-			claims := &auth.Claims{Subject: serviceSubject, Role: operators.RoleSuperAdmin, IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
+			// The adapter says which customer it is acting for, and the
+			// call is then confined to that customer's devices exactly
+			// as a customer-scoped operator's would be (deviceScope). The
+			// token alone used to reach every device: an adapter tricked
+			// or taken over could write to any customer's CPE.
+			acting := strings.TrimSpace(r.Header.Get(actingCustomerHeader))
+			if acting != "" && !looksLikeUUID(acting) {
+				http.Error(w, actingCustomerHeader+" must be a customer ID", http.StatusBadRequest)
+				return
+			}
+			if acting == "" && serviceCallsRequireCustomer {
+				http.Error(w, "a service call must name the customer it acts for ("+actingCustomerHeader+")", http.StatusForbidden)
+				return
+			}
+			claims := &auth.Claims{Subject: serviceSubject, Role: operators.RoleSuperAdmin, CustomerID: acting, IssuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
 			next.ServeHTTP(w, r.WithContext(withOperatorClaims(r.Context(), claims)))
 			return
 		}
 
 		claims, err := auth.VerifyJWT(secret, token)
 		if err != nil {
+			if fromCookie {
+				clearSessionCookie(w) // expired: stop the browser sending it
+			}
 			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 			return
 		}
@@ -169,7 +237,17 @@ func withJWTAuth(secret []byte, internalServiceToken string, current func(contex
 			http.Error(w, "wrong token type for this route", http.StatusUnauthorized)
 			return
 		}
+		// A ticket opens the one thing it was issued for: this purpose on
+		// this device. One minted for a device's console is no key to
+		// another device, nor to the same device's web GUI.
+		if fromQuery && claims.Resource != browserTicketResource(r) {
+			http.Error(w, "this ticket was issued for something else", http.StatusUnauthorized)
+			return
+		}
 		if current != nil && !current(r.Context(), claims) {
+			if fromCookie {
+				clearSessionCookie(w)
+			}
 			http.Error(w, "session revoked — sign in again", http.StatusUnauthorized)
 			return
 		}
@@ -190,6 +268,19 @@ func isBrowserTicketRoute(r *http.Request) bool {
 	return strings.HasSuffix(p, "/cli/connect") || strings.Contains(p, "/webgui/proxy/")
 }
 
+// browserTicketResource is what a ticket must have been issued for to be
+// accepted on this request (a browser-ticket route): the route's purpose
+// and the device in its path.
+func browserTicketResource(r *http.Request) string {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/devices/")
+	deviceID, tail, _ := strings.Cut(rest, "/")
+	purpose := auth.TicketPurposeWebGUI
+	if tail == "cli/connect" {
+		purpose = auth.TicketPurposeCLI
+	}
+	return auth.BrowserTicketResource(purpose, deviceID)
+}
+
 // isServiceRoute is the allowlist for the internal service token — the
 // exact calls internal/bss/acsclient.go makes on behalf of
 // cmd/bssadapter, nothing else (no operator management, no tenancy, no
@@ -198,6 +289,15 @@ func isServiceRoute(r *http.Request) bool {
 	p := r.URL.Path
 	switch {
 	case r.Method == http.MethodPut && strings.HasPrefix(p, "/api/v1/devices/") && strings.HasSuffix(p, "/parameters"):
+		return true
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/v1/devices/") && strings.HasSuffix(p, "/parameters") && strings.Count(p, "/") == 5 &&
+		strings.TrimSpace(r.URL.Query().Get("paths")) != "":
+		// The values of named parameters, for reconciliation and the
+		// TMF640 service view (acsclient.GetParameters). Only with an
+		// explicit list of paths: the adapter does not get to read a
+		// device's whole parameter cache. This case was missing, so both
+		// of those reads were refused with 403 whenever operator
+		// authentication was on.
 		return true
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/v1/devices/") && strings.Count(p, "/") == 4:
 		return true // GET /api/v1/devices/{id}
@@ -223,7 +323,9 @@ func isPublicRoute(r *http.Request) bool {
 	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v1/bulk-data/") && strings.HasSuffix(r.URL.Path, "/receive") {
 		return true
 	} // receiver-bound, expiring Basic credential is verified by the handler
-	if r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/login" {
+	if r.Method == http.MethodPost && (r.URL.Path == "/api/v1/auth/login" || strings.HasPrefix(r.URL.Path, "/api/v1/auth/login/mfa")) {
+		// The MFA login steps carry their own short-lived, audience-bound
+		// token in the body (mfa_handlers.go); there is no session yet.
 		return true
 	}
 	if r.Method == http.MethodPost && (r.URL.Path == "/api/v1/auth/password-reset/request" || r.URL.Path == "/api/v1/auth/password-reset/confirm") {
@@ -254,6 +356,10 @@ func isPublicRoute(r *http.Request) bool {
 	return false
 }
 
+// sharedRateLimit makes the request limit hold across replicas
+// (ratelimit.Synced). Nil unless ACS_SHARED_RATE_LIMIT=true.
+var sharedRateLimit *ratelimit.Synced
+
 // withRateLimit enforces a per-operator token bucket (build plan §7.3/§7d
 // — deliberately shipped after JWT auth, not before: an unauthenticated
 // limiter here could only key on IP, which is weak for an internal API).
@@ -271,7 +377,7 @@ func withRateLimit(limiter *ratelimit.Limiter, metrics *observability.Metrics, n
 		if claims, ok := operatorClaims(r.Context()); ok {
 			key = claims.Subject
 		}
-		if !limiter.Allow(key) {
+		if !limiter.Allow(key) || !sharedRateLimit.Allow(key) {
 			metrics.RateLimitRejectedTotal.Inc()
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
@@ -313,6 +419,20 @@ func (h *handler) issueBrowserTicket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service identities cannot mint browser tickets", http.StatusForbidden)
 		return
 	}
+	// A ticket is for one purpose on one device, and only for a device the
+	// operator may see.
+	var req struct {
+		DeviceID string `json:"device_id"`
+		Purpose  string `json:"purpose"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.DeviceID) == "" ||
+		(req.Purpose != auth.TicketPurposeCLI && req.Purpose != auth.TicketPurposeWebGUI) {
+		http.Error(w, `send device_id and purpose ("cli" or "webgui"): a ticket opens one thing on one device`, http.StatusBadRequest)
+		return
+	}
+	if _, ok := h.getScopedDevice(w, r, strings.TrimSpace(req.DeviceID)); !ok {
+		return
+	}
 	now := time.Now().UTC()
 	// audit P1.5: a ticket carries the operator's token version from the
 	// parent session JWT that authenticated this request, not the zero
@@ -327,6 +447,7 @@ func (h *handler) issueBrowserTicket(w http.ResponseWriter, r *http.Request) {
 	ticket, err := auth.SignJWT(h.jwtSecret, auth.Claims{
 		Subject: claims.Subject, Role: claims.Role, Audience: auth.AudienceBrowserTicket,
 		IssuedAt: now, ExpiresAt: now.Add(browserTicketTTL), Version: claims.Version,
+		Resource: auth.BrowserTicketResource(req.Purpose, strings.TrimSpace(req.DeviceID)),
 	})
 	if err != nil {
 		h.logger.Error("failed to sign browser ticket", "err", err, "username", claims.Subject)
@@ -414,7 +535,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username and password are required", http.StatusBadRequest)
 		return
 	}
-	if !loginLimiter.Allow(strings.ToLower(strings.TrimSpace(req.Username)) + "|" + clientIP(r)) {
+	if key := strings.ToLower(strings.TrimSpace(req.Username)) + "|" + clientIP(r); !loginLimiter.Allow(key) || !h.sharedAllow(r, h.sharedLoginLimit, key) {
 		h.metrics.RateLimitRejectedTotal.Inc()
 		http.Error(w, "too many login attempts — try again shortly", http.StatusTooManyRequests)
 		return
@@ -424,7 +545,10 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Same response whether the username doesn't exist or the
 		// password is wrong — a distinct "no such user" response would
-		// let a caller enumerate valid usernames.
+		// let a caller enumerate valid usernames. The same time, too: a
+		// wrong password costs a hash comparison, so an unknown name is
+		// made to cost one as well.
+		auth.BurnPasswordCheck(req.Password)
 		http.Error(w, "invalid username or password", http.StatusUnauthorized)
 		return
 	}
@@ -442,21 +566,9 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now().UTC()
-	claims := auth.Claims{Subject: op.Username, Role: op.Role, IssuedAt: now, ExpiresAt: now.Add(jwtTTL), Version: op.TokenVersion}
-	token, err := auth.SignJWT(h.jwtSecret, claims)
-	if err != nil {
-		h.logger.Error("failed to sign JWT", "err", err, "username", op.Username)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := h.auditor.Record(r.Context(), op.Username, "", "OperatorLogin", map[string]any{"role": op.Role}); err != nil {
-		h.logger.Error("failed to write audit record", "err", err)
-	}
-	h.logger.Info("operator logged in", "username", op.Username, "role", op.Role)
-
-	writeJSON(w, http.StatusOK, loginResponse{Token: token, Role: op.Role, ExpiresAt: claims.ExpiresAt.Format(time.RFC3339)})
+	// A correct password earns a session only when no second step is
+	// owed (mfa_handlers.go).
+	h.afterPassword(w, r, op)
 }
 
 // logout revokes every session of the calling operator (audit "missing
@@ -483,6 +595,7 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
 	if err := h.auditor.Record(r.Context(), op.Username, "", "OperatorLogout", nil); err != nil {
 		h.logger.Error("failed to write audit record", "err", err)
 	}
+	clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -518,6 +631,7 @@ type operatorResponse struct {
 	// Null for an active operator; the offboarding timestamp otherwise
 	// (audit 2026-09-04 P1.4).
 	DisabledAt *string `json:"disabled_at"`
+	MFAEnabled bool    `json:"mfa_enabled"`
 }
 
 func toOperatorResponse(op operators.Operator) operatorResponse {
@@ -537,6 +651,9 @@ func (h *handler) createOperator(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Username == "" || req.Password == "" || !operators.ValidRole(req.Role) {
 		http.Error(w, "username, password, and a valid role (superadmin, manager, noc, readonly) are required", http.StatusBadRequest)
+		return
+	}
+	if !h.acceptablePassword(w, r, req.Password, req.Username) {
 		return
 	}
 
@@ -607,9 +724,17 @@ func (h *handler) listOperators(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	withMFA, err := h.mfa.EnabledSet(r.Context())
+	if err != nil {
+		h.logger.Error("failed to list MFA status", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	out := make([]operatorResponse, 0, len(ops))
 	for _, op := range ops {
-		out = append(out, toOperatorResponse(op))
+		resp := toOperatorResponse(op)
+		resp.MFAEnabled = withMFA[op.ID]
+		out = append(out, resp)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
@@ -634,4 +759,39 @@ func bootstrapAdmin(ctx context.Context, h *handler, username, password string) 
 	}
 	_, err = h.operators.Create(ctx, username, "", string(hash), operators.RoleSuperAdmin)
 	return err
+}
+
+// sharedAllow applies the limit that all replicas share (finding O10),
+// after the in-memory one. A database fault is logged and does not refuse
+// the attempt.
+func (h *handler) sharedAllow(r *http.Request, limit *ratelimit.Shared, key string) bool {
+	return h.sharedAllowCtx(r.Context(), limit, key)
+}
+
+func (h *handler) sharedAllowCtx(ctx context.Context, limit *ratelimit.Shared, key string) bool {
+	ok, err := limit.Allow(ctx, key)
+	if err != nil {
+		h.logger.Error("shared attempt limit unavailable; the per-process limit still applies", "err", err)
+	}
+	return ok
+}
+
+// acceptablePassword applies the rules for a new operator password and
+// answers 400 with the reason when it fails them: the built-in floor
+// (auth.CheckPassword) and, when configured, the lookup of published
+// breaches. A lookup that cannot be made is logged and does not refuse
+// the password; see auth.BreachChecker.
+func (h *handler) acceptablePassword(w http.ResponseWriter, r *http.Request, password, username string) bool {
+	if err := auth.CheckPassword(password, username); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return false
+	}
+	switch err := h.passwordBreaches.Check(r.Context(), password); {
+	case errors.Is(err, auth.ErrPasswordBreached):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return false
+	case err != nil:
+		h.logger.Warn("breached-password lookup failed; the password was accepted on the other rules", "err", err)
+	}
+	return true
 }

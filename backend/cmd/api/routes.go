@@ -2,6 +2,8 @@ package main
 
 import (
 	"acs/internal/bulkdata"
+	"acs/internal/bulkops"
+	"acs/internal/mfa"
 	"database/sql"
 	"net/http"
 
@@ -17,6 +19,14 @@ import (
 func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *http.ServeMux {
 	if h.bulkData == nil {
 		h.bulkData = bulkdata.NewRepository(db)
+	}
+	if h.bulkOps == nil {
+		h.bulkOps = bulkops.NewRepository(db, h.jobs)
+	}
+	if h.mfa == nil {
+		// No key: status reads work, enrolment is refused (main.go passes
+		// the real key).
+		h.mfa, _ = mfa.NewRepository(db, "")
 	}
 	mux := http.NewServeMux()
 	// route(method, pattern, minRole, fn) wraps a handler with both HTTP
@@ -37,11 +47,24 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 		gated := h.requirePermission(perm, fn)
 		mux.HandleFunc(method+" "+pattern, metrics.InstrumentHTTP(method+" "+pattern, h.requireRole(op, gated)))
 	}
-	mux.HandleFunc("GET /metrics", metrics.Handler().ServeHTTP)
+	mux.Handle("GET /metrics", observability.ProtectMetrics(observability.MetricsToken(), metrics.Handler()))
 	mux.Handle("GET /healthz", observability.LivenessHandler())
 	mux.Handle("GET /readyz", observability.ReadinessHandler(db))
 	mux.HandleFunc("POST /api/v1/auth/login", metrics.InstrumentHTTP("POST /api/v1/auth/login", h.login))
+	// MFA (mfa_handlers.go). The three login steps are public: each takes
+	// the short-lived token the password step returned.
+	mux.HandleFunc("POST /api/v1/auth/login/mfa", metrics.InstrumentHTTP("POST /api/v1/auth/login/mfa", h.loginMFA))
+	mux.HandleFunc("POST /api/v1/auth/login/mfa/enroll", metrics.InstrumentHTTP("POST /api/v1/auth/login/mfa/enroll", h.loginMFAEnroll))
+	mux.HandleFunc("POST /api/v1/auth/login/mfa/confirm", metrics.InstrumentHTTP("POST /api/v1/auth/login/mfa/confirm", h.loginMFAConfirm))
+	route("GET", "/api/v1/auth/mfa", ro, h.getMFA)
+	route("POST", "/api/v1/auth/mfa/enroll", ro, h.enrollMFA)
+	route("POST", "/api/v1/auth/mfa/confirm", ro, h.confirmMFA)
+	route("POST", "/api/v1/auth/mfa/disable", ro, h.disableMFA)
+	route("POST", "/api/v1/auth/mfa/recovery-codes", ro, h.regenerateMFARecoveryCodes)
+	route("DELETE", "/api/v1/auth/operators/{id}/mfa", admin, h.resetOperatorMFA)
+	route("GET", "/api/v1/system/info", ro, h.systemInfo)
 	route("POST", "/api/v1/auth/ticket", ro, h.issueBrowserTicket) // audit P1.4 — see issueBrowserTicket
+	route("GET", "/api/v1/auth/session", ro, h.getSession)         // who the caller is; the console cannot read its own cookie
 	route("POST", "/api/v1/auth/logout", ro, h.logout)             // revokes every session of the caller
 	// The Grafana gate (grafana_gate.go): a ticket for a signed-in
 	// operator, then two public routes the proxy at Grafana's origin
@@ -253,6 +276,16 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("GET", "/api/v1/devices/{id}/jobs", ro, h.listDeviceJobs)
 	route("GET", "/api/v1/jobs", ro, h.listJobs)
 	route("GET", "/api/v1/jobs/{command_key}", ro, h.getJob)
+	// Cancel and retry check the permission the job's own type needs
+	// (jobPermission), so they are gated inside the handler.
+	route("POST", "/api/v1/jobs/{command_key}/cancel", op, h.cancelJob)
+	route("POST", "/api/v1/jobs/{command_key}/retry", op, h.retryJob)
+	// Bulk operations: the record of a bulk action or template apply.
+	// Changing one needs the permission that starting its kind needs.
+	route("GET", "/api/v1/bulk-operations", ro, h.listBulkOperations)
+	route("GET", "/api/v1/bulk-operations/{id}", ro, h.getBulkOperation)
+	route("POST", "/api/v1/bulk-operations/{id}/cancel", op, h.cancelBulkOperation)
+	route("POST", "/api/v1/bulk-operations/{id}/retry-failed", op, h.retryFailedBulkOperation)
 	route("GET", "/api/v1/firmware/images", ro, h.listFirmwareImages)
 	routePerm("POST", "/api/v1/firmware/images", operators.PermFirmwareManage, h.uploadFirmwareImage)
 	mux.HandleFunc("GET /api/v1/firmware/images/{id}/file", h.serveFirmwareFile) // CPE traffic, not an operator — see isPublicRoute, uninstrumented to avoid a per-device-download label blowup

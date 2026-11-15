@@ -42,6 +42,8 @@ export interface Device {
 export interface SubscriberSummary {
   device_id: string;
   account_id?: string;
+  /** The customer that owns the account; absent when nobody does. Account IDs are unique per customer. */
+  account_customer_id?: string;
   subscriber_name?: string;
   vip: boolean;
   site?: { name?: string; street?: string; suburb?: string; city?: string; postal_code?: string };
@@ -80,6 +82,9 @@ export interface CaptureEvent {
 export interface Job {
   command_key: string;
   device_id: string;
+  // Set on the fleet-wide jobs list, so a row can name its device.
+  oui_serial?: string;
+  device_label?: string;
   type: string;
   status: string;
   created_at: string;
@@ -152,10 +157,54 @@ export interface BulkActionResult {
 }
 
 export interface BulkActionResponse {
+  // The bulk operation recording this fan-out, to follow its progress.
+  bulk_operation_id?: string;
   action: string;
   requested: number;
   succeeded: number;
   results: BulkActionResult[];
+}
+
+// A bulk operation is the record of one bulk action or template apply;
+// its counts are its devices' latest jobs, read when asked.
+export interface BulkOperation {
+  id: string;
+  kind: "BULK_ACTION" | "TEMPLATE_APPLY";
+  action: string;
+  label: string;
+  group_id?: string | null;
+  created_by: string;
+  created_at: string;
+  state: "RUNNING" | "FINISHED";
+  total: number;
+  queued: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  not_queued: number;
+  unknown: number;
+}
+
+export interface BulkOperationItem {
+  device_id: string;
+  oui_serial?: string;
+  device_label?: string;
+  command_key?: string;
+  job_type?: string;
+  job_status?: string;
+  fault_string?: string;
+  error?: string;
+  detail?: string;
+  retries: number;
+}
+
+export interface BulkOperationDetail {
+  operation: BulkOperation;
+  items: BulkOperationItem[];
+  cancelled?: number;
+  retried?: number;
+  skipped?: Record<string, number>;
 }
 
 export interface DeviceGroup {
@@ -262,6 +311,8 @@ export type Role = "readonly" | "noc" | "manager" | "superadmin";
 
 export interface Operator {
   id: string;
+  /** The operator signs in with a second step (authenticator app). */
+  mfa_enabled?: boolean;
   username: string;
   email?: string;
   role: Role;
@@ -395,6 +446,8 @@ export interface ConfigTemplate {
 }
 
 export interface ApplyTemplateResult {
+  // The bulk operation recording this apply, to follow its progress.
+  bulk_operation_id?: string;
   template_id: string;
   requested: number;
   succeeded: number;
@@ -423,7 +476,10 @@ export interface ParameterHistoryEntry {
 // --- BSS integration admin panel (admin-platform backlog) ---
 export interface BSSMapping {
   id: string;
+  /** The ISP's own ID: unique per customer, not across customers. */
   account_id: string;
+  /** The customer that owns the account; null when nobody does. Names the account in later calls. */
+  account_customer_id?: string | null;
   device_id: string;
   oui_serial: string;
   service_plan?: string;

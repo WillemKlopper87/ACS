@@ -1,6 +1,7 @@
 package retention
 
 import (
+	"acs/internal/accounts/accountstest"
 	"context"
 	"database/sql"
 	"os"
@@ -116,8 +117,8 @@ func TestRun_PrunesOldStoppedCaptureSessions(t *testing.T) {
 func TestPruneSubscriberArchive(t *testing.T) {
 	ctx, db := newMigratedDB(t)
 	for _, age := range []string{"4 years", "1 year"} {
-		if _, err := db.ExecContext(ctx, `INSERT INTO account_profile_archive (account_id, display_name, vip, reason, archived_by, archived_at)
-			VALUES ('ACC-'||$1, 'Someone', false, 'service ended', 'op', now() - $1::interval)`, age); err != nil {
+		if _, err := db.ExecContext(ctx, accountstest.EnsureCTE("'ACC-'||$1")+`INSERT INTO account_profile_archive (account_id, account_key, display_name, vip, reason, archived_by, archived_at)
+			VALUES ('ACC-'||$1, (SELECT id FROM acct), 'Someone', false, 'service ended', 'op', now() - $1::interval)`, age); err != nil {
 			t.Fatal(err)
 		}
 	}

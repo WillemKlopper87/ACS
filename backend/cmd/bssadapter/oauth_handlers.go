@@ -4,6 +4,7 @@
 package main
 
 import (
+	"acs/internal/clientip"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -49,6 +50,10 @@ func (h *handler) issueOAuthToken(w http.ResponseWriter, r *http.Request) {
 
 	client, err := h.oauthClients.AuthenticateClient(r.Context(), clientID, clientSecret)
 	if err != nil {
+		// A failed client login used to leave no trace at all. The client
+		// ID is logged (it is not secret); the secret never is.
+		h.logger.Warn("oauth client authentication failed", "client_id", clientID, "remote", clientip.Of(r))
+		h.auditToken(r, "bss-client:"+clientID, "BSSClientAuthFailed", map[string]any{"remote": clientip.Of(r)})
 		writeError(w, http.StatusUnauthorized, "invalid_client", "client authentication failed")
 		return
 	}
@@ -84,6 +89,23 @@ func (h *handler) issueOAuthToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.Info("oauth token issued", "client_id", clientID, "scopes", scopes, "global_access", client.GlobalAccess)
+	issued := map[string]any{"scopes": scopes, "global_access": client.GlobalAccess, "remote": clientip.Of(r), "expires_at": claims.ExpiresAt.UTC()}
+	if claims.CustomerID != "" {
+		issued["customer_id"] = claims.CustomerID
+	}
+	h.auditToken(r, claims.Subject, "BSSTokenIssued", issued)
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(tokenResponse{AccessToken: token, TokenType: "Bearer", ExpiresIn: int(oauthTokenTTL.Seconds()), Scope: strings.Join(scopes, " "), CustomerID: claims.CustomerID})
+}
+
+// auditToken records a token being issued or refused (finding O13). The
+// audit trail is the record of who could act as which integration, and
+// from where; a failure to write it is logged and does not fail the call.
+func (h *handler) auditToken(r *http.Request, actor, action string, details map[string]any) {
+	if h.auditor == nil {
+		return
+	}
+	if err := h.auditor.Record(r.Context(), actor, "", action, details); err != nil {
+		h.logger.Error("failed to write audit record", "err", err, "action", action)
+	}
 }

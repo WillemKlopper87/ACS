@@ -3,6 +3,7 @@ import { api, ApiError } from "../api/client";
 import type { BSSAdapterCallResult, BSSHealth, BSSMapping, BSSOAuthClient, BSSStats, BSSUnassignReason, BSSWebhookSubscription } from "../api/types";
 import { toast } from "../lib/toast";
 import { customerName, useCustomers } from "../lib/useCustomers";
+import { confirmDialog } from "../lib/confirm";
 
 // BSS integration admin panel (admin-platform backlog): a superadmin view
 // onto the BSS-facing adapter (internal/bss, cmd/bssadapter — see
@@ -81,6 +82,7 @@ export function BSSIntegration() {
   // --- setup: mappings ---
   const [mappings, setMappings] = useState<BSSMapping[]>([]);
   const [mappingAccountId, setMappingAccountId] = useState("");
+  const [mappingCustomerId, setMappingCustomerId] = useState("");
   const [mappingOuiSerial, setMappingOuiSerial] = useState("");
   const [mappingServicePlan, setMappingServicePlan] = useState("");
 
@@ -167,7 +169,7 @@ export function BSSIntegration() {
   async function revokeOAuthClient(id: string, name: string) {
     // Revoking is immediate and irreversible: whatever BSS system holds
     // this client_id stops being able to authenticate the moment it lands.
-    if (!window.confirm(`Revoke OAuth2 client "${name}"? Any BSS integration using it stops authenticating immediately. This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Revoke OAuth2 client "${name}"? Any BSS integration using it stops authenticating immediately. This cannot be undone.`))) return;
     try {
       await api.revokeBSSOAuthClient(id);
       await loadSetup();
@@ -200,7 +202,7 @@ export function BSSIntegration() {
   async function removeMapping() {
     if (!removing) return;
     try {
-      await api.unassignBSSMapping(removing.account_id, removing.role, removeReason);
+      await api.unassignBSSMapping(removing.account_id, removing.role, removeReason, removing.account_customer_id ?? null);
       toast(`Removed ${removing.oui_serial} from ${removing.account_id}`, "success");
       setRemoving(null);
       await loadSetup();
@@ -212,7 +214,7 @@ export function BSSIntegration() {
   async function createMapping(e: React.FormEvent) {
     e.preventDefault();
     try {
-      await api.createBSSMapping(mappingAccountId, mappingOuiSerial, mappingServicePlan || undefined);
+      await api.createBSSMapping(mappingAccountId, mappingOuiSerial, mappingServicePlan || undefined, mappingCustomerId || undefined);
       setMappingAccountId("");
       setMappingOuiSerial("");
       setMappingServicePlan("");
@@ -243,7 +245,7 @@ export function BSSIntegration() {
   }
 
   async function deleteWebhook(id: string, target: string) {
-    if (!window.confirm(`Delete the webhook subscription to ${target}? Events will stop being delivered there.`)) return;
+    if (!(await confirmDialog(`Delete the webhook subscription to ${target}? Events will stop being delivered there.`))) return;
     try {
       await api.deleteBSSWebhook(id);
       await loadSetup();
@@ -318,12 +320,25 @@ export function BSSIntegration() {
           <div className="panel">
             <h3>Account–device mappings</h3>
             <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
-              Workflow A. <code>oui_serial</code> must belong to a device that has already sent at least one Inform.
+              Links a BSS account to a device that has already checked in. For a device that has not been seen yet, record a sale under Devices → Onboarding.
             </p>
             <form onSubmit={createMapping} className="form-row" style={{ flexWrap: "wrap" }}>
-              <input aria-label="account_id" placeholder="account_id" value={mappingAccountId} onChange={(e) => setMappingAccountId(e.target.value)} required />
-              <input aria-label="oui_serial" placeholder="oui_serial" value={mappingOuiSerial} onChange={(e) => setMappingOuiSerial(e.target.value)} required />
-              <input aria-label="service_plan (optional)" placeholder="service_plan (optional)" value={mappingServicePlan} onChange={(e) => setMappingServicePlan(e.target.value)} />
+              <input aria-label="account_id" placeholder="Account ID" value={mappingAccountId} onChange={(e) => setMappingAccountId(e.target.value)} required />
+              <select
+                aria-label="Customer the account belongs to"
+                title="Account IDs are unique per customer. Pick the customer when two customers use this ID, or to create the account for a customer."
+                value={mappingCustomerId}
+                onChange={(e) => setMappingCustomerId(e.target.value)}
+              >
+                <option value="">Customer: not specified</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <input aria-label="oui_serial" placeholder="Device: OUI+ProductClass+Serial" value={mappingOuiSerial} onChange={(e) => setMappingOuiSerial(e.target.value)} required />
+              <input aria-label="service_plan (optional)" placeholder="Service plan (optional)" value={mappingServicePlan} onChange={(e) => setMappingServicePlan(e.target.value)} />
               <button type="submit" className="btn primary">Create</button>
             </form>
             {mappings.length === 0 ? (
@@ -332,7 +347,13 @@ export function BSSIntegration() {
               <div style={{ maxHeight: "22rem", overflowY: "auto", marginTop: "0.75rem" }}>
                 {mappings.map((m) => (
                   <div className="param-row" key={m.id}>
-                    <span className="path">{m.account_id} <span className="dim">→</span> {m.oui_serial}</span>
+                    <span className="path">
+                      {m.account_id}{" "}
+                      <span className="dim" title="The customer this account belongs to. Account IDs are unique per customer.">
+                        ({m.account_customer_id ? customerName(customers, m.account_customer_id) : "no customer"})
+                      </span>{" "}
+                      <span className="dim">→</span> {m.oui_serial}
+                    </span>
                     <span className={statusPillClass(m.status)}>{m.status}</span>
                     {m.service_plan && <span className="src">{m.service_plan}</span>}
                     {removing?.id === m.id ? (
@@ -372,12 +393,12 @@ export function BSSIntegration() {
           <div className="panel">
             <h3>Webhook subscriptions</h3>
             <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
-              JOB_COMPLETED delivery targets. Leave account_id blank for a fleet-wide subscription.
+              Where the ACS posts a message when an order's job finishes. Leave the account blank for every account. Other event types are subscribed through the API.
             </p>
             <form onSubmit={createWebhook} className="form-row" style={{ flexWrap: "wrap" }}>
-              <input aria-label="account_id (optional)" placeholder="account_id (optional)" value={webhookAccountId} onChange={(e) => setWebhookAccountId(e.target.value)} />
+              <input aria-label="account_id (optional)" placeholder="Account ID (optional)" value={webhookAccountId} onChange={(e) => setWebhookAccountId(e.target.value)} />
               <input aria-label="https://target-url" placeholder="https://target-url" value={webhookTargetUrl} onChange={(e) => setWebhookTargetUrl(e.target.value)} required />
-              <input aria-label="HMAC secret" placeholder="HMAC secret" value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} required />
+              <input aria-label="HMAC secret" placeholder="Signing secret (32+ characters)" minLength={32} value={webhookSecret} onChange={(e) => setWebhookSecret(e.target.value)} required />
               <button type="submit" className="btn primary">Create</button>
             </form>
             {webhooks.length === 0 ? (
@@ -394,8 +415,7 @@ export function BSSIntegration() {
           <div className="panel">
             <h3>OAuth2 clients</h3>
             <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem" }}>
-              Recommended auth for new integrations (RFC 6749 client-credentials). Grant only the TMF permissions and
-              accounts this integration needs, or deliberately choose fleet-wide access. The secret is shown once after creation.
+              Each integration gets its own client. Grant only the permissions and accounts it needs. The secret is shown once, when the client is created.
             </p>
             <form onSubmit={createOAuthClient} style={{ marginTop: "0.75rem" }}>
               <div className="form-row" style={{ flexWrap: "wrap" }}>
@@ -596,16 +616,16 @@ export function BSSIntegration() {
           </div>
 
           <div className="panel">
-            <h3>Mapping lookup (Workflow A)</h3>
+            <h3>Look up an account's device</h3>
             <form onSubmit={runMappingLookup} className="form-row" style={{ flexWrap: "wrap" }}>
-              <input aria-label="account_id" placeholder="account_id" value={lookupAccountId} onChange={(e) => setLookupAccountId(e.target.value)} required />
+              <input aria-label="account_id" placeholder="Account ID" value={lookupAccountId} onChange={(e) => setLookupAccountId(e.target.value)} required />
               <button type="submit" className="btn primary" disabled={running === "lookup"}>{running === "lookup" ? "Running…" : "Run"}</button>
             </form>
             {lookupResult && <ResultCard result={lookupResult} />}
           </div>
 
           <div className="panel">
-            <h3>Job status lookup (Workflow C)</h3>
+            <h3>Look up a job</h3>
             <form onSubmit={runJobStatus} className="form-row" style={{ flexWrap: "wrap" }}>
               <input aria-label="command_key" placeholder="command_key" value={commandKey} onChange={(e) => setCommandKey(e.target.value)} required />
               <button type="submit" className="btn primary" disabled={running === "job"}>{running === "job" ? "Running…" : "Run"}</button>
@@ -614,13 +634,13 @@ export function BSSIntegration() {
           </div>
 
           <div className="panel">
-            <h3>Order dispatch (Workflow B)</h3>
+            <h3>Send a test order</h3>
             <p className="dim" style={{ marginTop: 0, fontSize: "0.82rem", color: "var(--warn)" }}>
               This is a real order — it queues a genuine MODIFY_WIFI job against the account's mapped device, not a dry run.
             </p>
             <form onSubmit={runOrderDispatch} className="form-row" style={{ flexWrap: "wrap" }}>
               <input aria-label="external_order_id" placeholder="external_order_id" value={orderId} onChange={(e) => setOrderId(e.target.value)} required />
-              <input aria-label="account_id" placeholder="account_id" value={orderAccountId} onChange={(e) => setOrderAccountId(e.target.value)} required />
+              <input aria-label="account_id" placeholder="Account ID" value={orderAccountId} onChange={(e) => setOrderAccountId(e.target.value)} required />
               <input aria-label="wifi_ssid" placeholder="wifi_ssid" value={orderSsid} onChange={(e) => setOrderSsid(e.target.value)} required />
               <button type="submit" className="btn primary" disabled={running === "order"}>{running === "order" ? "Running…" : "Send order"}</button>
             </form>

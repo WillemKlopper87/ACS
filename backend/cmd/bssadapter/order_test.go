@@ -1,6 +1,7 @@
 package main
 
 import (
+	"acs/internal/accounts/accountstest"
 	"bytes"
 	"context"
 	"database/sql"
@@ -10,7 +11,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,7 +79,7 @@ func seedOrderDevice(t *testing.T, ctx context.Context, db *sql.DB, accountID, d
 		t.Fatalf("seed device: %v", err)
 	}
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, role, assigned_at) VALUES (gen_random_uuid(), $1, $2, $3, 'gateway', now())`,
+		accountstest.EnsureCTE("$1")+`INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, role, assigned_at) VALUES (gen_random_uuid(), $1, (SELECT id FROM acct), $2, $3, 'gateway', now())`,
 		accountID, deviceID, deviceID+"-serial"); err != nil {
 		t.Fatalf("seed mapping: %v", err)
 	}
@@ -341,5 +344,127 @@ func TestCreateOrderConcurrentRequestsRaceInsertPending(t *testing.T) {
 	}
 	if order == nil {
 		t.Fatal("FindOrder after race = nil, want exactly one order recorded")
+	}
+}
+
+// TestCreateOrderExternalIDOfAnotherAccountIsRefused: external_order_id is
+// unique across accounts, so an ID one account used must not be answered,
+// for another account, with the first account's order. Before this the
+// second caller got 202 with the first account's command_key and status,
+// and its own order was never placed.
+func TestCreateOrderExternalIDOfAnotherAccountIsRefused(t *testing.T) {
+	dispatched := 0
+	ctx, h, db := newOrderTestHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-first", "status": "QUEUED"})
+			return
+		}
+		dispatched++
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-first"})
+	}))
+	seedOrderDevice(t, ctx, db, "acct-a", "11111111-1111-1111-1111-111111111111")
+	seedOrderDevice(t, ctx, db, "acct-b", "22222222-2222-2222-2222-222222222222")
+
+	post := func(accountID string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(createOrderRequest{ExternalOrderID: "ord-shared", AccountID: accountID, Action: "SUSPEND"})
+		rec := httptest.NewRecorder()
+		h.createOrder(rec, httptest.NewRequest(http.MethodPost, "/bss/v1/orders", bytes.NewReader(body)))
+		return rec
+	}
+
+	if rec := post("acct-a"); rec.Code != http.StatusAccepted {
+		t.Fatalf("first order: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := post("acct-b")
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "ErrIdempotencyKeyReused") {
+		t.Fatalf("other account, same external_order_id: %d %s, want 409 ErrIdempotencyKeyReused", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "ck-first") {
+		t.Errorf("the refusal carries the first account's command_key: %s", rec.Body.String())
+	}
+	if dispatched != 1 {
+		t.Errorf("dispatched %d jobs, want 1", dispatched)
+	}
+	// The owner's own retry is still answered idempotently.
+	if rec := post("acct-a"); rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "ck-first") {
+		t.Errorf("owner's retry: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A resent order ID is a retry only if it asks for the same thing
+// (security assessment O7). An integration that amends an order and
+// resends it under the same ID used to be told it was accepted, while the
+// device had been sent the original.
+func TestCreateOrderResentWithAChangedRequestIsRefused(t *testing.T) {
+	var dispatched atomic.Int64
+	ctx, h, db := newOrderTestHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Write([]byte(`{"status":"QUEUED","command_key":"ck-1"}`))
+			return
+		}
+		dispatched.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"command_key": "ck-1"})
+	}))
+	const accountID, deviceID = "acct-o7", "77777777-1111-1111-1111-111111111111"
+	seedOrderDevice(t, ctx, db, accountID, deviceID)
+	send := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.createOrder(rec, httptest.NewRequest(http.MethodPost, "/bss/v1/orders", strings.NewReader(body)))
+		return rec
+	}
+	first := `{"external_order_id":"ord-o7","account_id":"acct-o7","action":"SUSPEND"}`
+	if rec := send(first); rec.Code != http.StatusAccepted {
+		t.Fatalf("first = %d %s", rec.Code, rec.Body)
+	}
+
+	// The identical request, and the same request spelled differently
+	// (field order, the default role written out), are retries.
+	for name, body := range map[string]string{
+		"identical":        first,
+		"reordered fields": `{"action":"SUSPEND","account_id":"acct-o7","external_order_id":"ord-o7"}`,
+		"default role":     `{"external_order_id":"ord-o7","account_id":"acct-o7","action":"SUSPEND","role":"gateway"}`,
+	} {
+		rec := send(body)
+		if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"command_key":"ck-1"`) {
+			t.Errorf("%s retry = %d %s, want the original order", name, rec.Code, rec.Body)
+		}
+	}
+
+	// The same ID asking for something else is not.
+	for name, body := range map[string]string{
+		"another action":    `{"external_order_id":"ord-o7","account_id":"acct-o7","action":"ACTIVATE"}`,
+		"another role":      `{"external_order_id":"ord-o7","account_id":"acct-o7","action":"SUSPEND","role":"extender"}`,
+		"another parameter": `{"external_order_id":"ord-o7","account_id":"acct-o7","action":"SUSPEND","parameters":{"reason":"non-payment"}}`,
+	} {
+		rec := send(body)
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "ErrIdempotencyKeyReused") {
+			t.Errorf("%s under the same ID = %d %s, want 409 ErrIdempotencyKeyReused", name, rec.Code, rec.Body)
+		}
+	}
+	if n := dispatched.Load(); n != 1 {
+		t.Fatalf("device writes dispatched = %d, want 1 (the original only)", n)
+	}
+	var orders int
+	var action string
+	if err := db.QueryRowContext(ctx, `SELECT count(*), min(action) FROM bss_orders WHERE external_order_id = 'ord-o7'`).Scan(&orders, &action); err != nil || orders != 1 || action != "SUSPEND" {
+		t.Fatalf("orders = %d action %q (%v), want the one original", orders, action, err)
+	}
+
+	// An order from before digests were recorded has nothing to compare
+	// with: its ID keeps answering with the original, as it always did.
+	if _, err := db.ExecContext(ctx, `UPDATE bss_orders SET request_hash = NULL WHERE external_order_id = 'ord-o7'`); err != nil {
+		t.Fatal(err)
+	}
+	if rec := send(`{"external_order_id":"ord-o7","account_id":"acct-o7","action":"ACTIVATE"}`); rec.Code != http.StatusAccepted {
+		t.Fatalf("an order with no digest on record = %d %s, want the original (202)", rec.Code, rec.Body)
+	}
+	// Likewise one that carries the earlier, unmarked digest of the device writes.
+	if _, err := db.ExecContext(ctx, `UPDATE bss_orders SET request_hash = 'ab12cd34' WHERE external_order_id = 'ord-o7'`); err != nil {
+		t.Fatal(err)
+	}
+	if rec := send(first); rec.Code != http.StatusAccepted {
+		t.Fatalf("an order with an old-style digest = %d %s, want the original (202)", rec.Code, rec.Body)
 	}
 }

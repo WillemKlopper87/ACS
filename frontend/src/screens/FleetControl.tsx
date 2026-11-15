@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
@@ -216,12 +217,15 @@ export function FleetControl() {
       {
         id: "device",
         header: "Device",
-        accessorFn: (d) => d.label || d.oui_serial,
+        accessorFn: (d) => d.label || d.subscriber?.subscriber_name || d.oui_serial,
         cell: ({ row }) => {
           const d = row.original;
-          return d.label ? (
+          // Same order as Inventory: the label or the subscriber's name,
+          // then the serial.
+          const title = d.label || d.subscriber?.subscriber_name;
+          return title ? (
             <div>
-              <div>{d.label}</div>
+              <div>{title}</div>
               <div className="dim mono" style={{ fontSize: "0.72rem" }}>{d.oui_serial}</div>
             </div>
           ) : (
@@ -451,6 +455,12 @@ export function BulkOutcomes({ result, deviceName }: { result: BulkActionRespons
   return (
     <div className={`banner ${result.succeeded === result.requested ? "info" : "error"}`} style={{ marginTop: "0.9rem" }}>
       <b>{result.action}</b>: {result.succeeded} of {result.requested} queued successfully.
+      {result.bulk_operation_id && (
+        <>
+          {" "}
+          <Link to={`/operations?id=${result.bulk_operation_id}`}>Follow progress</Link>
+        </>
+      )}
       <div style={{ marginTop: "0.4rem", fontFamily: "var(--font-mono)", fontSize: "0.78rem", maxHeight: "16rem", overflowY: "auto" }}>
         {rows.map((r) => (
           <div key={r.device_id} data-outcome={r.error ? "failed" : "queued"}>

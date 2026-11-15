@@ -14,6 +14,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { api, ApiError } from "../api/client";
 import type { CLICredential } from "../api/types";
 import { toast } from "../lib/toast";
+import { confirmDialog } from "../lib/confirm";
 
 export function RemoteShell({ id, writable }: { id: string; writable: boolean }) {
   const [credentials, setCredentials] = useState<CLICredential[]>([]);
@@ -153,7 +154,7 @@ export function RemoteShell({ id, writable }: { id: string; writable: boolean })
   }
 
   async function handleDeleteCredential(credentialId: string) {
-    if (!window.confirm("Delete this CLI credential?")) return;
+    if (!(await confirmDialog("Delete this CLI credential?"))) return;
     try {
       await api.deleteCLICredential(id, credentialId);
       if (selected === credentialId) setSelected("");

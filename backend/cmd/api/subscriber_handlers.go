@@ -87,7 +87,8 @@ func (h *handler) accountInScope(w http.ResponseWriter, r *http.Request, account
 // getAccountProfile is GET /api/v1/accounts/{account_id}/profile.
 func (h *handler) getAccountProfile(w http.ResponseWriter, r *http.Request) {
 	accountID := r.PathValue("account_id")
-	if !h.accountInScope(w, r, accountID) {
+	r, ok := h.namedAccount(w, r, accountID)
+	if !ok || !h.accountInScope(w, r, accountID) {
 		return
 	}
 	p, err := h.subscribers.Get(r.Context(), accountID)
@@ -107,7 +108,8 @@ func (h *handler) getAccountProfile(w http.ResponseWriter, r *http.Request) {
 // not sent (409 when it has), or sets or clears VIP.
 func (h *handler) putAccountProfile(w http.ResponseWriter, r *http.Request) {
 	accountID := r.PathValue("account_id")
-	if !h.accountInScope(w, r, accountID) {
+	r, ok := h.namedAccount(w, r, accountID)
+	if !ok || !h.accountInScope(w, r, accountID) {
 		return
 	}
 	var req struct {

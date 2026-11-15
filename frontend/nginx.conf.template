@@ -7,7 +7,7 @@
 # non-localhost deploy silently had every API request blocked by the
 # browser — CSP violations don't surface as request errors in the app.
 server {
-    listen 80;
+    listen 8080;
     server_name _;
     root /usr/share/nginx/html;
     index index.html;

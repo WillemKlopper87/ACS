@@ -25,6 +25,29 @@ function place(h: SubscriberHit) {
   return [s.street, s.suburb, s.city].filter(Boolean).join(", ");
 }
 
+// One lookup result: who it is, where, what device, and why it matched.
+// Shared by the Inventory lookup and the search box in the page header.
+export function LookupHit({ hit: h, onOpen }: { hit: SubscriberHit; onOpen: () => void }) {
+  return (
+    <button role="listitem" className="lookup-hit" onClick={onOpen}>
+      <span className="lookup-hit-main">
+        {h.vip && <VipBadge />} <strong>{h.subscriber_name || h.label || h.oui_serial}</strong>
+        {h.account_id && <span className="mono dim"> · {h.account_id}</span>}
+      </span>
+      <span className="dim lookup-hit-sub">
+        {[place(h), [h.manufacturer, h.model].filter(Boolean).join(" "), serialTail(h.oui_serial)].filter(Boolean).join(" · ")}
+      </span>
+      <span className="lookup-hit-match">
+        {h.matched.map((m) => (
+          <span key={m} className="pill pill-neutral">
+            {MATCH_LABEL[m] ?? m}
+          </span>
+        ))}
+      </span>
+    </button>
+  );
+}
+
 export function SubscriberLookup() {
   const navigate = useNavigate();
   const [q, setQ] = useState("");
@@ -108,22 +131,7 @@ export function SubscriberLookup() {
                 or serial digits before acting.
               </p>
               {hits.map((h) => (
-                <button key={h.device_id} role="listitem" className="lookup-hit" onClick={() => navigate(devicePath(h.device_id))}>
-                  <span className="lookup-hit-main">
-                    {h.vip && <VipBadge />} <strong>{h.subscriber_name || h.label || h.oui_serial}</strong>
-                    {h.account_id && <span className="mono dim"> · {h.account_id}</span>}
-                  </span>
-                  <span className="dim lookup-hit-sub">
-                    {[place(h), [h.manufacturer, h.model].filter(Boolean).join(" "), serialTail(h.oui_serial)].filter(Boolean).join(" · ")}
-                  </span>
-                  <span className="lookup-hit-match">
-                    {h.matched.map((m) => (
-                      <span key={m} className="pill pill-neutral">
-                        {MATCH_LABEL[m] ?? m}
-                      </span>
-                    ))}
-                  </span>
-                </button>
+                <LookupHit key={h.device_id} hit={h} onOpen={() => navigate(devicePath(h.device_id))} />
               ))}
             </>
           )}

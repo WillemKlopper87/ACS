@@ -1,7 +1,9 @@
 package main
 
 import (
+	"acs/internal/config"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -67,6 +69,11 @@ func loadDevicePlaneConfig(getenv func(string) string) (devicePlaneConfig, error
 	if c.Profile == "production" {
 		if c.TLSCert == "" || c.TLSKey == "" {
 			return c, fmt.Errorf("production profile requires ACS_TLS_CERT and ACS_TLS_KEY")
+		}
+		// /metrics is served on this listener, which every device network
+		// reaches.
+		if p := config.MetricsTokenProblem(getenv); p != "" {
+			return c, errors.New(p)
 		}
 		if c.TLSMinVersion < tls.VersionTLS12 {
 			return c, fmt.Errorf("production profile requires ACS_TLS_MIN_VERSION=1.2 or 1.3")

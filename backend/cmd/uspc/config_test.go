@@ -102,6 +102,7 @@ func validUspcConfigEnv() map[string]string {
 func validProductionUspcConfigEnv() map[string]string {
 	return map[string]string{
 		"ACS_DEPLOYMENT_PROFILE": "production",
+		"ACS_METRICS_TOKEN":      "a-scrape-token-of-thirty-two-chars-0123",
 		"ACS_USP_CONTROLLER_ID":  "ci-controller",
 		"ACS_USP_TLS_CERT":       "/tmp/cert.pem",
 		"ACS_USP_TLS_KEY":        "/tmp/key.pem",

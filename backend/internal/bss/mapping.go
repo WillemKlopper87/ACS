@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"time"
 
+	"acs/internal/accounts"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -138,21 +140,46 @@ func uniqueViolationErr(err error, accountID, role string) error {
 // it is set. Status is retained for API compatibility and is NOT what
 // decides whether a device currently serves an account (spec §5.4).
 type AccountDeviceMapping struct {
-	ID             string     `json:"id"`
-	AccountID      string     `json:"account_id"`
-	DeviceID       string     `json:"device_id"`
-	OUISerial      string     `json:"oui_serial"`
-	ServicePlan    string     `json:"service_plan,omitempty"`
-	Status         string     `json:"status"`
-	Role           string     `json:"role"`
-	AssignedAt     time.Time  `json:"assigned_at"`
-	UnassignedAt   *time.Time `json:"unassigned_at,omitempty"`
-	UnassignReason string     `json:"unassign_reason,omitempty"`
+	ID        string `json:"id"`
+	AccountID string `json:"account_id"`
+	// AccountKey is the registry key of the account (never on the wire).
+	// A caller is authorized against it, not against AccountID, which two
+	// customers can share.
+	AccountKey string `json:"-"`
+	// AccountCustomerID is the customer that owns the account, "" when
+	// nobody does. The operator API reports it; the integration API does
+	// not (a bound client only ever sees its own).
+	AccountCustomerID string     `json:"-"`
+	DeviceID          string     `json:"device_id"`
+	OUISerial         string     `json:"oui_serial"`
+	ServicePlan       string     `json:"service_plan,omitempty"`
+	Status            string     `json:"status"`
+	Role              string     `json:"role"`
+	AssignedAt        time.Time  `json:"assigned_at"`
+	UnassignedAt      *time.Time `json:"unassigned_at,omitempty"`
+	UnassignReason    string     `json:"unassign_reason,omitempty"`
 }
 
 type Repository struct {
 	db *sql.DB
+	// requireAllocated: see RequireAllocatedDevices.
+	requireAllocated bool
 }
+
+// RequireAllocatedDevices turns on strict device ownership: an account
+// that belongs to a customer can take only a device the operator has
+// already allocated to that customer (devices.customer_id, set by the
+// device import or by an operator). A device with no customer is then
+// "not found" to every customer-bound caller, where it would otherwise
+// join whichever customer named its serial first. Serials are printed on
+// the box, so first-to-name is not proof of ownership.
+func (r *Repository) RequireAllocatedDevices(on bool) *Repository {
+	r.requireAllocated = on
+	return r
+}
+
+// AllocatedDevicesRequired reports whether strict device ownership is on.
+func (r *Repository) AllocatedDevicesRequired() bool { return r.requireAllocated }
 
 func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
@@ -179,11 +206,11 @@ func resolveDeviceID(ctx context.Context, q interface {
 // and a violation surfaces as ErrRoleAlreadyAssigned.
 func insertAssignment(ctx context.Context, q interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, id, accountID, deviceID, ouiSerial, role string, servicePlan any, status string) error {
+}, id, accountID, accountKey, deviceID, ouiSerial, role string, servicePlan any, status string) error {
 	_, err := q.ExecContext(ctx, `
-		INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial, service_plan, status, role)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, id, accountID, deviceID, ouiSerial, servicePlan, status, role)
+		INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial, service_plan, status, role)
+		VALUES ($1, $2, $8, $3, $4, $5, $6, $7)
+	`, id, accountID, deviceID, ouiSerial, servicePlan, status, role, accountKey)
 	if isUniqueViolation(err) {
 		return uniqueViolationErr(err, accountID, role)
 	}
@@ -221,17 +248,21 @@ func (r *Repository) AssignDeviceStatus(ctx context.Context, accountID, ouiSeria
 		return nil, fmt.Errorf("begin assignment: %w", err)
 	}
 	defer tx.Rollback()
-	deviceID, err := deviceForAccount(ctx, tx, ouiSerial, accountID)
+	accountKey, err := accounts.Ensure(ctx, tx, accountID)
 	if err != nil {
 		return nil, err
 	}
-	if err := insertAssignment(ctx, tx, uuid.New().String(), accountID, deviceID, ouiSerial, role, nullIfEmpty(servicePlan), status); err != nil {
+	deviceID, err := deviceForAccount(ctx, tx, ouiSerial, accountKey, r.requireAllocated)
+	if err != nil {
+		return nil, err
+	}
+	if err := insertAssignment(ctx, tx, uuid.New().String(), accountID, accountKey, deviceID, ouiSerial, role, nullIfEmpty(servicePlan), status); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit assignment: %w", err)
 	}
-	return r.getByAccountDevice(ctx, accountID, deviceID)
+	return r.getByAccountDevice(ctx, accountKey, deviceID)
 }
 
 // UnassignDevice ends the account's current assignment in the given role,
@@ -243,11 +274,15 @@ func (r *Repository) UnassignDevice(ctx context.Context, accountID, role, reason
 	if !ValidUnassignReason(reason) {
 		return fmt.Errorf("%w: %s", ErrInvalidUnassignReason, reason)
 	}
+	accountKey, err := accounts.Resolve(ctx, r.db, accountID)
+	if err != nil {
+		return err
+	}
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE account_device_mappings
 		   SET unassigned_at = now(), unassign_reason = $3, updated_at = now()
-		 WHERE account_id = $1 AND role = $2 AND unassigned_at IS NULL
-	`, accountID, role, reason)
+		 WHERE account_key = $1 AND role = $2 AND unassigned_at IS NULL
+	`, accountKey, role, reason)
 	if err != nil {
 		return fmt.Errorf("unassign device: %w", err)
 	}
@@ -279,13 +314,17 @@ func (r *Repository) SwapDevice(ctx context.Context, accountID, role, newOUISeri
 	}
 	defer tx.Rollback()
 
+	accountKey, err := accounts.Resolve(ctx, tx, accountID)
+	if err != nil {
+		return nil, err
+	}
 	var servicePlan sql.NullString
 	err = tx.QueryRowContext(ctx, `
 		UPDATE account_device_mappings
 		   SET unassigned_at = now(), unassign_reason = $3, updated_at = now()
-		 WHERE account_id = $1 AND role = $2 AND unassigned_at IS NULL
+		 WHERE account_key = $1 AND role = $2 AND unassigned_at IS NULL
 		 RETURNING service_plan
-	`, accountID, role, reason).Scan(&servicePlan)
+	`, accountKey, role, reason).Scan(&servicePlan)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: account %s role %s", ErrNoDeviceForRole, accountID, role)
 	}
@@ -293,7 +332,7 @@ func (r *Repository) SwapDevice(ctx context.Context, accountID, role, newOUISeri
 		return nil, fmt.Errorf("release old assignment: %w", err)
 	}
 
-	newDeviceID, err := deviceForAccount(ctx, tx, newOUISerial, accountID)
+	newDeviceID, err := deviceForAccount(ctx, tx, newOUISerial, accountKey, r.requireAllocated)
 	if err != nil {
 		return nil, err // deferred Rollback restores the old assignment
 	}
@@ -301,27 +340,31 @@ func (r *Repository) SwapDevice(ctx context.Context, accountID, role, newOUISeri
 	if servicePlan.Valid {
 		plan = servicePlan.String
 	}
-	if err := insertAssignment(ctx, tx, uuid.New().String(), accountID, newDeviceID, newOUISerial, role, plan, StatusActive); err != nil {
+	if err := insertAssignment(ctx, tx, uuid.New().String(), accountID, accountKey, newDeviceID, newOUISerial, role, plan, StatusActive); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit swap: %w", err)
 	}
-	return r.getByAccountDevice(ctx, accountID, newDeviceID)
+	return r.getByAccountDevice(ctx, accountKey, newDeviceID)
 }
 
-func (r *Repository) getByAccountDevice(ctx context.Context, accountID, deviceID string) (*AccountDeviceMapping, error) {
+func (r *Repository) getByAccountDevice(ctx context.Context, accountKey, deviceID string) (*AccountDeviceMapping, error) {
 	row := r.db.QueryRowContext(ctx,
-		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE account_id = $1 AND device_id = $2 AND unassigned_at IS NULL",
-		accountID, deviceID)
+		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE account_key = $1 AND device_id = $2 AND unassigned_at IS NULL",
+		accountKey, deviceID)
 	return scanMapping(row)
 }
 
 // ListByAccount returns every device *currently* assigned to an account.
 func (r *Repository) ListByAccount(ctx context.Context, accountID string) ([]AccountDeviceMapping, error) {
+	accountKey, err := accounts.Resolve(ctx, r.db, accountID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.db.QueryContext(ctx,
-		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE account_id = $1 AND unassigned_at IS NULL ORDER BY assigned_at ASC, id ASC",
-		accountID)
+		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE account_key = $1 AND unassigned_at IS NULL ORDER BY assigned_at ASC, id ASC",
+		accountKey)
 	if err != nil {
 		return nil, fmt.Errorf("list mappings: %w", err)
 	}
@@ -370,9 +413,13 @@ func (r *Repository) ListAll(ctx context.Context, limit int) ([]AccountDeviceMap
 // row per (account, role), so there is nothing to order by and no LIMIT 1
 // hiding a multiplicity. An unfilled role is ErrNoDeviceForRole.
 func (r *Repository) ActiveDeviceForAccount(ctx context.Context, accountID, role string) (*AccountDeviceMapping, error) {
+	accountKey, err := accounts.Resolve(ctx, r.db, accountID)
+	if err != nil {
+		return nil, err
+	}
 	row := r.db.QueryRowContext(ctx,
-		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE account_id = $1 AND role = $2 AND unassigned_at IS NULL",
-		accountID, role)
+		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE account_key = $1 AND role = $2 AND unassigned_at IS NULL",
+		accountKey, role)
 	m, err := scanMapping(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: account %s role %s", ErrNoDeviceForRole, accountID, role)
@@ -404,7 +451,8 @@ func (r *Repository) CurrentAccountForDevice(ctx context.Context, deviceID strin
 // GET/PATCH /service/{id} both need to resolve it directly, unlike every
 // other lookup in this file which goes through (account_id, role).
 func (r *Repository) GetMappingByID(ctx context.Context, id string) (*AccountDeviceMapping, error) {
-	row := r.db.QueryRowContext(ctx, "SELECT "+mappingColumns+" FROM account_device_mappings WHERE id = $1", id)
+	scoped, scope := scopeArgs(ctx)
+	row := r.db.QueryRowContext(ctx, "SELECT "+mappingColumns+" FROM account_device_mappings WHERE id = $1 AND ($2 = false OR "+mappingOwner+" = $3)", id, scoped, scope)
 	m, err := scanMapping(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w: %s", ErrMappingNotFound, id)
@@ -416,9 +464,13 @@ func (r *Repository) GetMappingByID(ctx context.Context, id string) (*AccountDev
 // current and released, oldest first — the care-agent view that answers
 // "this started after you swapped my router".
 func (r *Repository) AssignmentHistory(ctx context.Context, accountID string) ([]AccountDeviceMapping, error) {
+	accountKey, err := accounts.Resolve(ctx, r.db, accountID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.db.QueryContext(ctx,
-		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE account_id = $1 ORDER BY assigned_at ASC, id ASC",
-		accountID)
+		"SELECT "+mappingColumns+" FROM account_device_mappings WHERE account_key = $1 ORDER BY assigned_at ASC, id ASC",
+		accountKey)
 	if err != nil {
 		return nil, fmt.Errorf("assignment history: %w", err)
 	}
@@ -441,13 +493,13 @@ type scanner interface {
 
 // mappingColumns is every column scanMapping reads, in scan order. Every
 // SELECT against account_device_mappings uses it so the two cannot drift.
-const mappingColumns = `id, account_id, device_id, oui_serial, service_plan, status, role, assigned_at, unassigned_at, unassign_reason`
+const mappingColumns = `id, account_id, account_key::text, ` + mappingOwner + `, device_id, oui_serial, service_plan, status, role, assigned_at, unassigned_at, unassign_reason`
 
 func scanMapping(s scanner) (*AccountDeviceMapping, error) {
 	var m AccountDeviceMapping
 	var servicePlan, reason sql.NullString
 	var unassigned sql.NullTime
-	if err := s.Scan(&m.ID, &m.AccountID, &m.DeviceID, &m.OUISerial, &servicePlan, &m.Status,
+	if err := s.Scan(&m.ID, &m.AccountID, &m.AccountKey, &m.AccountCustomerID, &m.DeviceID, &m.OUISerial, &servicePlan, &m.Status,
 		&m.Role, &m.AssignedAt, &unassigned, &reason); err != nil {
 		return nil, fmt.Errorf("scan mapping: %w", err)
 	}

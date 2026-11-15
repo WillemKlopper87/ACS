@@ -6,7 +6,10 @@
 # server-side process to read a runtime env var from — this is a static
 # SPA served by nginx below). A deployment pointing at a non-default API
 # host must pass --build-arg VITE_API_BASE_URL=... at image build time.
-FROM node:26-alpine AS build
+# Base images are pinned by digest as well as by tag: a tag can be moved
+# to different content, a digest cannot. Dependabot (docker) raises the
+# digest when the tag is updated.
+FROM node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS build
 WORKDIR /src
 # .npmrc carries legacy-peer-deps (TypeScript 6 vs openapi-typescript's ^5 peer)
 COPY package.json package-lock.json .npmrc ./
@@ -23,7 +26,7 @@ ARG VITE_ENV_LABEL=
 ENV VITE_ENV_LABEL=$VITE_ENV_LABEL
 RUN npm run build
 
-FROM nginx:1.31.5-alpine3.24
+FROM nginx:1.31.5-alpine3.24@sha256:72ba65eb42c10344912a84ff42408db7d34f2feb642204570ab8fc5ffd29f1d3
 # Take Alpine's security fixes as soon as they are published, without
 # waiting for the next nginx tag (Trivy fails CI on fixable HIGH/CRITICAL).
 RUN apk upgrade --no-cache
@@ -53,5 +56,13 @@ RUN set -eu; \
     envsubst '$API_ORIGIN $API_WS_ORIGIN' \
       < /tmp/default.conf.template > /etc/nginx/conf.d/default.conf; \
     rm /tmp/default.conf.template; \
+    # Run as the image's unprivileged "nginx" user, not root (security
+    # assessment O14): no "user" directive, a pid file it can write, and
+    # ownership of the few paths nginx writes to. Hence port 8080: an
+    # unprivileged process cannot bind 80.
+    sed -i '/^user /d' /etc/nginx/nginx.conf; \
+    sed -i 's#^pid .*#pid /tmp/nginx.pid;#' /etc/nginx/nginx.conf; \
+    chown -R nginx:nginx /var/cache/nginx /etc/nginx/conf.d; \
     nginx -t
-EXPOSE 80
+USER nginx
+EXPOSE 8080

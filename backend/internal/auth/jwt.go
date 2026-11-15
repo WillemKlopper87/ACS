@@ -46,6 +46,9 @@ type Claims struct {
 	// CustomerID binds a machine token to one ACS customer (an ISP): it may
 	// act only on BSS accounts that customer owns.
 	CustomerID string
+	// Resource is what a browser ticket was issued for: one purpose on one
+	// device (BrowserTicketResource). A ticket is refused anywhere else.
+	Resource string
 }
 
 // AudienceBrowserTicket marks a ticket minted by POST /auth/ticket.
@@ -59,6 +62,14 @@ const (
 	AudienceGrafanaSession = "grafana-session"
 )
 
+// AudienceMFAVerify and AudienceMFAEnroll mark the token a correct
+// password earns when a second step is still owed: a code, or setting MFA
+// up first. Neither is a session; only the /auth/login/mfa routes take them.
+const (
+	AudienceMFAVerify = "mfa-verify"
+	AudienceMFAEnroll = "mfa-enroll"
+)
+
 type jwtPayload struct {
 	Subject      string   `json:"sub"`
 	Role         string   `json:"role"`
@@ -70,6 +81,7 @@ type jwtPayload struct {
 	AccountIDs   []string `json:"accounts,omitempty"`
 	GlobalAccess bool     `json:"global,omitempty"`
 	CustomerID   string   `json:"cust,omitempty"`
+	Resource     string   `json:"res,omitempty"`
 }
 
 const jwtHeader = `{"alg":"HS256","typ":"JWT"}`
@@ -93,6 +105,7 @@ func SignJWT(secret []byte, claims Claims) (string, error) {
 		AccountIDs:   claims.AccountIDs,
 		GlobalAccess: claims.GlobalAccess,
 		CustomerID:   claims.CustomerID,
+		Resource:     claims.Resource,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal claims: %w", err)
@@ -135,6 +148,7 @@ func VerifyJWT(secret []byte, token string) (*Claims, error) {
 		AccountIDs:   p.AccountIDs,
 		GlobalAccess: p.GlobalAccess,
 		CustomerID:   p.CustomerID,
+		Resource:     p.Resource,
 	}
 	if time.Now().After(claims.ExpiresAt) {
 		return nil, ErrInvalidToken
@@ -150,4 +164,16 @@ func sign(secret []byte, signingInput string) []byte {
 
 func b64(b []byte) string {
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// Purposes of a browser ticket.
+const (
+	TicketPurposeCLI    = "cli"
+	TicketPurposeWebGUI = "webgui"
+)
+
+// BrowserTicketResource names the one thing a browser ticket opens: a
+// purpose on a device.
+func BrowserTicketResource(purpose, deviceID string) string {
+	return purpose + ":" + deviceID
 }

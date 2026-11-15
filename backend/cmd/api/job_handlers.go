@@ -13,8 +13,12 @@ import (
 
 // jobResponse mirrors design doc v3 §8.5's job status shape.
 type jobResponse struct {
-	CommandKey   string          `json:"command_key"`
-	DeviceID     string          `json:"device_id"`
+	CommandKey string `json:"command_key"`
+	DeviceID   string `json:"device_id"`
+	// What an operator recognises the device by. Set on the list
+	// endpoints; the internal ID alone told them nothing.
+	OUISerial    string          `json:"oui_serial,omitempty"`
+	DeviceLabel  string          `json:"device_label,omitempty"`
 	Type         string          `json:"type"`
 	Status       string          `json:"status"`
 	CreatedAt    string          `json:"created_at"`
@@ -58,11 +62,34 @@ func (h *handler) listJobs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": h.jobResponses(r, list), "total": len(list)})
+}
+
+// jobResponses renders jobs with each device's serial and label. The
+// lookup is one query for the page; if it fails the jobs are still
+// returned, with IDs only.
+func (h *handler) jobResponses(r *http.Request, list []jobs.Job) []jobResponse {
+	ids := make([]string, 0, len(list))
+	seen := map[string]bool{}
+	for i := range list {
+		if !seen[list[i].DeviceID] {
+			seen[list[i].DeviceID] = true
+			ids = append(ids, list[i].DeviceID)
+		}
+	}
+	identities, err := h.devices.IdentitiesByID(r.Context(), ids)
+	if err != nil {
+		h.logger.Error("failed to look up device identities for jobs", "err", err)
+	}
 	items := make([]jobResponse, 0, len(list))
 	for i := range list {
-		items = append(items, toJobResponse(&list[i]))
+		resp := toJobResponse(&list[i])
+		if ident, ok := identities[list[i].DeviceID]; ok {
+			resp.OUISerial, resp.DeviceLabel = ident.OUISerial, ident.Label
+		}
+		items = append(items, resp)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items)})
+	return items
 }
 
 // listDeviceJobs backs Device Detail's recent-activity panel — one

@@ -31,12 +31,18 @@ import { deviceLink, gatewayName, isMeshSatellite, satelliteReachabilityNote, sa
 import { skippedNote, unsupportedReason } from "../lib/diagnostics";
 import { SubNav } from "../components/SubNav";
 import { deviceCapabilities, devicePath, visibleSections, type DeviceSectionId } from "../lib/deviceSections";
+import { confirmDialog } from "../lib/confirm";
+import { HEALTH_PATHS, deviceHealth } from "../lib/deviceHealth";
+import { DeviceHealthRow } from "../components/DeviceHealthRow";
+import { plainLabel } from "../lib/labels";
 
 // What each sub-page reads on open and on every poll, so a page loads only
 // what it shows (the single-page layout fired ~23 calls on open, close to
 // the API's burst limit of 30).
-const SECTION_DATA: Record<DeviceSectionId, { params?: true; jobs?: true; credentials?: true; uploads?: true }> = {
-  overview: { jobs: true },
+const SECTION_DATA: Record<DeviceSectionId, { params?: true; health?: true; jobs?: true; credentials?: true; uploads?: true }> = {
+  // The overview reads a dozen named parameters for its health row, not
+  // the whole cache.
+  overview: { jobs: true, health: true },
   wifi: {},
   cellular: { params: true },
   connectivity: { credentials: true },
@@ -117,7 +123,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
         const needs = SECTION_DATA[section];
         const [d, p, j, c, u] = await Promise.all([
           api.getDevice(id),
-          needs.params ? api.getDeviceParameters(id) : null,
+          needs.params ? api.getDeviceParameters(id) : needs.health ? api.getDeviceParametersByName(id, HEALTH_PATHS).catch(() => null) : null,
           needs.jobs ? api.listDeviceJobs(id) : null,
           needs.credentials ? api.listDeviceCredentials(id) : null,
           needs.uploads ? api.listDeviceUploads(id) : null,
@@ -311,13 +317,13 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
       return `AddObject queued: ${res.command_key} — watch Recent jobs for the new instance number`;
     });
 
-  const handleDeleteObject = () => {
+  const handleDeleteObject = async () => {
     const path = objectPath.trim();
     if (!path.endsWith(".")) {
       toast('Object path must end in "." (e.g. Device.WiFi.SSID.3.)', "error");
       return;
     }
-    if (!window.confirm(`Delete object instance "${path}" from this device? This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Delete object instance "${path}" from this device? This cannot be undone.`))) return;
     withBusy(async () => {
       const res = await api.deleteObject(id, path);
       setObjectPath("");
@@ -354,17 +360,17 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
       return `Upload requested: ${res.command_key} — file lands on receipt once the CPE pushes it`;
     });
 
-  const handleFirmwarePush = () => {
+  const handleFirmwarePush = async () => {
     const img = firmwareImages.find((i) => i.id === firmwareImageId);
     if (!img) return;
     // Same class of action as a reboot or factory reset — it interrupts
     // service and, on a device the ACS can only reach when it checks in,
     // is awkward to undo.
     if (
-      !window.confirm(
+      !(await confirmDialog(
         `Push ${img.vendor} ${img.model} v${img.version} (${img.channel}) to ${device?.oui_serial}? ` +
           `The device downloads and applies it, then reboots.`,
-      )
+      ))
     ) {
       return;
     }
@@ -400,19 +406,19 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
     }
   }
 
-  const handleReboot = () => {
+  const handleReboot = async () => {
     // A mesh satellite comes back only once its backhaul rejoins (8–11 min
     // for a Beacon 3.1 in the field test, once needing manual recovery).
-    if (satellite && !window.confirm(`Reboot ${device?.label || device?.oui_serial}?\n\n${satelliteRebootWarning(meshGatewayName)}`)) return;
+    if (satellite && !(await confirmDialog(`Reboot ${device?.label || device?.oui_serial}?\n\n${satelliteRebootWarning(meshGatewayName)}`))) return;
     return withBusy(async () => {
       const res = await api.rebootDevice(id);
       return `Reboot queued: ${res.command_key} — watch for a fresh Inform once it comes back up`;
     });
   };
 
-  const handleFactoryReset = () => {
+  const handleFactoryReset = async () => {
     const meshWarning = satellite ? `\n\n${satelliteRebootWarning(meshGatewayName)} A reset satellite may also need re-pairing with the gateway.` : "";
-    if (!window.confirm(`Factory reset ${device?.oui_serial}? This wipes the device back to defaults and cannot be undone.${meshWarning}`)) return;
+    if (!(await confirmDialog(`Factory reset ${device?.oui_serial}? This wipes the device back to defaults and cannot be undone.${meshWarning}`))) return;
     withBusy(async () => {
       const res = await api.factoryResetDevice(id);
       return `Factory reset queued: ${res.command_key}`;
@@ -482,7 +488,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
           jobs.slice(0, 8).map((j) => (
             <div className="param-row" key={j.command_key}>
               <span className="path">
-                {j.command_key} <span style={{ color: "var(--ink-faint)" }}>· {j.type}</span>
+                {j.command_key} <span style={{ color: "var(--ink-faint)" }} title={j.type}>· {plainLabel(j.type)}</span>
               </span>
               <span>
                 <StatusBadge value={j.status} />
@@ -532,6 +538,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
             {editingSubscriber && device.subscriber?.account_id && (
               <SubscriberProfileEditor
                 accountId={device.subscriber.account_id}
+                accountCustomerId={device.subscriber.account_customer_id ?? null}
                 onClose={() => setEditingSubscriber(false)}
                 onSaved={() => {
                   setEditingSubscriber(false);
@@ -594,6 +601,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
       <div className="device-content split two-col">
         {section === "overview" && (
           <>
+            <DeviceHealthRow device={device} health={deviceHealth(params)} lastJob={jobs[0]} />
             <div className="panel">
               <h3>Identity</h3>
               <dl className="kv">
@@ -738,7 +746,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
               </div>
               {cwmpDigestCredentials.length === 0 ? (
                 <p className="dim" style={{ fontSize: "0.78rem", marginTop: 0 }}>
-                  No per-device CWMP_DIGEST credential is recorded yet. Secure bootstrap should create one and keep it PENDING until this CPE reconnects with the generated credential and matching identity.
+                  This device has no credential of its own yet. One is created at first contact and becomes active when the device reconnects with it.
                 </p>
               ) : (
                 cwmpDigestCredentials.map((credential) => (
@@ -877,8 +885,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
             <div className="panel">
               <h3>Push firmware</h3>
               <p className="dim" style={{ marginTop: 0, fontSize: "0.8rem" }}>
-                Sends one image to this device alone. For a fleet, use a canary rollout on the Rollouts screen instead — this
-                is for single-device work: an RMA replacement, or reproducing a report on a known build.
+                Sends one image to this device only. For many devices, use a rollout (Configuration → Rollouts).
               </p>
               {firmwareImages.length === 0 ? (
                 <p className="dim" style={{ fontSize: "0.8rem", margin: 0 }}>

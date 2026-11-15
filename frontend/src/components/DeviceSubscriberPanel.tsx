@@ -21,6 +21,8 @@ function place(site?: SubscriberSummary["site"], full = false) {
 export function DeviceSubscriberPanel({ device, canEdit, onChanged }: { device: Device; canEdit: boolean; onChanged: () => void }) {
   const sub = device.subscriber;
   const accountId = sub?.account_id;
+  // Whose account it is: account IDs are unique per customer.
+  const accountCustomerId = sub?.account_customer_id ?? null;
   const [profile, setProfile] = useState<AccountProfile | null>(null);
   const [revealed, setRevealed] = useState<SubscriberSummary | null>(null);
   const [busy, setBusy] = useState(false);
@@ -30,8 +32,8 @@ export function DeviceSubscriberPanel({ device, canEdit, onChanged }: { device: 
     setRevealed(null);
     setProfile(null);
     if (!accountId) return;
-    api.getAccountProfile(accountId).then(setProfile).catch(() => setProfile(null));
-  }, [accountId, device.id, sub?.subscriber_name, sub?.vip]);
+    api.getAccountProfile(accountId, accountCustomerId).then(setProfile).catch(() => setProfile(null));
+  }, [accountId, accountCustomerId, device.id, sub?.subscriber_name, sub?.vip]);
 
   if (!sub || !accountId) {
     return (
@@ -104,6 +106,7 @@ export function DeviceSubscriberPanel({ device, canEdit, onChanged }: { device: 
       {editing && (
         <SubscriberProfileEditor
           accountId={accountId}
+          accountCustomerId={accountCustomerId}
           onClose={() => setEditing(false)}
           onSaved={() => {
             setEditing(false);

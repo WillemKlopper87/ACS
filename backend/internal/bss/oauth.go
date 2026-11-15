@@ -8,6 +8,7 @@
 package bss
 
 import (
+	"acs/internal/auth"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -237,6 +238,9 @@ func (r *OAuthRepository) AuthenticateClient(ctx context.Context, clientID, clie
 		FROM bss_oauth_clients WHERE client_id = $1`, clientID).
 		Scan(&id, &name, &hash, &createdAt, &revokedAt, &scopesRaw, &accountsRaw, &globalAccess, &customerID)
 	if errors.Is(err, sql.ErrNoRows) {
+		// An unknown client costs the same hash comparison as a wrong
+		// secret, so the response time does not say which it was.
+		auth.BurnPasswordCheck(clientSecret)
 		return nil, ErrInvalidClientCredentials
 	}
 	if err != nil {

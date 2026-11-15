@@ -15,6 +15,9 @@ qualification.
 2. `scripts/backup.sh` (below) before any upgrade that adds migrations.
 3. Apply migrations ahead of the fleet: `ACS_POSTGRES_DSN=... go run ./cmd/migrate`
    (or let the first new replica do it — the lock serializes either way).
+   With per-service database logins (below) this step is not optional:
+   no service can change the schema, and `cmd/acs` refuses to start until
+   `cmd/migrate` has run. `scripts/start.sh` runs it on every start.
 4. Restart services one at a time; each HTTP service drains in-flight work
    on SIGTERM. Recommended order: `bssadapter` → `api` → `uspc` → `acs`.
    The USP controller is now a first-class deployed service; do not omit it
@@ -176,7 +179,8 @@ taken.
   and lifecycle rules instead, and back up only the database.
 - **Restore**: `ACS_POSTGRES_DSN=... scripts/restore.sh <tarball>` —
   destructive on the target schema; services started afterwards apply any
-  newer migrations automatically. The archive records logical firmware and
+  newer migrations automatically (with per-service database logins, run
+  `cmd/migrate` first: see that section). The archive records logical firmware and
   upload store names, so a restore can target custom storage roots.
   A restore also brings back anything deleted after the backup was taken,
   including subscriber profiles (`account_profile_archive`) erased on request:
@@ -189,6 +193,213 @@ taken.
 | Date | Backup size | Restore time (RTO observed) | Verified by |
 |---|---|---|---|
 | — | — | — | no physical/staging drill recorded yet; CI rehearsal is automated |
+
+## Smaller hardening changes (findings O4, O8 to O14)
+
+- **Remote shell and device web GUI tickets** are for one device and one
+  purpose. Nothing to do; a console older than the API cannot open either
+  until it is reloaded.
+- **Webhooks.** A new signing secret must be 32 characters or more. In
+  the production profile a new `http://` target is refused; existing
+  ones keep delivering, so list them and move them to `https`:
+  `select id, target_url from webhook_subscriptions where target_url like 'http://%'`.
+  With `ACS_BSS_SECRET_KEY` set on the adapter, signing secrets are stored
+  encrypted, and those already stored are encrypted the next time the
+  adapter starts (the log says how many). Set the same key on the API.
+  **Do not lose or change that key**: deliveries for sealed subscriptions
+  then fail with "the signing secret could not be opened" until each
+  subscription's secret is rotated.
+- **`/metrics`** needs a bearer token in the production profile
+  (`ACS_METRICS_TOKEN`, 32 characters or more): the services refuse to
+  start without it. `scripts/gen-production-env.sh` writes one to the
+  secrets file (and keeps it on later runs), and `scripts/start.sh`
+  renders the Prometheus configuration with it
+  (`infra/.prometheus.generated.yml`, not in git). **Upgrading an
+  existing production host**: run `gen-production-env.sh` again, or add
+  the line by hand (`openssl rand -hex 32`), before starting. A
+  Prometheus that is not started by `start.sh` needs
+  `authorization: { credentials: <token> }` in each ACS scrape job. In
+  the lab the token is optional. The CWMP listener is reachable from
+  device networks and serves `/metrics` too, which is why this is
+  required.
+- **Breached passwords.** Set `ACS_PASSWORD_BREACH_CHECK_URL` on the API
+  to refuse new operator passwords that appear in published breaches.
+  It needs outbound HTTPS from the API to that address; only a
+  five-character digest prefix is sent. If the lookup fails the API logs
+  `breached-password lookup failed` and accepts the password on the
+  other rules.
+- **More than one replica.** Set `ACS_SHARED_RATE_LIMIT=true` on the API
+  and the adapter, so a caller's request rate is counted across all of
+  them (tables `rate_limit_windows`, which holds digests). Sign-in
+  attempt limits are shared regardless.
+- **Sign-in attempts** are counted in the database as well as in each
+  process (table `auth_attempt_windows`, which holds digests, not names).
+  If the database cannot be reached the per-process limit still applies.
+- **Passwords** set from now on need 12 characters and cannot be the
+  username, a run, or a common word with digits added. Existing passwords
+  are not checked until they are changed.
+- **Audit trail.** New actions: `BSSTokenIssued`, `BSSClientAuthFailed`,
+  and `BSSReadsSummary` (one row per client, customer and route for each
+  five minutes in which that client read that route).
+- **Console image** listens on **8080** as an unprivileged user (it was
+  80 as root). The Compose file maps it; a deployment with its own port
+  mapping or proxy upstream for the console container must change 80 to
+  8080.
+- **Images** are pinned by digest: the base images of the five
+  Dockerfiles and the six third-party images in the Compose file.
+  Dependabot raises them; a build or pull that cannot find a digest
+  fails instead of using different content.
+
+## A resent order must be the same order
+
+An integration that sends an `external_order_id` again gets the original
+order back only if the request is the same (action, role, parameters).
+If it changed anything, the answer is `409 ErrIdempotencyKeyReused` and
+the device is sent nothing more. Before, the changed request was
+answered `202` as if accepted, while the device had the original.
+
+- A `WARN` line `order ID resent with a different request` in the
+  adapter log names the order and account. It means the integration is
+  amending orders in place: it has to send an amendment under a new ID.
+- Orders placed before this version have no request on record to compare
+  with, so a resend of one of those is still answered with the original.
+
+## The adapter's calls name their customer
+
+The BSS adapter reaches the operator API with one shared service token.
+Each call now also says which customer it is for, and the API lets it
+touch that customer's devices and their jobs only. The token by itself
+no longer reaches every device.
+
+- **Nothing to configure.** The adapter takes the customer from the
+  integration that sent the request, or from the order when a worker
+  retries it. In the production profile with `naas`, the API refuses a
+  call that names none. The API log line `BSS adapter service calls
+  must_name_customer=true` confirms it.
+- **Upgrade order**: restart the adapter before the API (the order the
+  rolling upgrade above already uses). A new adapter with an old API
+  works; an old adapter with a new production API is refused.
+- **If orders fail with `ErrACSUnreachable` (502) right after an
+  upgrade** and the API log shows `403` for the adapter: an old adapter
+  is still running, or the order belongs to an account no customer owns
+  (created from the console or by a fleet-wide client before the ISP's
+  client was bound). Assign the account to its customer
+  (`PUT /api/v1/bss/accounts/{id}/customer`). As a temporary measure
+  `ACS_SERVICE_CALLS_REQUIRE_CUSTOMER=false` on the API lets unnamed
+  calls through again.
+- **Fixed with this**: reading an account's reconciliation
+  (`GET /bss/v1/devices/{id}/reconciliation`) and the Wi-Fi values of a
+  TMF640 service returned 502 whenever operator authentication was on,
+  because the API refused the adapter's read of the named parameters.
+
+## The console session is a cookie
+
+The console no longer keeps the operator's session token in browser
+storage. A sign-in sets a cookie (`acs_session`) that page scripts cannot
+read; the browser sends it with the console's API calls.
+
+- **After upgrading**, every operator signs in once more: the token an
+  older console stored is discarded.
+- **The console and the API must be on the same site**: the same host, or
+  hosts under one registered domain (`console.isp.example` and
+  `api.isp.example`). Ports do not matter. `localhost` and `127.0.0.1`
+  are different sites: use one name for both.
+- **`ACS_API_CORS_ORIGIN`** (default: `ACS_FRONTEND_BASE_URL`) must be the
+  console's exact origin. `*` is refused in production.
+- **A TLS-terminating proxy** in front of the API needs nothing special:
+  cookies pass through. In the production profile the cookie is always
+  `Secure`; in the lab it is `Secure` when the proxy sends
+  `X-Forwarded-Proto: https`.
+- **If operators are asked to sign in on every reload**, the cookie is
+  not reaching the API. The API log says so at start when it will not
+  issue one (`the console session is not kept in a cookie`): the origin
+  is `*`, or `ACS_WEBGUI_ALLOW_SAME_ORIGIN=true` is set. Otherwise the
+  console and the API are on different sites, or the proxy strips
+  `Set-Cookie`. The console still works in that state, holding the
+  session in memory.
+- **Scripts** that sign in and send `Authorization: Bearer <token>` are
+  unchanged. A script that wants to use the cookie instead must send the
+  `X-ACS-CSRF: 1` header on anything that is not a read.
+- **Signing out** revokes every session of that operator, as before, and
+  removes the cookie from that browser.
+
+## Account IDs are per customer
+
+An ISP's `account_id` and order IDs are its own: two customers can have
+an account of the same ID (`docs/TENANT-SCOPED-IDS-DESIGN.md`).
+
+- **In the console** the BSS / NaaS mapping list shows the customer next
+  to each account ID, and the console passes it along when you act on a
+  row. Nothing changes while IDs do not repeat.
+- **In API calls and scripts** that address an account by ID
+  (`/api/v1/accounts/{id}/profile`, `/api/v1/bss/mappings/{id}/...`,
+  `/api/v1/bss/accounts/{id}/customer`): if the ID is used by more than
+  one customer the call is refused with `409` and does nothing. Add
+  `?customer_id=<customer>`, or `customer_id=none` for the account no
+  customer owns.
+- **Assigning an account to a customer** is refused (`409`) when that
+  customer already has an account of the same ID. Decide which of the
+  two is the real one; there is no merge.
+- **An account from before an ISP's client was bound** (created from the
+  console or by a global client, and it has mappings or orders) is not
+  taken over by the ISP's first write: the ISP gets `404` on that ID
+  until you assign the account to it. A `WARN` line "bound client refused
+  an account with legacy data" in the adapter log names the account.
+- **Upgrading**: migrations 0098 and 0099 are forward-only and rewrite
+  the account columns of the event table once. Take a backup first
+  (`scripts/backup.sh`) and run them in a quiet period. Lab data: 100
+  events, under a second; a production-sized event table has not been
+  timed.
+- **Alert incidents** are labelled with the account ID and the device.
+  Two customers' same-numbered accounts share the label; use the device
+  to tell them apart.
+
+## Separate database logins per service
+
+By default every service connects as `acs`, the role that owns the schema.
+`scripts/db-service-roles.sh` gives each service a login of its own with
+only the table privileges its code uses:
+
+| Role | Service | Cannot reach (examples) |
+|---|---|---|
+| `acs_gateway` | `cmd/acs` | operator accounts, two-step sign-in secrets, OAuth clients, webhook secrets |
+| `acs_api` | `cmd/api` | (reads and writes almost every table: it is the operator console) |
+| `acs_bss` | `cmd/bssadapter` | operator accounts, two-step sign-in secrets, password-reset tokens, device credentials, role permissions |
+| `acs_usp` | `cmd/uspc` | operator accounts, OAuth clients, webhook secrets |
+
+None of the four can create, alter or drop anything. `acs` remains the
+owner and is used by `cmd/migrate`, `scripts/backup.sh` and
+`scripts/restore.sh` only.
+
+- **Turn on**: `scripts/db-service-roles.sh`, then `scripts/stop.sh &&
+  scripts/start.sh`. It creates the roles, writes
+  `ACS_CWMP_POSTGRES_DSN`, `ACS_API_POSTGRES_DSN`, `ACS_BSS_POSTGRES_DSN`
+  and `ACS_USP_POSTGRES_DSN` to the secrets file, and runs `cmd/migrate`,
+  which grants the privileges. Check: the `cmd/acs` log says
+  `migrations verified, none applied`, and
+  `grep -c "permission denied" ~/acs-logs/*.log` stays at 0.
+- **Turn off**: `scripts/db-service-roles.sh --disable`, restart. Every
+  service uses `ACS_POSTGRES_DSN` again and the four logins are closed.
+- **Rotate the passwords**: run the script again, restart.
+- **Upgrades**: nothing extra. The privileges are a table in the code
+  (`backend/internal/store/dbroles/manifest.go`); each `cmd/migrate` run
+  sets the roles to exactly that table, so a release that adds a table
+  grants it and one that stops using a table takes it away.
+- **After a restore**: `scripts/restore.sh` recreates the schema without
+  privileges. Run `cmd/migrate` (or `scripts/start.sh`, which does) before
+  the services start, or they are refused every table.
+- **If a service logs `permission denied for table ...`**: that is a
+  missing grant, which the build's tests are meant to catch. Restore
+  service with `--disable` and a restart, then report the table and the
+  service.
+- `scripts/start.sh` starts each service without the owner's login in its
+  environment. The secrets file itself is still readable by the account
+  the services run as: the roles limit what a service can be made to do
+  through its database connection, not what someone with a shell as that
+  account can read. Separate OS accounts or a secrets manager close that.
+- The Compose `containerized` profile still uses the shared login: it has
+  no separate migration step. Use the script-launched deployment for
+  per-service logins.
 
 ## Secret rotation
 
@@ -225,6 +436,105 @@ taken.
 - `ACS_CREDENTIAL_ENCRYPTION_KEY`: set identically on cmd/api and
   cmd/acs. There is no re-encryption tool; rotating it orphans stored
   credential ciphertexts — rotate device credentials afterwards.
+
+## Standalone or NaaS: the integration switch
+
+`ACS_INTEGRATION_MODE` is `naas` (the default) or `standalone`. Set the same
+value for `cmd/api` and `cmd/bssadapter` and restart both.
+`gen-production-env.sh` asks for it as `ACS_PRODUCTION_INTEGRATION_MODE` and
+has no default, so it is a decision each time.
+
+- **Standalone** is for running the ACS on its own, for example while the
+  NaaS platform is still being developed or during an incident on that
+  side. The adapter stays up (so launchers and health checks are unchanged)
+  but answers `503 ErrIntegrationDisabled` on every integration route and
+  runs no webhook, reconciliation or order worker. The API stops accepting
+  the adapter's service token. The console hides BSS / NaaS and shows
+  "Standalone" in the sidebar.
+- **Switching back** to `naas` needs the adapter's production settings
+  (below). Nothing was deleted while it was off. Orders the platform tried
+  to place while it was off were refused with a 503, not queued: the
+  platform must resend them. Webhook deliveries that were pending resume.
+- **To check which mode is live:** the sidebar footer in the console, or
+  `curl http://127.0.0.1:8090/readyz` on the host (standalone says so), or
+  the `integration mode` line in the API log at start-up.
+
+Testing the NaaS platform against a live ACS: do it against a separate
+lab-profile ACS, not the production one. If it must be the production ACS,
+it has to be `naas` mode with the full production settings; there is no
+relaxed in-between, on purpose.
+
+## Strict device ownership (before a second ISP)
+
+By default an unassigned device joins the first ISP whose integration names
+its serial. `ACS_BSS_REQUIRE_ALLOCATED_DEVICES=true` on the adapter changes
+that: an ISP can map or pre-provision only a serial already allocated to
+it. Allocate serials with the device import (Administration → Tenancy →
+Bulk device import, with `customer_id`) or by setting the customer on a
+device. With it on:
+
+- a serial that is unknown, unallocated or another ISP's gets the same
+  refusal, so it cannot be used to probe other ISPs' stock;
+- a device whose sale has ended returns to the unassigned pool and must be
+  allocated again before it can be sold by an integration;
+- operators are not affected: sales and mappings made from the console work
+  as before.
+
+## Production profile: operator and integration plane
+
+Under `ACS_DEPLOYMENT_PROFILE=production`, `cmd/api` and `cmd/bssadapter`
+refuse to start unless the strict settings are in place, and say which are
+missing. The four `ACS_BSS_*` rows and `ACS_TRUSTED_PROXY_CIDRS` apply only in
+`naas` mode; in `standalone` the adapter asks for nothing. `scripts/gen-production-env.sh` writes them;
+`scripts/security-preflight.sh` checks them before anything starts.
+
+| Setting | Required value | If it is wrong |
+|---|---|---|
+| `ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS` | `true` | Adapter does not start. Fleet-wide and account-listed OAuth clients stop working: re-issue each integration a client bound to its customer (BSS / NaaS → OAuth2 clients). |
+| `ACS_BSS_API_TOKEN` | unset | Adapter does not start. Anything still using the shared token must move to an OAuth client first. |
+| `ACS_BSS_ALLOWED_CIDRS` | the platform's source networks, no `/0` | Adapter does not start. A caller outside the list gets `403 ErrSourceNotAllowed` and a `source is outside ACS_BSS_ALLOWED_CIDRS` warning is logged with its address. |
+| `ACS_TRUSTED_PROXY_CIDRS` | the ingress proxy | Adapter does not start (when on loopback without its own TLS). If set wrongly, every caller looks like the proxy and is refused. |
+| `ACS_MFA_REQUIRED_ROLES` | `superadmin,manager,noc` or `all` | API does not start. Operators in those roles set up two-step sign-in at their next sign-in. |
+| `ACS_WEBGUI_ALLOW_SAME_ORIGIN` | not `true` | API does not start. |
+| `ACS_INSECURE_DEV_MODE` | not `true` | Neither starts. |
+
+**Moving an existing production host onto this:** before restarting, (1) make
+sure every BSS integration uses a customer-bound OAuth client, (2) find the
+platform's source addresses (the adapter's access log, or ask the platform
+team) and export `ACS_PRODUCTION_BSS_ALLOWED_CIDRS`, (3) tell operators they
+will be asked to set up an authenticator app at next sign-in, then re-run
+`gen-production-env.sh` and `start-production.sh`. The NaaS platform changing
+its egress addresses is now an outage for the integration until the list is
+updated: agree a notice period with them.
+
+## Operator two-step sign-in (MFA)
+
+Operators can add a code from an authenticator app as a second sign-in
+step (their name in the sidebar → Account). `ACS_MFA_REQUIRED_ROLES`
+on cmd/api makes it mandatory for the roles it lists (`superadmin,manager`,
+or `all`): such an operator sets it up at their next sign-in and cannot
+turn it off. cmd/api refuses to start with that variable set and no
+`ACS_CREDENTIAL_ENCRYPTION_KEY`, since the secrets are sealed with it.
+
+- **Lost phone, another admin available:** Administration → Operators →
+  *Reset two-step* on their row. They are signed out; the reset is audited
+  as `OperatorMFAReset`.
+- **Lost phone, no other admin:** `scripts/reset-admin-password.sh` clears
+  the bootstrap admin's two-step sign-in as well as resetting the password.
+- **Recovery codes:** ten are shown once at set-up; each signs in once.
+  Only hashes are stored, so they cannot be read back, only replaced
+  (Account → New recovery codes).
+- **Rotating `ACS_CREDENTIAL_ENCRYPTION_KEY`** makes stored two-step
+  secrets unreadable: affected operators cannot pass the second step.
+  Reset them as above (or run the break-glass script) after the rotation.
+- **Clock:** codes depend on time. Keep the API host on NTP; one 30-second
+  step of drift either way is tolerated.
+- Audit actions: `OperatorMFAEnabled`, `OperatorMFADisabled`,
+  `OperatorMFAReset`, `OperatorMFAFailed`, `OperatorMFARecoveryCodeUsed`,
+  `OperatorMFARecoveryCodesRegenerated`.
+
+Devices and BSS/NaaS OAuth clients are not affected: this is the operator
+console's sign-in only.
 
 ## Alert responses
 

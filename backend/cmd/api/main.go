@@ -11,8 +11,11 @@
 package main
 
 import (
+	"acs/internal/auth"
 	"acs/internal/bulkdata"
+	"acs/internal/bulkops"
 	"acs/internal/clientip"
+	"acs/internal/mfa"
 	"context"
 	"errors"
 	"log/slog"
@@ -70,7 +73,30 @@ func main() {
 		logger.Info("forwarding headers are trusted from these proxies only", "ACS_TRUSTED_PROXY_CIDRS", v)
 	}
 
-	dsn := os.Getenv("ACS_POSTGRES_DSN")
+	// The production profile requires the strict operator-side settings
+	// (docs/SECURITY-ASSESSMENT-2026-11-14.md, O1): two-step sign-in for
+	// every role that can change devices, and no lab switches.
+	profile, err := config.DeploymentProfile(os.Getenv)
+	if err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if profile == config.ProfileProduction {
+		if problems := config.APIProductionProblems(os.Getenv); len(problems) > 0 {
+			logger.Error(config.FormatProblems("cmd/api", problems))
+			os.Exit(1)
+		}
+	}
+	// The switch between running on its own and through the NaaS platform
+	// (internal/config.IntegrationMode).
+	integrationMode, err := config.IntegrationMode(os.Getenv)
+	if err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	logger.Info("integration mode", "ACS_INTEGRATION_MODE", integrationMode)
+
+	dsn, _ := store.ServiceDSN(os.Getenv, "ACS_API_POSTGRES_DSN")
 	if dsn == "" {
 		logger.Error("ACS_POSTGRES_DSN is required")
 		os.Exit(1)
@@ -124,13 +150,29 @@ func main() {
 	}
 
 	internalServiceToken := os.Getenv("ACS_INTERNAL_SERVICE_TOKEN")
-	if len(jwtSecret) > 0 && internalServiceToken == "" {
+	if integrationMode == config.ModeStandalone {
+		// No adapter is calling in, so there is no service identity to
+		// accept: the token is ignored even if it is still configured.
+		internalServiceToken = ""
+	}
+	if len(jwtSecret) > 0 && internalServiceToken == "" && integrationMode == config.ModeNaaS {
 		logger.Warn("ACS_INTERNAL_SERVICE_TOKEN not set — cmd/bssadapter's own calls into this API (order dispatch, job status) will get 401'd once JWT auth is enabled, since it has no operator login. Set the same value here and on cmd/bssadapter.")
 	}
 
 	credentialsRepo, err := credentials.NewRepository(db, os.Getenv("ACS_CREDENTIAL_ENCRYPTION_KEY"))
 	if err != nil {
 		logger.Error("failed to initialize credential encryption", "err", err)
+		os.Exit(1)
+	}
+	mfaRepo, err := mfa.NewRepository(db, os.Getenv("ACS_CREDENTIAL_ENCRYPTION_KEY"))
+	if err != nil {
+		logger.Error("failed to initialize MFA secret encryption", "err", err)
+		os.Exit(1)
+	}
+	mfaRequired := mfaRequiredRoles(os.Getenv("ACS_MFA_REQUIRED_ROLES"))
+	if len(mfaRequired) > 0 && !mfaRepo.Available() {
+		// Fail closed at startup rather than at each login.
+		logger.Error("ACS_MFA_REQUIRED_ROLES is set but ACS_CREDENTIAL_ENCRYPTION_KEY is not: MFA secrets cannot be stored")
 		os.Exit(1)
 	}
 	if !credentialsRepo.Encrypted() {
@@ -238,6 +280,14 @@ func main() {
 		bssWebhookNetPolicy.AllowedCIDRs = cidrs
 	}
 
+	// A webhook created from the console is sealed like one the adapter
+	// creates, when this service has the key too (webhook_secrets.go);
+	// without it the adapter seals the secret when it next starts.
+	bssWebhooks, err := bss.NewWebhookRepository(db).WithSecretKey(os.Getenv("ACS_BSS_SECRET_KEY"))
+	if err != nil {
+		logger.Error("failed to set up webhook secret sealing", "err", err)
+		os.Exit(1)
+	}
 	h := &handler{
 		logger:              logger,
 		devices:             devices.NewRepository(db),
@@ -270,6 +320,11 @@ func main() {
 		templates:           templates.NewRepository(db),
 		cli:                 cliRepo,
 		permissions:         operators.NewPermissionRepository(db),
+		mfa:                 mfaRepo,
+		mfaRequired:         mfaRequired,
+		webGUISameOrigin:    os.Getenv("ACS_WEBGUI_ALLOW_SAME_ORIGIN") == "true",
+		integrationMode:     integrationMode,
+		deploymentProfile:   profile,
 		mailer: mailer.New(mailer.Config{
 			Host: os.Getenv("ACS_SMTP_HOST"), Port: envOr("ACS_SMTP_PORT", "587"),
 			Username: os.Getenv("ACS_SMTP_USERNAME"), Password: os.Getenv("ACS_SMTP_PASSWORD"),
@@ -285,7 +340,7 @@ func main() {
 		dashboards:      dashboard.NewRepository(db),
 
 		bssMappings:     bss.NewRepository(db),
-		bssWebhooks:     bss.NewWebhookRepository(db),
+		bssWebhooks:     bssWebhooks,
 		bssOAuthClients: bss.NewOAuthRepository(db),
 		bssAdapterURL:   envOr("ACS_BSS_ADAPTER_URL", "http://localhost:8090"),
 		bssToken:        os.Getenv("ACS_BSS_API_TOKEN"),
@@ -387,9 +442,40 @@ func main() {
 	if corsOrigin == "*" {
 		logger.Warn("ACS_API_CORS_ORIGIN=* — any web origin may call this API with a stolen token; set it to the console's exact origin in production")
 	}
+	// Service calls name their customer (auth_handlers.go). Required by
+	// default where every integration is bound to one.
+	serviceCallsRequireCustomer = profile == config.ProfileProduction && integrationMode == config.ModeNaaS
+	if v := os.Getenv("ACS_SERVICE_CALLS_REQUIRE_CUSTOMER"); v != "" {
+		serviceCallsRequireCustomer = v == "true"
+	}
+	if internalServiceToken != "" {
+		logger.Info("BSS adapter service calls", "must_name_customer", serviceCallsRequireCustomer)
+	}
+	// What one process allows over the same time (a burst of 5, then one
+	// every 12 seconds), now for all replicas together.
+	if h.passwordBreaches, err = auth.NewBreachChecker(os.Getenv(auth.BreachCheckURLEnv)); err != nil {
+		logger.Error("refusing to start", "err", err)
+		os.Exit(1)
+	}
+	if h.passwordBreaches != nil {
+		logger.Info("new operator passwords are looked up among published breaches", auth.BreachCheckURLEnv, os.Getenv(auth.BreachCheckURLEnv))
+	}
+	if os.Getenv(ratelimit.SharedEnv) == "true" {
+		sharedRateLimit = ratelimit.NewSynced(db, "api", apiRate, apiBurst, 10*time.Second)
+		go sharedRateLimit.Run(ctx, func(err error) {
+			logger.Error("shared rate limit unavailable; the per-process limit still applies", "err", err)
+		})
+		logger.Info("request rate limit is shared across replicas", ratelimit.SharedEnv, "true")
+	}
+	h.sharedLoginLimit = ratelimit.NewShared(db, "login", 30, 5*time.Minute)
+	h.sharedMFALimit = ratelimit.NewShared(db, "mfa", 30, 5*time.Minute)
+	h.sessionCookies = sessionCookiesAllowed(corsOrigin, h.webGUISameOrigin)
+	if len(jwtSecret) > 0 && !h.sessionCookies {
+		logger.Warn("the console session is not kept in a cookie: ACS_API_CORS_ORIGIN is \"*\" or ACS_WEBGUI_ALLOW_SAME_ORIGIN=true. The console keeps it in memory and asks for a sign-in on every reload")
+	}
 	server := &http.Server{
 		Addr:    addr,
-		Handler: withCORS(corsOrigin, withJWTAuth(jwtSecret, internalServiceToken, h.tokenCurrent, withRateLimit(apiLimiter, metrics, withBodyLimit(mux)))),
+		Handler: withCORS(corsOrigin, withSessionOriginCheck(corsOrigin, withJWTAuth(jwtSecret, internalServiceToken, h.tokenCurrent, withRateLimit(apiLimiter, metrics, withBodyLimit(mux))))),
 		// Timeouts (audit P1.2). No global ReadTimeout/WriteTimeout on
 		// purpose: firmware uploads and CPE upload receipts stream large
 		// bodies, and the console WebSocket / web-GUI proxy are long-lived
@@ -449,10 +535,25 @@ func envOrInt(key string, fallback int) int {
 
 type handler struct {
 	bulkData *bulkdata.Repository
-	logger   *slog.Logger
-	devices  *devices.Repository
-	jobs     *jobs.Repository
-	params   *parameters.Repository
+	// bulkOps records fan-outs (bulk actions, template applies) so their
+	// progress can be read back; built in registerRoutes when unset.
+	bulkOps *bulkops.Repository
+	// mfa holds operators' sealed authenticator secrets; mfaRequired is
+	// the set of roles that must use MFA (ACS_MFA_REQUIRED_ROLES).
+	mfa         *mfa.Repository
+	mfaRequired map[string]bool
+	// webGUISameOrigin turns off the sandbox on proxied device web pages
+	// (ACS_WEBGUI_ALLOW_SAME_ORIGIN=true; see isolateDeviceContent).
+	webGUISameOrigin bool
+	// integrationMode is "naas" or "standalone" (ACS_INTEGRATION_MODE);
+	// deploymentProfile is "lab" or "production". Both are reported to the
+	// console by GET /system/info.
+	integrationMode   string
+	deploymentProfile string
+	logger            *slog.Logger
+	devices           *devices.Repository
+	jobs              *jobs.Repository
+	params            *parameters.Repository
 	// wifiInsights serves the controller-style Wi-Fi overview (sampled by cmd/acs).
 	wifiInsights *wifiinsights.Repository
 	vendors      *adapters.Registry
@@ -463,7 +564,17 @@ type handler struct {
 	firmwareBase string // base URL the CPE fetches Download URLs from (design doc v3 §9.4's "HTTPS static file host", local-disk stand-in — see internal/firmware doc comment)
 
 	operators *operators.Repository
-	jwtSecret []byte // empty means operator auth is disabled — see main()'s ACS_JWT_SIGNING_SECRET warning
+	// passwordBreaches looks a new password up among published breaches
+	// (auth.BreachChecker). Nil: the lookup is off.
+	passwordBreaches *auth.BreachChecker
+	// sharedLoginLimit and sharedMFALimit count sign-in attempts in the
+	// database, so the limit holds across replicas (finding O10). Nil in
+	// tests that do not set them: the per-process limiters then stand alone.
+	sharedLoginLimit, sharedMFALimit *ratelimit.Shared
+	// sessionCookies: issue the console's session as a cookie
+	// (session_cookie.go, sessionCookiesAllowed).
+	sessionCookies bool
+	jwtSecret      []byte // empty means operator auth is disabled — see main()'s ACS_JWT_SIGNING_SECRET warning
 
 	// transferKey signs the expiring tokens on public firmware-download
 	// and upload-receipt URLs (audit P0.3, internal/transfer). Derived

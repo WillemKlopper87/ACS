@@ -8,7 +8,7 @@ import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
 import { toast } from "../lib/toast";
-import { useEscape } from "../lib/hotkeys";
+import { Drawer } from "../components/Drawer";
 import { useCustomers, customerName } from "../lib/useCustomers";
 
 export function FirmwareRollouts() {
@@ -30,6 +30,8 @@ export function FirmwareRollouts() {
   const [customerId, setCustomerId] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [creatingOpen, setCreatingOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
   const customers = useCustomers();
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -60,7 +62,6 @@ export function FirmwareRollouts() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEscape(() => setSelected(null), selected !== null);
 
   async function openRollout(r: Rollout) {
     setActionError(null);
@@ -90,6 +91,7 @@ export function FirmwareRollouts() {
       setModelFilter("");
       setRollbackImageId("");
       setCustomerId("");
+      setCreatingOpen(false);
       await load();
     } catch (e) {
       setCreateError(e instanceof ApiError ? e.message : "Failed to create rollout");
@@ -111,6 +113,7 @@ export function FirmwareRollouts() {
       setUploadModel("");
       setUploadVersion("");
       setUploadChannel("stable");
+      setUploadOpen(false);
       await load();
     } catch (e) {
       setUploadError(e instanceof ApiError ? e.message : "Failed to upload firmware image");
@@ -173,6 +176,32 @@ export function FirmwareRollouts() {
     [customers],
   );
 
+  // The images a rollout can send. They were only ever visible as options
+  // in the rollout form; listing them shows what is actually on the server.
+  const imageColumns = useMemo<ColumnDef<FirmwareImage, any>[]>(
+    () => [
+      { id: "target", header: "Vendor / Model", accessorFn: (img) => `${img.vendor} ${img.model}` },
+      { accessorKey: "version", header: "Version" },
+      { accessorKey: "channel", header: "Channel", cell: ({ getValue }) => <span className="dim">{getValue() as string}</span> },
+      { accessorKey: "filename", header: "File", cell: ({ getValue }) => <span className="dim">{getValue() as string}</span> },
+      {
+        accessorKey: "file_size_bytes",
+        header: "Size",
+        cell: ({ getValue }) => <span className="dim">{((getValue() as number) / (1024 * 1024)).toFixed(1)} MB</span>,
+      },
+      {
+        accessorKey: "created_at",
+        header: "Uploaded",
+        cell: ({ getValue }) => (
+          <span className="dim" title={`${fmtTime(getValue() as string)} UTC`}>
+            {timeAgo(getValue() as string)}
+          </span>
+        ),
+      },
+    ],
+    [],
+  );
+
   return (
     <section>
       {error && (
@@ -181,8 +210,20 @@ export function FirmwareRollouts() {
         </div>
       )}
 
-      <div className="panel">
-        <h3>Upload firmware image</h3>
+      <div className="page-bar">
+        <p className="page-lede">A rollout sends a firmware image to matching devices in waves, starting with a small canary batch, and stops if too many fail.</p>
+        <span className="page-actions">
+          <button className="btn" onClick={() => setUploadOpen(true)} disabled={!writable}>
+            Upload image
+          </button>
+          <button className="btn primary" onClick={() => setCreatingOpen(true)} disabled={!writable || images.length === 0} title={images.length === 0 ? "Upload a firmware image first" : undefined}>
+            New rollout
+          </button>
+        </span>
+      </div>
+
+      {uploadOpen && (
+        <Drawer title="Upload firmware image" onClose={() => setUploadOpen(false)} wide>
         <form onSubmit={onUpload}>
           <div className="form-row">
             <input
@@ -221,11 +262,11 @@ export function FirmwareRollouts() {
             </button>
           </div>
         </form>
-      </div>
+        </Drawer>
+      )}
 
-      <div className="split two-col">
-        <div className="panel">
-          <h3>Create canary rollout</h3>
+      {creatingOpen && (
+        <Drawer title="New rollout" onClose={() => setCreatingOpen(false)} wide>
           <form onSubmit={onCreate}>
             <div className="form-row">
               <label className="field">
@@ -299,19 +340,11 @@ export function FirmwareRollouts() {
               </button>
             </div>
           </form>
-        </div>
+        </Drawer>
+      )}
 
-        <div className="panel">
-          <h3>
-            {selected ? selected.name : "Select a rollout"}
-            {selected && (
-              <button className="close-detail" onClick={() => setSelected(null)}>
-                ✕
-              </button>
-            )}
-          </h3>
-          {selected ? (
-            <>
+      {selected && (
+        <Drawer title={selected.name} onClose={() => setSelected(null)} wide>
               <dl className="kv">
                 <dt>Status</dt>
                 <dd><StatusBadge value={selected.status} /></dd>
@@ -358,14 +391,8 @@ export function FirmwareRollouts() {
                   </li>
                 ))}
               </ul>
-            </>
-          ) : (
-            <p className="dim" style={{ margin: 0 }}>
-              Click a rollout in the table below for status and controls.
-            </p>
-          )}
-        </div>
-      </div>
+        </Drawer>
+      )}
 
       {loading && items.length === 0 ? (
         <div className="loading">Loading rollouts…</div>
@@ -374,6 +401,9 @@ export function FirmwareRollouts() {
           <DataTable data={items} columns={columns} getRowId={(r) => r.id} onRowClick={openRollout} emptyMessage="No firmware rollouts yet." />
         </div>
       )}
+
+      <h3 className="section-title">Firmware images</h3>
+      <DataTable data={images} columns={imageColumns} getRowId={(img) => img.id} emptyMessage="No firmware images uploaded yet." />
     </section>
   );
 }

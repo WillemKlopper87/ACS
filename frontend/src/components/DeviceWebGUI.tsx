@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { WebGUIConfig } from "../api/types";
 import { toast } from "../lib/toast";
+import { confirmDialog } from "../lib/confirm";
 
 export function DeviceWebGUI({ id, writable, unreachableNote }: { id: string; writable: boolean; unreachableNote?: string }) {
   const [config, setConfig] = useState<WebGUIConfig | null>(null);
@@ -68,7 +69,7 @@ export function DeviceWebGUI({ id, writable, unreachableNote }: { id: string; wr
   }
 
   async function handleDelete() {
-    if (!window.confirm("Remove this device's web GUI configuration?")) return;
+    if (!(await confirmDialog("Remove this device's web GUI configuration?"))) return;
     try {
       await api.deleteWebGUIConfig(id);
       setConfig({ configured: false });
@@ -131,6 +132,12 @@ export function DeviceWebGUI({ id, writable, unreachableNote }: { id: string; wr
             <iframe
               src={frameSrc}
               title="Device web GUI"
+              // The device's page is foreign content served through our API.
+              // No allow-same-origin: it gets an origin of its own and cannot
+              // read the console's session. The API sends the same policy as
+              // a header, so this holds if the frame is opened directly too.
+              sandbox="allow-forms allow-scripts allow-popups"
+              referrerPolicy="no-referrer"
               style={{
                 marginTop: "0.6rem",
                 width: "100%",

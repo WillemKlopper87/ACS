@@ -1,6 +1,7 @@
 package bss
 
 import (
+	"acs/internal/accounts"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -36,9 +37,21 @@ func NewACSClient(baseURL string, timeout time.Duration, serviceToken string) *A
 	return &ACSClient{baseURL: baseURL, http: &http.Client{Timeout: timeout}, serviceToken: serviceToken}
 }
 
+// ActingCustomerHeader tells the operator API which customer a call is
+// made for. The API then confines the call to that customer's devices,
+// so the service token is not by itself a key to every device.
+const ActingCustomerHeader = "X-ACS-Acting-Customer"
+
 func (c *ACSClient) setAuth(req *http.Request) {
 	if c.serviceToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+	// The customer is the one the request's context acts for
+	// (internal/accounts): the integration's own, or the order's when a
+	// worker runs it. With none (a fleet-wide client, an account nobody
+	// owns) the header is left out.
+	if customer, ok := accounts.Customer(req.Context()); ok && customer != "" {
+		req.Header.Set(ActingCustomerHeader, customer)
 	}
 }
 
