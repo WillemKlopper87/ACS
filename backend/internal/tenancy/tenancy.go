@@ -8,9 +8,11 @@ package tenancy
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"acs/internal/store"
 )
@@ -43,11 +45,23 @@ func NewRepository(db *sql.DB) *Repository {
 
 // --- regions -------------------------------------------------------------
 
+// ErrNameTaken: a region, customer or project of that name exists
+// already. It used to surface as a 500.
+var ErrNameTaken = errors.New("that name is already in use")
+
+func nameTaken(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
 func (r *Repository) CreateRegion(ctx context.Context, name string) (*Region, error) {
 	id := uuid.New().String()
 	row := r.db.QueryRowContext(ctx, `INSERT INTO regions (id, name) VALUES ($1, $2) RETURNING id, name, created_at::text`, id, name)
 	var reg Region
 	if err := row.Scan(&reg.ID, &reg.Name, &reg.CreatedAt); err != nil {
+		if nameTaken(err) {
+			return nil, ErrNameTaken
+		}
 		return nil, fmt.Errorf("create region: %w", err)
 	}
 	return &reg, nil
@@ -85,6 +99,9 @@ func (r *Repository) CreateCustomer(ctx context.Context, name string, regionID *
 	row := r.db.QueryRowContext(ctx, `INSERT INTO customers (id, name, region_id) VALUES ($1, $2, $3) RETURNING id, name, region_id`, id, name, regionID)
 	var c Customer
 	if err := row.Scan(&c.ID, &c.Name, &c.RegionID); err != nil {
+		if nameTaken(err) {
+			return nil, ErrNameTaken
+		}
 		return nil, fmt.Errorf("create customer: %w", err)
 	}
 	return &c, nil
@@ -122,6 +139,9 @@ func (r *Repository) CreateProject(ctx context.Context, name, description string
 	row := r.db.QueryRowContext(ctx, `INSERT INTO projects (id, name, description) VALUES ($1, $2, $3) RETURNING id, name, COALESCE(description, '')`, id, name, nullIfEmpty(description))
 	var p Project
 	if err := row.Scan(&p.ID, &p.Name, &p.Description); err != nil {
+		if nameTaken(err) {
+			return nil, ErrNameTaken
+		}
 		return nil, fmt.Errorf("create project: %w", err)
 	}
 	return &p, nil
