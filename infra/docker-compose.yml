@@ -74,7 +74,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   grafana:
-    image: grafana/grafana:11.3.1@sha256:fa801ab6e1ae035135309580891e09f7eb94d1abdbd2106bdc288030b028158c
+    image: grafana/grafana:13.3.1@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf
     ports:
       # 127.0.0.1 unless deliberately overridden (audit P1.5):
       # scripts/start.sh sets GRAFANA_BIND=0.0.0.0 only when
