@@ -5479,6 +5479,20 @@ export interface paths {
                     };
                     content?: never;
                 };
+                /** @description Invalid policy, unknown customer_id, or the named customer has no account of that ID */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The account ID exists for more than one customer. Set customer_id. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         delete?: never;
@@ -8066,7 +8080,10 @@ export interface paths {
         /** Open a WebSocket bridging the browser terminal to the device's SSH/Telnet port (cli.access permission). Real code, blocked in practice by the CGNAT reachability gap — build plan §10 — until a VPN/tunnel path exists. */
         get: {
             parameters: {
-                query?: never;
+                query: {
+                    /** @description A CLI credential of this device. */
+                    credential_id: string;
+                };
                 header?: never;
                 path: {
                     /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
@@ -8078,6 +8095,20 @@ export interface paths {
             responses: {
                 /** @description Switching Protocols (WebSocket upgrade) */
                 101: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description credential_id is missing or is not a credential ID */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description No such credential on this device */
+                404: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -9256,7 +9287,10 @@ export interface components {
             name: string;
             /** @enum {string} */
             scope: "fleet" | "tenant" | "group" | "device";
+            /** @description The account ID a tenant policy is for. */
             tenant_id?: string;
+            /** @description Tenant policies only. The customer that owns the account: account IDs are unique per customer. On create, a customer ID, or "none" for the account no customer owns; needed when more than one customer has an account of this ID. In answers, the owning customer, when the policy is tied to one account. */
+            customer_id?: string;
             /** Format: uuid */
             group_id?: string;
             /** Format: uuid */

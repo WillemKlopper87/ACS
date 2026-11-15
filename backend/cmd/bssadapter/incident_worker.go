@@ -57,7 +57,7 @@ func (h *handler) ingestBulkDataHealth(ctx context.Context) {
 		return
 	}
 	for _, target := range targets {
-		policy, ok := alerting.Resolve(policies, alerting.Target{TenantID: target.TenantID, DeviceID: target.DeviceID, CustomerTier: target.CustomerTier, GroupIDs: target.GroupIDs})
+		policy, ok := alerting.Resolve(policies, alerting.Target{TenantID: target.TenantID, AccountKey: target.AccountKey, DeviceID: target.DeviceID, CustomerTier: target.CustomerTier, GroupIDs: target.GroupIDs})
 		if !ok {
 			continue
 		}
@@ -91,7 +91,7 @@ func (h *handler) ingestOfflineDevices(ctx context.Context) {
 	}
 	now := time.Now().UTC()
 	for _, d := range devices {
-		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: d.TenantID, CustomerTier: d.CustomerTier, GroupIDs: d.GroupIDs, DeviceID: d.DeviceID})
+		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: d.TenantID, AccountKey: d.AccountKey, CustomerTier: d.CustomerTier, GroupIDs: d.GroupIDs, DeviceID: d.DeviceID})
 		if !ok || p.OfflineAfter <= 0 {
 			continue
 		}
@@ -137,11 +137,11 @@ func (h *handler) processEscalations(ctx context.Context) {
 		if groupErr != nil {
 			continue
 		}
-		tier, tierErr := h.alertPolicies.CustomerTier(ctx, i.TenantID, i.DeviceID)
+		tier, accountKey, tierErr := h.alertPolicies.Mapping(ctx, i.TenantID, i.DeviceID)
 		if tierErr != nil {
 			continue
 		}
-		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: i.TenantID, DeviceID: i.DeviceID, GroupIDs: groupIDs, CustomerTier: tier})
+		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: i.TenantID, AccountKey: accountKey, DeviceID: i.DeviceID, GroupIDs: groupIDs, CustomerTier: tier})
 		if !ok {
 			continue
 		}
@@ -192,12 +192,12 @@ func (h *handler) ingestTMFFaults(ctx context.Context) {
 			h.logger.Error("failed to resolve CPE alert groups", "err", err, "device_id", event.DeviceID)
 			continue
 		}
-		tier, err := h.alertPolicies.CustomerTier(ctx, event.AccountID, event.DeviceID)
+		tier, accountKey, err := h.alertPolicies.Mapping(ctx, event.AccountID, event.DeviceID)
 		if err != nil {
 			h.logger.Error("failed to resolve customer tier", "err", err, "device_id", event.DeviceID)
 			continue
 		}
-		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: event.AccountID, CustomerTier: tier, GroupIDs: groupIDs, DeviceID: event.DeviceID})
+		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: event.AccountID, AccountKey: accountKey, CustomerTier: tier, GroupIDs: groupIDs, DeviceID: event.DeviceID})
 		if !ok {
 			continue
 		}

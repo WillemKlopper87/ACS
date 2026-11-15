@@ -29,10 +29,17 @@ type EscalationStep struct {
 }
 
 type Policy struct {
-	ID              string              `json:"id"`
-	Name            string              `json:"name"`
-	Scope           Scope               `json:"scope"`
-	TenantID        string              `json:"tenant_id,omitempty"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Scope    Scope  `json:"scope"`
+	TenantID string `json:"tenant_id,omitempty"`
+	// CustomerID is the customer that owns the account TenantID names.
+	// Account IDs are unique per customer, not across the ACS.
+	CustomerID string `json:"customer_id,omitempty"`
+	// AccountKey is the account's registry key (bss_accounts.id). Empty
+	// on a policy made before accounts had keys, or for an ID no account
+	// has yet: such a policy matches every account of that ID.
+	AccountKey      string              `json:"-"`
 	GroupID         string              `json:"group_id,omitempty"`
 	DeviceID        string              `json:"device_id,omitempty"`
 	CustomerTier    string              `json:"customer_tier,omitempty"`
@@ -44,6 +51,7 @@ type Policy struct {
 
 type Target struct {
 	TenantID     string
+	AccountKey   string // registry key of the account TenantID names, when known
 	GroupIDs     []string
 	DeviceID     string
 	CustomerTier string
@@ -100,7 +108,15 @@ func matches(p Policy, t Target) bool {
 		}
 		return false
 	case ScopeTenant:
-		return p.TenantID != "" && p.TenantID == t.TenantID && (p.CustomerTier == "" || p.CustomerTier == t.CustomerTier)
+		if p.TenantID == "" || p.TenantID != t.TenantID {
+			return false
+		}
+		// Two customers can have an account of the same ID: when both
+		// sides know which account they mean, it has to be the same one.
+		if p.AccountKey != "" && t.AccountKey != "" && p.AccountKey != t.AccountKey {
+			return false
+		}
+		return p.CustomerTier == "" || p.CustomerTier == t.CustomerTier
 	case ScopeFleet:
 		return p.TenantID == "" && p.GroupID == "" && p.DeviceID == ""
 	default:

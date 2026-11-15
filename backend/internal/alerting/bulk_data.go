@@ -7,15 +7,15 @@ import (
 )
 
 type BulkDataTarget struct {
-	TenantID, DeviceID, ReceiverID, CustomerTier string
-	ExpiresAt                                    time.Time
-	LastReportAt                                 *time.Time
-	Interval                                     int
-	GroupIDs                                     []string
+	TenantID, AccountKey, DeviceID, ReceiverID, CustomerTier string
+	ExpiresAt                                                time.Time
+	LastReportAt                                             *time.Time
+	Interval                                                 int
+	GroupIDs                                                 []string
 }
 
 func (r *Repository) MissingBulkData(ctx context.Context, limit int) ([]BulkDataTarget, error) {
-	rows, err := r.db.QueryContext(ctx, `WITH latest AS (SELECT DISTINCT ON(device_id,profile_instance) * FROM bulk_data_receivers WHERE NOT revoked ORDER BY device_id,profile_instance,created_at DESC) SELECT m.account_id,r.device_id::text,r.id::text,COALESCE(m.service_plan,''),r.expires_at,r.last_report_at,r.reporting_interval FROM latest r JOIN account_device_mappings m ON m.device_id=r.device_id WHERE r.expires_at<=now() OR GREATEST(COALESCE(r.last_report_at,r.renewed_at),r.renewed_at)+(r.reporting_interval*3+60)*interval '1 second'<now() ORDER BY r.expires_at LIMIT $1`, limit)
+	rows, err := r.db.QueryContext(ctx, `WITH latest AS (SELECT DISTINCT ON(device_id,profile_instance) * FROM bulk_data_receivers WHERE NOT revoked ORDER BY device_id,profile_instance,created_at DESC) SELECT m.account_id,m.account_key::text,r.device_id::text,r.id::text,COALESCE(m.service_plan,''),r.expires_at,r.last_report_at,r.reporting_interval FROM latest r JOIN account_device_mappings m ON m.device_id=r.device_id WHERE r.expires_at<=now() OR GREATEST(COALESCE(r.last_report_at,r.renewed_at),r.renewed_at)+(r.reporting_interval*3+60)*interval '1 second'<now() ORDER BY r.expires_at LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -23,7 +23,7 @@ func (r *Repository) MissingBulkData(ctx context.Context, limit int) ([]BulkData
 	out := []BulkDataTarget{}
 	for rows.Next() {
 		var v BulkDataTarget
-		if err := rows.Scan(&v.TenantID, &v.DeviceID, &v.ReceiverID, &v.CustomerTier, &v.ExpiresAt, &v.LastReportAt, &v.Interval); err != nil {
+		if err := rows.Scan(&v.TenantID, &v.AccountKey, &v.DeviceID, &v.ReceiverID, &v.CustomerTier, &v.ExpiresAt, &v.LastReportAt, &v.Interval); err != nil {
 			return nil, err
 		}
 		v.GroupIDs, err = r.GroupIDsForDevice(ctx, v.DeviceID)

@@ -2251,6 +2251,8 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AlertPolicy" } } } }
       responses:
         "201": { description: Created }
+        "400": { description: "Invalid policy, unknown customer_id, or the named customer has no account of that ID" }
+        "409": { description: The account ID exists for more than one customer. Set customer_id. }
   /api/v1/alert-policies/{id}:
     delete:
       tags: [Alerting]
@@ -3007,9 +3009,13 @@ paths:
         Open a WebSocket bridging the browser terminal to the device's SSH/Telnet port
         (cli.access permission). Real code, blocked in practice by the CGNAT reachability
         gap — build plan §10 — until a VPN/tunnel path exists.
-      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - { name: credential_id, in: query, required: true, schema: { type: string, format: uuid }, description: "A CLI credential of this device." }
       responses:
         "101": { description: Switching Protocols (WebSocket upgrade) }
+        "400": { description: credential_id is missing or is not a credential ID }
+        "404": { description: No such credential on this device }
 
   # --- Web GUI ---
   /api/v1/devices/{id}/webgui:
@@ -3918,7 +3924,8 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         scope: { type: string, enum: [fleet, tenant, group, device] }
-        tenant_id: { type: string }
+        tenant_id: { type: string, description: "The account ID a tenant policy is for." }
+        customer_id: { type: string, description: "Tenant policies only. The customer that owns the account: account IDs are unique per customer. On create, a customer ID, or \"none\" for the account no customer owns; needed when more than one customer has an account of this ID. In answers, the owning customer, when the policy is tied to one account." }
         group_id: { type: string, format: uuid }
         device_id: { type: string, format: uuid }
         customer_tier: { type: string }

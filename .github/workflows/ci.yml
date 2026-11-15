@@ -400,6 +400,12 @@ jobs:
             ci/usp/assert-allowlist.sh /tmp/uspc-ws.log "$ACS_USP_POSTGRES_DSN" "$AGENT_ENDPOINT_ID" || rc=$?
 
           if [ "$rc" -ne 0 ]; then
+            # This step fails now and then with no connection from the
+            # agent in cmd/uspc's log at all (seen 15 November on two
+            # unrelated branches). The controller's log alone does not
+            # say why the agent stayed away, so show the agent's side.
+            echo "--- obuspa-ws log tail (the agent's side) ---"
+            tail -n 120 /tmp/obuspa-ws.log || true
             kill "$logs_pid" 2>/dev/null || true
             docker rm -f obuspa-ws >/dev/null 2>&1 || true
             kill "$uspc_pid" 2>/dev/null || true
