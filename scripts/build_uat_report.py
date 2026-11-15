@@ -4,11 +4,17 @@ An update to ACS-UAT-Readiness-Assessment.pdf (9 September 2026, revision
 1251984), re-verified against revision d2ea8d1 — 21 commits later — and
 extended with an appendix of real screens.
 
-Every figure in Appendix A was captured on 10 September 2026 from a
+This is the 15 November 2026 edition. The assessment in sections 1 to 9
+is still the one of 10 September, unchanged; what this edition adds is a
+status section in front of it (what has changed since, and where each
+September blocker stands) and a new Appendix A.
+
+Every figure in Appendix A was captured on 15 November 2026 from a
 running stack: the CWMP gateway, operator API, BSS adapter, console and
-the provisioned Grafana dashboards, with a mock fleet of eight CPE across
-five vendors that genuinely onboarded over TR-069 with Digest
-authentication. No screen here is a mock-up.
+the provisioned Grafana dashboards, with mock CPE that onboarded over
+TR-069 with Digest authentication. No screen here is a mock-up. The
+September figures stay in docs/uat-screenshots; this edition reads
+docs/screenshots/2026-11-15.
 
 Rebuild with:  python scripts/build_uat_report.py
 """
@@ -38,8 +44,11 @@ from reportlab.platypus import (
 )
 
 OUT = os.environ.get("UAT_REPORT_OUT", "docs/ACS_UAT_Readiness_Report.pdf")
-DATE = "10 September 2026"
-REVISION = "d2ea8d1"
+# The assessment (sections 1 to 9) and the edition (status section, Appendix A).
+ASSESSED_DATE = "10 September 2026"
+ASSESSED_REVISION = "d2ea8d1"
+DATE = "15 November 2026"
+REVISION = "2ebf22f"
 
 INK = colors.HexColor("#14171a")
 MUTED = colors.HexColor("#5b6570")
@@ -134,14 +143,26 @@ def terminal(lines):
     return t
 
 
-SHOTS = "docs/uat-screenshots"
+SHOTS = "docs/screenshots/2026-11-15"
 
 
 def figure(name, number, title, caption, width=None):
     path = os.path.join(SHOTS, name + ".png")
     if not os.path.exists(path):
         return Paragraph(f"[missing screenshot: {name}]", Small)
-    iw, ih = ImageReader(path).getSize()
+    # The captures are 3000 px wide or more. A page shows them at about
+    # 174 mm, so 1500 px is ample. Embedded as JPEG: reportlab stores a
+    # PNG uncompressed-then-deflated, which made this PDF 12 MB.
+    from PIL import Image as _PIL
+    import io
+    src = _PIL.open(path).convert("RGB")
+    if src.width > 1500:
+        src = src.resize((1500, round(src.height * 1500 / src.width)), _PIL.LANCZOS)
+    buf = io.BytesIO()
+    src.save(buf, format="JPEG", quality=88, optimize=True)
+    buf.seek(0)
+    path = buf
+    iw, ih = src.size
     w = width or W
     h = w * ih / iw
     max_h = 168 * mm
@@ -190,8 +211,8 @@ def cover(canvas, doc):
                       "What has been built  ·  How it runs day to day  ·  What comes next  ·  What still blocks UAT")
     canvas.setFillColor(MUTED)
     canvas.setFont("Helvetica", 8.5)
-    canvas.drawString(M, M - 4 * mm, f"{DATE}  ·  revision {REVISION}  ·  executed, not reviewed")
-    canvas.drawRightString(PAGE_W - M, M - 4 * mm, "Supersedes the assessment of 9 September 2026")
+    canvas.drawString(M, M - 4 * mm, f"Edition of {DATE} (revision {REVISION})  ·  assessment of {ASSESSED_DATE} (revision {ASSESSED_REVISION})")
+    canvas.drawRightString(PAGE_W - M, M - 4 * mm, "Sections 1 to 9 are unchanged since September; see the status section")
     canvas.restoreState()
 
 
@@ -213,12 +234,72 @@ W = PAGE_W - 2 * M
 
 # ------------------------------------------------------------------- cover
 F.append(NextPageTemplate("body"))
-F.append(Paragraph("Executive summary", H1))
+F.append(Paragraph("Status at " + DATE, H1))
+F.append(Paragraph(
+    "This edition does not re-run the assessment. Sections 1 to 9 are the report of " + ASSESSED_DATE +
+    " against revision " + ASSESSED_REVISION + ", word for word, and several of their statements are now out of "
+    "date. This section says what has changed and where each September blocker stands at revision " + REVISION +
+    ". Appendix A shows the system as it is today.", Lead))
+F.append(Paragraph("What has changed since September", H2))
+F.append(bullets([
+    "<b>The console was redesigned.</b> Navigation is in six areas with tabs, list screens share one pattern, "
+    "destructive actions ask in one dialog, and a device has a workspace of its own. No function was removed.",
+    "<b>Sign-in is stronger.</b> Two-step sign-in with an authenticator app, password rules, and a session held "
+    "in a cookie that page scripts cannot read instead of in browser storage.",
+    "<b>Bulk work is recorded.</b> A bulk action or a template apply is an operation with progress, cancel and "
+    "retry; a single job can be cancelled or retried.",
+    "<b>Several internet providers can share one ACS safely.</b> Account and order identifiers are unique per "
+    "provider, every integration call is confined to its provider, and each service can use its own database "
+    "login. The integration contract is at version 2.0.0.",
+    "<b>A production profile exists.</b> The gateway, the API, the integration adapter and the USP controller "
+    "refuse to start with lab settings.",
+    "<b>A security assessment of 14 November raised 17 findings; all are addressed.</b> Four protections are "
+    "built but switched on per deployment.",
+    "<b>Real hardware has checked in.</b> A Nokia FastMile 5G Gateway 2 passed the read-only qualification on "
+    "30 October, behind carrier-grade NAT, and a Nokia Beacon 3.1 onboarded with it.",
+    "<b>Tests.</b> 1,046 Go test functions, 189 console unit tests and 16 browser tests; fourteen CI checks "
+    "including image scans, a backup and restore rehearsal and interoperability with the reference USP agent.",
+]))
+F.append(Paragraph("The September blockers today", H2))
+F.append(table([
+    ["Ref", "Blocker in September", "Today", "Basis"],
+    ["B2", "No qualified CPE hardware", pill("Partly closed", AMBER),
+     "One model passed read-only qualification on a live 5G network (field result of 30 October). That is not "
+     "full firmware qualification, and no other vendor has been tested."],
+    ["B3", "TLS not enabled on the CWMP interface", pill("Built, not deployed", AMBER),
+     "TLS is supported and the production profile will not start without it. Whether the lab host now runs it "
+     "was not checked for this edition."],
+    ["B4", "Scale is unmeasured", pill("Open", RED),
+     "No measurement has been recorded since."],
+    ["B5", "No defined UAT environment", pill("Partly closed", AMBER),
+     "A production profile, a preflight check and an operations runbook now define the environment. Secret "
+     "custody and network restriction remain the administrators' decisions."],
+    ["B6", "The console cannot reach its API on a host address", pill("Fixed", GREEN),
+     "The start script sets the API's allowed origin from the console address. Read in the script; the script "
+     "was not run end to end for this edition."],
+    ["B7", "The retention pruner fails on every pass", pill("Not re-checked", MUTED),
+     "Not exercised for this edition."],
+    ["B8", "The test suite fails when run the obvious way", pill("Open, documented", AMBER),
+     "The database-backed packages still share one database and must run one at a time; CI does so. Without a "
+     "database configured they are skipped and the obvious command passes."],
+    ["B9", "Duplicate names return a server error", pill("Fixed", GREEN),
+     "Reproduced on 15 November (a second region or project of the same name was a 500), then fixed: it is a "
+     "409. In pull request 114, not yet merged."],
+], [12 * mm, 44 * mm, 28 * mm, W - 84 * mm]))
+F.append(Spacer(1, 2 * mm))
+F.append(Paragraph(
+    "B1, the quick start that failed, was already closed in September. One defect was found while taking this "
+    "edition's screens and fixed: a dashboard layout saved without a widget list broke the Dashboard for that "
+    "operator. The September verdict, ready for a controlled lab UAT and not yet for a subscriber-facing one, "
+    "has not been re-argued here. The current detail is in docs/WORK-SUMMARY-2026-11-14.md and "
+    "docs/SECURITY-ASSESSMENT-2026-11-14.md.", Body))
+F.append(PageBreak())
+F.append(Paragraph("Executive summary (" + ASSESSED_DATE + ")", H1))
 F.append(Paragraph(
     "ACS is a multi-tenant TR-069 device-management platform: it onboards customer-premises equipment the moment it "
     "first calls home, keeps its configuration to a defined standard, pushes firmware in controlled waves, and gives "
     "an operator one console from which to see and act on the whole fleet. This report updates the assessment of "
-    "9 September 2026 against revision <b>" + REVISION + "</b>, twenty-one commits later, and adds an appendix of "
+    "9 September 2026 against revision <b>" + ASSESSED_REVISION + "</b>, twenty-one commits later, and adds an appendix of "
     "real screens from the running system.", Lead))
 F.append(Paragraph(
     "The verdict is unchanged in shape but better in substance: the platform is ready for a controlled lab UAT and "
@@ -761,114 +842,125 @@ F.append(PageBreak())
 F.append(Paragraph("Appendix A. The system on screen", H1))
 F.append(Paragraph(
     "Every figure below is a real screen captured on " + DATE + " from the running platform at revision " +
-    REVISION + ", with a mock fleet of eight CPE across five vendors that genuinely onboarded over TR-069. The "
-    "device records, the job outcomes, the audit entries and the dashboard readings are all produced by the "
-    "product, not by fixtures written into the database.", Body))
+    REVISION + " (the Grafana figures from the containerized profile at the same revision). The console figures "
+    "show 15 mock CPE across four vendors that onboarded over TR-069; the Grafana figures show 26. The device "
+    "records, job outcomes, audit entries and dashboard readings are produced by the product. The customers "
+    "and accounts are test data with generated names.", Body))
+
+def fig(name, title, caption):
+    fig.n += 1
+    return figure(name, f"A{fig.n}", title, caption)
+fig.n = 0
 
 F.append(Paragraph("Signing in", H2))
-F.append(figure("01-login", "A1", "The console sign-in",
-                "Sign-in is the only unauthenticated screen. The status line at the foot of the navigation shows "
-                "whether the console can currently reach the API — the indicator that exposed blocker B6."))
+F.append(fig("01-login", "The console sign-in",
+             "Sign-in is the only unauthenticated screen. An operator with two-step sign-in is asked for a code "
+             "from their authenticator app after the password."))
+F.append(PageBreak())
+F.append(fig("32-account-menu", "Account and two-step sign-in",
+             "Each operator turns two-step sign-in on for themselves here. A role can be set to require it."))
 
 F.append(PageBreak())
-F.append(Paragraph("The daily view", H2))
-F.append(figure("02-dashboard", "A2", "Dashboard",
-                "The operator's landing view: fleet state, recent activity and the panels an operator arranges for "
-                "themselves. The layout is per-operator, so a NOC shift and a provisioning engineer are not forced "
-                "to share one arrangement."))
+F.append(Paragraph("Overview", H2))
+F.append(fig("02-dashboard", "Dashboard",
+             "The landing view: fleet counts, active alarms, online state, last check-in, the fleet by vendor and "
+             "firmware state. Each operator arranges the widgets for themselves."))
+F.append(PageBreak())
+F.append(fig("03-fleet-health", "Fleet health",
+             "Where the fleet is unhealthy and why, in one place."))
+F.append(PageBreak())
+F.append(fig("05-alerting", "Alerting",
+             "Alert policies and open incidents. A policy applies to the fleet, one account, a group or one device, "
+             "with escalation steps."))
 
 F.append(PageBreak())
-F.append(figure("03-device-fleet", "A3", "Device Fleet",
-                "Eight devices across five vendors, each one having genuinely onboarded over TR-069 during this "
-                "capture. Reachability reads UNKNOWN because the mock devices do not listen for a connection "
-                "request — an honest reading rather than an optimistic default, and precisely the field that "
-                "real-hardware qualification (B2) exists to turn green."))
+F.append(Paragraph("Devices", H2))
+F.append(fig("06-inventory", "Inventory",
+             "Fifteen devices across four vendors, each having onboarded over TR-069. Reachability reads "
+             "“at next check-in” because the mock devices do not listen for a connection request. A subscriber "
+             "can be found by name, address, account number or the last digits of a serial."))
+F.append(PageBreak())
+F.append(fig("22-device-overview", "One device: overview",
+             "The working surface for one subscriber's device: identity, state and recent jobs, with the "
+             "sections of the workspace down the left."))
+F.append(PageBreak())
+F.append(fig("23-device-wifi", "One device: Wi-Fi",
+             "The Wi-Fi networks of the device. A change shows which clients it would disconnect before it is sent."))
+F.append(PageBreak())
+F.append(fig("28-device-ownership", "One device: ownership",
+             "Which customer and account the device serves. The subscriber's details are masked until shown."))
+F.append(PageBreak())
+F.append(fig("29-device-parameters", "One device: parameters",
+             "The reported data model, searchable, for an engineer who needs the raw values."))
+F.append(PageBreak())
+F.append(fig("07-onboarding", "Onboarding",
+             "Planned sales and their progress to service. At capture nothing needed attention, so the list is "
+             "empty; fifteen devices were waiting unclaimed."))
+F.append(PageBreak())
+F.append(fig("10-device-groups", "Groups", "Devices organised into groups that actions and policies can target."))
+F.append(PageBreak())
+F.append(fig("08-fleet-control", "Bulk actions",
+             "An action on many devices at once. It runs as a recorded operation."))
 
 F.append(PageBreak())
-F.append(figure("18-device-detail", "A4", "One device in detail",
-                "The engineer's working surface for a single subscriber: reported parameters, history, and the "
-                "actions that fix it. The selection is carried in the address bar, so a device can be linked "
-                "straight into a ticket."))
+F.append(Paragraph("Activity", H2))
+F.append(fig("04-jobs", "Jobs",
+             "What the platform tried on each device and how it went. A failed job carries its reason, and a job "
+             "can be cancelled or retried."))
+F.append(PageBreak())
+F.append(fig("09-bulk-operations", "Bulk operations",
+             "Every bulk action and template apply as one record with its progress."))
+F.append(PageBreak())
+F.append(fig("31-bulk-operation-detail", "One bulk operation",
+             "The per-device result of an operation, with cancel for what is still queued and retry for what failed."))
+F.append(PageBreak())
+F.append(fig("13-scheduled-jobs", "Scheduled jobs", "Work that runs on a schedule."))
 
 F.append(PageBreak())
-F.append(figure("06-jobs", "A5", "Jobs — what the platform tried, and how it went",
-                "Six jobs from the live run: four succeeded, two failed. The failures carry their reason — "
-                "“response did not match the RPC that was sent” — rather than a bare status, which is the "
-                "difference between an engineer diagnosing a fault and guessing at it."))
+F.append(Paragraph("Configuration", H2))
+F.append(fig("11-config-templates", "Templates",
+             "A named set of parameters, applied to matching devices on request or automatically."))
+F.append(PageBreak())
+F.append(fig("12-policies", "Policies", "The standard a device is expected to meet."))
+F.append(PageBreak())
+F.append(fig("14-firmware-rollouts", "Firmware rollouts", "Firmware pushed in controlled waves."))
 
 F.append(PageBreak())
-F.append(figure("05-fleet-health", "A6", "Fleet Health",
-                "Fleet-wide condition rather than per-device detail: what is online, what has stopped checking in, "
-                "and where failures are concentrating."))
-F.append(figure("04-fleet-control", "A7", "Fleet Control",
-                "Bulk action across a filtered selection — the screen used to move many devices at once rather "
-                "than repeating an action device by device."))
-
+F.append(Paragraph("Administration and records", H2))
+F.append(fig("17-operators", "Operators", "Operator accounts, roles and the permissions of each role."))
 F.append(PageBreak())
-F.append(Paragraph("Provisioning: keeping the fleet to a standard", H2))
-F.append(figure("11-config-templates", "A8", "Configuration templates",
-                "The template created live for this report. Marked to apply automatically to matching models, it "
-                "pushed its settings to two devices on their next check-in with no operator involvement."))
-F.append(figure("09-policies", "A9", "Compliance policies",
-                "A rule checked on every device check-in. Drift shows as non-compliance continuously, rather than "
-                "waiting for somebody to run a report."))
-
+F.append(fig("18-tenancy", "Tenancy", "Regions, customers and projects, and which operator may see which."))
 F.append(PageBreak())
-F.append(figure("08-scheduled-jobs", "A10", "Scheduled jobs",
-                "Recurring work — a nightly parameter refresh and an hourly reachability check, both created live "
-                "against the customer-scoped group. The platform enforces a minimum interval and re-checks tenancy "
-                "at each firing, not only when the schedule is created."))
-F.append(figure("10-firmware-rollouts", "A11", "Firmware rollouts",
-                "Staged rollout with a canary percentage and a maximum-failure-rate brake, so a bad image stops "
-                "itself rather than continuing into the fleet."))
-
+F.append(fig("16-bss-integration", "BSS / NaaS integration",
+             "Account-to-device mappings, webhook subscriptions and the integration clients. The account "
+             "SHARED-d0d75 appears under two customers: account identifiers are unique per customer, so these "
+             "are two separate accounts."))
 F.append(PageBreak())
-F.append(Paragraph("Organising the estate", H2))
-F.append(figure("07-device-groups", "A12", "Groups",
-                "Devices gathered into a customer-scoped group, which is what bulk actions and scheduled jobs "
-                "target. A scoped operator cannot create a group outside their own customer."))
-F.append(figure("12-tenancy", "A13", "Tenancy",
-                "The region and customer hierarchy every other screen is scoped against. This is the structure "
-                "that makes one deployment serve several customers without them seeing each other."))
-
+F.append(fig("19-audit-log", "Audit log", "Who did what, to which device, and when."))
 F.append(PageBreak())
-F.append(figure("13-operators", "A14", "Operators and permissions",
-                "Four permission tiers with a curated permission matrix. The three additional operators shown were "
-                "created live through the API. An operator with no tenancy scope sees no devices at all — the "
-                "default is deny."))
-F.append(figure("14-bss-integration", "A15", "BSS integration",
-                "The business-system contract, with its own troubleshooting panel — mapping lookup, authentication "
-                "check, job status and order dispatch — so an integration fault is diagnosed inside the product."))
-
+F.append(fig("20-reports", "Reports", "Exports for people who do not use the console."))
 F.append(PageBreak())
-F.append(Paragraph("Records and oversight", H2))
-F.append(figure("16-audit-log", "A16", "Audit log",
-                "Every privileged action, with the operator, the target and the time. Terminal sessions opened to "
-                "a device are recorded here too."))
-F.append(figure("15-reports", "A17", "Reports",
-                "Spreadsheet export for the people who work in one, rather than requiring them into the console."))
-
+F.append(fig("15-session-captures", "Session captures",
+             "A recording of a device's CWMP conversation for fault-finding, with secrets masked."))
 F.append(PageBreak())
-F.append(figure("17-help", "A18", "The in-app handbook",
-                "Documentation carried inside the product. It matters for UAT: a tester who can answer their own "
-                "question does not file a defect that turns out to be a question."))
+F.append(fig("21-help", "The in-app handbook", "The operator guide, inside the console."))
 
 F.append(PageBreak())
 F.append(Paragraph("Monitoring: the platform's own health", H2))
-F.append(figure("19-grafana-cpe-fleet", "A19", "CPE Fleet dashboard",
-                "Live data from this report's own run: eight devices online, thirteen check-ins a minute, and job "
-                "completions broken out by type and outcome — the two failed diagnostics and the successful "
-                "reboots and schedule-informs are all visible here. The stale-lease panel is the queue's own "
-                "safety net reporting on itself."))
-
+F.append(fig("33-grafana-cpe-fleet", "Grafana: CPE Fleet",
+             "Devices online, check-in rate, job outcomes, the fleet by model and recent job faults, from "
+             "Prometheus and the database."))
 F.append(PageBreak())
-F.append(figure("20-grafana-bss-integration", "A20", "BSS Integration dashboard",
-                "Order and webhook throughput for the business-system path. Quiet here because no orders were "
-                "dispatched during the capture — the panels are wired and the adapter is being scraped."))
-F.append(figure("21-grafana-tenancy-locator", "A21", "Tenancy and Site Locator dashboard",
-                "The relational view — customer, site, serial, last check-in — deliberately served from the "
-                "database rather than the metrics store, through a read-only role whose grants exclude every "
-                "column that could carry a secret."))
+F.append(fig("34-grafana-bss-integration", "Grafana: BSS Integration",
+             "Orders, webhook deliveries and the adapter's request rate and latency. The deliveries read as "
+             "pending because the test webhook target does not exist."))
+F.append(PageBreak())
+F.append(fig("35-grafana-tenancy-locator", "Grafana: Tenancy and Site Locator",
+             "Devices on a map, with the devices that are not online by region and customer. The coordinates "
+             "were set by hand for this capture."))
+F.append(PageBreak())
+F.append(fig("36-grafana-alerting-escalation", "Grafana: Alerting and Escalation",
+             "Open incidents and escalations. New since September."))
 
 doc.build(F)
 print(f"wrote {OUT}")

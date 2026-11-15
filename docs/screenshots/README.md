@@ -5,11 +5,11 @@ Current screens of the operator console, captured from a running stack.
 | Folder | Captured | From | Notes |
 |---|---|---|---|
 | [`2026-11-15/`](2026-11-15/) | 15 November 2026 | `main` as of pull request 104 (`a36a4ba`), lab profile, NaaS integration on | Console after the redesign, two-step sign-in and the cookie session |
-| [`../uat-screenshots/`](../uat-screenshots/) | 10 September 2026 | revision `d2ea8d1` | The figures of `docs/ACS_UAT_Readiness_Report.pdf`. Kept as they were: that report is a dated record and `scripts/build_uat_report.py` reads them by name. They show the console before the redesign. |
+| [`../uat-screenshots/`](../uat-screenshots/) | 10 September 2026 | revision `d2ea8d1` | The figures of the September edition of the UAT readiness report (in git history). Kept as they were, as a dated record. They show the console before the redesign. The 15 November edition of the report reads the folder above. |
 
 The data is lab data: 15 mock CPEs (Zyxel, Nokia, Huawei, Teltonika) and
-test customers with generated names. 1500 px wide at 2x, full page, dark
-theme.
+test customers with generated names. Console: 1500 px wide at 2x, full
+page, dark theme. Grafana: 1600 px wide at 2x.
 
 ## 2026-11-15
 
@@ -39,14 +39,21 @@ theme.
 | `22-device-overview` … `30-device-remote` | Device workspace: Overview, Wi-Fi, Cellular & SIM, Connectivity, Diagnostics, Firmware & files, Ownership, Parameters, Remote access | Devices → a device |
 | `31-bulk-operation-detail` | One bulk operation with its per-device results | Activity |
 | `32-account-menu` | Account, with two-step sign-in | the operator name, bottom left |
+| `33-grafana-cpe-fleet` | Grafana: CPE Fleet | Grafana |
+| `34-grafana-bss-integration` | Grafana: BSS Integration | Grafana |
+| `35-grafana-tenancy-locator` | Grafana: Tenancy & Site Locator | Grafana |
+| `36-grafana-alerting-escalation` | Grafana: Alerting & Escalation (new since September) | Grafana |
 
 In `16-bss-integration` the account `SHARED-d0d75` appears under two
 customers. That is the per-customer account registry at work
 (`docs/TENANT-SCOPED-IDS-DESIGN.md`): the two rows are different accounts.
 
-Not re-captured: the three Grafana dashboards (`19`–`21` in the September
-set). They need the Compose monitoring stack, and the dashboards have not
-changed.
+The four Grafana dashboards were captured from the Compose
+`containerized` profile with Prometheus and Grafana, 26 mock CPEs across
+three test customers, and the contract flows run against it for orders,
+webhooks and events. Device coordinates and regions were set by hand for
+the map. The webhook deliveries show as pending because the test target
+does not exist.
 
 ## Capturing again
 

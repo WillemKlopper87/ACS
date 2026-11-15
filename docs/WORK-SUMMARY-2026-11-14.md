@@ -471,8 +471,16 @@ Still open:
 - **Screenshots**: 32 screens of the current console in
   `docs/screenshots/2026-11-15/`, indexed in `docs/screenshots/README.md`.
   The September set in `docs/uat-screenshots/` is unchanged, because the
-  UAT readiness report is a dated record built from it. The Grafana
-  dashboards were not re-captured.
+  September edition of the UAT readiness report was built from it. The
+  four Grafana dashboards were captured later the same day from the
+  Compose `containerized` profile (`33` to `36`).
+- **UAT readiness report**: `docs/ACS_UAT_Readiness_Report.pdf` is now a
+  15 November edition. Its assessment (sections 1 to 9) is still the one
+  of 10 September, unchanged and labelled so. The edition adds a status
+  section in front (what changed, and where each September blocker
+  stands) and a new appendix of 36 current screens. Checking the
+  blockers found one still open, a duplicate region or project name
+  answering 500, which is now 409.
 - **Older documents brought in line**: `docs/CONSOLE-REDESIGN-AND-MFA.md`
   (two of its "not done" items are now done), `docs/LAB-TLS.md` (console
   and API names must be the same site for the session cookie),
