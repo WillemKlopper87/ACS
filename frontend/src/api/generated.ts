@@ -5479,7 +5479,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description Invalid policy */
+                /** @description Invalid policy, unknown customer_id, or the named customer has no account of that ID */
                 400: {
                     headers: {
                         [name: string]: unknown;

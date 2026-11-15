@@ -2251,7 +2251,7 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AlertPolicy" } } } }
       responses:
         "201": { description: Created }
-        "400": { description: Invalid policy, unknown customer_id, or the named customer has no account of that ID }
+        "400": { description: "Invalid policy, unknown customer_id, or the named customer has no account of that ID" }
         "409": { description: The account ID exists for more than one customer. Set customer_id. }
   /api/v1/alert-policies/{id}:
     delete:
