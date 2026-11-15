@@ -4,17 +4,25 @@ Everything done on branch `claude/great-euler-c0t5ar`: what was asked,
 what was built, how it was checked, and what is still open. Each section
 points to the document that has the detail.
 
+Last updated 15 November, to include the remaining security findings
+(O4, O8 to O14) and the parts of them that were first left out.
+
 ## 1. At a glance
 
-- **19 commits**, 192 files, about 13,900 lines added and 990 removed.
+- **24 commits**, 227 files, about 16,300 lines added and 1,050 removed.
   No pull request has been opened; nothing is merged to `main`.
 - **Seven schema migrations** (0095 to 0101), all forward-only.
 - **State of the checks at the last commit:** the Go suite passes against
-  PostgreSQL (54 packages), the console's 189 unit tests and 16 browser
-  tests pass, and the production preflight matrix passes.
-- **Six decisions or actions are yours** (section 9). The most important:
-  the integration contract has changed meaning in two places and has not
-  been re-versioned.
+  PostgreSQL (55 packages) and the production preflight matrix passes.
+  The console's 189 unit tests and 16 browser tests passed when last run,
+  which was before the final commit; that commit changed no console code.
+- **Every finding of the security assessment has been addressed.** Four
+  protections are built but stay off until a setting is turned on
+  (section 6).
+- **Nine decisions or actions are yours** (section 9). The two that
+  matter most: the integration contract has changed meaning and has not
+  been re-versioned, and an existing production host needs two changes
+  before it will start on this version.
 
 | Area | Outcome |
 |---|---|
@@ -25,7 +33,7 @@ points to the document that has the detail.
 | Two-step sign-in (MFA) | Built |
 | Security assessment | 3 findings fixed at once; all 14 left open have since been addressed (some parts are opt-in, listed in section 6) |
 | Standalone / NaaS switch | Built |
-| Production profile enforcement | Built for the operator API and the BSS adapter |
+| Production profile enforcement | Built for the operator API and the BSS adapter; a `/metrics` token is required on all four services |
 | Database login per service | Built, opt-in |
 | Account and order IDs per ISP | Built |
 | Console session out of browser storage | Built |
@@ -50,6 +58,10 @@ points to the document that has the detail.
 | `3cc1317` | Console session in an HttpOnly cookie |
 | `15858a4` | Adapter service calls name their customer |
 | `3dd1ebf` | Refuse a resent order whose request changed |
+| `728d74b` | This summary, first version |
+| `06ae6a3` | The remaining security findings: O4 and O8 to O14 |
+| `c12ddef` | Third-party Compose images pinned by digest |
+| `bd591ad` | The parts of O9, O10 and O12 first left out: `/metrics` token required in production, breached-password lookup, shared request limit |
 
 ## 3. Assessments and plans
 
@@ -153,9 +165,22 @@ not a penetration test.
 | O13 | Low | Token issuance and adapter reads are not audited | **Fixed**: token issuance audited; reads audited in summary |
 | O14 | Info | Frontend container runs as root; images pinned by tag | **Fixed**: unprivileged console image; all images pinned by digest |
 
-O4 and O8 to O14 were done after this summary was first written; the
+O4 and O8 to O14 were done after this summary was first written. The
 runbook section "Smaller hardening changes" says what each needs from
 whoever runs the ACS.
+
+Four protections are built but **off until a setting is turned on**:
+
+| Protection | Turn on with | Why it is not on by default |
+|---|---|---|
+| Strict device ownership (O3) | `ACS_BSS_REQUIRE_ALLOCATED_DEVICES=true` | Changes how an ISP's first mapping of a device works; needed before a second ISP |
+| Database login per service (O5) | `scripts/db-service-roles.sh` | Creates database roles and changes how the gateway handles migrations |
+| Breached-password lookup (O12) | `ACS_PASSWORD_BREACH_CHECK_URL` | An outbound call to a service outside the ACS |
+| Shared request limit (O10) | `ACS_SHARED_RATE_LIMIT=true` | Only useful with more than one replica; costs a database exchange a second |
+
+Sealing of webhook signing secrets (O8) turns itself on when
+`ACS_BSS_SECRET_KEY` is set, which it may already be for Wi-Fi secret
+handles.
 
 ### What the fixes do
 
@@ -186,6 +211,40 @@ whoever runs the ACS.
 - **Resent orders** (O7). The same order ID with a different request is
   refused with 409; the original stands. An identical resend is still a
   retry. Orders placed before this are not compared.
+- **Browser tickets** (O4). The 60-second ticket that opens the remote
+  shell or a device's web GUI is issued for that one purpose on that one
+  device, only for a device the operator may see.
+- **Webhooks** (O8). A new signing secret needs 32 characters. In the
+  production profile a new `http://` target is refused. With
+  `ACS_BSS_SECRET_KEY` set, signing secrets are stored encrypted and
+  bound to their subscription; ones already stored are encrypted when
+  the adapter next starts. Existing `http://` subscriptions and shorter
+  secrets keep working.
+- **`/metrics`** (O9). With `ACS_METRICS_TOKEN` set, `/metrics` on all
+  four services needs that bearer token. The production profile requires
+  it: `gen-production-env.sh` generates it and `start.sh` renders the
+  Prometheus configuration with it. This matters most on the CWMP
+  listener, which device networks can reach.
+- **Attempt and request limits across replicas** (O10). Password and
+  two-step sign-in attempts are also counted in the database, always.
+  The general request limit of the API and the adapter can be shared
+  too: each process exchanges its counts about once a second, so the
+  limit is approximate by about that much.
+- **Sign-in timing** (O11). An unknown username or OAuth client costs
+  the same hash comparison as a wrong password or secret.
+- **Passwords** (O12). Twelve characters; not the username, a run, or a
+  common word with digits added. Checked when a password is set, so
+  existing ones keep working. The optional lookup refuses passwords
+  found in published breaches; only the first five characters of the
+  password's SHA-1 digest leave the API, and a failed lookup does not
+  block a password change.
+- **Audit trail** (O13). Issuing a token and a refused client login are
+  recorded. Reads are recorded in summary: one row per client, customer
+  and route for each five minutes in which that client read that route.
+- **Containers** (O14). The console image runs nginx as an unprivileged
+  user on port 8080. The base images of the five Dockerfiles and the six
+  third-party images in the Compose file are pinned by digest, and
+  Dependabot raises them.
 
 ## 7. Account and order IDs per ISP
 
@@ -243,20 +302,40 @@ up first and run them in a quiet period.
 | `ACS_CWMP_POSTGRES_DSN`, `ACS_API_POSTGRES_DSN`, `ACS_BSS_POSTGRES_DSN`, `ACS_USP_POSTGRES_DSN` | each | A database login per service |
 | `ACS_DB_MIGRATIONS` | acs | `apply` or `check` |
 | `ACS_API_CORS_ORIGIN` | api | Existing; `*` is now refused in production |
+| `ACS_METRICS_TOKEN` | all four | Bearer token for `/metrics`; **required in production** |
+| `ACS_BSS_SECRET_KEY` | bssadapter, acs, api | Existing; now also seals webhook signing secrets. Set it on the API too |
+| `ACS_PASSWORD_BREACH_CHECK_URL` | api | Turns the breached-password lookup on |
+| `ACS_SHARED_RATE_LIMIT` | api, bssadapter | `true`: the request limit holds across replicas |
 
 ### Scripts
 
-`scripts/gen-production-env.sh`, `security-preflight.sh` and its test,
-`start-production.sh`, `reset-admin-password.sh`, `db-service-roles.sh`
-(new), `start.sh` (starts each service without the schema owner's
-login), `restore.sh` (says to run the migration step afterwards).
+`scripts/gen-production-env.sh` (also generates the `/metrics` token),
+`security-preflight.sh` and its test, `start-production.sh`,
+`reset-admin-password.sh`, `db-service-roles.sh` (new), `start.sh`
+(starts each service without the schema owner's login, and renders the
+Prometheus configuration with the `/metrics` token when one is set),
+`restore.sh` (says to run the migration step afterwards).
+
+### Containers and monitoring
+
+- The console container listens on **8080**, not 80. The Compose file is
+  updated; any other port mapping or proxy upstream for that container
+  has to change.
+- All images are pinned by digest. A build or pull that cannot find a
+  digest fails instead of using different content.
+- A Prometheus that `start.sh` does not start needs the `/metrics` token
+  added to each ACS scrape job by hand.
+- New audit actions: `BSSTokenIssued`, `BSSClientAuthFailed`,
+  `BSSReadsSummary`.
 
 ### Operator API
 
 New: bulk operations, job cancel and retry, the MFA routes,
 `/api/v1/system/info`, `/api/v1/auth/session`, the `customer_id`
 qualifier on account routes. Changed: sign-in may answer with an MFA
-step; sign-in also sets a cookie.
+step; sign-in also sets a cookie; `POST /api/v1/auth/ticket` now needs
+the device and the purpose in its body; a new operator password must
+pass the password rules; `/metrics` may need a bearer token.
 
 ### Integration contract (`/bss/v1`, TMF)
 
@@ -271,24 +350,43 @@ The **meaning** of some answers changed:
 | Call from outside the allowed networks | n/a | 403 `ErrSourceNotAllowed` |
 | Adapter in standalone mode | n/a | 503 `ErrIntegrationDisabled` |
 | Fleet-wide client, ID used by two customers | n/a | 409 `ErrAccountAmbiguous` |
+| New webhook with a secret under 32 characters | Accepted | 400 `ErrInvalidRequest` |
+| New webhook with an `http://` target, production profile | Accepted | 400 `ErrInvalidRequest` |
 
 One recorded fixture exchange no longer holds (`subscriber-profile`, the
 last one). `contract/README.md` lists the changes as unreleased.
 
 ## 9. Yours to decide or do
 
-1. **Contract version.** By the contract's own rule a changed meaning is
+**Before an existing production host is upgraded**
+
+1. **Give it a `/metrics` token.** The services refuse to start in the
+   production profile without `ACS_METRICS_TOKEN`. Run
+   `gen-production-env.sh` again, or add the line by hand, first.
+2. **Check what points at the console container.** It now listens on
+   8080.
+
+**Decisions**
+
+3. **Contract version.** By the contract's own rule a changed meaning is
    a major version. Fixtures have not been re-recorded and no tag cut.
-2. **Turn on `ACS_BSS_REQUIRE_ALLOCATED_DEVICES=true`** before a second
+4. **Turn on `ACS_BSS_REQUIRE_ALLOCATED_DEVICES=true`** before a second
    ISP connects.
-3. **Run `scripts/db-service-roles.sh`** to switch on per-service
+5. **Run `scripts/db-service-roles.sh`** to switch on per-service
    database logins.
-4. **A NaaS test mode.** Whether a development NaaS platform should be
+6. **Breached-password lookup.** Whether the API may call the public
+   service, a copy inside your network, or neither.
+7. **A NaaS test mode.** Whether a development NaaS platform should be
    tested against the production ACS with relaxed rules. The
    recommendation was a separate lab-profile ACS.
-5. **External penetration test** of the adapter and console.
-6. **Open a pull request** when you want this reviewed or merged; none
+8. **External penetration test** of the adapter and console.
+9. **Open a pull request** when you want this reviewed or merged; none
    exists.
+
+Also worth doing: move any existing `http://` webhook targets to `https`
+(the runbook has the query that lists them), and keep
+`ACS_BSS_SECRET_KEY` safe, since losing it stops deliveries for sealed
+subscriptions until each secret is rotated.
 
 ## 10. Not verified
 
@@ -311,6 +409,17 @@ These were not exercised and should not be read as covered:
   API).
 - Per-service database logins: every write route, and the USP controller
   beyond start-up. A generated-from-code test is the guard there.
+- The container images end to end. The final stage of the console image
+  was built and run unprivileged and read-only; the stage that runs
+  `npm ci`, and the four backend images, were not built.
+- Five of the six pinned Compose digests were read from Docker Hub but
+  the images were not pulled or started (Prometheus was).
+- The `/metrics` token with the adapter and the USP controller running.
+  Prometheus scraped the gateway and the API with the rendered
+  configuration, and was refused with the plain one.
+- The breached-password lookup against the real public service; it was
+  tested against a stand-in that answers in the same format.
+- CI on any of these pushes.
 
 ## 11. Loose ends
 
@@ -324,9 +433,13 @@ These were not exercised and should not be read as covered:
   two ISPs' same-numbered accounts share the label.
 - **Device management plan** steps 2 to 10, and the optional console
   housekeeping.
-- **Opt-in parts of the findings**, off until set: the breached-password
-  lookup (O12), the shared general rate limit (O10), strict device
-  ownership (O3) and per-service database logins (O5).
+- **Existing data is not brought up to the new rules**: operator
+  passwords shorter than 12 characters, webhook secrets shorter than 32,
+  and `http://` webhook targets keep working until they are changed.
+- **The shared request limit is approximate**: a caller can exceed it by
+  what the replicas let through in the second before they exchange
+  counts.
+- **TMF641 item orders** are not compared when an order is resent.
 
 ## 12. Where the detail is
 
