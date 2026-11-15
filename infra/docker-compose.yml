@@ -33,7 +33,7 @@ services:
   # prometheus.yml targets host.docker.internal, which Docker Desktop
   # resolves to the host machine.
   prometheus:
-    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
+    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
     ports:
       # Localhost by default. scripts/start.sh sets PROMETHEUS_BIND=0.0.0.0
       # only when ACS_PROMETHEUS_PUBLIC=1 (the dev quickstart does this).
