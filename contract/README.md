@@ -36,17 +36,20 @@ and the response `body`.
 | `webhook-bodies` | One delivered webhook body per event type (DeviceSeen, DeviceUnreachable, FirmwareChanged, CellularStateChanged, DeviceFault, DeviceRecovered, OnboardingStateChangeEvent, IdentityMismatch), as sent, from real CWMP sessions with cmd/acs |
 | `tmf640-patch-monitor` | TMF640 PATCH with `X-Idempotency-Key`, its replay, the Monitor, an unknown Monitor (404) |
 | `not-found-other-account` | Another customer's account reads as 404 |
-| `subscriber-profile` | **1.2.** `PUT /bss/v1/accounts/{id}/subscriber`: set name and VIP, change one field, clear the name, a name over 120 characters (400), another customer's account (404) |
+| `subscriber-profile` | **1.2.** `PUT /bss/v1/accounts/{id}/subscriber`: set name and VIP, change one field, clear the name, a name over 120 characters (400), an account ID another customer also uses (200 since 2.0: it is this customer's own account) |
 | `sale-ended` | **1.2.** A sale an operator ended: the BSS reads it as `ENDED`, the account lists no device, a cancel is 409, and the `OnboardingStateChangeEvent` with `ENDED` |
 | `sale-swap` | **1.2.** A device swap: the old sale `ENDED`, a new `PLANNED` sale for the replacement, and an event for each |
 | `sale-plan-change` | **1.2.** A plan change that writes configuration: the sale reads `DISCOVERED` with the new plan code, and its event |
+| `ids-per-customer` | **2.0.** A second customer uses an `account_id` and an `external_order_id` another customer already uses: both are its own (200, 202), and each customer reads only its own device |
+| `order-resend-changed` | **2.0.** An `external_order_id` sent again: the identical request replays the order (202), a different request is 409 `ErrIdempotencyKeyReused` |
+| `webhook-secret-too-short` | **2.0.** A new webhook subscription with a secret under 32 characters: 400 |
 
-The four 1.2 fixtures were recorded at their own commit (see `captured_from`;
-`sale-ended` and `sale-plan-change` were re-recorded for 1.2.1); the others keep
-the 1.1.1 recording, since nothing they show changed. The
-operator calls in the 1.2 fixtures (`/api/v1/onboardings/...`) are not part of
-the BSS contract; they are shown so you can see what produces the state and
-events you read.
+All fixtures were recorded again for 2.0.0, at one commit (see
+`captured_from`). Apart from ids, times and the three new fixtures, one
+exchange differs from the 1.2.1 recording: the last one of
+`subscriber-profile`, described below. The operator calls in some fixtures
+(`/api/v1/onboardings/...`) are not part of the BSS contract; they are shown
+so you can see what produces the state and events you read.
 
 Secrets, tokens and SIM identifiers are redacted. Ids, timestamps and sequence
 numbers are real values from the recording; compare shapes and states, not
@@ -55,34 +58,35 @@ these values. Exchanges keep the response headers an integration acts on
 and the request headers that matter (`request_headers`). Errors are RFC 9457
 problems that keep the older `error`/`message` keys.
 
-**Not yet released: account and order IDs per customer.** The build after
-`v1.2.1` makes `account_id`, `external_order_id`, the TMF641 `externalId`
-and event/alarm `sourceKey` unique per customer instead of across the ACS
-(`docs/TENANT-SCOPED-IDS-DESIGN.md`). For a customer-bound client the
-requests and responses are unchanged, with two differences in meaning: a
-write to an ID that another customer uses now registers the caller's own
-account or order (it was `404`, or `409 ErrIdempotencyKeyReused` for an
-order ID), and one new code exists, `409 ErrAccountAmbiguous`, which only
-a global client can receive. One recorded exchange no longer holds: the
-last one of `subscriber-profile` (`PUT .../rival.0001/subscriber`, recorded
-as 404, now 200). The fixtures have not been re-recorded and no tag has
-been cut; by the rule below, a changed meaning is a major version.
+## 2.0.0: what changed for an integration
 
-**Not yet released: a resent order must be the same order.** The same
-build refuses an `external_order_id` (or a TMF640 `X-Idempotency-Key`)
-that is sent again with a different request: `409
-ErrIdempotencyKeyReused`, where it used to answer `202` with the original
-order. An identical resend is unchanged. No recorded exchange shows the
-old answer. This too is a changed meaning.
+2.0.0 is a major version because three answers changed meaning. Requests
+and response shapes are unchanged; a customer-bound client that never met
+one of these cases needs no change.
 
-**Not yet released: webhook subscriptions.** The same build refuses a
-new subscription whose `secret` is shorter than 32 characters, and, in
-the production profile, one whose `target_url` is plain `http` (both
-`400 ErrInvalidRequest`). Existing subscriptions are unaffected.
+| Situation | Up to 1.2.1 | 2.0.0 |
+|---|---|---|
+| A write to an `account_id` that another customer also uses | `404` | Succeeds: it is the caller's own account (`ids-per-customer`; the last exchange of `subscriber-profile`, recorded as 404 in 1.2.1, is now 200) |
+| An `external_order_id` (or TMF641 `externalId`) that another customer used | `409 ErrIdempotencyKeyReused` | Succeeds as the caller's own order (`ids-per-customer`) |
+| An `external_order_id` or TMF640 `X-Idempotency-Key` sent again with a different request | `202` with the original order | `409 ErrIdempotencyKeyReused` (`order-resend-changed`). An identical resend is unchanged |
+| A new webhook subscription with a `secret` under 32 characters | Accepted | `400 ErrInvalidRequest` (`webhook-secret-too-short`) |
+| A new webhook subscription with a plain `http` `target_url`, production profile | Accepted | `400 ErrInvalidRequest` |
+
+`account_id`, `external_order_id`, the TMF641 `externalId` and the
+event/alarm `sourceKey` are unique per customer, not across the ACS
+(`docs/TENANT-SCOPED-IDS-DESIGN.md`). Existing webhook subscriptions are
+not affected by the two webhook rules.
+
+New codes, none of which a customer-bound client on an allowed network
+can receive in normal operation: `409 ErrAccountAmbiguous` (a fleet-wide
+client names an ID that more than one customer uses), `403
+ErrSourceNotAllowed` (a call from outside the networks the operator
+allows) and `503 ErrIntegrationDisabled` (the ACS runs without the
+integration).
 
 **Versioned.** The contract is tagged `bss-contract-v<major>.<minor>.<patch>`
-(`bss-contract-v1.0.0`, `v1.0.1`, `v1.1.0`, `v1.1.1`, `v1.2.0`, `v1.2.1`). A tag never moves. Within a major version, changes only add
+(`bss-contract-v1.0.0`, `v1.0.1`, `v1.1.0`, `v1.1.1`, `v1.2.0`, `v1.2.1`, `v2.0.0`). A tag never moves. Within a major version, changes only add
 (fields, endpoints, and codes that only a new endpoint or parameter can return); a removal or a changed
-meaning bumps the major version. 1.1.0 added sealed secret handles (`POST /bss/v1/secrets`). 1.2.0 added the optional `subscriber_name` and `vip`, `PUT /bss/v1/accounts/{id}/subscriber` and the `ENDED` sale state (a consumer that validates the state against a fixed list must accept it). 1.2.1 made a plan change update the account mapping's `service_plan` too (it only changed the sale's), corrected the spec text on ending a sale in service (a TMF641 delete ends the mapping and leaves the sale `IN_SERVICE`), and named `ENDED` in the cancel 409 message. Pin integration tests to a tag. Re-record
+meaning bumps the major version. 1.1.0 added sealed secret handles (`POST /bss/v1/secrets`). 1.2.0 added the optional `subscriber_name` and `vip`, `PUT /bss/v1/accounts/{id}/subscriber` and the `ENDED` sale state (a consumer that validates the state against a fixed list must accept it). 1.2.1 made a plan change update the account mapping's `service_plan` too (it only changed the sale's), corrected the spec text on ending a sale in service (a TMF641 delete ends the mapping and leaves the sale `IN_SERVICE`), and named `ENDED` in the cancel 409 message. 2.0.0 made IDs unique per customer, refused a resent order that differs, and set the webhook secret rules (table above). Pin integration tests to a tag. Re-record
 with [`scripts/contract/record_fixtures.py`](../scripts/contract/record_fixtures.py)
 against a throwaway stack (its docstring lists the environment it needs).

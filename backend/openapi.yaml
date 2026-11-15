@@ -1001,6 +1001,7 @@ paths:
         content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Region" } } } }
+        "409": { description: "A region with that name already exists" }
     get:
       tags: [Tenancy]
       summary: List regions
@@ -1057,6 +1058,7 @@ paths:
               properties: { name: { type: string }, description: { type: string } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+        "409": { description: "A project with that name already exists" }
     get:
       tags: [Tenancy]
       summary: List projects

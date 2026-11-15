@@ -20,10 +20,10 @@ Last updated 15 November, to include the remaining security findings
 - **Every finding of the security assessment has been addressed.** Four
   protections are built but stay off until a setting is turned on
   (section 6).
-- **Nine decisions or actions are yours** (section 9). The two that
-  matter most: the integration contract has changed meaning and has not
-  been re-versioned, and an existing production host needs two changes
-  before it will start on this version.
+- **Nine decisions or actions are yours** (section 9). The one that
+  matters most now: an existing production host needs two changes
+  before it will start on this version. The contract has since been
+  released as 2.0.0.
 
 | Area | Outcome |
 |---|---|
@@ -359,8 +359,9 @@ The **meaning** of some answers changed:
 | New webhook with a secret under 32 characters | Accepted | 400 `ErrInvalidRequest` |
 | New webhook with an `http://` target, production profile | Accepted | 400 `ErrInvalidRequest` |
 
-One recorded fixture exchange no longer holds (`subscriber-profile`, the
-last one). `contract/README.md` lists the changes as unreleased.
+Released as contract 2.0.0 on 15 November: all fixtures recorded again,
+three added (`ids-per-customer`, `order-resend-changed`,
+`webhook-secret-too-short`). `contract/README.md` has the table.
 
 ## 9. Yours to decide or do
 
@@ -374,8 +375,8 @@ last one). `contract/README.md` lists the changes as unreleased.
 
 **Decisions**
 
-3. **Contract version.** By the contract's own rule a changed meaning is
-   a major version. Fixtures have not been re-recorded and no tag cut.
+3. **Contract version.** Done: 2.0.0, a major version by the contract's
+   own rule. The tag `bss-contract-v2.0.0` goes on the merge commit.
 4. **Turn on `ACS_BSS_REQUIRE_ALLOCATED_DEVICES=true`** before a second
    ISP connects.
 5. **Run `scripts/db-service-roles.sh`** to switch on per-service
@@ -447,12 +448,14 @@ pull request 104):
   keeps matching all of them until it is recreated.
 - **TMF641 orders resent with a different body** were already refused
   with 409 `ErrIdempotencyKeyReused`; the entry here was wrong.
+- **Compose `containerized` profile.** It now runs the migrations in a
+  step of its own and can give each service its own database login (four
+  passwords in `infra/.env`). Checked in a real Compose run both ways,
+  with images built from the same binaries on the same base; the image
+  builds themselves run in CI.
 
 Still open:
 
-- **Compose `containerized` profile** still uses the shared database
-  login. Separate logins there need a migration step of its own (a new
-  image) and a place to create the roles; not started.
 - **Device management plan** steps 2 to 10, and the optional console
   housekeeping.
 - **Existing data is not brought up to the new rules**: operator
@@ -468,8 +471,16 @@ Still open:
 - **Screenshots**: 32 screens of the current console in
   `docs/screenshots/2026-11-15/`, indexed in `docs/screenshots/README.md`.
   The September set in `docs/uat-screenshots/` is unchanged, because the
-  UAT readiness report is a dated record built from it. The Grafana
-  dashboards were not re-captured.
+  September edition of the UAT readiness report was built from it. The
+  four Grafana dashboards were captured later the same day from the
+  Compose `containerized` profile (`33` to `36`).
+- **UAT readiness report**: `docs/ACS_UAT_Readiness_Report.pdf` is now a
+  15 November edition. Its assessment (sections 1 to 9) is still the one
+  of 10 September, unchanged and labelled so. The edition adds a status
+  section in front (what changed, and where each September blocker
+  stands) and a new appendix of 36 current screens. Checking the
+  blockers found one still open, a duplicate region or project name
+  answering 500, which is now 409.
 - **Older documents brought in line**: `docs/CONSOLE-REDESIGN-AND-MFA.md`
   (two of its "not done" items are now done), `docs/LAB-TLS.md` (console
   and API names must be the same site for the session cookie),
@@ -489,4 +500,4 @@ Still open:
 | `docs/TENANT-SCOPED-IDS-DESIGN.md` | Per-ISP IDs: design and both phases as built |
 | `docs/OPERATIONS-RUNBOOK.md` | How to run each new thing; upgrade notes |
 | `docs/integration/` | Integration guide, updated for the contract changes |
-| `contract/README.md` | Unreleased contract changes |
+| `contract/README.md` | Contract 2.0.0: what changed, and the fixtures |

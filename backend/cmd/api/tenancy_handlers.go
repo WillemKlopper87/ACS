@@ -30,6 +30,10 @@ func (h *handler) createRegion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reg, err := h.tenancy.CreateRegion(r.Context(), req.Name)
+	if errors.Is(err, tenancy.ErrNameTaken) {
+		http.Error(w, "a region with that name already exists", http.StatusConflict)
+		return
+	}
 	if err != nil {
 		h.logger.Error("failed to create region", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -77,6 +81,10 @@ func (h *handler) createCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := h.tenancy.CreateCustomer(r.Context(), req.Name, req.RegionID)
+	if errors.Is(err, tenancy.ErrNameTaken) {
+		http.Error(w, "a customer with that name already exists", http.StatusConflict)
+		return
+	}
 	if err != nil {
 		h.logger.Error("failed to create customer", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -124,6 +132,10 @@ func (h *handler) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.tenancy.CreateProject(r.Context(), req.Name, req.Description)
+	if errors.Is(err, tenancy.ErrNameTaken) {
+		http.Error(w, "a project with that name already exists", http.StatusConflict)
+		return
+	}
 	if err != nil {
 		h.logger.Error("failed to create project", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

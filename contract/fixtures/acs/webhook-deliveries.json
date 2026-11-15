@@ -1,35 +1,36 @@
 {
   "name": "acs/webhook-deliveries",
   "description": "Delivery view: status, attempts and the last error of each delivery.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0520101, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c9c94ff, 2026-11-15. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "GET",
-      "path": "/bss/v1/webhooks/13659899-d4e0-42b4-8b7c-24eef2eff3b5/deliveries",
+      "path": "/bss/v1/webhooks/61a0b770-438e-4e44-85ae-a7b4aa801f75/deliveries",
       "status": 200,
       "mutating": false,
       "body": {
         "items": [
           {
-            "id": "753352af-cfa5-4c23-88a4-157e6a8923fd",
-            "event_id": "7eeb9b7a-7172-4086-b1bf-97913f1ba95e",
+            "id": "5c50bdcb-b3d7-41f0-a003-8ba65b4c878e",
+            "event_id": "193cb07a-75c2-4081-982e-09844faee0ff",
             "event_sequence": 1,
             "event_type": "DeviceSeen",
             "status": "PENDING",
-            "attempts": 1,
-            "last_attempt_at": "2026-11-01T19:10:45.941054Z",
+            "attempts": 2,
+            "last_attempt_at": "2026-11-15T18:28:42.540958Z",
             "last_error": "request failed: could not reach the receiver",
-            "created_at": "2026-11-01T19:10:35.931569Z"
+            "created_at": "2026-11-15T18:28:42.497739Z"
           },
           {
-            "id": "d6a330b6-e65f-477d-9de6-fcb3f1f3070c",
-            "event_id": "640a04d3-9b35-495a-a26d-64e3746b3f23",
+            "id": "3170851f-568a-4419-8d17-b216f983f490",
+            "event_id": "3ee63100-4b3f-4577-9df4-5df598a50ffe",
             "event_sequence": 2,
             "event_type": "FirmwareChanged",
             "status": "PENDING",
-            "attempts": 0,
-            "last_attempt_at": null,
-            "created_at": "2026-11-01T19:10:35.931569Z"
+            "attempts": 2,
+            "last_attempt_at": "2026-11-15T18:28:42.547885Z",
+            "last_error": "request failed: could not reach the receiver",
+            "created_at": "2026-11-15T18:28:42.497739Z"
           }
         ]
       }

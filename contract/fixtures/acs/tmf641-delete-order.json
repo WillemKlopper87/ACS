@@ -1,7 +1,7 @@
 {
   "name": "acs/tmf641-delete-order",
   "description": "TMF641 delete without unassignReason: completed at once (the reason recorded is return); the account then lists no active mapping.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0520101, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c9c94ff, 2026-11-15. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
@@ -10,12 +10,12 @@
       "mutating": true,
       "body": {
         "externalId": "SO-CONTRACT-DEL-1",
-        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/2a06ad5d-96ab-4ba8-ad35-4c7d13c54502",
-        "id": "2a06ad5d-96ab-4ba8-ad35-4c7d13c54502",
-        "orderDate": "2026-11-01T19:10:24.604523Z",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/6c0e2b18-b950-4c06-93d4-9807398f8c33",
+        "id": "6c0e2b18-b950-4c06-93d4-9807398f8c33",
+        "orderDate": "2026-11-15T18:28:36.876413Z",
         "orderItem": [
           {
-            "id": "ace3d1b3-b949-4b93-84c0-b360b13df852",
+            "id": "12f90261-44eb-49bf-9061-b6286e48b618",
             "action": "delete",
             "state": "COMPLETED",
             "role": "gateway"
@@ -48,12 +48,12 @@
       "mutating": false,
       "body": {
         "externalId": "SO-CONTRACT-DEL-1",
-        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/2a06ad5d-96ab-4ba8-ad35-4c7d13c54502",
-        "id": "2a06ad5d-96ab-4ba8-ad35-4c7d13c54502",
-        "orderDate": "2026-11-01T19:10:24.604523Z",
+        "href": "/tmf-api/serviceOrdering/v4/serviceOrder/6c0e2b18-b950-4c06-93d4-9807398f8c33",
+        "id": "6c0e2b18-b950-4c06-93d4-9807398f8c33",
+        "orderDate": "2026-11-15T18:28:36.876413Z",
         "orderItem": [
           {
-            "id": "ace3d1b3-b949-4b93-84c0-b360b13df852",
+            "id": "12f90261-44eb-49bf-9061-b6286e48b618",
             "action": "delete",
             "state": "COMPLETED",
             "role": "gateway"

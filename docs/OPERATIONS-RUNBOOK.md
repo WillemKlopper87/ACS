@@ -397,9 +397,14 @@ owner and is used by `cmd/migrate`, `scripts/backup.sh` and
   the services run as: the roles limit what a service can be made to do
   through its database connection, not what someone with a shell as that
   account can read. Separate OS accounts or a secrets manager close that.
-- The Compose `containerized` profile still uses the shared login: it has
-  no separate migration step. Use the script-launched deployment for
-  per-service logins.
+- The Compose `containerized` profile has its own way in: set
+  `ACS_GATEWAY_DB_PASSWORD`, `ACS_API_DB_PASSWORD`, `ACS_BSS_DB_PASSWORD`
+  and `ACS_USP_DB_PASSWORD` (hex) in `infra/.env` or the shell. The
+  `db-roles` step creates the logins, the `migrate` step grants their
+  privileges, and each service then connects as its own login without the
+  owner's password in its environment. To rotate, change the values and
+  bring the profile up again. To go back, unset them: the services use
+  the owner login again (the roles stay, unused).
 
 ## Secret rotation
 

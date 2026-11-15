@@ -1739,6 +1739,13 @@ export interface paths {
                         "application/json": components["schemas"]["Region"];
                     };
                 };
+                /** @description A region with that name already exists */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         delete?: never;
@@ -1940,6 +1947,13 @@ export interface paths {
                     content: {
                         "application/json": components["schemas"]["Project"];
                     };
+                };
+                /** @description A project with that name already exists */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
             };
         };

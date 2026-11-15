@@ -199,7 +199,7 @@ jobs:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: build backend images
         run: |
-          for svc in acs api bssadapter uspc; do
+          for svc in acs api bssadapter uspc migrate; do
             docker build -f backend/Dockerfile.$svc -t acs-$svc:ci backend
           done
       - name: build frontend image
@@ -212,7 +212,7 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/v1.51.1/install.sh | sh -s -- -b /usr/local/bin v1.51.1
           mkdir -p sbom
-          for img in acs-acs acs-api acs-bssadapter acs-frontend; do
+          for img in acs-acs acs-api acs-bssadapter acs-migrate acs-frontend; do
             syft "$img:ci" -o spdx-json > "sbom/$img.spdx.json"
           done
       - name: upload SBOM artifacts
@@ -228,7 +228,7 @@ jobs:
         # artifact instead of rebuilding it per matrix leg.
         run: |
           mkdir -p images
-          for img in acs-acs acs-api acs-bssadapter acs-frontend; do
+          for img in acs-acs acs-api acs-bssadapter acs-migrate acs-frontend; do
             docker save "$img:ci" -o "images/$img.tar"
           done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -244,7 +244,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [acs-acs, acs-api, acs-bssadapter, acs-frontend]
+        image: [acs-acs, acs-api, acs-bssadapter, acs-migrate, acs-frontend]
     steps:
       # Checkout first: it cleans the workspace, so it has to run before
       # the images land in it. Nothing is built here — this is only for

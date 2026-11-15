@@ -102,6 +102,20 @@ export GRAFANA_ADMIN_PASSWORD=...  ACS_POSTGRES_PASSWORD=...
 docker compose -f infra/docker-compose.yml --profile containerized up -d --build
 ```
 
+The profile applies the schema migrations in a step of its own (`migrate`)
+before the services start. To give each service its own database login
+instead of the owner's, set four more passwords before `up`
+(`openssl rand -hex 24` each; hex, because they go into a connection URL):
+
+```bash
+export ACS_GATEWAY_DB_PASSWORD=...  ACS_API_DB_PASSWORD=...  ACS_BSS_DB_PASSWORD=...  ACS_USP_DB_PASSWORD=...
+```
+
+A service with a password connects as its own login (`acs_gateway`,
+`acs_api`, `acs_bss`, `acs_usp`) with only the table privileges its code
+uses, and the owner's password is not in its environment. One without
+keeps the owner login.
+
 Only CWMP (`7547`) and STUN (`3478/udp`) are published on all
 interfaces; Postgres, the API, the BSS adapter, the console, Prometheus,
 Alertmanager and Grafana bind to `127.0.0.1` — put a TLS-terminating
