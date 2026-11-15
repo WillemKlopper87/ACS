@@ -52,7 +52,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   alertmanager:
-    image: prom/alertmanager:v0.27.0@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5
+    image: prom/alertmanager:v0.35.0@sha256:e638797febd034838eca8b98cdbd46f951e9bf7f178777aa8669167406a9946c
     ports:
       - "127.0.0.1:9093:9093"
     # ACS_ALERT_WEBHOOK_URL is substituted into the config template at
