@@ -56,9 +56,19 @@ func (r *Repository) Layout(ctx context.Context, operatorID string) ([]Widget, e
 	if err != nil {
 		return nil, fmt.Errorf("load dashboard layout: %w", err)
 	}
+	return decodeLayout(raw)
+}
+
+// decodeLayout reads a stored layout. A row holding JSON null (saved by
+// a request that left the list out) reads as the defaults: the console
+// expects a list and a null one breaks the dashboard for that operator.
+func decodeLayout(raw []byte) ([]Widget, error) {
 	var widgets []Widget
 	if err := json.Unmarshal(raw, &widgets); err != nil {
 		return nil, fmt.Errorf("unmarshal dashboard layout: %w", err)
+	}
+	if widgets == nil {
+		return DefaultWidgets, nil
 	}
 	return widgets, nil
 }

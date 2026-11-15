@@ -142,8 +142,8 @@ A time-based one-time code (TOTP, RFC 6238) from an authenticator app, asked for
 
 - **Existing sessions are not ended when someone turns MFA on.** They run to their 8-hour expiry or sign-out.
 - **The password-reset email is unchanged**: it resets the password only. With MFA on, the second step still stands after a reset, which is the intent.
-- **The guess limit is per API process**, like the other limits (`docs/ASSESSMENT-2026-11-09.md`, A4). With several replicas it multiplies.
-- **The session token is still kept in browser storage** (same assessment, C2). MFA protects sign-in, not a token already issued.
+- ~~The guess limit is per API process.~~ Changed later: the sign-in and code limits are kept in the database and hold across replicas (migration 0100; `docs/SECURITY-ASSESSMENT-2026-11-14.md`, O11).
+- ~~The session token is still kept in browser storage.~~ Changed later: the session is an `HttpOnly`, `SameSite=Strict` cookie that page scripts cannot read, and every changing request carries an `X-ACS-CSRF` header (same assessment, O6). MFA still protects sign-in only, not a session already issued.
 - **Single sign-on** (OIDC) remains the better end state for a large operator and is not blocked by this.
 
 ### Tests

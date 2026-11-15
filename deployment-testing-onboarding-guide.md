@@ -336,6 +336,27 @@ ACS_LAB_TLS_EMAIL (start.sh, lab profile — the https names of the console, API
   BSS adapter, and the Let's Encrypt contact; with all four, start.sh runs the Caddy
   TLS front door; the first two alone only change the URLs; see docs/LAB-TLS.md)
 
+# security hardening (added 2026-11-14 — docs/SECURITY-ASSESSMENT-2026-11-14.md;
+# the full description of each is in README.md and docs/OPERATIONS-RUNBOOK.md)
+ACS_INTEGRATION_MODE (naas [default] or standalone — whether the BSS adapter
+  and the NaaS parts of the console are in use),
+ACS_CWMP_POSTGRES_DSN, ACS_API_POSTGRES_DSN, ACS_BSS_POSTGRES_DSN,
+ACS_USP_POSTGRES_DSN (optional — a separate database login per service, created
+  by scripts/db-service-roles.sh; without them every service uses ACS_POSTGRES_DSN),
+ACS_METRICS_TOKEN (all services — bearer token for /metrics, at least 32
+  characters; required in the production profile; start.sh writes it into the
+  Prometheus configuration it renders),
+ACS_BSS_REQUIRE_ALLOCATED_DEVICES (cmd/bssadapter — an ISP's integration may map
+  or pre-provision only a device the operator has already allocated to that ISP),
+ACS_SERVICE_CALLS_REQUIRE_CUSTOMER (cmd/api — refuse a BSS adapter call that does
+  not name the customer it acts for; default true in production with naas),
+ACS_SHARED_RATE_LIMIT (cmd/api, cmd/bssadapter — keep the general request limits
+  in the database so they hold across replicas; sign-in limits always are),
+ACS_PASSWORD_BREACH_CHECK_URL (cmd/api — a k-anonymity range service for refusing
+  breached operator passwords; unset = no lookup),
+ACS_BSS_SECRET_KEY now also seals webhook signing secrets at rest; signing
+  secrets are 32 characters or more and, in production, targets are https
+
 # docker compose (infra/docker-compose.yml) — shell/.env, not the app env file
 GRAFANA_ADMIN_PASSWORD, ACS_GRAFANA_DB_PASSWORD (both required — scripts/gen-env.sh
   generates them and writes them, with the knobs below, to infra/.env),

@@ -517,7 +517,10 @@ curl -v http://localhost:7547/cwmp 2>&1 | head -20
 # Expected: 405 Method Not Allowed or similar (CWMP expects SOAP, not GET)
 
 # API should return health/metrics
-curl http://localhost:8080/metrics | head
+curl http://localhost:8080/readyz
+# /metrics is open in the lab profile only while ACS_METRICS_TOKEN is unset.
+# With a token (required in production) send it:
+curl -H "Authorization: Bearer $ACS_METRICS_TOKEN" http://localhost:8080/metrics | head
 # Expected: Prometheus metrics
 
 # Frontend should serve HTML
@@ -710,7 +713,7 @@ The gateway also (as of this revision) echoes the CPE's `cwmp:ID` header and CWM
 
 ### Console won't load
 
-- Check `cmd/api` is running: `curl http://localhost:8080/metrics`
+- Check `cmd/api` is running: `curl http://localhost:8080/readyz` (`/metrics` answers `401` without the bearer token once `ACS_METRICS_TOKEN` is set)
 - Check frontend build: `ls ~/ACS/frontend/dist/index.html`
 - Check Nginx (if using it): `sudo nginx -t` and `sudo systemctl status nginx`
 

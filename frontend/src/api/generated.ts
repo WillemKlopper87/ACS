@@ -7224,13 +7224,20 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        widgets?: components["schemas"]["DashboardWidget"][];
+                        widgets: components["schemas"]["DashboardWidget"][];
                     };
                 };
             };
             responses: {
                 /** @description Saved */
                 204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The widget list is missing. Send an empty list to hide every widget. */
+                400: {
                     headers: {
                         [name: string]: unknown;
                     };

@@ -336,6 +336,10 @@ qualifier on account routes. Changed: sign-in may answer with an MFA
 step; sign-in also sets a cookie; `POST /api/v1/auth/ticket` now needs
 the device and the purpose in its body; a new operator password must
 pass the password rules; `/metrics` may need a bearer token.
+`PUT /api/v1/dashboard/layout` without a widget list is now `400`. It used
+to save an empty value, after which that operator's Dashboard showed an
+error on every visit; a layout already saved that way now reads as the
+default. Found while taking the screenshots below.
 
 ### Integration contract (`/bss/v1`, TMF)
 
@@ -441,7 +445,21 @@ These were not exercised and should not be read as covered:
   counts.
 - **TMF641 item orders** are not compared when an order is resent.
 
-## 12. Where the detail is
+## 12. Screenshots and older documents
+
+- **Screenshots**: 32 screens of the current console in
+  `docs/screenshots/2026-11-15/`, indexed in `docs/screenshots/README.md`.
+  The September set in `docs/uat-screenshots/` is unchanged, because the
+  UAT readiness report is a dated record built from it. The Grafana
+  dashboards were not re-captured.
+- **Older documents brought in line**: `docs/CONSOLE-REDESIGN-AND-MFA.md`
+  (two of its "not done" items are now done), `docs/LAB-TLS.md` (console
+  and API names must be the same site for the session cookie),
+  `frontend/README.md` (session, tests, image port),
+  `EC2-DEPLOYMENT-GUIDE.md` (`/metrics` with a token) and the settings
+  list in `deployment-testing-onboarding-guide.md`.
+
+## 13. Where the detail is
 
 | Document | Contents |
 |---|---|

@@ -154,7 +154,7 @@ export function Dashboard() {
     queryKey: ["dashboard"],
     queryFn: async () => {
       const [d, l] = await Promise.all([api.getDashboard(), api.getDashboardLayout()]);
-      return { data: d, layout: l.widgets };
+      return { data: d, layout: l.widgets ?? [] };
     },
     refetchInterval: live ? 10_000 : false,
   });

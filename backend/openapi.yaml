@@ -2745,9 +2745,10 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object, properties: { widgets: { type: array, items: { $ref: "#/components/schemas/DashboardWidget" } } } }
+            schema: { type: object, required: [widgets], properties: { widgets: { type: array, items: { $ref: "#/components/schemas/DashboardWidget" } } } }
       responses:
         "204": { description: Saved }
+        "400": { description: The widget list is missing. Send an empty list to hide every widget. }
 
   # --- BSS Admin ---
   /api/v1/bss/mappings:
