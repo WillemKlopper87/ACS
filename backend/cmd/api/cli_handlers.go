@@ -133,6 +133,12 @@ func (h *handler) deleteCLICredential(w http.ResponseWriter, r *http.Request) {
 // fallback, since a browser WebSocket can't set the Authorization header.
 func (h *handler) connectCLI(w http.ResponseWriter, r *http.Request) {
 	credentialID := r.URL.Query().Get("credential_id")
+	// A missing or malformed ID used to reach the database as a UUID
+	// parameter and come back as a 500.
+	if !looksLikeUUID(credentialID) {
+		http.Error(w, "credential_id is required and must be a credential ID", http.StatusBadRequest)
+		return
+	}
 	cred, err := h.cli.ByID(r.Context(), credentialID)
 	if errors.Is(err, cliaccess.ErrNotFound) {
 		http.Error(w, "credential not found", http.StatusNotFound)
@@ -145,6 +151,13 @@ func (h *handler) connectCLI(w http.ResponseWriter, r *http.Request) {
 	// The credential belongs to a device; the caller must be in that
 	// device's tenancy scope (audit P0.2).
 	if _, ok := h.getScopedDevice(w, r, cred.DeviceID); !ok {
+		return
+	}
+	// The credential must be one of the device named in the path. The
+	// browser ticket is bound to that device, so without this a ticket
+	// for one device opened a console on another the caller can see.
+	if cred.DeviceID != r.PathValue("id") {
+		http.Error(w, "credential not found", http.StatusNotFound)
 		return
 	}
 	// The bridge dials an operator-configured host from inside the ACS —

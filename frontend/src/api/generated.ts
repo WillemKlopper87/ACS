@@ -5479,6 +5479,20 @@ export interface paths {
                     };
                     content?: never;
                 };
+                /** @description Invalid policy */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The account ID exists for more than one customer. Set customer_id. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         delete?: never;
@@ -9256,7 +9270,10 @@ export interface components {
             name: string;
             /** @enum {string} */
             scope: "fleet" | "tenant" | "group" | "device";
+            /** @description The account ID a tenant policy is for. */
             tenant_id?: string;
+            /** @description Tenant policies only. The customer that owns the account: account IDs are unique per customer. On create, a customer ID, or "none" for the account no customer owns; needed when more than one customer has an account of this ID. In answers, the owning customer, when the policy is tied to one account. */
+            customer_id?: string;
             /** Format: uuid */
             group_id?: string;
             /** Format: uuid */

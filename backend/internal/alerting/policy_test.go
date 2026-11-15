@@ -47,3 +47,27 @@ func TestClassifyUsesExactWildcardAndOfflineRules(t *testing.T) {
 		t.Fatalf("offline = %s", got)
 	}
 }
+
+// Two customers can each have an account "5001". A tenant policy tied to
+// one of them must not apply to the other's.
+func TestResolveKeepsSameNumberedAccountsApart(t *testing.T) {
+	policies := []Policy{
+		{ID: "isp-a", Scope: ScopeTenant, TenantID: "5001", AccountKey: "key-a", Enabled: true},
+		{ID: "fleet", Scope: ScopeFleet, Enabled: true},
+	}
+	if got, _ := Resolve(policies, Target{TenantID: "5001", AccountKey: "key-a"}); got.ID != "isp-a" {
+		t.Fatalf("own account resolved to %q, want isp-a", got.ID)
+	}
+	if got, _ := Resolve(policies, Target{TenantID: "5001", AccountKey: "key-b"}); got.ID != "fleet" {
+		t.Fatalf("another customer's account 5001 resolved to %q, want fleet", got.ID)
+	}
+	// A policy from before keys existed, or a target whose key is not
+	// known, still matches on the ID.
+	legacy := []Policy{{ID: "old", Scope: ScopeTenant, TenantID: "5001", Enabled: true}}
+	if got, ok := Resolve(legacy, Target{TenantID: "5001", AccountKey: "key-b"}); !ok || got.ID != "old" {
+		t.Fatalf("policy without a key resolved to %q, %v; want old", got.ID, ok)
+	}
+	if got, _ := Resolve(policies, Target{TenantID: "5001"}); got.ID != "isp-a" {
+		t.Fatalf("target without a key resolved to %q, want isp-a", got.ID)
+	}
+}

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"net/http"
+	"strings"
 
+	"acs/internal/accounts"
 	"acs/internal/alerting"
 	"acs/internal/devices"
 )
@@ -48,6 +50,14 @@ func (h *handler) createAlertPolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	if p.Scope == alerting.ScopeTenant {
+		key, status, msg := h.alertPolicyAccount(r, p)
+		if status != 0 {
+			http.Error(w, msg, status)
+			return
+		}
+		p.AccountKey = key
+	}
 	p.Enabled = true
 	created, err := h.alertPolicies.Create(r.Context(), p)
 	if err != nil {
@@ -56,6 +66,39 @@ func (h *handler) createAlertPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 201, created)
+}
+
+// alertPolicyAccount finds the account a tenant policy is for. Account
+// IDs are unique per customer, so the request may name the customer
+// (customer_id, "none" for the account no customer owns). Without it the
+// ID must name at most one account; an ID no account has yet gives a
+// policy with no key, which matches any account of that ID.
+func (h *handler) alertPolicyAccount(r *http.Request, p alerting.Policy) (key string, status int, msg string) {
+	ctx := r.Context()
+	named := strings.TrimSpace(p.CustomerID)
+	switch named {
+	case "":
+	case "none":
+		ctx = accounts.WithCustomer(ctx, "")
+	default:
+		if !looksLikeUUID(named) || !h.customerExists(r, named) {
+			return "", http.StatusBadRequest, "customer_id does not exist"
+		}
+		ctx = accounts.WithCustomer(ctx, named)
+	}
+	key, err := h.bssMappings.AccountKey(ctx, p.TenantID)
+	switch {
+	case errors.Is(err, accounts.ErrAmbiguous):
+		return "", http.StatusConflict, "account " + p.TenantID + " exists for more than one customer: set customer_id to say which (\"none\" for the account no customer owns)"
+	case err != nil:
+		h.logger.Error("failed to resolve alert policy account", "err", err, "account_id", p.TenantID)
+		return "", http.StatusInternalServerError, "internal error"
+	case key == accounts.None && named != "":
+		return "", http.StatusBadRequest, "that customer has no account " + p.TenantID
+	case key == accounts.None:
+		return "", 0, ""
+	}
+	return key, 0, ""
 }
 
 func validateAlertPolicy(p alerting.Policy) error {
@@ -84,6 +127,9 @@ func validateAlertPolicy(p alerting.Policy) error {
 		}
 	default:
 		return fmt.Errorf("invalid alert policy scope")
+	}
+	if p.CustomerID != "" && p.Scope != alerting.ScopeTenant {
+		return fmt.Errorf("customer_id applies to a tenant policy only")
 	}
 	if p.OfflineAfter < 0 {
 		return fmt.Errorf("offline_after cannot be negative")

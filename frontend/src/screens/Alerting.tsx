@@ -2,7 +2,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
-import type { AlertIncident, AlertPolicy, DeviceGroup } from "../api/types";
+import type { AlertIncident, AlertPolicy, Customer, DeviceGroup } from "../api/types";
 import { DataTable } from "../components/DataTable";
 import { Drawer } from "../components/Drawer";
 import { useAuth } from "../auth/useAuth";
@@ -36,6 +36,9 @@ export function Alerting() {
   const [name, setName] = useState("");
   const [scope, setScope] = useState<AlertPolicy["scope"]>("fleet");
   const [target, setTarget] = useState("");
+  // Account IDs are unique per customer: a tenant policy may have to say whose.
+  const [targetCustomer, setTargetCustomer] = useState("");
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [priority, setPriority] = useState("P2");
   const [offline, setOffline] = useState("900");
   const [steps, setSteps] = useState<DraftStep[]>([emptyStep()]);
@@ -56,6 +59,7 @@ export function Alerting() {
   useEffect(() => {
     load();
     api.listDeviceGroups().then((res) => setGroups(res.items)).catch(() => setGroups([]));
+    api.listCustomers().then((res) => setCustomers(res.items)).catch(() => setCustomers([]));
   }, [load]);
   const [live, setLive] = useLive(() => load(true), 10000);
 
@@ -95,7 +99,7 @@ export function Alerting() {
       await api.createAlertPolicy({
         name,
         scope,
-        ...(scope === "fleet" ? {} : scope === "device" ? { device_id: target } : scope === "group" ? { group_id: target } : { tenant_id: target }),
+        ...(scope === "fleet" ? {} : scope === "device" ? { device_id: target } : scope === "group" ? { group_id: target } : { tenant_id: target, ...(targetCustomer ? { customer_id: targetCustomer } : {}) }),
         fault_priorities: { offline: priority },
         // The API takes durations in nanoseconds.
         offline_after: Number(offline) * 1e9,
@@ -104,6 +108,7 @@ export function Alerting() {
       toast(`Alert policy "${name}" created`, "success");
       setName("");
       setTarget("");
+      setTargetCustomer("");
       setSteps([emptyStep()]);
       setCreatingOpen(false);
       await load(true);
@@ -258,6 +263,22 @@ export function Alerting() {
                   <span>{scope === "device" ? "Device ID" : "Tenant ID"}</span>
                   <input value={target} onChange={(e) => setTarget(e.target.value)} required />
                 </label>
+                {scope === "tenant" && (
+                  <label className="field">
+                    <span>Customer</span>
+                    <select
+                      value={targetCustomer}
+                      onChange={(e) => setTargetCustomer(e.target.value)}
+                      title="Account IDs are unique per customer. Pick the customer when two customers use this ID."
+                    >
+                      <option value="">Not specified</option>
+                      {customers.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                      <option value="none">No customer</option>
+                    </select>
+                  </label>
+                )}
               </div>
             )}
             <div className="form-row">

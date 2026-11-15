@@ -2251,6 +2251,8 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AlertPolicy" } } } }
       responses:
         "201": { description: Created }
+        "400": { description: Invalid policy, unknown customer_id, or the named customer has no account of that ID }
+        "409": { description: The account ID exists for more than one customer. Set customer_id. }
   /api/v1/alert-policies/{id}:
     delete:
       tags: [Alerting]
@@ -3918,7 +3920,8 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         scope: { type: string, enum: [fleet, tenant, group, device] }
-        tenant_id: { type: string }
+        tenant_id: { type: string, description: "The account ID a tenant policy is for." }
+        customer_id: { type: string, description: "Tenant policies only. The customer that owns the account: account IDs are unique per customer. On create, a customer ID, or \"none\" for the account no customer owns; needed when more than one customer has an account of this ID. In answers, the owning customer, when the policy is tied to one account." }
         group_id: { type: string, format: uuid }
         device_id: { type: string, format: uuid }
         customer_tier: { type: string }

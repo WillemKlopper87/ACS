@@ -4,7 +4,7 @@ Current screens of the operator console, captured from a running stack.
 
 | Folder | Captured | From | Notes |
 |---|---|---|---|
-| [`2026-11-15/`](2026-11-15/) | 15 November 2026 | branch `claude/great-euler-c0t5ar` (pull request 104), lab profile, NaaS integration on | Console after the redesign, two-step sign-in and the cookie session |
+| [`2026-11-15/`](2026-11-15/) | 15 November 2026 | `main` as of pull request 104 (`a36a4ba`), lab profile, NaaS integration on | Console after the redesign, two-step sign-in and the cookie session |
 | [`../uat-screenshots/`](../uat-screenshots/) | 10 September 2026 | revision `d2ea8d1` | The figures of `docs/ACS_UAT_Readiness_Report.pdf`. Kept as they were: that report is a dated record and `scripts/build_uat_report.py` reads them by name. They show the console before the redesign. |
 
 The data is lab data: 15 mock CPEs (Zyxel, Nokia, Huawei, Teltonika) and

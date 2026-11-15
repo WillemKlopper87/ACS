@@ -1,6 +1,7 @@
 # Work summary, 9 to 14 November 2026
 
-Everything done on branch `claude/great-euler-c0t5ar`: what was asked,
+Everything done on branch `claude/great-euler-c0t5ar`, merged to `main`
+on 15 November 2026 as pull request 104: what was asked,
 what was built, how it was checked, and what is still open. Each section
 points to the document that has the detail.
 
@@ -285,6 +286,7 @@ an ID first. Now each is unique per ISP.
 | 0099 | IDs unique per customer; source keys per customer / account |
 | 0100 | Sign-in attempt counts shared by all replicas |
 | 0101 | Request-rate counts shared by all replicas (used only when switched on) |
+| 0102 | Alert policy tied to one account (added after the merge) |
 
 0098 and 0099 rewrite the account columns of the event table once. Back
 up first and run them in a quiet period.
@@ -427,23 +429,39 @@ These were not exercised and should not be read as covered:
 
 ## 11. Loose ends
 
-- **Queued, not done**: two adapter routes answer 500 instead of 404 for
-  an ID that is not a UUID (a task card exists). The operator route
-  `GET /devices/{id}/cli/connect` without a `credential_id` does the
-  same.
+Closed since this was first written (16 November, after the merge of
+pull request 104):
+
+- **IDs that are not UUIDs.** The two adapter routes were fixed on `main`
+  before the merge. `GET /devices/{id}/cli/connect` now answers 400 for a
+  missing or malformed `credential_id`. It also refuses a credential that
+  belongs to another device than the one in the path: the browser ticket
+  names one device, and the credential was not checked against it.
+- **Alert policies and same-numbered accounts.** A tenant-scoped alert
+  policy named its account by ID alone, so it applied to every customer's
+  account of that ID. A policy is now tied to one account (migration
+  0102). Creating one for an ID that two customers use needs
+  `customer_id` (409 without it); the console form has a customer picker.
+  Incidents themselves were never mixed up: an incident is per device.
+  A policy made earlier for an ID that several customers already share
+  keeps matching all of them until it is recreated.
+- **TMF641 orders resent with a different body** were already refused
+  with 409 `ErrIdempotencyKeyReused`; the entry here was wrong.
+
+Still open:
+
 - **Compose `containerized` profile** still uses the shared database
-  login.
-- **Alert incidents** are labelled with the account ID and the device;
-  two ISPs' same-numbered accounts share the label.
+  login. Separate logins there need a migration step of its own (a new
+  image) and a place to create the roles; not started.
 - **Device management plan** steps 2 to 10, and the optional console
   housekeeping.
 - **Existing data is not brought up to the new rules**: operator
   passwords shorter than 12 characters, webhook secrets shorter than 32,
   and `http://` webhook targets keep working until they are changed.
+  Whether to force a change is a decision, not a fix.
 - **The shared request limit is approximate**: a caller can exceed it by
   what the replicas let through in the second before they exchange
-  counts.
-- **TMF641 item orders** are not compared when an order is resent.
+  counts. This is how the design works, not a defect to fix.
 
 ## 12. Screenshots and older documents
 
