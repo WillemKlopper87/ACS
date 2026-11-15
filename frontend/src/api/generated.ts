@@ -8080,7 +8080,10 @@ export interface paths {
         /** Open a WebSocket bridging the browser terminal to the device's SSH/Telnet port (cli.access permission). Real code, blocked in practice by the CGNAT reachability gap — build plan §10 — until a VPN/tunnel path exists. */
         get: {
             parameters: {
-                query?: never;
+                query: {
+                    /** @description A CLI credential of this device. */
+                    credential_id: string;
+                };
                 header?: never;
                 path: {
                     /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
@@ -8092,6 +8095,20 @@ export interface paths {
             responses: {
                 /** @description Switching Protocols (WebSocket upgrade) */
                 101: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description credential_id is missing or is not a credential ID */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description No such credential on this device */
+                404: {
                     headers: {
                         [name: string]: unknown;
                     };

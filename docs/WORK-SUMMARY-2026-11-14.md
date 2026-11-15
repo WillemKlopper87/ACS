@@ -429,7 +429,7 @@ These were not exercised and should not be read as covered:
 
 ## 11. Loose ends
 
-Closed since this was first written (16 November, after the merge of
+Closed since this was first written (15 November, after the merge of
 pull request 104):
 
 - **IDs that are not UUIDs.** The two adapter routes were fixed on `main`

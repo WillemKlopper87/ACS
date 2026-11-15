@@ -3009,9 +3009,13 @@ paths:
         Open a WebSocket bridging the browser terminal to the device's SSH/Telnet port
         (cli.access permission). Real code, blocked in practice by the CGNAT reachability
         gap — build plan §10 — until a VPN/tunnel path exists.
-      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - { name: credential_id, in: query, required: true, schema: { type: string, format: uuid }, description: "A CLI credential of this device." }
       responses:
         "101": { description: Switching Protocols (WebSocket upgrade) }
+        "400": { description: credential_id is missing or is not a credential ID }
+        "404": { description: No such credential on this device }
 
   # --- Web GUI ---
   /api/v1/devices/{id}/webgui:
