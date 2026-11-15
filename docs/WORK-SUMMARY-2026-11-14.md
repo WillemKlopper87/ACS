@@ -448,12 +448,14 @@ pull request 104):
   keeps matching all of them until it is recreated.
 - **TMF641 orders resent with a different body** were already refused
   with 409 `ErrIdempotencyKeyReused`; the entry here was wrong.
+- **Compose `containerized` profile.** It now runs the migrations in a
+  step of its own and can give each service its own database login (four
+  passwords in `infra/.env`). Checked in a real Compose run both ways,
+  with images built from the same binaries on the same base; the image
+  builds themselves run in CI.
 
 Still open:
 
-- **Compose `containerized` profile** still uses the shared database
-  login. Separate logins there need a migration step of its own (a new
-  image) and a place to create the roles; not started.
 - **Device management plan** steps 2 to 10, and the optional console
   housekeeping.
 - **Existing data is not brought up to the new rules**: operator

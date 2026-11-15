@@ -184,10 +184,12 @@ services:
       - "3478:3478/udp"
     env_file: .env.containerized
     environment:
-      ACS_POSTGRES_DSN: postgres://acs:${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}@postgres:5432/acs?sslmode=disable
+      ACS_CWMP_POSTGRES_DSN: postgres://acs${ACS_GATEWAY_DB_PASSWORD:+_gateway}:${ACS_GATEWAY_DB_PASSWORD:-${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}}@postgres:5432/acs?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   api:
     build:
@@ -198,11 +200,13 @@ services:
       - "127.0.0.1:8080:8080"
     env_file: .env.containerized
     environment:
-      ACS_POSTGRES_DSN: postgres://acs:${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}@postgres:5432/acs?sslmode=disable
+      ACS_API_POSTGRES_DSN: postgres://acs${ACS_API_DB_PASSWORD:+_api}:${ACS_API_DB_PASSWORD:-${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}}@postgres:5432/acs?sslmode=disable
       ACS_BSS_ADAPTER_URL: http://bssadapter:8090
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       acs:
         condition: service_started
 
@@ -215,11 +219,13 @@ services:
       - "127.0.0.1:8090:8090"
     env_file: .env.containerized
     environment:
-      ACS_POSTGRES_DSN: postgres://acs:${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}@postgres:5432/acs?sslmode=disable
+      ACS_BSS_POSTGRES_DSN: postgres://acs${ACS_BSS_DB_PASSWORD:+_bss}:${ACS_BSS_DB_PASSWORD:-${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}}@postgres:5432/acs?sslmode=disable
       ACS_INTERNAL_API_URL: http://api:8080
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_started
 
@@ -234,12 +240,59 @@ services:
       - "127.0.0.1:8092:8092"
     env_file: .env.containerized
     environment:
-      ACS_USP_POSTGRES_DSN: postgres://acs:${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}@postgres:5432/acs?sslmode=disable
+      ACS_USP_POSTGRES_DSN: postgres://acs${ACS_USP_DB_PASSWORD:+_usp}:${ACS_USP_DB_PASSWORD:-${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}}@postgres:5432/acs?sslmode=disable
       ACS_USP_CONTROLLER_ID: ${ACS_USP_CONTROLLER_ID:-uspc-containerized}
       ACS_USP_ALLOW_PLAINTEXT: "true"
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Database set-up for the containerized profile, in two one-shot steps
+  # that finish before any service starts.
+  #
+  # db-roles creates a login for each service that has a password in
+  # infra/.env (ACS_GATEWAY_DB_PASSWORD, ACS_API_DB_PASSWORD,
+  # ACS_BSS_DB_PASSWORD, ACS_USP_DB_PASSWORD). migrate then applies the
+  # schema migrations as the owner and grants each of those logins the
+  # table privileges its service uses. A service with a password connects
+  # as its own login and never sees the owner's; one without connects as
+  # the owner, as before. Use hex passwords (openssl rand -hex 24): they
+  # go into a connection URL unescaped.
+  db-roles:
+    image: postgres:18-alpine@sha256:1018733457011bf88d81db98cf43aac6d5150afc18787dbe204771fedf80ff95
+    profiles: ["containerized"]
+    restart: "no"
+    entrypoint: ["/bin/sh", "/service-roles.sh"]
+    volumes:
+      - ./postgres/service-roles.sh:/service-roles.sh:ro
+    environment:
+      PGHOST: postgres
+      PGUSER: acs
+      PGDATABASE: acs
+      PGPASSWORD: ${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}
+      ACS_GATEWAY_DB_PASSWORD: ${ACS_GATEWAY_DB_PASSWORD:-}
+      ACS_API_DB_PASSWORD: ${ACS_API_DB_PASSWORD:-}
+      ACS_BSS_DB_PASSWORD: ${ACS_BSS_DB_PASSWORD:-}
+      ACS_USP_DB_PASSWORD: ${ACS_USP_DB_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  migrate:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.migrate
+    profiles: ["containerized"]
+    restart: "no"
+    environment:
+      ACS_POSTGRES_DSN: postgres://acs:${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}@postgres:5432/acs?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-roles:
+        condition: service_completed_successfully
 
   frontend:
     build:
