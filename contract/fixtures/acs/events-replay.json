@@ -1,7 +1,7 @@
 {
   "name": "acs/events-replay",
   "description": "Replay of the customer's event stream: envelope, per-customer sequence, next_after cursor, then an empty page.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0520101, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c9c94ff, 2026-11-15. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "GET",
@@ -11,32 +11,32 @@
       "body": {
         "events": [
           {
-            "id": "7eeb9b7a-7172-4086-b1bf-97913f1ba95e",
+            "id": "193cb07a-75c2-4081-982e-09844faee0ff",
             "type": "DeviceSeen",
-            "occurred_at": "2026-11-01T19:10:26.935897Z",
+            "occurred_at": "2026-11-15T18:28:38.991529Z",
             "sequence": 1,
-            "customer_id": "da33dc99-4c88-4357-9ba3-698fa11d4123",
+            "customer_id": "f4e43753-bd5c-4d36-8acd-752f22bfde34",
             "account_id": "contract.0001",
             "device": {
-              "id": "2626c715-0dd8-42e3-abd0-38f1749a3dfb",
+              "id": "5c1136ea-e0ac-4419-87a2-d6ea24980c47",
               "oui_serial": "A4FC77+3TG02241+CONTRACT01"
             },
             "data": {
               "ouiSerial": "A4FC77+3TG02241+CONTRACT01",
               "firstContact": true,
-              "lastInformAt": "2026-11-01T19:10:26.935897+00:00",
+              "lastInformAt": "2026-11-15T18:28:38.991529+00:00",
               "onlineStatus": "ONLINE"
             }
           },
           {
-            "id": "640a04d3-9b35-495a-a26d-64e3746b3f23",
+            "id": "3ee63100-4b3f-4577-9df4-5df598a50ffe",
             "type": "FirmwareChanged",
-            "occurred_at": "2026-11-01T19:10:26.943902Z",
+            "occurred_at": "2026-11-15T18:28:39.001312Z",
             "sequence": 2,
-            "customer_id": "da33dc99-4c88-4357-9ba3-698fa11d4123",
+            "customer_id": "f4e43753-bd5c-4d36-8acd-752f22bfde34",
             "account_id": "contract.0001",
             "device": {
-              "id": "2626c715-0dd8-42e3-abd0-38f1749a3dfb",
+              "id": "5c1136ea-e0ac-4419-87a2-d6ea24980c47",
               "oui_serial": "A4FC77+3TG02241+CONTRACT01"
             },
             "data": {

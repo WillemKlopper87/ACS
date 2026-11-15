@@ -27,8 +27,13 @@ Environment:
   ACS_RECORD_ONLY   optional: comma-separated fixture names; only those are
                     written, so a new minor version can add fixtures without
                     churning the recorded ids and times of the others
+  ACS_BSS_PLAIN_URL, ACS_BSS_KEYLESS_URL   optional: two more adapters on the
+                    same database, one without ACS_BSS_SECRETS_BEHIND_TLS_PROXY
+                    and one without ACS_BSS_SECRET_KEY (secret-handle-errors)
 The stack needs ACS_BSS_OAUTH_SIGNING_SECRET (both services), or the tokens are
-not customer-bound, and ACS_INTERNAL_API_URL on the adapter.
+not customer-bound, and ACS_INTERNAL_API_URL on the adapter. The main adapter
+needs ACS_BSS_SECRET_KEY, ACS_BSS_SECRETS_BEHIND_TLS_PROXY=true and the three
+ACS_WALLED_GARDEN_* settings (without them the TMF640 PATCH is 400).
 Usage: record_fixtures.py <output-dir>
 """
 
@@ -390,6 +395,8 @@ def main():
     record_edges(token, cust)
     record_lifecycle(token, cust)
 
+    record_v2(token)
+
     if os.environ.get("ACS_CWMP_URL"):
         record_webhook_bodies(token)
         record_secret_handles(token)
@@ -406,6 +413,67 @@ def main():
             json.dump(fixture, f, indent=2, sort_keys=False, default=str)
             f.write("\n")
     print(f"wrote {len(fixtures)} fixtures to {OUT}")
+
+
+def record_v2(token):
+    """What 2.0 changed in meaning: IDs are per customer, a resent order
+    must be the same order, and a webhook secret has a minimum length."""
+    map_device(token, 31, root="IGD1")
+    account = "contract.0031"
+    order = {"external_order_id": "ORD-CONTRACT-V2", "account_id": account, "action": "MODIFY_WIFI",
+             "parameters": {"wifi_ssid": "Contract-V2"}}
+    status, placed = call(BSS, "POST", "/bss/v1/orders", order, token)
+    assert status == 202, (status, placed)
+    exchanges = [exchange("POST", "/bss/v1/orders", status, placed, True, order)]
+    status, replay = call(BSS, "POST", "/bss/v1/orders", order, token)
+    assert status == 202 and replay.get("command_key") == placed.get("command_key"), (status, replay)
+    exchanges.append(exchange("POST", "/bss/v1/orders", status, replay, False, order))
+    changed = dict(order, parameters={"wifi_ssid": "Contract-V2-other"})
+    status, refused = call(BSS, "POST", "/bss/v1/orders", changed, token)
+    assert status == 409, (status, refused)
+    exchanges.append(exchange("POST", "/bss/v1/orders", status, refused, False, changed))
+    record("order-resend-changed", "2.0. An external_order_id sent again: the identical request replays the original order "
+           "(202, same command_key, nothing dispatched again); the same ID with a different request is 409 "
+           "ErrIdempotencyKeyReused. Before 2.0 the second case answered 202 with the original order.", exchanges)
+
+    # A second ISP uses the same account ID and the same order ID. Both are
+    # its own: IDs are unique per customer, not across the ACS.
+    status, second = call(API, "POST", "/api/v1/customers", {"name": "Second ISP"}, ADMIN)
+    assert status in (200, 201), (status, second)
+    status, sc = call(API, "POST", "/api/v1/bss/oauth-clients",
+                      {"name": "second-isp", "scopes": ["tmf:read", "tmf:write", "tmf:execute"], "customer_id": second["id"]}, ADMIN)
+    assert status in (200, 201), (status, sc)
+    status, stok = call(BSS, "POST", "/bss/v1/oauth/token", form={"grant_type": "client_credentials",
+                        "client_id": sc["client"]["client_id"], "client_secret": sc["client_secret"]})
+    assert status == 200, (status, stok)
+    second_token = stok["access_token"]
+    sql("""INSERT INTO devices (id, oui_serial, oui, product_class, serial_number, manufacturer, data_model_root, online_status)
+           VALUES (gen_random_uuid(), 'A4FC77+3TG02241+CONTRACT32', 'A4FC77', '3TG02241', 'CONTRACT32', 'Nokia', 'IGD1', 'OFFLINE');""")
+    mapping = {"account_id": account, "oui_serial": "A4FC77+3TG02241+CONTRACT32", "service_plan": "HOME-5G"}
+    status, mapped = call(BSS, "POST", "/bss/v1/mappings", mapping, second_token)
+    assert status == 200, (status, mapped)
+    exchanges = [exchange("POST", "/bss/v1/mappings", status, mapped, True, mapping)]
+    theirs = dict(order, parameters={"wifi_ssid": "Second-ISP"})
+    status, placed2 = call(BSS, "POST", "/bss/v1/orders", theirs, second_token)
+    assert status == 202 and placed2.get("command_key") != placed.get("command_key"), (status, placed2)
+    exchanges.append(exchange("POST", "/bss/v1/orders", status, placed2, True, theirs))
+    status, devs = call(BSS, "GET", f"/bss/v1/mappings/{account}", token=second_token)
+    exchanges.append(exchange("GET", f"/bss/v1/mappings/{account}", status, devs, False))
+    status, devs1 = call(BSS, "GET", f"/bss/v1/mappings/{account}", token=token)
+    exchanges.append(exchange("GET", f"/bss/v1/mappings/{account} (the first customer's token)", status, devs1, False))
+    record("ids-per-customer", "2.0. A second customer uses an account_id and an external_order_id that another customer "
+           "already uses. Both are the second customer's own: the mapping creates its own account (200), the order is its "
+           "own order (202, a different command_key), and each customer reads only its own device under that account_id. "
+           "Before 2.0 the mapping was 404 and the order 409 ErrIdempotencyKeyReused.", exchanges)
+
+    short = {"account_id": account, "target_url": "https://203.0.113.10/acs-events", "secret": "too-short-secret",
+             "event_types": ["DeviceSeen"]}
+    status, resp = call(BSS, "POST", "/bss/v1/webhooks", short, token)
+    assert status == 400, (status, resp)
+    record("webhook-secret-too-short", "2.0. A new webhook subscription whose secret is shorter than 32 characters is "
+           "refused (400 ErrInvalidRequest). In the production profile a plain-http target_url is refused the same way. "
+           "Subscriptions that already exist are not affected.",
+           [exchange("POST", "/bss/v1/webhooks", status, resp, False, dict(short, secret="too-short-secret"))])
 
 
 def map_device(token, n, root="DEVICE2"):

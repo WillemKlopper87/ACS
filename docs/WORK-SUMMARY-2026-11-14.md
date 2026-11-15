@@ -20,10 +20,10 @@ Last updated 15 November, to include the remaining security findings
 - **Every finding of the security assessment has been addressed.** Four
   protections are built but stay off until a setting is turned on
   (section 6).
-- **Nine decisions or actions are yours** (section 9). The two that
-  matter most: the integration contract has changed meaning and has not
-  been re-versioned, and an existing production host needs two changes
-  before it will start on this version.
+- **Nine decisions or actions are yours** (section 9). The one that
+  matters most now: an existing production host needs two changes
+  before it will start on this version. The contract has since been
+  released as 2.0.0.
 
 | Area | Outcome |
 |---|---|
@@ -359,8 +359,9 @@ The **meaning** of some answers changed:
 | New webhook with a secret under 32 characters | Accepted | 400 `ErrInvalidRequest` |
 | New webhook with an `http://` target, production profile | Accepted | 400 `ErrInvalidRequest` |
 
-One recorded fixture exchange no longer holds (`subscriber-profile`, the
-last one). `contract/README.md` lists the changes as unreleased.
+Released as contract 2.0.0 on 15 November: all fixtures recorded again,
+three added (`ids-per-customer`, `order-resend-changed`,
+`webhook-secret-too-short`). `contract/README.md` has the table.
 
 ## 9. Yours to decide or do
 
@@ -374,8 +375,8 @@ last one). `contract/README.md` lists the changes as unreleased.
 
 **Decisions**
 
-3. **Contract version.** By the contract's own rule a changed meaning is
-   a major version. Fixtures have not been re-recorded and no tag cut.
+3. **Contract version.** Done: 2.0.0, a major version by the contract's
+   own rule. The tag `bss-contract-v2.0.0` goes on the merge commit.
 4. **Turn on `ACS_BSS_REQUIRE_ALLOCATED_DEVICES=true`** before a second
    ISP connects.
 5. **Run `scripts/db-service-roles.sh`** to switch on per-service
@@ -489,4 +490,4 @@ Still open:
 | `docs/TENANT-SCOPED-IDS-DESIGN.md` | Per-ISP IDs: design and both phases as built |
 | `docs/OPERATIONS-RUNBOOK.md` | How to run each new thing; upgrade notes |
 | `docs/integration/` | Integration guide, updated for the contract changes |
-| `contract/README.md` | Unreleased contract changes |
+| `contract/README.md` | Contract 2.0.0: what changed, and the fixtures |

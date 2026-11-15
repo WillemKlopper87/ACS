@@ -1,16 +1,16 @@
 {
   "name": "acs/sale-retry-cancel",
   "description": "A held sale (was ON_HOLD, SIM mismatch) retried by the BSS, then cancelled; cancelling it again is 409 ErrSaleWrongState.",
-  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 0520101, 2026-11-01. Secrets and tokens redacted.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit c9c94ff, 2026-11-15. Secrets and tokens redacted.",
   "exchanges": [
     {
       "method": "POST",
-      "path": "/bss/v1/onboardings/db107963-8621-4b61-91e2-e7a01b440b20/retry",
+      "path": "/bss/v1/onboardings/e77b0358-b1d5-46f5-ab76-ae0bc0e32222/retry",
       "status": 200,
       "mutating": true,
       "body": {
-        "id": "db107963-8621-4b61-91e2-e7a01b440b20",
-        "href": "/bss/v1/onboardings/db107963-8621-4b61-91e2-e7a01b440b20",
+        "id": "e77b0358-b1d5-46f5-ab76-ae0bc0e32222",
+        "href": "/bss/v1/onboardings/e77b0358-b1d5-46f5-ab76-ae0bc0e32222",
         "account_id": "contract.0002",
         "oui": "A4FC77",
         "serial_number": "CONTRACT02",
@@ -18,20 +18,20 @@
         "service_plan": "HOME-5G",
         "plan_matched": true,
         "state": "CONTACTED",
-        "device_id": "7bec4cbf-fdf3-4112-9f28-1d0e238e03d6",
-        "created_at": "2026-11-01T19:10:24.384455Z",
-        "updated_at": "2026-11-01T19:11:12.189015Z",
-        "contacted_at": "2026-11-01T19:11:11.406467Z"
+        "device_id": "8d0a7672-b100-4a78-8ddd-77f6e5cc4040",
+        "created_at": "2026-11-15T18:28:36.822913Z",
+        "updated_at": "2026-11-15T18:29:13.81317Z",
+        "contacted_at": "2026-11-15T18:29:13.52024Z"
       }
     },
     {
       "method": "POST",
-      "path": "/bss/v1/onboardings/db107963-8621-4b61-91e2-e7a01b440b20/cancel",
+      "path": "/bss/v1/onboardings/e77b0358-b1d5-46f5-ab76-ae0bc0e32222/cancel",
       "status": 200,
       "mutating": true,
       "body": {
-        "id": "db107963-8621-4b61-91e2-e7a01b440b20",
-        "href": "/bss/v1/onboardings/db107963-8621-4b61-91e2-e7a01b440b20",
+        "id": "e77b0358-b1d5-46f5-ab76-ae0bc0e32222",
+        "href": "/bss/v1/onboardings/e77b0358-b1d5-46f5-ab76-ae0bc0e32222",
         "account_id": "contract.0002",
         "oui": "A4FC77",
         "serial_number": "CONTRACT02",
@@ -39,25 +39,25 @@
         "service_plan": "HOME-5G",
         "plan_matched": true,
         "state": "CANCELLED",
-        "device_id": "7bec4cbf-fdf3-4112-9f28-1d0e238e03d6",
-        "created_at": "2026-11-01T19:10:24.384455Z",
-        "updated_at": "2026-11-01T19:11:12.195419Z",
-        "contacted_at": "2026-11-01T19:11:11.406467Z"
+        "device_id": "8d0a7672-b100-4a78-8ddd-77f6e5cc4040",
+        "created_at": "2026-11-15T18:28:36.822913Z",
+        "updated_at": "2026-11-15T18:29:14.8247Z",
+        "contacted_at": "2026-11-15T18:29:13.52024Z"
       }
     },
     {
       "method": "POST",
-      "path": "/bss/v1/onboardings/db107963-8621-4b61-91e2-e7a01b440b20/cancel",
+      "path": "/bss/v1/onboardings/e77b0358-b1d5-46f5-ab76-ae0bc0e32222/cancel",
       "status": 409,
       "mutating": false,
       "body": {
         "type": "urn:acs:problem:v1:ErrSaleWrongState",
         "title": "Sale in the wrong state",
         "status": 409,
-        "detail": "an IN_SERVICE or CANCELLED sale cannot be cancelled; it is CANCELLED",
+        "detail": "an IN_SERVICE, ENDED or CANCELLED sale cannot be cancelled; it is CANCELLED",
         "code": "ErrSaleWrongState",
         "error": "ErrSaleWrongState",
-        "message": "an IN_SERVICE or CANCELLED sale cannot be cancelled; it is CANCELLED"
+        "message": "an IN_SERVICE, ENDED or CANCELLED sale cannot be cancelled; it is CANCELLED"
       },
       "headers": {
         "Content-Type": "application/json"
