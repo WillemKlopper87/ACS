@@ -10,6 +10,7 @@ import (
 	"acs/internal/parameters"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -204,6 +205,55 @@ func (h *handler) cellularDiagnosticPaths(ctx context.Context, device *devices.D
 		return vendor, paths, qualified
 	}
 	return vendor, nil, false
+}
+
+// refreshStatus queues ONE GET_PARAMETER job for what a support desk asks
+// of a router: how long it has been up, how many devices are on it and,
+// on a cellular router, its signal. It is the "ask the router to report
+// now" action of the BSS adapter (REFRESH_STATUS); the answers land in the
+// parameter cache like any other read. Only paths the device is known to
+// have are asked for: with no discovery yet the uptime path of its data
+// model is tried alone, which every CPE has.
+func (h *handler) refreshStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	device, ok := h.getScopedDevice(w, r, id)
+	if !ok {
+		return
+	}
+	paths := h.statusPaths(r.Context(), device)
+	if len(paths) == 0 {
+		http.Error(w, "no discovered status parameters; run parameter discovery", http.StatusConflict)
+		return
+	}
+	job, err := h.jobs.CreateWithIdempotency(r.Context(), id, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, operatorFromRequest(r), r.Header.Get("Idempotency-Key"))
+	if err != nil {
+		if errors.Is(err, jobs.ErrIdempotencyConflict) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		h.logger.Error("failed to queue status refresh", "err", err, "device_id", id)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"command_key": job.CommandKey, "status": job.Status, "parameters": paths})
+}
+
+func (h *handler) statusPaths(ctx context.Context, device *devices.Device) []string {
+	wanted := adapters.StatusParams(device.DataModelRoot)
+	if h.params == nil {
+		return wanted[:1]
+	}
+	discovered, err := h.params.GetNames(ctx, device.ID)
+	if err != nil || discovered == nil {
+		return wanted[:1]
+	}
+	var paths []string
+	for _, path := range wanted {
+		if _, ok := discovered.Names[path]; ok {
+			paths = append(paths, path)
+		}
+	}
+	return append(paths, adapters.CellularDiagnosticParamsFromNames(discovered.Names)...)
 }
 
 // refreshWifiClients queues a GET_PARAMETER job over the whole WiFi

@@ -20,6 +20,9 @@ Read this section first — it tells you what you can integrate against today ve
 | Account-device mapping (Workflow A) | **Live** |
 | Order dispatch — `MODIFY_WIFI` | **Live** |
 | Order dispatch — `SUSPEND` / `ACTIVATE` | **Not configured by default.** Returns `400 ErrInvalidRequest` until an operator sets a real per-vendor walled-garden parameter. See §2.2. |
+| Order dispatch — `REBOOT`, `REFRESH_STATUS` (§2.3, 2.1.0) | **Built, not yet qualified on real CPE.** Covered by adapter and API tests only. |
+| Order dispatch — `FACTORY_RESET` (§2.3, 2.1.0) | **Off by default.** `400 ErrUnsupportedAction` until an operator sets `ACS_BSS_ALLOW_FACTORY_RESET=true`. |
+| Status read (§2.3, 2.1.0) | **Built, not yet qualified on real CPE.** Signal metrics depend on what each CPE model reports. |
 | Job status polling (Workflow C) | **Live** |
 | Reconciliation / drift detection (Workflow D) | **Live.** Read-only; never queues a corrective order itself. |
 | Idempotent order retry | **Live** |
@@ -107,7 +110,7 @@ Content-Type: application/json
 }
 ```
 
-`action` must currently be `MODIFY_WIFI`. `parameters` needs at least one of `wifi_ssid` / `wifi_password` / `wifi_enabled` — any subset is fine (only the fields you send get written). `wifi_enabled` accepts `"true"`/`"false"` or `"1"`/`"0"`.
+`action` is `MODIFY_WIFI`, or one of the device operations below (2.1.0). `parameters` needs at least one of `wifi_ssid` / `wifi_password` / `wifi_enabled` — any subset is fine (only the fields you send get written). `wifi_enabled` accepts `"true"`/`"false"` or `"1"`/`"0"`.
 
 Before dispatching this action, the adapter uses the device's latest
 parameter-discovery result to select a known writable vendor path. If a
@@ -170,6 +173,39 @@ When no per-vendor walled-garden parameter is configured, these `/bss/v1/orders`
 This is deliberate: disabling the WAN interface could cut off the management path needed for reactivation. An operator must configure and qualify a safe walled-garden parameter for the target vendor/firmware before enabling these actions.
 
 ---
+
+### 2.3 Device operations: `REBOOT`, `REFRESH_STATUS`, `FACTORY_RESET` (2.1.0)
+
+These actions go through `POST /bss/v1/orders` like `MODIFY_WIFI`, but write no parameter. They are tracked the same way (Workflow C) and retried the same way: resending the same `external_order_id` with the same action never restarts the router twice.
+
+```json
+POST /bss/v1/orders
+{ "external_order_id": "ord-2026-000123", "account_id": "ACC-1001", "action": "REBOOT" }
+```
+
+| Action | `parameters` | What happens |
+|---|---|---|
+| `REBOOT` | none | The CPE restarts at its next contact. The job ends when the CPE takes the command; the CPE is back when it next reports in (a `DeviceSeen` event). |
+| `REFRESH_STATUS` | none | The CPE is asked to report its status parameters now. Nothing on the CPE changes. Read the result with the status read below once the job has ended. |
+| `FACTORY_RESET` | `{"confirm": "FACTORY_RESET"}` | The CPE's configuration is wiped. **Off by default**: the operator must set `ACS_BSS_ALLOW_FACTORY_RESET=true` on the adapter, otherwise the order is `400 ErrUnsupportedAction`. Without the confirmation it is `400 ErrInvalidRequest`. |
+
+Sending `parameters` with `REBOOT` or `REFRESH_STATUS` is `400 ErrInvalidRequest`. `POST /bss/v1/actions/preflight` accepts the three actions and answers whether the order would be taken, without placing it.
+
+**Status read.** `GET /bss/v1/mappings/{account_id}/status` (optional `?role=`, default `gateway`):
+
+```json
+{
+  "account_id": "ACC-1001",
+  "device_id": "…",
+  "role": "gateway",
+  "uptime_seconds": 86400,
+  "lan_hosts": 7,
+  "signal": { "rsrp": -98, "rsrq": -11, "sinr": 14.5, "rssi": -67 },
+  "read_at": "2026-11-17T08:00:00Z"
+}
+```
+
+It is answered from the ACS's parameter cache and never contacts the CPE. A value the CPE has not reported is `null` (never `0`); `signal` is `null` for a router with no cellular interface; `read_at` is when the OLDEST of the returned values was reported, so a stale reading is visible as stale. For a fresh reading, place a `REFRESH_STATUS` order, wait for its job, then read again.
 
 ### Workflow C: Querying Job Status
 

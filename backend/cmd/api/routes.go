@@ -203,6 +203,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("GET", "/api/v1/audit-log", ro, h.listAuditLog)
 	routePerm("POST", "/api/v1/devices/{id}/parameters/refresh-cellular", operators.PermDiagnosticsRun, h.refreshCellularDiagnostics)
 	routePerm("POST", "/api/v1/devices/{id}/parameters/refresh-wifi-clients", operators.PermDiagnosticsRun, h.refreshWifiClients)
+	routePerm("POST", "/api/v1/devices/{id}/parameters/refresh-status", operators.PermDiagnosticsRun, h.refreshStatus)
 	routePerm("POST", "/api/v1/devices/{id}/diagnostics/ping", operators.PermDiagnosticsRun, h.createDiagnosticsPing)
 	routePerm("POST", "/api/v1/devices/{id}/diagnostics/traceroute", operators.PermDiagnosticsRun, h.createDiagnosticsTraceroute)
 	routePerm("POST", "/api/v1/devices/{id}/diagnostics/tr143/{direction}", operators.PermDiagnosticsRun, h.createTR143)

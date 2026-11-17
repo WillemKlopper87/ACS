@@ -48,7 +48,7 @@ func (h *handler) reconcilePendingOrders(ctx context.Context) {
 		// The retry acts for the order's customer, as the request that
 		// placed it did: the operator API confines the call to that
 		// customer's devices.
-		commandKey, err := h.acs.SetParametersWithIdempotency(accounts.WithCustomer(ctx, order.Scope), order.DeviceID, order.Parameters, "bss:"+order.ExternalOrderID+":set-parameters")
+		commandKey, err := h.sendOrder(accounts.WithCustomer(ctx, order.Scope), order.Action, order.DeviceID, order.Parameters, order.ExternalOrderID)
 		if err != nil {
 			if markErr := h.mappings.MarkDispatchFailed(ctx, order.ID, err.Error()); markErr != nil {
 				h.logger.Error("failed to record dispatch retry failure", "err", markErr, "external_order_id", order.ExternalOrderID)

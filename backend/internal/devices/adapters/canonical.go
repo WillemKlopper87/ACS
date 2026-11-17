@@ -201,6 +201,21 @@ func DiagnosticsPrefix(root, kind string) string {
 // AssociatedDevice table included"), so the IGD1 equivalent sweeps every
 // WLANConfiguration instance under the primary LANDevice the same way,
 // not just the first. Same LANDevice.1 caveat as WiFiSSID above.
+// StatusParams are the scalar parameters that say how a router is doing
+// right now, uptime FIRST (every CPE has it; a caller that knows nothing
+// else about the device asks for it alone): seconds since boot, then how
+// many hosts the router has seen on its LAN. Same LANDevice.1 caveat as
+// WiFiSSID above.
+func StatusParams(root string) []string {
+	if root == devices.DataModelRootIGD1 {
+		return []string{
+			"InternetGatewayDevice.DeviceInfo.UpTime",
+			"InternetGatewayDevice.LANDevice.1.Hosts.HostNumberOfEntries",
+		}
+	}
+	return []string{"Device.DeviceInfo.UpTime", "Device.Hosts.HostNumberOfEntries"}
+}
+
 func WiFiAssociatedDevicesPrefix(root string) string {
 	if root == devices.DataModelRootIGD1 {
 		return "InternetGatewayDevice.LANDevice.1.WLANConfiguration."
