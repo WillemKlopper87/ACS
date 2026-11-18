@@ -353,3 +353,82 @@ func TestMappingLookupWithAnIDThatIsNoUUIDIsNotFound(t *testing.T) {
 		}
 	}
 }
+
+// One customer may place only so many destructive orders an hour. The
+// order over the ceiling is refused before anything is written or sent.
+func TestDestructiveOrdersHaveAnHourlyCeiling(t *testing.T) {
+	acs := &operationsACS{}
+	ctx, h, db := newOrderTestHandler(t, acs)
+	h.orderCeilings = map[string]int{bss.ActionReboot: 2}
+	const accountID, deviceID = "acct-op", "48484848-4848-4848-4848-484848484848"
+	seedOrderDevice(t, ctx, db, accountID, deviceID)
+
+	for _, id := range []string{"ord-c1", "ord-c2"} {
+		if rec := postOrder(h, createOrderRequest{ExternalOrderID: id, AccountID: accountID, Action: bss.ActionReboot}); rec.Code != http.StatusAccepted {
+			t.Fatalf("%s: code %d body %s", id, rec.Code, rec.Body.String())
+		}
+	}
+	rec := postOrder(h, createOrderRequest{ExternalOrderID: "ord-c3", AccountID: accountID, Action: bss.ActionReboot})
+	if rec.Code != http.StatusTooManyRequests || !bytes.Contains(rec.Body.Bytes(), []byte("hourly ceiling for this action")) || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("over the ceiling: code %d, Retry-After %q, body %s", rec.Code, rec.Header().Get("Retry-After"), rec.Body.String())
+	}
+	if order, err := h.mappings.FindOrder(ctx, "ord-c3"); err != nil || order != nil {
+		t.Errorf("the refused order was recorded: %+v, err %v", order, err)
+	}
+	if len(acs.calls) != 2 {
+		t.Errorf("calls = %+v; the third restart must not be sent", acs.calls)
+	}
+	// An order already placed is still answered: a resend is not a new order.
+	if rec := postOrder(h, createOrderRequest{ExternalOrderID: "ord-c1", AccountID: accountID, Action: bss.ActionReboot}); rec.Code != http.StatusAccepted {
+		t.Errorf("a resend at the ceiling: code %d body %s", rec.Code, rec.Body.String())
+	}
+	// Another action has its own allowance (here: none set).
+	if rec := postOrder(h, createOrderRequest{ExternalOrderID: "ord-c4", AccountID: accountID, Action: bss.ActionRefreshStatus}); rec.Code != http.StatusAccepted {
+		t.Errorf("a status refresh at the restart ceiling: code %d body %s", rec.Code, rec.Body.String())
+	}
+	// Orders older than the window no longer count.
+	if _, err := db.ExecContext(ctx, `UPDATE bss_orders SET created_at = now() - interval '61 minutes' WHERE external_order_id = 'ord-c1'`); err != nil {
+		t.Fatal(err)
+	}
+	if rec := postOrder(h, createOrderRequest{ExternalOrderID: "ord-c5", AccountID: accountID, Action: bss.ActionReboot}); rec.Code != http.StatusAccepted {
+		t.Errorf("after one order left the window: code %d body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A restart waiting in the outbox must not land on a router that has left
+// the account in the meantime.
+func TestReconcilerEndsADeviceOperationWhoseDeviceLeftTheAccount(t *testing.T) {
+	acs := &operationsACS{status: http.StatusBadGateway}
+	ctx, h, db := newOrderTestHandler(t, acs)
+	const accountID, deviceID = "acct-op", "49494949-4949-4949-4949-494949494949"
+	seedOrderDevice(t, ctx, db, accountID, deviceID)
+
+	if rec := postOrder(h, createOrderRequest{ExternalOrderID: "ord-left", AccountID: accountID, Action: bss.ActionReboot}); rec.Code == http.StatusAccepted {
+		t.Fatalf("the first dispatch should have failed; body: %s", rec.Body.String())
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE account_device_mappings SET unassigned_at = now() WHERE device_id = $1`, deviceID); err != nil {
+		t.Fatal(err)
+	}
+	acs.mu.Lock()
+	acs.status = http.StatusAccepted
+	acs.mu.Unlock()
+	backdateOrderLastAttempt(t, ctx, db, "ord-left")
+	h.reconcilePendingOrders(ctx)
+
+	order, err := h.mappings.FindOrder(ctx, "ord-left")
+	if err != nil || order == nil || order.Status != bss.OrderStatusDeadLettered {
+		t.Fatalf("order = %+v, err = %v; want dead-lettered", order, err)
+	}
+	if len(acs.calls) != 1 {
+		t.Errorf("calls = %+v; the retry must not reach the device", acs.calls)
+	}
+}
+
+func TestEveryAdapterAnswerIsMarkedAsDataNotToBeKept(t *testing.T) {
+	rec := httptest.NewRecorder()
+	withResponseHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/bss/v1/devices", nil))
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("headers = %v", rec.Header())
+	}
+}

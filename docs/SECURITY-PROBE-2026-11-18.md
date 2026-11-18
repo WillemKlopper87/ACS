@@ -35,15 +35,21 @@ No High or Medium finding. None let one customer reach another's data or devices
 
 Tests for each are in `backend/cmd/bssadapter/operations_test.go`, `backend/internal/bss/status_test.go` and `backend/internal/bss/acsclient_test.go`. The probe passes 95 of 95 after the fixes.
 
-## 4. Still open
+## 4. Hardening added after the probe
 
-- **The service token can order a factory reset directly on the operator API**, with no switch and no confirmation: the switch lives in the adapter. Where service calls need not name a customer (the default outside the production NaaS profile) that reaches every device. Keep `ACS_SERVICE_CALLS_REQUIRE_CUSTOMER=true` and treat the service token as the most sensitive secret in the stack.
-- **No ceiling on destructive orders per client.** A compromised or faulty integration can restart or reset every router of its own customer as fast as the rate limit allows (5 requests a second by default). The NaaS platform limits these per router; the ACS does not.
-- **A retried order goes to the device recorded when the order was taken.** If that device is re-mapped to another account of the same customer before a delayed retry, the retry acts on the new subscriber's router. Cross-customer moves are refused. Not traced through the mapping lifecycle.
-- **A status refresh resent after discovery changed** is refused as a conflict by the operator API (the job's parameter list differs), and the order is dead-lettered although the first job was queued. Rare; the integration sees a refused order and can send a new one.
-- **The API's JSON responses carry no security headers** (`X-Content-Type-Options`, `Cache-Control`). The console is served by nginx, which sets its own; worth adding `nosniff` and `no-store` on the API.
+| # | What | How |
+|---|---|---|
+| H1 | **A ceiling on destructive orders per customer.** The per-token rate limit alone lets a compromised or faulty integration restart or reset thousands of its routers in an hour. | A new order over the hourly ceiling is refused with `429 ErrRateLimited` and `Retry-After`, before anything is written or sent, and audited as `BSSOrderCeilingReached`. Defaults: 120 restarts and 10 factory resets per customer per hour (`ACS_BSS_MAX_REBOOTS_PER_HOUR`, `ACS_BSS_MAX_FACTORY_RESETS_PER_HOUR`). Suspend has no default ceiling, because a billing run can rightly suspend many accounts in an hour; set `ACS_BSS_MAX_SUSPENDS_PER_HOUR` to add one. `0` means none. Counted in the database, so it holds across replicas. A retry by the outbox and a resend of an order already placed are not counted again. |
+| H2 | **A late retry no longer lands on a router that left the account.** A restart, reset or refresh waiting in the outbox is ended if its device is no longer assigned to the order's account when the retry comes. | `DeviceStillAssigned` in the reconciler; the order is dead-lettered. Parameter writes are not checked this way: some are meant to follow an unassignment. |
+| H3 | **A resent status refresh is the same request.** The operator API chooses the parameter list itself, so the same key after discovery found more parameters returned a conflict the caller could do nothing about. | The job already queued for that key is returned. |
+| H4 | **Response headers.** | Every operator API answer carries `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`, and `Cache-Control: no-store` under `/api/` unless the handler sets its own. The device web-GUI proxy is left alone. Every adapter answer carries `nosniff` and `no-store`. |
+
+## 5. Still open
+
+- **The service token can order a factory reset directly on the operator API**, with no switch and no confirmation: the switch lives in the adapter. Where service calls need not name a customer (the default outside the production NaaS profile) that reaches every device. Keep `ACS_SERVICE_CALLS_REQUIRE_CUSTOMER=true` and treat the service token as the most sensitive secret in the stack. The ceiling (H1) is also the adapter's, not the operator API's.
+- **The ceiling is per action, not per device**, and a few orders over it can pass when requests arrive at the same instant.
 - Everything listed as open or as deployment work in the 14 November assessment, including the external penetration test.
 
-## 5. Running the probe
+## 6. Running the probe
 
 Against a throwaway stack only. `scripts/security/probe.py` names the ports and settings it expects. It exits non-zero when a check fails.

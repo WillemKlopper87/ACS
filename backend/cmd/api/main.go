@@ -475,7 +475,7 @@ func main() {
 	}
 	server := &http.Server{
 		Addr:    addr,
-		Handler: withCORS(corsOrigin, withSessionOriginCheck(corsOrigin, withJWTAuth(jwtSecret, internalServiceToken, h.tokenCurrent, withRateLimit(apiLimiter, metrics, withBodyLimit(mux))))),
+		Handler: withSecurityHeaders(withCORS(corsOrigin, withSessionOriginCheck(corsOrigin, withJWTAuth(jwtSecret, internalServiceToken, h.tokenCurrent, withRateLimit(apiLimiter, metrics, withBodyLimit(mux)))))),
 		// Timeouts (audit P1.2). No global ReadTimeout/WriteTimeout on
 		// purpose: firmware uploads and CPE upload receipts stream large
 		// bodies, and the console WebSocket / web-GUI proxy are long-lived

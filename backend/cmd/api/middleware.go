@@ -42,6 +42,26 @@ func withBodyLimit(next http.Handler) http.Handler {
 	})
 }
 
+// withSecurityHeaders sets, on every answer of this API, the headers a
+// browser needs to treat it as data and not keep it: no MIME sniffing, no
+// caching of what are operator and subscriber records, no referrer. A
+// handler that sets its own Cache-Control (a file download) overrides the
+// default. The device web-GUI proxy is left alone: it relays a device's
+// own pages and sets its own headers (webgui_handlers.go).
+func withSecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/webgui/proxy/") {
+			h := w.Header()
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("Referrer-Policy", "no-referrer")
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				h.Set("Cache-Control", "no-store")
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Rate limit defaults (build plan §7.4 sub-phase 7d — shipped after JWT
 // auth, not before, per §7.3's own reasoning).
 const (

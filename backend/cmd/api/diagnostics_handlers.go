@@ -226,11 +226,14 @@ func (h *handler) refreshStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job, err := h.jobs.CreateWithIdempotency(r.Context(), id, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, operatorFromRequest(r), r.Header.Get("Idempotency-Key"))
+	if errors.Is(err, jobs.ErrIdempotencyConflict) {
+		// The caller sends no body: the parameter list is chosen here, from
+		// what discovery knows now. A resend of the same key after
+		// discovery found more is still the same request, so it gets the
+		// job already queued, not a conflict it could do nothing about.
+		job, err = h.jobs.FindByIdempotency(r.Context(), id, jobs.TypeGetParameter, r.Header.Get("Idempotency-Key"))
+	}
 	if err != nil {
-		if errors.Is(err, jobs.ErrIdempotencyConflict) {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		}
 		h.logger.Error("failed to queue status refresh", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

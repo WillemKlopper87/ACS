@@ -306,6 +306,53 @@ func (r *Repository) MarkDispatchFailed(ctx context.Context, orderID, errMsg str
 	return nil
 }
 
+// ErrOrderCeilingReached refuses a destructive order because the caller's
+// customer has already placed its hourly allowance of that action.
+var ErrOrderCeilingReached = errors.New("hourly ceiling for this action reached")
+
+// OrderCeilingWindow is the period an order ceiling counts over.
+const OrderCeilingWindow = time.Hour
+
+// CountRecentOrders is how many orders of one action the context's
+// customer placed within the window, whatever became of them: an order
+// that was refused later still counts, so a client cannot probe for free.
+// retryAfter is when the oldest of them leaves the window.
+func (r *Repository) CountRecentOrders(ctx context.Context, action string, window time.Duration) (count int, retryAfter time.Duration, err error) {
+	_, scope := scopeArgs(ctx)
+	var oldest sql.NullTime
+	err = r.db.QueryRowContext(ctx, `
+		SELECT count(*), min(created_at) FROM bss_orders
+		WHERE order_scope = $1 AND action = $2 AND created_at > now() - make_interval(secs => $3)
+	`, scope, action, window.Seconds()).Scan(&count, &oldest)
+	if err != nil {
+		return 0, 0, fmt.Errorf("count recent orders: %w", err)
+	}
+	if oldest.Valid {
+		retryAfter = time.Until(oldest.Time.Add(window))
+	}
+	if retryAfter < time.Second {
+		retryAfter = time.Second
+	}
+	return count, retryAfter, nil
+}
+
+// DeviceStillAssigned reports whether an order's device is still assigned
+// to the order's account. An order waiting in the outbox outlives the
+// request that placed it; the assignment may not.
+func (r *Repository) DeviceStillAssigned(ctx context.Context, orderID string) (bool, error) {
+	var ok bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM bss_orders o
+			JOIN account_device_mappings m ON m.account_key = o.account_key AND m.device_id = o.device_id
+			WHERE o.id = $1::uuid AND m.unassigned_at IS NULL)
+	`, orderID).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("check order device assignment: %w", err)
+	}
+	return ok, nil
+}
+
 // MarkDeadLettered ends a PENDING_DISPATCH order that can never be
 // dispatched (the action is refused, not merely failing): no retry.
 func (r *Repository) MarkDeadLettered(ctx context.Context, orderID, errMsg string) error {
