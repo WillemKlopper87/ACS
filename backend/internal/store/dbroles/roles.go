@@ -70,7 +70,7 @@ var Denied = map[string]map[string][]string{
 var Extra = map[string]map[string][]string{
 	// internal/retention builds "DELETE FROM <table>" from its rule list.
 	"api": {
-		"cwmp_sessions": {"SELECT", "DELETE"}, "audit_log": {"SELECT", "DELETE"}, "parameter_history": {"SELECT", "DELETE"},
+		"cwmp_sessions": {"SELECT", "DELETE"}, "parameter_history": {"SELECT", "DELETE"},
 		"webhook_deliveries": {"SELECT", "DELETE"}, "jobs": {"SELECT", "DELETE"}, "bulk_operations": {"SELECT", "DELETE"},
 		"uploaded_files": {"SELECT", "DELETE"}, "password_reset_tokens": {"SELECT", "DELETE"}, "capture_sessions": {"SELECT", "DELETE"},
 		"wifi_samples": {"SELECT", "DELETE"}, "wifi_clients": {"SELECT", "DELETE"}, "account_profile_archive": {"SELECT", "DELETE"},
@@ -80,6 +80,15 @@ var Extra = map[string]map[string][]string{
 	"acs": {
 		"wifi_client_samples": {"SELECT", "DELETE"}, "wifi_clients": {"SELECT", "DELETE"},
 	},
+}
+
+// Functions lists the database functions a service's role may execute.
+// They run with the owner's rights and do one bounded thing the role is
+// not granted on the table itself.
+var Functions = map[string][]string{
+	// The audit trail's retention: never a row younger than 30 days
+	// (migration 0104). The API's role has no DELETE on audit_log.
+	"api": {"acs_prune_audit_log(timestamptz, integer)"},
 }
 
 // Apply sets every existing service role's privileges to exactly the
@@ -138,6 +147,10 @@ func applyOne(ctx context.Context, db *sql.DB, svc Service) error {
 	sort.Strings(tables)
 	for _, t := range tables {
 		stmts = append(stmts, fmt.Sprintf(`GRANT %s ON public.%s TO %s`, strings.Join(grants[t], ", "), quoteIdent(t), role))
+	}
+	for _, fn := range Functions[svc.Cmd] {
+		// The signature is this package's own constant, never input.
+		stmts = append(stmts, fmt.Sprintf(`GRANT EXECUTE ON FUNCTION public.%s TO %s`, fn, role))
 	}
 	for _, stmt := range stmts {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {

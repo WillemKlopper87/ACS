@@ -237,3 +237,69 @@ func TestRetentionRunsAsTheAPIRole(t *testing.T) {
 		t.Fatalf("retention as acs_api: %v", err)
 	}
 }
+
+// The API's login runs the audit trail's retention but cannot delete an
+// audit row itself, and the function it goes through never removes one
+// younger than 30 days: someone who takes over the API cannot erase the
+// record of what they just did (security probe 2026-11-18, D2).
+func TestTheAPIRoleCannotEraseTheRecentAuditTrail(t *testing.T) {
+	ctx, db := rolesDB(t)
+	if _, err := db.ExecContext(ctx, `DELETE FROM audit_log`); err != nil {
+		t.Fatal(err)
+	}
+	for _, age := range []string{"1 hour", "29 days", "31 days", "400 days"} {
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO audit_log (id, occurred_at, actor, action) VALUES (gen_random_uuid(), now() - $1::interval, 'test', $2)`, age, age); err != nil {
+			t.Fatalf("seed %s: %v", age, err)
+		}
+	}
+	for _, stmt := range []string{
+		`DELETE FROM audit_log`,
+		`UPDATE audit_log SET actor = 'someone else'`,
+		`TRUNCATE audit_log`,
+	} {
+		if err := as(ctx, t, db, "acs_api", stmt); !denied(err) {
+			t.Errorf("acs_api: %s: err = %v, want permission denied", stmt, err)
+		}
+	}
+	// No other service role can call the function at all.
+	for _, role := range []string{"acs_gateway", "acs_bss", "acs_usp"} {
+		if err := as(ctx, t, db, role, `SELECT acs_prune_audit_log(now(), 100)`); !denied(err) {
+			t.Errorf("%s calls acs_prune_audit_log: err = %v, want permission denied", role, err)
+		}
+	}
+	// The API asks for everything, as an attacker would: a cutoff of now
+	// (and one in the future). Only what is older than 30 days goes.
+	api := roleDB(ctx, t, "acs_api")
+	for _, cutoff := range []string{`now()`, `now() + interval '10 years'`, `NULL`} {
+		var removed int64
+		if err := api.QueryRowContext(ctx, `SELECT acs_prune_audit_log(`+cutoff+`, 100000)`).Scan(&removed); err != nil {
+			t.Fatalf("acs_prune_audit_log(%s): %v", cutoff, err)
+		}
+	}
+	rows, err := db.QueryContext(ctx, `SELECT action FROM audit_log ORDER BY occurred_at DESC`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var left []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, a)
+	}
+	if strings.Join(left, ",") != "1 hour,29 days" {
+		t.Errorf("audit rows left = %v, want the two younger than 30 days", left)
+	}
+	// The ordinary retention pass, as the API, still prunes by its policy.
+	if _, err := db.ExecContext(ctx,
+		`INSERT INTO audit_log (id, occurred_at, actor, action) VALUES (gen_random_uuid(), now() - interval '400 days', 'test', 'old')`); err != nil {
+		t.Fatal(err)
+	}
+	res, err := retention.Run(ctx, api, retention.Policy{AuditLogDays: 365})
+	if err != nil || res["audit_log"] != 1 {
+		t.Errorf("retention as acs_api: removed %d audit rows, err %v; want 1", res["audit_log"], err)
+	}
+}
