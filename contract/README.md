@@ -43,6 +43,9 @@ and the response `body`.
 | `ids-per-customer` | **2.0.** A second customer uses an `account_id` and an `external_order_id` another customer already uses: both are its own (200, 202), and each customer reads only its own device |
 | `order-resend-changed` | **2.0.** An `external_order_id` sent again: the identical request replays the order (202), a different request is 409 `ErrIdempotencyKeyReused` |
 | `webhook-secret-too-short` | **2.0.** A new webhook subscription with a secret under 32 characters: 400 |
+| `order-refresh-status` | **2.1.** `REFRESH_STATUS` and the status read: nulls before the CPE reported, a preflight, the order, its job after the CPE session, the status with uptime, LAN hosts and signal, and an unknown account (404) |
+| `order-reboot` | **2.1.** `REBOOT`: the order, the same order again (same `command_key`, one restart), the same `external_order_id` with another action (409), and the job after the CPE session |
+| `order-factory-reset` | **2.1.** `FACTORY_RESET`: refused where it is not switched on (400 `ErrUnsupportedAction`), refused without the confirmation (400 `ErrInvalidRequest`), then the order and its job |
 
 All fixtures were recorded again for 2.0.0, at one commit (see
 `captured_from`). Apart from ids, times and the three new fixtures, one
@@ -75,12 +78,11 @@ of the same `external_order_id` with the same action is a retry and does not
 restart the CPE twice; with a different action it is `409
 ErrIdempotencyKeyReused`, as for every order since 2.0.0.
 
-**No fixture is recorded for 2.1.0 yet.** The fixtures in this directory are
-the 2.0.0 recording and remain valid. The additions are covered by the
-adapter's tests (`backend/cmd/bssadapter/operations_test.go`); recordings of
-a `REBOOT` order, a refused `FACTORY_RESET` and the status read are to be
-added with `scripts/contract/record_fixtures.py` against a throwaway stack
-before `bss-contract-v2.1.0` is tagged.
+Three fixtures were recorded for 2.1.0 (`order-refresh-status`,
+`order-reboot`, `order-factory-reset`), through real CWMP sessions with a
+simulated CPE that registered itself, so its parameter names were discovered
+as with a real one. The other fixtures are the 2.0.0 recording and remain
+valid: `ACS_RECORD_ONLY` kept them untouched.
 
 ## 2.0.0: what changed for an integration
 
