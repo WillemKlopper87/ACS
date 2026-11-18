@@ -98,6 +98,13 @@ type rule struct {
 	idColumn  string
 }
 
+// pruneFunctions names, per table, a database function (cutoff, batch) ->
+// rows removed that does the pruning in place of a DELETE by this login.
+// The audit trail is pruned through acs_prune_audit_log (migration 0104),
+// which never removes a row younger than 30 days: the login that runs
+// this pass cannot delete audit rows itself.
+var pruneFunctions = map[string]string{"audit_log": "acs_prune_audit_log"}
+
 var rules = []rule{
 	{"cwmp_sessions", func(p Policy) int { return p.SessionsDays },
 		"closed_at IS NOT NULL AND closed_at < $1", "id"},
@@ -150,14 +157,22 @@ func Run(ctx context.Context, db *sql.DB, p Policy) (Result, error) {
 			if ctx.Err() != nil {
 				return res, ctx.Err()
 			}
-			out, err := db.ExecContext(ctx, query, cutoff)
+			var n int64
+			var err error
+			if fn := pruneFunctions[r.name]; fn != "" {
+				err = db.QueryRowContext(ctx, "SELECT "+fn+"($1, $2)", cutoff, batchSize).Scan(&n)
+			} else {
+				var out sql.Result
+				if out, err = db.ExecContext(ctx, query, cutoff); err == nil {
+					n, _ = out.RowsAffected()
+				}
+			}
 			if err != nil {
 				if firstErr == nil {
 					firstErr = fmt.Errorf("prune %s: %w", r.name, err)
 				}
 				break
 			}
-			n, _ := out.RowsAffected()
 			res[r.name] += n
 			if n < batchSize {
 				break

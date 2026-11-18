@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -229,5 +230,205 @@ func TestMappedDeviceStatusReadsTheCacheOnly(t *testing.T) {
 	}
 	if rec := read("acct-unknown"); rec.Code != http.StatusNotFound {
 		t.Errorf("an account with no device: status = %d, want 404", rec.Code)
+	}
+}
+
+// An operator who switches factory reset off must not have a router wiped
+// later by the outbox retrying an order taken while it was on.
+func TestReconcilerDoesNotResetAfterTheSwitchIsOff(t *testing.T) {
+	acs := &operationsACS{status: http.StatusBadGateway}
+	ctx, h, db := newOrderTestHandler(t, acs)
+	h.allowFactoryReset = true
+	const accountID, deviceID = "acct-op", "45454545-4545-4545-4545-454545454545"
+	seedOrderDevice(t, ctx, db, accountID, deviceID)
+
+	first := postOrder(h, createOrderRequest{ExternalOrderID: "ord-reset-late", AccountID: accountID,
+		Action: bss.ActionFactoryReset, Parameters: map[string]string{"confirm": bss.ActionFactoryReset}})
+	if first.Code == http.StatusAccepted || len(acs.calls) != 1 {
+		t.Fatalf("the first dispatch should have been tried once and failed; code %d, calls %+v", first.Code, acs.calls)
+	}
+	h.allowFactoryReset = false
+	acs.mu.Lock()
+	acs.status = http.StatusAccepted
+	acs.mu.Unlock()
+	backdateOrderLastAttempt(t, ctx, db, "ord-reset-late")
+	h.reconcilePendingOrders(ctx)
+
+	order, err := h.mappings.FindOrder(ctx, "ord-reset-late")
+	if err != nil || order == nil || order.Status != bss.OrderStatusDeadLettered {
+		t.Fatalf("order after the switch went off = %+v, err = %v; want dead-lettered", order, err)
+	}
+	if len(acs.calls) != 1 {
+		t.Errorf("calls = %+v; the retry must not reach the operator API", acs.calls)
+	}
+	backdateOrderLastAttempt(t, ctx, db, "ord-reset-late")
+	h.allowFactoryReset = true
+	h.reconcilePendingOrders(ctx)
+	if len(acs.calls) != 1 {
+		t.Errorf("a dead-lettered reset came back: %+v", acs.calls)
+	}
+}
+
+// A dispatch the operator API refuses (a status refresh for a device with
+// nothing to report) is answered as a refusal and never retried.
+func TestARefusedDispatchIsDeadLetteredNotRetried(t *testing.T) {
+	acs := &operationsACS{status: http.StatusConflict}
+	ctx, h, db := newOrderTestHandler(t, acs)
+	const accountID, deviceID = "acct-op", "46464646-4646-4646-4646-464646464646"
+	seedOrderDevice(t, ctx, db, accountID, deviceID)
+
+	rec := postOrder(h, createOrderRequest{ExternalOrderID: "ord-refused", AccountID: accountID, Action: bss.ActionRefreshStatus})
+	if rec.Code != http.StatusConflict || !bytes.Contains(rec.Body.Bytes(), []byte("ErrUnsupportedAction")) {
+		t.Fatalf("code %d body %s; want 409 ErrUnsupportedAction", rec.Code, rec.Body.String())
+	}
+	order, err := h.mappings.FindOrder(ctx, "ord-refused")
+	if err != nil || order == nil || order.Status != bss.OrderStatusDeadLettered {
+		t.Fatalf("order = %+v, err = %v; want dead-lettered", order, err)
+	}
+	backdateOrderLastAttempt(t, ctx, db, "ord-refused")
+	h.reconcilePendingOrders(ctx)
+	if len(acs.calls) != 1 {
+		t.Errorf("calls = %+v; a refused order must not be retried", acs.calls)
+	}
+}
+
+func TestOrderIdentifiersAreBoundedAndClean(t *testing.T) {
+	acs := &operationsACS{}
+	ctx, h, db := newOrderTestHandler(t, acs)
+	const accountID, deviceID = "acct-op", "47474747-4747-4747-4747-474747474747"
+	seedOrderDevice(t, ctx, db, accountID, deviceID)
+	long := string(bytes.Repeat([]byte("X"), maxIdentifierBytes+1))
+	for name, req := range map[string]createOrderRequest{
+		"an order id over the bound":   {ExternalOrderID: long, AccountID: accountID, Action: bss.ActionReboot},
+		"an order id with a NUL":       {ExternalOrderID: "ord\x00", AccountID: accountID, Action: bss.ActionReboot},
+		"an account id over the bound": {ExternalOrderID: "ord-1", AccountID: long, Action: bss.ActionReboot},
+		"an account id with a NUL":     {ExternalOrderID: "ord-2", AccountID: "acct\x00op", Action: bss.ActionReboot},
+	} {
+		if rec := postOrder(h, req); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: code %d body %s; want 400", name, rec.Code, rec.Body.String())
+		}
+	}
+	if len(acs.calls) != 0 {
+		t.Errorf("calls = %+v; nothing may be dispatched", acs.calls)
+	}
+	ok := string(bytes.Repeat([]byte("X"), maxIdentifierBytes))
+	if rec := postOrder(h, createOrderRequest{ExternalOrderID: ok, AccountID: accountID, Action: bss.ActionReboot}); rec.Code != http.StatusAccepted {
+		t.Errorf("an order id at the bound: code %d body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAPathWithAControlByteIsRefusedBeforeAnyHandler(t *testing.T) {
+	reached := false
+	h := withCleanPath(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+	for _, path := range []string{"/bss/v1/jobs/%00", "/bss/v1/mappings/a%00b/status", "/bss/v1/jobs/x%0d%0ay"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusBadRequest || reached {
+			t.Errorf("%s: code %d, handler reached %v", path, rec.Code, reached)
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/bss/v1/jobs/reboot_20261118_ab12", nil))
+	if !reached {
+		t.Errorf("an ordinary path was refused: %d", rec.Code)
+	}
+}
+
+func TestTMF638ServiceWithAnIDThatIsNoUUIDIsNotFound(t *testing.T) {
+	_, h, _ := newOrderTestHandler(t, &operationsACS{})
+	req := httptest.NewRequest(http.MethodGet, tmf638ServiceBasePath+"acct-of-someone", nil)
+	req.SetPathValue("id", "acct-of-someone")
+	rec := httptest.NewRecorder()
+	h.getTMF638Service(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("code %d body %s; want 404", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMappingLookupWithAnIDThatIsNoUUIDIsNotFound(t *testing.T) {
+	ctx, h, _ := newOrderTestHandler(t, &operationsACS{})
+	for _, id := range []string{"acct-of-someone", "", "' OR 1=1--"} {
+		if _, err := h.mappings.GetMappingByID(ctx, id); !errors.Is(err, bss.ErrMappingNotFound) {
+			t.Errorf("GetMappingByID(%q) = %v; want ErrMappingNotFound", id, err)
+		}
+	}
+}
+
+// One customer may place only so many destructive orders an hour. The
+// order over the ceiling is refused before anything is written or sent.
+func TestDestructiveOrdersHaveAnHourlyCeiling(t *testing.T) {
+	acs := &operationsACS{}
+	ctx, h, db := newOrderTestHandler(t, acs)
+	h.orderCeilings = map[string]int{bss.ActionReboot: 2}
+	const accountID, deviceID = "acct-op", "48484848-4848-4848-4848-484848484848"
+	seedOrderDevice(t, ctx, db, accountID, deviceID)
+
+	for _, id := range []string{"ord-c1", "ord-c2"} {
+		if rec := postOrder(h, createOrderRequest{ExternalOrderID: id, AccountID: accountID, Action: bss.ActionReboot}); rec.Code != http.StatusAccepted {
+			t.Fatalf("%s: code %d body %s", id, rec.Code, rec.Body.String())
+		}
+	}
+	rec := postOrder(h, createOrderRequest{ExternalOrderID: "ord-c3", AccountID: accountID, Action: bss.ActionReboot})
+	if rec.Code != http.StatusTooManyRequests || !bytes.Contains(rec.Body.Bytes(), []byte("hourly ceiling for this action")) || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("over the ceiling: code %d, Retry-After %q, body %s", rec.Code, rec.Header().Get("Retry-After"), rec.Body.String())
+	}
+	if order, err := h.mappings.FindOrder(ctx, "ord-c3"); err != nil || order != nil {
+		t.Errorf("the refused order was recorded: %+v, err %v", order, err)
+	}
+	if len(acs.calls) != 2 {
+		t.Errorf("calls = %+v; the third restart must not be sent", acs.calls)
+	}
+	// An order already placed is still answered: a resend is not a new order.
+	if rec := postOrder(h, createOrderRequest{ExternalOrderID: "ord-c1", AccountID: accountID, Action: bss.ActionReboot}); rec.Code != http.StatusAccepted {
+		t.Errorf("a resend at the ceiling: code %d body %s", rec.Code, rec.Body.String())
+	}
+	// Another action has its own allowance (here: none set).
+	if rec := postOrder(h, createOrderRequest{ExternalOrderID: "ord-c4", AccountID: accountID, Action: bss.ActionRefreshStatus}); rec.Code != http.StatusAccepted {
+		t.Errorf("a status refresh at the restart ceiling: code %d body %s", rec.Code, rec.Body.String())
+	}
+	// Orders older than the window no longer count.
+	if _, err := db.ExecContext(ctx, `UPDATE bss_orders SET created_at = now() - interval '61 minutes' WHERE external_order_id = 'ord-c1'`); err != nil {
+		t.Fatal(err)
+	}
+	if rec := postOrder(h, createOrderRequest{ExternalOrderID: "ord-c5", AccountID: accountID, Action: bss.ActionReboot}); rec.Code != http.StatusAccepted {
+		t.Errorf("after one order left the window: code %d body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A restart waiting in the outbox must not land on a router that has left
+// the account in the meantime.
+func TestReconcilerEndsADeviceOperationWhoseDeviceLeftTheAccount(t *testing.T) {
+	acs := &operationsACS{status: http.StatusBadGateway}
+	ctx, h, db := newOrderTestHandler(t, acs)
+	const accountID, deviceID = "acct-op", "49494949-4949-4949-4949-494949494949"
+	seedOrderDevice(t, ctx, db, accountID, deviceID)
+
+	if rec := postOrder(h, createOrderRequest{ExternalOrderID: "ord-left", AccountID: accountID, Action: bss.ActionReboot}); rec.Code == http.StatusAccepted {
+		t.Fatalf("the first dispatch should have failed; body: %s", rec.Body.String())
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE account_device_mappings SET unassigned_at = now() WHERE device_id = $1`, deviceID); err != nil {
+		t.Fatal(err)
+	}
+	acs.mu.Lock()
+	acs.status = http.StatusAccepted
+	acs.mu.Unlock()
+	backdateOrderLastAttempt(t, ctx, db, "ord-left")
+	h.reconcilePendingOrders(ctx)
+
+	order, err := h.mappings.FindOrder(ctx, "ord-left")
+	if err != nil || order == nil || order.Status != bss.OrderStatusDeadLettered {
+		t.Fatalf("order = %+v, err = %v; want dead-lettered", order, err)
+	}
+	if len(acs.calls) != 1 {
+		t.Errorf("calls = %+v; the retry must not reach the device", acs.calls)
+	}
+}
+
+func TestEveryAdapterAnswerIsMarkedAsDataNotToBeKept(t *testing.T) {
+	rec := httptest.NewRecorder()
+	withResponseHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/bss/v1/devices", nil))
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("headers = %v", rec.Header())
 	}
 }

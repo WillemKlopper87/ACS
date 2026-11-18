@@ -109,6 +109,10 @@ func (h *handler) authorizeTMF(w http.ResponseWriter, r *http.Request, requiredS
 // tmf:execute for orders). Clients that predate binding keep the legacy
 // rule, where scopes govern only the TMF APIs.
 func (h *handler) authorizeBSSAccount(w http.ResponseWriter, r *http.Request, requiredScope, accountID string) bool {
+	if !validIdentifier(accountID) {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "account_id is too long or has control characters")
+		return false
+	}
 	if h.requireCustomerBound {
 		claims, ok := h.boundPrincipal(w, r)
 		return ok && h.bssScopeAllowed(w, claims, requiredScope) && h.accountAllowed(w, r, claims, accountID)

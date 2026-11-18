@@ -52,3 +52,27 @@ func TestBuildDeviceStatusKeepsUnreportedValuesNull(t *testing.T) {
 		t.Errorf("nothing reported = %s", empty)
 	}
 }
+
+// A router can report "NaN" or "Inf" for a signal level. Neither is a
+// reading, and neither can be written as JSON.
+func TestBuildDeviceStatusDropsNaNAndInf(t *testing.T) {
+	status := BuildDeviceStatus("acct", "dev", "gateway", map[string]CachedParameter{
+		"Device.Cellular.Interface.1.RSRP": {Value: "NaN"},
+		"Device.Cellular.Interface.1.RSRQ": {Value: "-Inf"},
+		"Device.Cellular.Interface.1.SINR": {Value: "Infinity"},
+		"Device.Cellular.Interface.1.RSSI": {Value: "-67"},
+	})
+	if status.Signal == nil || status.Signal.RSSI == nil || *status.Signal.RSSI != -67 {
+		t.Fatalf("signal = %+v; want the one real value", status.Signal)
+	}
+	if status.Signal.RSRP != nil || status.Signal.RSRQ != nil || status.Signal.SINR != nil {
+		t.Errorf("NaN or Inf kept: %+v", status.Signal)
+	}
+	if _, err := json.Marshal(status); err != nil {
+		t.Errorf("the status does not marshal: %v", err)
+	}
+	only := BuildDeviceStatus("acct", "dev", "gateway", map[string]CachedParameter{"Device.Cellular.Interface.1.RSRP": {Value: "NaN"}})
+	if _, err := json.Marshal(only); err != nil || only.Signal != nil {
+		t.Errorf("NaN alone: signal %+v, marshal err %v", only.Signal, err)
+	}
+}

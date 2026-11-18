@@ -226,3 +226,21 @@ func TestACSClientGetParameterNames(t *testing.T) {
 		t.Errorf("names = %v, want discovered writable path", names)
 	}
 }
+
+// Parameter names can come from a device's own report. One with "&" or
+// "#" must stay one name in the paths list, not change the request.
+func TestACSClientGetParametersEscapesNames(t *testing.T) {
+	var gotPaths, gotOther string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths, gotOther = r.URL.Query().Get("paths"), r.URL.Query().Get("evil")
+		w.Write([]byte(`{"parameters":{}}`))
+	}))
+	defer srv.Close()
+	hostile := "Device.Cellular.Interface.1.RSRP&evil=1#frag"
+	if _, err := NewACSClient(srv.URL, 0, "").GetParameters(context.Background(), "dev-1", []string{"Device.DeviceInfo.UpTime", hostile}); err != nil {
+		t.Fatalf("GetParameters: %v", err)
+	}
+	if gotPaths != "Device.DeviceInfo.UpTime,"+hostile || gotOther != "" {
+		t.Errorf("paths = %q, evil = %q", gotPaths, gotOther)
+	}
+}

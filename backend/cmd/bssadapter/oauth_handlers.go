@@ -58,6 +58,16 @@ func (h *handler) issueOAuthToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.requireCustomerBound && (client.CustomerID == nil || strings.TrimSpace(*client.CustomerID) == "") {
+		// Strict mode refuses such a client on every route. Refusing the
+		// token says so at once, and leaves no token in existence that
+		// looks usable (security probe 2026-11-18, D5).
+		h.logger.Warn("token refused: the client is not bound to a customer", "client_id", clientID, "remote", clientip.Of(r))
+		h.auditToken(r, "bss-client:"+clientID, "BSSClientAuthFailed", map[string]any{"remote": clientip.Of(r), "reason": "not customer-bound"})
+		writeError(w, http.StatusUnauthorized, "invalid_client", "this deployment accepts customer-bound clients only")
+		return
+	}
+
 	scopes := append([]string(nil), client.Scopes...)
 	if requested := strings.Fields(r.FormValue("scope")); len(requested) > 0 {
 		allowed := make(map[string]struct{}, len(client.Scopes))

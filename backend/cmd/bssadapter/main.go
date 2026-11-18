@@ -197,7 +197,10 @@ func main() {
 	// allowlist beyond the always-forbidden classes (loopback/link-local/
 	// multicast) netguard refuses unconditionally — same safe-by-default
 	// shape as ACS_DEVICE_NET_ALLOWED_CIDRS in cmd/api.
-	webhookNetPolicy := netguard.Policy{}
+	// In production a receiver on a private address must be listed: an
+	// integration could otherwise have this host open connections into its
+	// own network and read from the delivery errors what answers there.
+	webhookNetPolicy := netguard.Policy{ForbidPrivate: profile == config.ProfileProduction}
 	if v := os.Getenv("ACS_BSS_WEBHOOK_ALLOWED_CIDRS"); v != "" {
 		cidrs, err := netguard.ParseCIDRList(v)
 		if err != nil {
@@ -245,6 +248,7 @@ func main() {
 		secretsBehindTLSProxy: os.Getenv("ACS_BSS_SECRETS_BEHIND_TLS_PROXY") == "true",
 		requireSecretHandles:  os.Getenv("ACS_BSS_REQUIRE_SECRET_HANDLES") == "true",
 		allowFactoryReset:     os.Getenv("ACS_BSS_ALLOW_FACTORY_RESET") == "true",
+		orderCeilings:         orderCeilingsFromEnv(logger),
 		metrics:               metrics,
 		walledGarden:          walledGarden,
 		webhooks:              webhooks,
@@ -338,7 +342,7 @@ func main() {
 		// missing token is rejected (401) without ever touching the rate
 		// limiter — otherwise an attacker could spray distinct bogus
 		// tokens to dodge a per-token bucket entirely.
-		Handler:           withProblemMediaType(withSourceAllowlist(allowedSources, logger, withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(mux))))),
+		Handler:           withResponseHeaders(withProblemMediaType(withSourceAllowlist(allowedSources, logger, withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(withCleanPath(mux))))))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second, // every BSS route is a small JSON exchange
 		WriteTimeout:      60 * time.Second,
@@ -600,6 +604,49 @@ func withRateLimit(limiter *ratelimit.Limiter, metrics *observability.Metrics, n
 // withMaxBody rejects any /bss/v1 request body over maxBodyBytes before it
 // reaches a handler's json.Decoder, the same guard cmd/acs's CWMP endpoint
 // already has against oversized payloads.
+// maxIdentifierBytes bounds an identifier an integration chooses
+// (account_id, external_order_id). They are stored, indexed and logged.
+const maxIdentifierBytes = 255
+
+// validIdentifier reports whether an integration's identifier is usable:
+// not over the bound and free of control bytes. Postgres refuses a NUL in
+// text, which would otherwise surface as a 500.
+func validIdentifier(s string) bool {
+	if len(s) > maxIdentifierBytes {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// withResponseHeaders marks every answer as data that is not to be sniffed
+// or kept: the adapter serves subscriber and device records to integrations.
+func withResponseHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withCleanPath refuses a request whose path carries a control byte
+// (e.g. %00) before it reaches a handler or the database.
+func withCleanPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for i := 0; i < len(r.URL.Path); i++ {
+			if c := r.URL.Path[i]; c < 0x20 || c == 0x7f {
+				writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "the request path has control characters")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func withMaxBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
@@ -635,7 +682,10 @@ type handler struct {
 	// allowFactoryReset lets an integration order FACTORY_RESET
 	// (ACS_BSS_ALLOW_FACTORY_RESET). Off by default: it wipes a customer's
 	// router, so the operator decides whether an integration may ask.
-	allowFactoryReset  bool
+	allowFactoryReset bool
+	// orderCeilings is how many orders of a destructive action one
+	// customer may place in an hour (checkOrderCeiling). 0 or absent: none.
+	orderCeilings      map[string]int
 	acs                *bss.ACSClient
 	auditor            *observability.Auditor
 	token              string
@@ -1137,6 +1187,9 @@ func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
 // its own idempotent-response path -- this function only dispatches, it
 // does not know how to shape either caller's response.
 func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID, action, deviceID string, params []bss.ParameterWrite, requestDigest string) (commandKey string, err error) {
+	if err := h.checkOrderCeiling(ctx, accountID, action); err != nil {
+		return "", err
+	}
 	// Write-ahead: the order's intent, including exactly what dispatch
 	// would send, is durable before dispatch is attempted (design S3).
 	orderID, err := h.mappings.InsertPending(ctx, externalOrderID, accountID, action, deviceID, params, requestDigest)
@@ -1154,7 +1207,7 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 
 	commandKey, err = h.sendOrder(ctx, action, deviceID, params, externalOrderID)
 	if err != nil {
-		if markErr := h.mappings.MarkDispatchFailed(ctx, orderID, err.Error()); markErr != nil {
+		if markErr := h.recordDispatchFailure(ctx, orderID, err); markErr != nil {
 			h.logger.Error("failed to record dispatch failure", "err", markErr, "external_order_id", externalOrderID)
 		}
 		// ErrACSUnreachable maps to its own 502 at the caller with no
@@ -1190,6 +1243,93 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 	return commandKey, nil
 }
 
+// orderCeilingError is ErrOrderCeilingReached with when to try again.
+type orderCeilingError struct{ retryAfter time.Duration }
+
+func (e *orderCeilingError) Error() string { return bss.ErrOrderCeilingReached.Error() }
+func (e *orderCeilingError) Unwrap() error { return bss.ErrOrderCeilingReached }
+
+// checkOrderCeiling refuses a new destructive order once the caller's
+// customer has placed its hourly allowance of that action
+// (ACS_BSS_MAX_REBOOTS_PER_HOUR, ..._FACTORY_RESETS_..., ..._SUSPENDS_...).
+// It bounds what a compromised or faulty integration can do to its own
+// customer base in one run; the per-token rate limit alone allows
+// thousands an hour. Counted in the database, so it holds across replicas.
+// A retry by the outbox is not a new order and is not counted again.
+func (h *handler) checkOrderCeiling(ctx context.Context, accountID, action string) error {
+	limit := h.orderCeilings[action]
+	if limit <= 0 {
+		return nil
+	}
+	count, retryAfter, err := h.mappings.CountRecentOrders(ctx, action, bss.OrderCeilingWindow)
+	if err != nil {
+		return err
+	}
+	if count < limit {
+		return nil
+	}
+	h.logger.Warn("order ceiling reached", "action", action, "account_id", accountID, "limit_per_hour", limit)
+	if err := h.auditor.Record(ctx, "bss:"+accountID, "", "BSSOrderCeilingReached", map[string]any{
+		"action": action, "limit_per_hour": limit,
+	}); err != nil {
+		h.logger.Error("failed to write audit record", "err", err)
+	}
+	return &orderCeilingError{retryAfter: retryAfter}
+}
+
+// writeOrderCeiling answers a refused order: 429 with Retry-After.
+func writeOrderCeiling(w http.ResponseWriter, err error) bool {
+	var ceiling *orderCeilingError
+	if !errors.As(err, &ceiling) {
+		return false
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(int(ceiling.retryAfter.Seconds())+1))
+	// ErrRateLimited, the code an integration already backs off on: a new
+	// code would be a contract change. The detail says which limit it was.
+	writeError(w, http.StatusTooManyRequests, "ErrRateLimited",
+		"hourly ceiling for this action reached for this customer; nothing was ordered")
+	return true
+}
+
+// orderCeilingsFromEnv reads the hourly ceilings. Restart and factory
+// reset are bounded by default; suspend is not, because a billing run can
+// legitimately suspend many accounts in an hour, so the operator sets it.
+func orderCeilingsFromEnv(logger *slog.Logger) map[string]int {
+	ceilings := map[string]int{}
+	for action, v := range map[string]struct {
+		env string
+		def int
+	}{
+		bss.ActionReboot:       {"ACS_BSS_MAX_REBOOTS_PER_HOUR", 120},
+		bss.ActionFactoryReset: {"ACS_BSS_MAX_FACTORY_RESETS_PER_HOUR", 10},
+		"SUSPEND":              {"ACS_BSS_MAX_SUSPENDS_PER_HOUR", 0},
+	} {
+		limit := v.def
+		if raw := strings.TrimSpace(os.Getenv(v.env)); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 0 {
+				logger.Warn("ignoring an invalid order ceiling", "var", v.env, "default", v.def)
+			} else {
+				limit = n
+			}
+		}
+		ceilings[action] = limit
+	}
+	logger.Info("order ceilings per customer per hour (0 = none)", "reboot", ceilings[bss.ActionReboot],
+		"factory_reset", ceilings[bss.ActionFactoryReset], "suspend", ceilings["SUSPEND"])
+	return ceilings
+}
+
+// recordDispatchFailure records a failed send. A refusal (the action is
+// not enabled, or the device cannot answer it) will not change by itself,
+// so the order is dead-lettered at once instead of being retried.
+func (h *handler) recordDispatchFailure(ctx context.Context, orderID string, err error) error {
+	if errors.Is(err, bss.ErrUnsupportedAction) {
+		return h.mappings.MarkDeadLettered(ctx, orderID, err.Error())
+	}
+	return h.mappings.MarkDispatchFailed(ctx, orderID, err.Error())
+}
+
 // sendOrder is the one place an order reaches the ACS, for the first
 // dispatch (dispatchOrder) and for the outbox's retry (order_reconciler.go)
 // alike: a device operation (REBOOT, FACTORY_RESET, REFRESH_STATUS) queues
@@ -1198,6 +1338,13 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 // job already queued and the CPE is not restarted twice.
 func (h *handler) sendOrder(ctx context.Context, action, deviceID string, params []bss.ParameterWrite, externalOrderID string) (string, error) {
 	if bss.IsDeviceOperation(action) {
+		// Checked again here, not only when the order was taken: the
+		// outbox may send an order long after it was accepted, and an
+		// operator who has since switched factory reset off must not
+		// have a router wiped by a retry.
+		if action == bss.ActionFactoryReset && !h.allowFactoryReset {
+			return "", bss.ErrFactoryResetNotEnabled
+		}
 		return h.acs.DeviceOperation(ctx, deviceID, action, "bss:"+externalOrderID+":operation")
 	}
 	return h.acs.SetParametersWithIdempotency(ctx, deviceID, params, "bss:"+externalOrderID+":set-parameters")
@@ -1266,6 +1413,10 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ExternalOrderID == "" || req.AccountID == "" || req.Action == "" {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "external_order_id, account_id, and action are required")
+		return
+	}
+	if !validIdentifier(req.ExternalOrderID) {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "external_order_id is too long or has control characters")
 		return
 	}
 	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFExecute, req.AccountID) {
@@ -1345,6 +1496,16 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, bss.ErrACSUnreachable) {
 			writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
+			return
+		}
+		if writeOrderCeiling(w, err) {
+			return
+		}
+		if errors.Is(err, bss.ErrUnsupportedAction) {
+			// Refused at dispatch (e.g. a status refresh for a device
+			// with no status parameter discovered yet). The order is
+			// recorded as dead-lettered; it will not be retried.
+			writeError(w, http.StatusConflict, "ErrUnsupportedAction", err.Error())
 			return
 		}
 		// Any other failure was already logged inside dispatchOrder,

@@ -16,6 +16,7 @@ package main
 
 import (
 	"acs/internal/accounts"
+	"acs/internal/bss"
 	"context"
 	"time"
 )
@@ -48,9 +49,26 @@ func (h *handler) reconcilePendingOrders(ctx context.Context) {
 		// The retry acts for the order's customer, as the request that
 		// placed it did: the operator API confines the call to that
 		// customer's devices.
+		// The order names the device it was taken for. If that device has
+		// since left the account (unassigned, or swapped), a late restart
+		// or reset would land on whoever has it now: end the order.
+		if bss.IsDeviceOperation(order.Action) {
+			assigned, err := h.mappings.DeviceStillAssigned(ctx, order.ID)
+			if err != nil {
+				h.logger.Error("failed to check an order's device assignment", "err", err, "external_order_id", order.ExternalOrderID)
+				continue
+			}
+			if !assigned {
+				if markErr := h.mappings.MarkDeadLettered(ctx, order.ID, "the device is no longer assigned to this account"); markErr != nil {
+					h.logger.Error("failed to end an order for an unassigned device", "err", markErr, "external_order_id", order.ExternalOrderID)
+				}
+				h.logger.Warn("order ended: its device left the account before dispatch", "external_order_id", order.ExternalOrderID, "action", order.Action)
+				continue
+			}
+		}
 		commandKey, err := h.sendOrder(accounts.WithCustomer(ctx, order.Scope), order.Action, order.DeviceID, order.Parameters, order.ExternalOrderID)
 		if err != nil {
-			if markErr := h.mappings.MarkDispatchFailed(ctx, order.ID, err.Error()); markErr != nil {
+			if markErr := h.recordDispatchFailure(ctx, order.ID, err); markErr != nil {
 				h.logger.Error("failed to record dispatch retry failure", "err", markErr, "external_order_id", order.ExternalOrderID)
 			}
 			h.logger.Warn("order dispatch retry failed", "err", err, "external_order_id", order.ExternalOrderID, "attempt", order.Attempts+1)

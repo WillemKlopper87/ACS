@@ -86,6 +86,12 @@ func TestIntegration_RefreshStatusAsksOnlyForKnownParameters(t *testing.T) {
 		t.Errorf("discovered: status = %d, paths = %v", code, paths)
 	}
 
+	// The first key again, now that discovery found more: still the same
+	// request (the caller sends no parameter list), so the job it queued.
+	if code, again, _ := e.operation(path, "bss:ord-s1:operation"); code != http.StatusAccepted || again != first {
+		t.Errorf("resent after discovery: status = %d, command_key = %q, want 202 and %q", code, again, first)
+	}
+
 	// A device that reported none of them cannot answer: 409, no job.
 	bare := e.device("OP003", nil)
 	if err := e.h.params.SaveNames(e.ctx, bare, map[string]bool{"Device.WiFi.SSID.1.SSID": true}); err != nil {

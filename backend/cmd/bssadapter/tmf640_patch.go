@@ -175,6 +175,9 @@ func (h *handler) patchService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err = h.dispatchOrder(r.Context(), key, m.AccountID, action, m.DeviceID, writes, digest)
+	if writeOrderCeiling(w, err) {
+		return
+	}
 	if err != nil && !errors.Is(err, bss.ErrOrderAlreadyExists) && !errors.Is(err, bss.ErrACSUnreachable) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return

@@ -451,6 +451,11 @@ func (r *Repository) CurrentAccountForDevice(ctx context.Context, deviceID strin
 // GET/PATCH /service/{id} both need to resolve it directly, unlike every
 // other lookup in this file which goes through (account_id, role).
 func (r *Repository) GetMappingByID(ctx context.Context, id string) (*AccountDeviceMapping, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		// Not an ID this table can hold: no such mapping, rather than a
+		// database error for the caller to turn into a 500.
+		return nil, fmt.Errorf("%w: not a mapping id", ErrMappingNotFound)
+	}
 	scoped, scope := scopeArgs(ctx)
 	row := r.db.QueryRowContext(ctx, "SELECT "+mappingColumns+" FROM account_device_mappings WHERE id = $1 AND ($2 = false OR "+mappingOwner+" = $3)", id, scoped, scope)
 	m, err := scanMapping(row)

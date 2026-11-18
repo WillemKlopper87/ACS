@@ -32,16 +32,20 @@ type bootstrapCredentialByID func(context.Context, string) (*credentials.Credent
 type bootstrapDeviceByID func(context.Context, string) (*devices.Device, error)
 
 type bootstrapGraduationDeps struct {
-	bootstrapAuth  auth.DigestAuthenticator
-	metrics        *observability.Metrics
-	ipLimiter      *ratelimit.Limiter
-	deviceLimiter  *ratelimit.Limiter
-	lookup         bootstrapDeviceLookup
-	ensureDevice   bootstrapEnsureDevice
-	ensurePending  bootstrapEnsurePendingCredential
-	credentialByID bootstrapCredentialByID
-	deviceByID     bootstrapDeviceByID
-	logger         *slog.Logger
+	bootstrapAuth auth.DigestAuthenticator
+	metrics       *observability.Metrics
+	ipLimiter     *ratelimit.Limiter
+	deviceLimiter *ratelimit.Limiter
+	// newDeviceLimiter bounds how many serials the ACS has never seen one
+	// source address may register with the bootstrap credential in an
+	// hour (ACS_CWMP_MAX_NEW_DEVICES_PER_SOURCE_PER_HOUR). nil: no bound.
+	newDeviceLimiter *ratelimit.Limiter
+	lookup           bootstrapDeviceLookup
+	ensureDevice     bootstrapEnsureDevice
+	ensurePending    bootstrapEnsurePendingCredential
+	credentialByID   bootstrapCredentialByID
+	deviceByID       bootstrapDeviceByID
+	logger           *slog.Logger
 }
 
 func (d bootstrapGraduationDeps) log() *slog.Logger {
@@ -75,16 +79,33 @@ func bootstrapCWMPGraduationGuard(next http.HandlerFunc, metrics *observability.
 	}
 
 	return bootstrapCWMPGraduationGuardWithDeps(next, bootstrapGraduationDeps{
-		bootstrapAuth:  bootstrapAuth,
-		metrics:        metrics,
-		ipLimiter:      ratelimit.New(envOrFloat("ACS_RATE_LIMIT_IP_PER_SECOND", defaultIPRateLimitPerSecond), envOrInt("ACS_RATE_LIMIT_IP_BURST", defaultIPRateLimitBurst), rateLimitIdleTTL),
-		deviceLimiter:  ratelimit.New(envOrFloat("ACS_RATE_LIMIT_DEVICE_PER_SECOND", defaultDeviceRateLimitPerSecond), envOrInt("ACS_RATE_LIMIT_DEVICE_BURST", defaultDeviceRateLimitBurst), rateLimitIdleTTL),
-		lookup:         deviceRepo.GetByOUIserial,
-		ensureDevice:   deviceRepo.EnsureBootstrapRegistration,
-		ensurePending:  credentialRepo.EnsurePendingCWMPDigest,
-		credentialByID: credentialRepo.ByID,
-		deviceByID:     deviceRepo.Get,
+		bootstrapAuth:    bootstrapAuth,
+		metrics:          metrics,
+		ipLimiter:        ratelimit.New(envOrFloat("ACS_RATE_LIMIT_IP_PER_SECOND", defaultIPRateLimitPerSecond), envOrInt("ACS_RATE_LIMIT_IP_BURST", defaultIPRateLimitBurst), rateLimitIdleTTL),
+		deviceLimiter:    ratelimit.New(envOrFloat("ACS_RATE_LIMIT_DEVICE_PER_SECOND", defaultDeviceRateLimitPerSecond), envOrInt("ACS_RATE_LIMIT_DEVICE_BURST", defaultDeviceRateLimitBurst), rateLimitIdleTTL),
+		newDeviceLimiter: newDeviceLimiterFromEnv(),
+		lookup:           deviceRepo.GetByOUIserial,
+		ensureDevice:     deviceRepo.EnsureBootstrapRegistration,
+		ensurePending:    credentialRepo.EnsurePendingCWMPDigest,
+		credentialByID:   credentialRepo.ByID,
+		deviceByID:       deviceRepo.Get,
 	})
+}
+
+// defaultMaxNewDevicesPerSourcePerHour is generous on purpose: routers
+// behind one carrier-grade NAT address share a source, and an install day
+// must not be stopped by this. It bounds a holder of the fleet's bootstrap
+// credential filling the device table with invented serials from one place.
+const defaultMaxNewDevicesPerSourcePerHour = 120
+
+// newDeviceLimiterFromEnv builds the per-source bound on never-seen
+// serials; ACS_CWMP_MAX_NEW_DEVICES_PER_SOURCE_PER_HOUR=0 switches it off.
+func newDeviceLimiterFromEnv() *ratelimit.Limiter {
+	perHour := envOrInt("ACS_CWMP_MAX_NEW_DEVICES_PER_SOURCE_PER_HOUR", defaultMaxNewDevicesPerSourcePerHour)
+	if perHour <= 0 {
+		return nil
+	}
+	return ratelimit.New(float64(perHour)/3600, perHour, 2*time.Hour)
 }
 
 func bootstrapCWMPGraduationGuardWithDeps(next http.HandlerFunc, deps bootstrapGraduationDeps) http.HandlerFunc {
@@ -228,12 +249,32 @@ func handleBootstrapGraduationInform(w http.ResponseWriter, r *http.Request, raw
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// A serial the ACS has never seen. The bootstrap credential is the
+	// same on every unprovisioned router, so whoever holds it can invent
+	// serials: bound how many one source registers, and count each one so
+	// an unusual number raises an alert (BootstrapNewDeviceSurge).
+	newSerial := errors.Is(lookupErr, sql.ErrNoRows)
+	if newSerial && deps.newDeviceLimiter != nil && !deps.newDeviceLimiter.Allow(remoteIP(r)) {
+		deps.log().Warn("bootstrap registration refused: too many new serials from one source", "oui_serial", naturalKey, "remote", r.RemoteAddr)
+		if deps.metrics != nil {
+			deps.metrics.CWMPAuthTotal.WithLabelValues("bootstrap_new_device_limited").Inc()
+		}
+		w.Header().Set("Retry-After", "3600")
+		http.Error(w, "too many new devices from this address", http.StatusTooManyRequests)
+		return
+	}
 
 	root := inferBootstrapDataModelRoot(inform.ParameterList)
 	device, err := deps.ensureDevice(r.Context(), inform.DeviceId, root)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	if newSerial {
+		deps.log().Info("new device registered with the bootstrap credential", "device_id", device.ID, "oui_serial", device.OUISerial, "remote", r.RemoteAddr)
+		if deps.metrics != nil {
+			deps.metrics.CWMPAuthTotal.WithLabelValues("bootstrap_new_device").Inc()
+		}
 	}
 	// Close a race with an operator/real-device Inform between the admission
 	// lookup above and the bootstrap-safe upsert.

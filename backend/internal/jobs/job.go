@@ -186,6 +186,12 @@ func (r *Repository) CreateWithIdempotency(ctx context.Context, deviceID, jobTyp
 	return existing, nil
 }
 
+// FindByIdempotency returns the job a key already queued for a device and
+// job type, or sql.ErrNoRows.
+func (r *Repository) FindByIdempotency(ctx context.Context, deviceID, jobType, key string) (*Job, error) {
+	return r.findByIdempotency(ctx, deviceID, jobType, key)
+}
+
 func (r *Repository) findByIdempotency(ctx context.Context, deviceID, jobType, key string) (*Job, error) {
 	return scanJob(r.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE device_id=$1 AND type=$2 AND idempotency_key=$3`, deviceID, jobType, key))
 }

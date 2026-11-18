@@ -302,6 +302,7 @@ func writeManifest(t *testing.T, m map[string]map[string][]string) {
 // string of their own but only reads: no DELETE is needed.
 var dynamicReadOnly = map[string]string{
 	"wifi_ssid_samples": "internal/wifiinsights passes it to the counterDeltas SELECT",
+	"audit_log":         "internal/retention prunes it through acs_prune_audit_log (migration 0104), not a DELETE of its own",
 }
 
 var dynamicTable = regexp.MustCompile("(?:DELETE FROM|FROM|INTO|UPDATE)\\s+(?:%s|`\\s*\\+)")

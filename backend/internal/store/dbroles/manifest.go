@@ -59,7 +59,7 @@ var Manifest = map[string]map[string][]string{
 		"account_profiles":            {"SELECT", "INSERT", "UPDATE", "DELETE"},
 		"alert_incidents":             {"SELECT", "INSERT", "UPDATE"},
 		"alert_policies":              {"SELECT", "INSERT", "DELETE"},
-		"audit_log":                   {"SELECT", "INSERT", "DELETE"},
+		"audit_log":                   {"SELECT", "INSERT"},
 		"auth_attempt_windows":        {"SELECT", "INSERT", "UPDATE", "DELETE"},
 		"bss_accounts":                {"SELECT", "INSERT", "UPDATE"},
 		"bss_idempotency_keys":        {"SELECT", "INSERT", "UPDATE", "DELETE"},
