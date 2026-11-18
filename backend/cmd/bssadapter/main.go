@@ -338,7 +338,7 @@ func main() {
 		// missing token is rejected (401) without ever touching the rate
 		// limiter — otherwise an attacker could spray distinct bogus
 		// tokens to dodge a per-token bucket entirely.
-		Handler:           withProblemMediaType(withSourceAllowlist(allowedSources, logger, withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(mux))))),
+		Handler:           withProblemMediaType(withSourceAllowlist(allowedSources, logger, withAuth(token, oauthSigningSecret, h.clientRevoked, withRateLimit(limiter, metrics, withMaxBody(withCleanPath(mux)))))),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second, // every BSS route is a small JSON exchange
 		WriteTimeout:      60 * time.Second,
@@ -600,6 +600,39 @@ func withRateLimit(limiter *ratelimit.Limiter, metrics *observability.Metrics, n
 // withMaxBody rejects any /bss/v1 request body over maxBodyBytes before it
 // reaches a handler's json.Decoder, the same guard cmd/acs's CWMP endpoint
 // already has against oversized payloads.
+// maxIdentifierBytes bounds an identifier an integration chooses
+// (account_id, external_order_id). They are stored, indexed and logged.
+const maxIdentifierBytes = 255
+
+// validIdentifier reports whether an integration's identifier is usable:
+// not over the bound and free of control bytes. Postgres refuses a NUL in
+// text, which would otherwise surface as a 500.
+func validIdentifier(s string) bool {
+	if len(s) > maxIdentifierBytes {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// withCleanPath refuses a request whose path carries a control byte
+// (e.g. %00) before it reaches a handler or the database.
+func withCleanPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for i := 0; i < len(r.URL.Path); i++ {
+			if c := r.URL.Path[i]; c < 0x20 || c == 0x7f {
+				writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "the request path has control characters")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func withMaxBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
@@ -1154,7 +1187,7 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 
 	commandKey, err = h.sendOrder(ctx, action, deviceID, params, externalOrderID)
 	if err != nil {
-		if markErr := h.mappings.MarkDispatchFailed(ctx, orderID, err.Error()); markErr != nil {
+		if markErr := h.recordDispatchFailure(ctx, orderID, err); markErr != nil {
 			h.logger.Error("failed to record dispatch failure", "err", markErr, "external_order_id", externalOrderID)
 		}
 		// ErrACSUnreachable maps to its own 502 at the caller with no
@@ -1190,6 +1223,16 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 	return commandKey, nil
 }
 
+// recordDispatchFailure records a failed send. A refusal (the action is
+// not enabled, or the device cannot answer it) will not change by itself,
+// so the order is dead-lettered at once instead of being retried.
+func (h *handler) recordDispatchFailure(ctx context.Context, orderID string, err error) error {
+	if errors.Is(err, bss.ErrUnsupportedAction) {
+		return h.mappings.MarkDeadLettered(ctx, orderID, err.Error())
+	}
+	return h.mappings.MarkDispatchFailed(ctx, orderID, err.Error())
+}
+
 // sendOrder is the one place an order reaches the ACS, for the first
 // dispatch (dispatchOrder) and for the outbox's retry (order_reconciler.go)
 // alike: a device operation (REBOOT, FACTORY_RESET, REFRESH_STATUS) queues
@@ -1198,6 +1241,13 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 // job already queued and the CPE is not restarted twice.
 func (h *handler) sendOrder(ctx context.Context, action, deviceID string, params []bss.ParameterWrite, externalOrderID string) (string, error) {
 	if bss.IsDeviceOperation(action) {
+		// Checked again here, not only when the order was taken: the
+		// outbox may send an order long after it was accepted, and an
+		// operator who has since switched factory reset off must not
+		// have a router wiped by a retry.
+		if action == bss.ActionFactoryReset && !h.allowFactoryReset {
+			return "", bss.ErrFactoryResetNotEnabled
+		}
 		return h.acs.DeviceOperation(ctx, deviceID, action, "bss:"+externalOrderID+":operation")
 	}
 	return h.acs.SetParametersWithIdempotency(ctx, deviceID, params, "bss:"+externalOrderID+":set-parameters")
@@ -1266,6 +1316,10 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ExternalOrderID == "" || req.AccountID == "" || req.Action == "" {
 		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "external_order_id, account_id, and action are required")
+		return
+	}
+	if !validIdentifier(req.ExternalOrderID) {
+		writeError(w, http.StatusBadRequest, "ErrInvalidRequest", "external_order_id is too long or has control characters")
 		return
 	}
 	if !h.authorizeBSSAccount(w, r, bss.ScopeTMFExecute, req.AccountID) {
@@ -1345,6 +1399,13 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, bss.ErrACSUnreachable) {
 			writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
+			return
+		}
+		if errors.Is(err, bss.ErrUnsupportedAction) {
+			// Refused at dispatch (e.g. a status refresh for a device
+			// with no status parameter discovered yet). The order is
+			// recorded as dead-lettered; it will not be retried.
+			writeError(w, http.StatusConflict, "ErrUnsupportedAction", err.Error())
 			return
 		}
 		// Any other failure was already logged inside dispatchOrder,

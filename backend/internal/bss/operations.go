@@ -54,13 +54,17 @@ func ValidateDeviceOperation(action string, params map[string]string, allowFacto
 		return nil
 	}
 	if !allowFactoryReset {
-		return fmt.Errorf("%w: FACTORY_RESET is not enabled on this ACS (ACS_BSS_ALLOW_FACTORY_RESET)", ErrUnsupportedAction)
+		return ErrFactoryResetNotEnabled
 	}
 	if len(params) != 1 || params["confirm"] != ActionFactoryReset {
 		return fmt.Errorf("%w: FACTORY_RESET needs exactly one parameter, confirm=FACTORY_RESET", ErrInvalidParameters)
 	}
 	return nil
 }
+
+// ErrFactoryResetNotEnabled is the refusal of a FACTORY_RESET where the
+// operator has not switched it on. It is an ErrUnsupportedAction.
+var ErrFactoryResetNotEnabled = fmt.Errorf("%w: FACTORY_RESET is not enabled on this ACS (ACS_BSS_ALLOW_FACTORY_RESET)", ErrUnsupportedAction)
 
 // DeviceOperation queues a device operation on the operator API and
 // returns the job's command_key. The idempotency key makes a retried

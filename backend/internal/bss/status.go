@@ -1,6 +1,7 @@
 package bss
 
 import (
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -114,7 +115,9 @@ func BuildDeviceStatus(accountID, deviceID, role string, values map[string]Cache
 			seen(p)
 		case "RSRP", "RSRQ", "SINR", "RSSI":
 			f, err := strconv.ParseFloat(value, 64)
-			if err != nil {
+			if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+				// ParseFloat accepts "NaN" and "Inf"; JSON does not, and
+				// neither is a signal level.
 				continue
 			}
 			switch leaf {

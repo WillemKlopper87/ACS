@@ -50,7 +50,7 @@ func (h *handler) reconcilePendingOrders(ctx context.Context) {
 		// customer's devices.
 		commandKey, err := h.sendOrder(accounts.WithCustomer(ctx, order.Scope), order.Action, order.DeviceID, order.Parameters, order.ExternalOrderID)
 		if err != nil {
-			if markErr := h.mappings.MarkDispatchFailed(ctx, order.ID, err.Error()); markErr != nil {
+			if markErr := h.recordDispatchFailure(ctx, order.ID, err); markErr != nil {
 				h.logger.Error("failed to record dispatch retry failure", "err", markErr, "external_order_id", order.ExternalOrderID)
 			}
 			h.logger.Warn("order dispatch retry failed", "err", err, "external_order_id", order.ExternalOrderID, "attempt", order.Attempts+1)

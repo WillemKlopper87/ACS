@@ -306,6 +306,20 @@ func (r *Repository) MarkDispatchFailed(ctx context.Context, orderID, errMsg str
 	return nil
 }
 
+// MarkDeadLettered ends a PENDING_DISPATCH order that can never be
+// dispatched (the action is refused, not merely failing): no retry.
+func (r *Repository) MarkDeadLettered(ctx context.Context, orderID, errMsg string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE bss_orders
+		SET attempts = attempts + 1, last_attempt_at = now(), last_error = $2, status = $3
+		WHERE id = $1::uuid AND status = $4
+	`, orderID, errMsg, OrderStatusDeadLettered, OrderStatusPendingDispatch)
+	if err != nil {
+		return fmt.Errorf("mark order dead-lettered: %w", err)
+	}
+	return nil
+}
+
 // ClaimDuePendingOrders atomically selects up to limit PENDING_DISPATCH
 // orders whose next retry is due -- the same exponential-backoff
 // predicate (2^attempts minutes, capped by maxDispatchAttempts) a plain

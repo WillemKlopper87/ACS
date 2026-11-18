@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"github.com/google/uuid"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,6 +18,10 @@ const tmf638ServiceBasePath = "/tmf-api/serviceInventoryManagement/v4/service/"
 // source of truth; this endpoint does not create a second inventory store.
 func (h *handler) getTMF638Service(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.PathValue("id"))
+	if _, err := uuid.Parse(id); err != nil {
+		writeError(w, http.StatusNotFound, "ErrNotFound", "no such service")
+		return
+	}
 	mapping, err := h.mappings.GetMappingByID(r.Context(), id)
 	if errors.Is(err, bss.ErrMappingNotFound) {
 		writeError(w, http.StatusNotFound, "ErrNotFound", "no such service")

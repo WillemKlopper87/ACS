@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"time"
 )
@@ -252,7 +253,13 @@ func utcTimestamp(s string) string {
 // entire cache — used by the TMF640 Service read path (design S4.1) to
 // reflect a device's current SSID/WiFiPassword characteristic values.
 func (c *ACSClient) GetParameters(ctx context.Context, deviceID string, paths []string) (map[string]CachedParameter, error) {
-	url := fmt.Sprintf("%s/api/v1/devices/%s/parameters?paths=%s", c.baseURL, deviceID, strings.Join(paths, ","))
+	// Names can come from a device's own report: escaped, so a name with
+	// "&" or "#" cannot change the request.
+	escaped := make([]string, len(paths))
+	for i, p := range paths {
+		escaped[i] = neturl.QueryEscape(p)
+	}
+	url := fmt.Sprintf("%s/api/v1/devices/%s/parameters?paths=%s", c.baseURL, deviceID, strings.Join(escaped, ","))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build parameters request: %w", err)
