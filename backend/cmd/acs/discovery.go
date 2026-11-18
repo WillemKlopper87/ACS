@@ -60,7 +60,7 @@ func (h *handler) autoDiscoverParameters(ctx context.Context, device *devices.De
 		h.logger.Error("failed to queue parameter discovery", "err", err, "device_id", device.ID)
 		return
 	}
-	h.logger.Info("parameter discovery queued on BOOTSTRAP", "device_id", device.ID, "root", root, "command_key", job.CommandKey)
+	h.logger.Info("parameter discovery queued on first contact", "device_id", device.ID, "root", root, "command_key", job.CommandKey)
 }
 
 // discoveryResultDetail is what PARAMETER_DISCOVERY's SUCCESS jobs carry in

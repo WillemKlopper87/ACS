@@ -315,6 +315,14 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	// the victim device's queued jobs (including parameter writes with
 	// secrets), mark its jobs complete/failed, or get auto-provisioning
 	// templates pushed to it under a forged manufacturer/model match.
+	// firstContact: this is the first Inform the device has made as itself.
+	// A router that enrolled with the fleet's bootstrap credential sent its
+	// "0 BOOTSTRAP" to the bootstrap guard, which only handed it its own
+	// credential; this handler never sees that event. Without this the
+	// work done on a first contact (parameter discovery, auto-provisioning
+	// templates, mesh adoption) never ran for such a router, and a status
+	// refresh could ask only for uptime.
+	firstContact := false
 	if bound.credentialDeviceID != "" {
 		existing, err := h.devices.GetByOUIserial(ctx, naturalKey)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -328,6 +336,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 			http.Error(w, "device identity mismatch", http.StatusForbidden)
 			return
 		}
+		firstContact = existing.LastInformAt == nil
 		// HTTP Digest proof alone must never graduate a PENDING credential.
 		// Only after the Inform's natural identity resolves to the exact
 		// credential-bound DeviceID may the caller-owned lifecycle hook run.
@@ -382,7 +391,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	h.enforcePolicies(ctx, device, inform.ParameterList)
 	h.reconcileOnboarding(ctx, device, true)
 
-	if inform.HasEventCode("0") {
+	if inform.HasEventCode("0") || firstContact {
 		h.applyAutoProvisioningTemplates(ctx, device)
 		h.autoDiscoverParameters(ctx, device)
 		h.adoptMeshSatellites(ctx, device)

@@ -710,3 +710,83 @@ func TestTryPostReturnsTransportErrors(t *testing.T) {
 		t.Errorf("tryPost returned code %d alongside an error, want 0", code)
 	}
 }
+
+// A router that enrolled with the bootstrap credential never shows this
+// handler a "0 BOOTSTRAP": the bootstrap guard took that Inform and handed
+// the router its own credential. Its first Inform as itself is its first
+// contact, and gets what a BOOTSTRAP gets: parameter discovery, once.
+func TestIntegration_FirstContactWithItsOwnCredentialStartsDiscovery(t *testing.T) {
+	dsn := os.Getenv("ACS_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("ACS_TEST_POSTGRES_DSN not set — skipping DB-backed integration test")
+	}
+	ctx := context.Background()
+	db, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	deviceRepo := devices.NewRepository(db)
+	// As the bootstrap guard leaves it: registered, never informed.
+	enrolled, err := deviceRepo.EnsureBootstrapRegistration(ctx,
+		cwmp.DeviceID{Manufacturer: "Zyxel", OUI: "001349", ProductClass: "NR5103", SerialNumber: "S230Q12345678"}, devices.DataModelRootDevice2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enrolled.LastInformAt != nil {
+		t.Fatal("a device the bootstrap guard registered must not count as having informed")
+	}
+	const ownUser, ownPass = "dev-own-user", "dev-own-password"
+	h := &handler{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		auth: auth.DigestAuthenticator{Lookup: func(username string) (string, string, bool) {
+			if username != ownUser {
+				return "", "", false
+			}
+			return ownPass, enrolled.ID, true
+		}},
+		devices:       deviceRepo,
+		sessions:      sessions.NewRepository(db),
+		jobs:          jobs.NewRepository(db),
+		params:        parameters.NewRepository(db),
+		auditor:       observability.NewAuditor(db),
+		metrics:       observability.NewMetrics("acs-test-first-contact"),
+		policies:      policy.NewRepository(db),
+		templates:     templates.NewRepository(db),
+		ipLimiter:     ratelimit.New(1000, 1000, time.Minute),
+		deviceLimiter: ratelimit.New(1000, 1000, time.Minute),
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", h.handleCWMP)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	discoveries := func() int {
+		var n int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE device_id = $1 AND type = $2`, enrolled.ID, jobs.TypeParameterDiscovery).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	cpe := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp", user: ownUser, pass: ownPass}
+	if code, body := cpe.post(periodicInform(t)); code != 200 || !strings.Contains(body, "InformResponse") {
+		t.Fatalf("first Inform as itself → %d %s", code, body)
+	}
+	if got := discoveries(); got != 1 {
+		t.Fatalf("parameter discoveries after the first contact = %d, want 1", got)
+	}
+	// Its next Inform is an ordinary one: nothing is queued again.
+	again := &mockCPE{t: t, client: srv.Client(), url: srv.URL + "/cwmp", user: ownUser, pass: ownPass}
+	if code, body := again.post(periodicInform(t)); code != 200 {
+		t.Fatalf("second Inform → %d %s", code, body)
+	}
+	if got := discoveries(); got != 1 {
+		t.Errorf("parameter discoveries after a second Inform = %d, want still 1", got)
+	}
+}

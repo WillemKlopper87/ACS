@@ -40,11 +40,16 @@ class SimCpe:
         serial: str = "S230QE2E00001",
         oui: str = "001349",
         product_class: str = "NR5103",
+        sim: tuple[str, str] | None = None,
     ):
         self.url = url
         self.auth = httpx.DigestAuth(user, password)
         self.oui, self.product_class, self.serial = oui, product_class, serial
+        # (ICCID, IMSI) of the SIM in a cellular router; None for a router with no modem
+        self.sim = sim
         self.booted_at = time.time() - 4242
+        self.user = user
+        self.own_credential = False  # True once the ACS has given this router its own
         self.rpcs: list[tuple[str, str]] = []  # (method, raw xml) in the order received
         self.pending_events: list[tuple[str, str]] = [("0 BOOTSTRAP", ""), ("1 BOOT", "")]
         self.factory_resets = 0
@@ -65,6 +70,9 @@ class SimCpe:
             "Device.Hosts.HostNumberOfEntries": "3",
             "Device.ManagementServer.ConnectionRequestURL": "http://127.0.0.1:1/unreachable",
             "Device.ManagementServer.ParameterKey": "",
+            "Device.ManagementServer.URL": self.url,
+            "Device.ManagementServer.Username": self.user,
+            "Device.ManagementServer.Password": "",
             "Device.ManagementServer.PeriodicInformEnable": "true",
             "Device.ManagementServer.PeriodicInformInterval": "300",
             "Device.WiFi.SSIDNumberOfEntries": "1",
@@ -81,6 +89,23 @@ class SimCpe:
             "Device.WiFi.AccessPoint.1.Security.KeyPassphrase": "factory-passphrase",
             "Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries": "0",
         }
+        if self.sim is not None:  # the SIM and the modem survive a factory reset
+            iccid, imsi = self.sim
+            self.params.update(
+                {
+                    "Device.Cellular.InterfaceNumberOfEntries": "1",
+                    "Device.Cellular.Interface.1.Enable": "true",
+                    "Device.Cellular.Interface.1.Status": "Up",
+                    "Device.Cellular.Interface.1.IMEI": "356938035643809",
+                    "Device.Cellular.Interface.1.USIM.Status": "Valid",
+                    "Device.Cellular.Interface.1.USIM.ICCID": iccid,
+                    "Device.Cellular.Interface.1.USIM.IMSI": imsi,
+                    "Device.Cellular.Interface.1.RSRP": "-97",
+                    "Device.Cellular.Interface.1.RSRQ": "-11",
+                    "Device.Cellular.Interface.1.SINR": "14",
+                    "Device.Cellular.Interface.1.RSSI": "-66",
+                }
+            )
 
     # -- values ---------------------------------------------------------------------------
     def value(self, name: str) -> str:
@@ -220,6 +245,15 @@ class SimCpe:
                 return _fault(9005, f"Invalid parameter name: {name}")
         for name, value in pairs:
             self.params[name] = _unescape(value)
+        # The ACS hands a router its own credential on first contact (it arrived with the
+        # fleet's bootstrap one). From its next session the router signs in with that.
+        names = dict(pairs)
+        user = names.get("Device.ManagementServer.Username")
+        password = names.get("Device.ManagementServer.Password")
+        if user is not None and password is not None:
+            self.user = _unescape(user)
+            self.auth = httpx.DigestAuth(self.user, _unescape(password))
+            self.own_credential = True
         key = re.search(r"<ParameterKey[^>]*>([^<]*)</ParameterKey>", xml)
         if key:
             self.params["Device.ManagementServer.ParameterKey"] = key.group(1)
@@ -240,7 +274,9 @@ class SimCpe:
     def _rpc_FactoryReset(self, _xml: str) -> str:
         self.factory_resets += 1
         self.booted_at = time.time()
+        user = self.user
         self._factory_defaults()
+        self.params["Device.ManagementServer.Username"] = user
         self.pending_events = [("0 BOOTSTRAP", ""), ("1 BOOT", "")]
         return "<cwmp:FactoryResetResponse/>"
 
