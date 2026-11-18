@@ -12,6 +12,7 @@ import (
 	"acs/internal/credentials"
 	"acs/internal/cwmp"
 	"acs/internal/devices"
+	"acs/internal/ratelimit"
 )
 
 func bootstrapInformWithRoot(prefix string) string {
@@ -320,5 +321,44 @@ func TestBootstrapGraduationClampsLegacyParameterKey(t *testing.T) {
 	key := body[start+len("<ParameterKey>") : end]
 	if len(key) > cwmp.MaxParameterKeyLength || !strings.HasPrefix(cred.CommandKey, key) {
 		t.Fatalf("ParameterKey = %q (%d chars), want the stored key clamped to %d", key, len(key), cwmp.MaxParameterKeyLength)
+	}
+}
+
+// One source may register only so many serials the ACS has never seen in
+// an hour: the bootstrap credential is on every unprovisioned router, so
+// its holder could otherwise fill the device table with invented ones.
+func TestBootstrapBoundsNewSerialsPerSource(t *testing.T) {
+	deps, _, device := bootstrapGraduationTestDeps(t, devices.DataModelRootDevice2)
+	deps.newDeviceLimiter = ratelimit.New(2.0/3600, 2, time.Hour)
+	guard := bootstrapCWMPGraduationGuardWithDeps(func(http.ResponseWriter, *http.Request) {}, deps)
+	inform := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		guard(rec, authenticatedBootstrapRequest(t, deps.bootstrapAuth, bootstrapInformWithRoot("Device")))
+		return rec
+	}
+	for i := 1; i <= 2; i++ {
+		if rec := inform(); rec.Code != http.StatusOK {
+			t.Fatalf("new serial %d: status %d body %q, want 200", i, rec.Code, rec.Body.String())
+		}
+	}
+	rec := inform()
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("third new serial in the hour: status %d, Retry-After %q; want 429", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	// A serial already registered (a router retrying its first contact) is
+	// not a new one: it is not counted and not refused.
+	deps.lookup = func(context.Context, string) (*devices.Device, error) { return device, nil }
+	guard = bootstrapCWMPGraduationGuardWithDeps(func(http.ResponseWriter, *http.Request) {}, deps)
+	if rec := inform(); rec.Code != http.StatusOK {
+		t.Errorf("a known, not yet established serial at the limit: status %d body %q, want 200", rec.Code, rec.Body.String())
+	}
+	// Without a limiter nothing is bounded.
+	deps.lookup = func(context.Context, string) (*devices.Device, error) { return nil, sql.ErrNoRows }
+	deps.newDeviceLimiter = nil
+	guard = bootstrapCWMPGraduationGuardWithDeps(func(http.ResponseWriter, *http.Request) {}, deps)
+	for i := 0; i < 5; i++ {
+		if rec := inform(); rec.Code != http.StatusOK {
+			t.Fatalf("unbounded: status %d", rec.Code)
+		}
 	}
 }

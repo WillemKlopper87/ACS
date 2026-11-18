@@ -125,7 +125,7 @@ func NewMetrics(service string) *Metrics {
 		}),
 		CWMPAuthTotal: factory.NewCounterVec(prometheus.CounterOpts{
 			Name:        "acs_cwmp_auth_total",
-			Help:        "CWMP authentication outcomes: ok, challenge (no credentials yet, normal first request), stale, bad_credentials, bootstrap_ok, bootstrap_failed.",
+			Help:        "CWMP authentication outcomes: ok, challenge (no credentials yet, normal first request), stale, bad_credentials, bootstrap_ok, bootstrap_failed, bootstrap_new_device (a never-seen serial registered), bootstrap_new_device_limited (refused: too many from one source).",
 			ConstLabels: constLabels,
 		}, []string{"result"}),
 		DevicesOnline: factory.NewGaugeVec(prometheus.GaugeOpts{

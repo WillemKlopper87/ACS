@@ -97,6 +97,26 @@ groups:
           summary: "Sustained CWMP credential rejections"
           description: "CPEs are presenting wrong Digest or bootstrap credentials (more than 3/min for 15 minutes) — a credential mismatch after graduation, a factory-reset device needing re-enrolment, or a scanner."
 
+      - alert: BootstrapNewDeviceSurge
+        # The bootstrap credential is the same on every unprovisioned router,
+        # so its holder can register serials the ACS has never seen. An
+        # install day raises this too: check it against the day's plan.
+        expr: sum(increase(acs_cwmp_auth_total{result="bootstrap_new_device"}[1h])) > 200
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unusual number of new devices registering"
+          description: "More than 200 never-seen serials registered with the bootstrap credential in an hour. Expected during a planned rollout; otherwise someone holding the bootstrap credential may be inventing serials (security probe 2026-11-18, D3)."
+
+      - alert: BootstrapNewDeviceLimited
+        expr: sum(increase(acs_cwmp_auth_total{result="bootstrap_new_device_limited"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "New-device registrations refused at the per-source limit"
+          description: "One source address tried to register more never-seen serials than ACS_CWMP_MAX_NEW_DEVICES_PER_SOURCE_PER_HOUR allows. A large site behind one NAT address needs the limit raised; anything else is worth a look in acs.log (\"bootstrap registration refused\")."
+
       - alert: TransferEndpointRejections
         expr: sum(rate(acs_http_requests_total{service="api",route=~"PUT /api/v1/uploads/.*",status="4xx"}[5m])) > 0.2
         for: 10m
