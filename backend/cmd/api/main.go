@@ -270,7 +270,7 @@ func main() {
 	// target_url points at a receiver on the internet/BSS network, not a
 	// CPE, so it gets its own policy/CIDR list rather than reusing
 	// ACS_DEVICE_NET_ALLOWED_CIDRS.
-	bssWebhookNetPolicy := netguard.Policy{}
+	bssWebhookNetPolicy := netguard.Policy{ForbidPrivate: profile == config.ProfileProduction}
 	if v := os.Getenv("ACS_BSS_WEBHOOK_ALLOWED_CIDRS"); v != "" {
 		cidrs, err := netguard.ParseCIDRList(v)
 		if err != nil {

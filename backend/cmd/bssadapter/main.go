@@ -197,7 +197,10 @@ func main() {
 	// allowlist beyond the always-forbidden classes (loopback/link-local/
 	// multicast) netguard refuses unconditionally — same safe-by-default
 	// shape as ACS_DEVICE_NET_ALLOWED_CIDRS in cmd/api.
-	webhookNetPolicy := netguard.Policy{}
+	// In production a receiver on a private address must be listed: an
+	// integration could otherwise have this host open connections into its
+	// own network and read from the delivery errors what answers there.
+	webhookNetPolicy := netguard.Policy{ForbidPrivate: profile == config.ProfileProduction}
 	if v := os.Getenv("ACS_BSS_WEBHOOK_ALLOWED_CIDRS"); v != "" {
 		cidrs, err := netguard.ParseCIDRList(v)
 		if err != nil {

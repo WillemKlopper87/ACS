@@ -50,6 +50,36 @@ Tests for each are in `backend/cmd/bssadapter/operations_test.go`, `backend/inte
 - **The ceiling is per action, not per device**, and a few orders over it can pass when requests arrive at the same instant.
 - Everything listed as open or as deployment work in the 14 November assessment, including the external penetration test.
 
-## 6. Running the probe
+## 6. Second pass: the stack in the production profile
 
-Against a throwaway stack only. `scripts/security/probe.py` names the ports and settings it expects. It exits non-zero when a check fails.
+The same day, against a local stack started as production runs it: `ACS_DEPLOYMENT_PROFILE=production`, NaaS mode, the adapter in strict mode (customer-bound clients only, source allowlist, sealed secrets only, allocated devices only), TLS on the CWMP port, a TLS proxy in front of the API and the adapter, two-step sign-in required, and each service on its own database login. `scripts/security/prod_probe.py`.
+
+Still a local stack: no real firewall, hosts, certificates or network, and no real router.
+
+### What held
+
+| Area | Checked |
+|---|---|
+| Refusing an unsafe configuration | The adapter does not start with a shared token, without a source allowlist, with fleet-wide clients, without a metrics token, or on a public address without TLS. The API does not start with CORS `*`, without a metrics token, without two-step sign-in for the writing roles, or with a short signing secret. The CWMP gateway does not start without TLS, with TLS below 1.2, with Basic authentication, with the shared credential for established devices, or without a device-network allowlist. |
+| TLS | TLS 1.0 and 1.1 refused, 1.2 and 1.3 accepted, on all three listeners; RC4, 3DES, CBC-SHA and NULL suites refused; plain HTTP to the CWMP port is `400`. |
+| Two-step sign-in | A password alone gives no session; neither step token works as a session or at the other step; enrolment cannot be restarted; four wrong codes and the next is `429`; a one-time code cannot be used twice. |
+| Sessions | The cookie is `HttpOnly`, `Secure`, `SameSite=Strict`, scoped to `/api/`. A cookie-authenticated change is refused without the CSRF header, from a foreign, look-alike or `null` origin. Edited, `alg: none` and extended tokens are `401`. Logout, disabling an operator and removing one stop the session at once. |
+| Roles | All 209 registered routes were called with no session (none answered) and every changing route as a read-only operator (none changed anything, apart from its own logout and the public password-reset request). No route answered `5xx`. A `noc` operator cannot create operators or list integration clients. |
+| Adapter, strict mode | A fleet-wide client's token is refused on every route (`ErrClientNotCustomerBound`). Mapping an unallocated, another customer's or an unknown serial is refused, and the three answers are identical. A call from an unlisted network is refused, and a client cannot choose its source address through the proxy. A Wi-Fi password in clear is refused. Factory reset is off. The order ceiling refused the sixth restart in the hour. |
+| CWMP | No or wrong credentials and Basic authentication are refused. An external entity reads no file; an entity-expansion bomb is rejected at once; an 8 MiB Inform is refused; garbage is `400`; a connection that never finishes its headers is dropped after 30 seconds. |
+| Database logins | The adapter's login cannot read operator password hashes, two-step secrets or device credentials, change operators, or create or drop tables. The gateway's cannot read integration client secrets or operator hashes or delete the audit log. The API's cannot alter the schema or create roles. None is a superuser. |
+| Request forgery | The device web-GUI target refuses loopback and link-local addresses. Webhook targets on loopback, link-local, `localhost`, decimal and hexadecimal forms of `127.0.0.1`, and non-HTTPS schemes are refused at creation. |
+
+### Findings
+
+| # | Sev | Finding | Status |
+|---|---|---|---|
+| D1 | Medium | **An integration could make the ACS connect to private addresses on its own network.** A webhook `target_url` on a private address (10/8, 172.16/12, 192.168/16) was accepted, the dispatcher connected to it (observed: a TCP connection to a listener on the host's own private address), and the delivery error told the integration whether something answered. An ISP's client could map the ACS operator's internal network from outside. Only where `ACS_BSS_WEBHOOK_ALLOWED_CIDRS` was unset, which was the default. | **Fixed.** In production a webhook target on a private, shared (100.64/10) or unique-local address is refused at creation and at delivery unless `ACS_BSS_WEBHOOK_ALLOWED_CIDRS` lists it. Existing subscriptions to such addresses stop delivering ("target refused by the network policy"). |
+| D2 | Low | **The API's database login can delete audit rows.** It is granted for the retention job that runs inside the API. Someone who takes over the API can erase the trail of what they did. | Open. Ship the audit trail off the host (14 November, item 4), or move retention to the owner role run from a scheduled `cmd/migrate`-style job so the API's login can be `INSERT`/`SELECT` only. |
+| D3 | Low | **The bootstrap credential registers any serial the ACS has never seen** (known as S2 since 30 October; confirmed here: an Inform with an invented serial was accepted and created a device row). Anyone holding the fleet's bootstrap credential, which every unprovisioned router carries, can fill the device table and squat on serials. With allocated-devices-only on, a squatted serial cannot be mapped by an integration. | Open. Pre-register expected serials (or a per-batch bootstrap credential) and refuse the rest. |
+| D4 | Info | **The API serves plain HTTP on whatever address it is given**, production profile included. `scripts/start.sh` binds it to loopback and the compose file publishes it on loopback only; the binary itself does not refuse a public address the way the adapter does (it cannot tell a container's `0.0.0.0` from a host's). | Open, by design. Never set `ACS_API_ADDR` to a public address. |
+| D5 | Info | **A fleet-wide client can still be created and gets a token in strict mode.** The token is refused on every route. | Open. Refuse creation and issuance in strict mode so nothing misleading exists. |
+
+## 7. Running the probes
+
+Against a throwaway stack only. `scripts/security/probe.py` (lab profile, two ISPs with simulated routers) and `scripts/security/prod_probe.py` (production profile behind a TLS proxy) each name the ports and settings they expect, and exit non-zero when a check fails.

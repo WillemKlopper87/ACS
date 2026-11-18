@@ -22,7 +22,17 @@ type Policy struct {
 	// inside one of these networks. When empty, any address passes
 	// except the always-forbidden classes below.
 	AllowedCIDRs []*net.IPNet
+	// ForbidPrivate, with no allowlist, also refuses private-use
+	// addresses (RFC 1918, RFC 6598 shared space, IPv6 unique local): for
+	// a target chosen by an outside party, such as an integration's
+	// webhook receiver, which has no business on this host's own
+	// networks. An allowlist states the intent and takes precedence.
+	ForbidPrivate bool
 }
+
+// sharedAddressSpace is RFC 6598 (carrier-grade NAT), which net.IP.IsPrivate
+// does not cover.
+var sharedAddressSpace = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
 
 // ParseCIDRList parses a comma-separated CIDR list (e.g. the
 // ACS_WEBGUI_ALLOWED_CIDRS environment variable).
@@ -65,6 +75,9 @@ func (p Policy) CheckIP(ip net.IP) error {
 		return fmt.Errorf("target %s is the unspecified address", ip)
 	}
 	if len(p.AllowedCIDRs) == 0 {
+		if p.ForbidPrivate && (ip.IsPrivate() || sharedAddressSpace.Contains(ip)) {
+			return fmt.Errorf("target %s is a private address", ip)
+		}
 		return nil
 	}
 	for _, n := range p.AllowedCIDRs {

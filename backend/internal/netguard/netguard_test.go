@@ -76,3 +76,35 @@ func TestDialControl(t *testing.T) {
 		t.Error("DialControl outside allowlist = nil, want error")
 	}
 }
+
+// A target an outside party chooses (a webhook receiver) may not be on a
+// private network unless the operator listed it.
+func TestForbidPrivateRefusesPrivateTargetsUnlessListed(t *testing.T) {
+	strict := Policy{ForbidPrivate: true}
+	for _, addr := range []string{"10.0.0.5", "172.17.0.1", "192.168.1.10", "100.64.3.2", "fd12:3456::1"} {
+		if err := strict.CheckIP(net.ParseIP(addr)); err == nil {
+			t.Errorf("%s was allowed", addr)
+		}
+	}
+	for _, addr := range []string{"203.0.113.9", "8.8.8.8", "2001:db8::1"} {
+		if err := strict.CheckIP(net.ParseIP(addr)); err != nil {
+			t.Errorf("%s was refused: %v", addr, err)
+		}
+	}
+	// Without the flag nothing changes for the other users of a policy.
+	if err := (Policy{}).CheckIP(net.ParseIP("10.0.0.5")); err != nil {
+		t.Errorf("a plain policy refused a private address: %v", err)
+	}
+	// An allowlist is the operator's stated intent and takes precedence.
+	_, n, _ := net.ParseCIDR("10.20.0.0/16")
+	listed := Policy{ForbidPrivate: true, AllowedCIDRs: []*net.IPNet{n}}
+	if err := listed.CheckIP(net.ParseIP("10.20.1.1")); err != nil {
+		t.Errorf("a listed private address was refused: %v", err)
+	}
+	if err := listed.CheckIP(net.ParseIP("10.30.1.1")); err == nil {
+		t.Error("an unlisted address passed an allowlist")
+	}
+	if err := listed.CheckIP(net.ParseIP("127.0.0.1")); err == nil {
+		t.Error("loopback passed")
+	}
+}
