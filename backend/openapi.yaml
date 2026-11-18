@@ -1454,6 +1454,23 @@ paths:
                   - type: object
                     properties: { parameters: { type: array, items: { type: string } } }
 
+  /api/v1/devices/{id}/parameters/refresh-status:
+    post:
+      tags: [Diagnostics]
+      summary: Queue ONE GET_PARAMETER over the router's status parameters, uptime, LAN host count and, on a cellular router, its signal (diagnostics.run permission). An Idempotency-Key answers a retry with the job already queued
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/QueueResponse"
+                  - type: object
+                    properties: { parameters: { type: array, items: { type: string } } }
+        "409": { description: "The device has no discovered status parameter (run parameter discovery), or the Idempotency-Key was used for a different request" }
+
   /api/v1/devices/{id}/parameter-attributes:
     post:
       tags: [Parameters]

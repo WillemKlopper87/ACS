@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: ACS BSS/CRM Integration Adapter API
-  version: "2.0.0"
+  version: "2.1.0"
   description: >-
     The external-facing REST API served by cmd/bssadapter (build plan §5,
     bss-integration-guide.md). This is the boundary an external BSS/CRM
@@ -211,6 +211,43 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
 
+  /bss/v1/mappings/{account_id}/status:
+    get:
+      tags: [Mappings]
+      summary: >-
+        Read how the mapped device is doing (2.1.0): uptime, LAN host count and, on a cellular router, its signal.
+        Answered from the ACS's parameter cache without contacting the CPE; the values are as old as read_at.
+        Place a REFRESH_STATUS order to have the CPE report again
+      parameters:
+        - { name: account_id, in: path, required: true, schema: { type: string } }
+        - { name: role, in: query, required: false, schema: { type: string, enum: [gateway, ont, extender, stb, ata, other] }, description: "Optional. Defaults to gateway." }
+      responses:
+        "200":
+          description: The values the CPE has reported. One it has not reported is null, never zero. No SSID, credential or parameter path is returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account_id, device_id, role, uptime_seconds, lan_hosts, signal, read_at]
+                properties:
+                  account_id: { type: string }
+                  device_id: { type: string }
+                  role: { type: string }
+                  uptime_seconds: { type: integer, nullable: true, description: "Seconds since the CPE last started" }
+                  lan_hosts: { type: integer, nullable: true, description: "Hosts the CPE has on its LAN (wired and Wi-Fi)" }
+                  signal:
+                    type: object
+                    nullable: true
+                    description: "Null for a router with no cellular interface. RSRP and RSSI in dBm, RSRQ and SINR in dB, as the CPE reports them"
+                    properties:
+                      rsrp: { type: number, nullable: true }
+                      rsrq: { type: number, nullable: true }
+                      sinr: { type: number, nullable: true }
+                      rssi: { type: number, nullable: true }
+                  read_at: { type: string, format: date-time, nullable: true, description: "When the OLDEST of the returned values was reported. Null when none was" }
+        "404": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+
   /bss/v1/orders:
     post:
       tags: [Orders]
@@ -229,7 +266,7 @@ paths:
                 external_order_id: { type: string, description: "BSS-assigned idempotency key" }
                 account_id: { type: string }
                 service_type: { type: string }
-                action: { type: string, enum: [MODIFY_WIFI, SUSPEND, ACTIVATE], description: "SUSPEND/ACTIVATE need ACS_WALLED_GARDEN_* configured server-side or return 400 (build plan §5.3)" }
+                action: { type: string, enum: [MODIFY_WIFI, SUSPEND, ACTIVATE, REBOOT, REFRESH_STATUS, FACTORY_RESET], description: "SUSPEND/ACTIVATE need ACS_WALLED_GARDEN_* configured server-side or return 400 (build plan §5.3). REBOOT, REFRESH_STATUS and FACTORY_RESET (2.1.0) are device operations: they write no parameter and take none, except FACTORY_RESET, which must carry parameters {confirm: FACTORY_RESET} and is 400 ErrUnsupportedAction unless the operator set ACS_BSS_ALLOW_FACTORY_RESET. REFRESH_STATUS changes nothing on the CPE; its job fails when the device has no status parameter to report" }
                 role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "Optional. Defaults to gateway." }
                 parameters:
                   type: object
@@ -255,7 +292,7 @@ paths:
               required: [account_id, action]
               properties:
                 account_id: { type: string }
-                action: { type: string, enum: [MODIFY_WIFI, SUSPEND, ACTIVATE] }
+                action: { type: string, enum: [MODIFY_WIFI, SUSPEND, ACTIVATE, REBOOT, REFRESH_STATUS, FACTORY_RESET] }
                 role: { type: string, enum: [gateway, ont, extender, stb, ata, other], description: "Optional. Defaults to gateway." }
                 parameters: { type: object, additionalProperties: { type: string } }
       responses:

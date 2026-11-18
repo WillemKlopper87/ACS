@@ -43,6 +43,9 @@ and the response `body`.
 | `ids-per-customer` | **2.0.** A second customer uses an `account_id` and an `external_order_id` another customer already uses: both are its own (200, 202), and each customer reads only its own device |
 | `order-resend-changed` | **2.0.** An `external_order_id` sent again: the identical request replays the order (202), a different request is 409 `ErrIdempotencyKeyReused` |
 | `webhook-secret-too-short` | **2.0.** A new webhook subscription with a secret under 32 characters: 400 |
+| `order-refresh-status` | **2.1.** `REFRESH_STATUS` and the status read: nulls before the CPE reported, a preflight, the order, its job after the CPE session, the status with uptime, LAN hosts and signal, and an unknown account (404) |
+| `order-reboot` | **2.1.** `REBOOT`: the order, the same order again (same `command_key`, one restart), the same `external_order_id` with another action (409), and the job after the CPE session |
+| `order-factory-reset` | **2.1.** `FACTORY_RESET`: refused where it is not switched on (400 `ErrUnsupportedAction`), refused without the confirmation (400 `ErrInvalidRequest`), then the order and its job |
 
 All fixtures were recorded again for 2.0.0, at one commit (see
 `captured_from`). Apart from ids, times and the three new fixtures, one
@@ -57,6 +60,29 @@ these values. Exchanges keep the response headers an integration acts on
 (`headers`: `Location`, `Idempotent-Replayed`, `Content-Type`, `Retry-After`)
 and the request headers that matter (`request_headers`). Errors are RFC 9457
 problems that keep the older `error`/`message` keys.
+
+## 2.1.0: device operations and a status read
+
+2.1.0 only adds. A 2.0.0 integration needs no change.
+
+| Addition | What it is |
+|---|---|
+| `REBOOT` | An order action (`POST /bss/v1/orders`) that restarts the account's CPE. No `parameters`. Tracked like any order (`GET /bss/v1/jobs/{command_key}`); the CPE is back when it next reports in |
+| `REFRESH_STATUS` | An order action that asks the CPE to report its status parameters now. No `parameters`; it changes nothing on the CPE. Its job fails when the device has no status parameter to report |
+| `FACTORY_RESET` | An order action that wipes the CPE's configuration. Refused with `400 ErrUnsupportedAction` unless the operator set `ACS_BSS_ALLOW_FACTORY_RESET=true` (off by default), and the order must carry `parameters: {"confirm": "FACTORY_RESET"}` |
+| `GET /bss/v1/mappings/{account_id}/status` | Uptime, LAN host count and, on a cellular router, signal (RSRP, RSRQ, SINR, RSSI), from the ACS's parameter cache. A value the CPE has not reported is `null`. `read_at` is when the oldest returned value was reported |
+
+The three actions are also accepted by `POST /bss/v1/actions/preflight`,
+which answers whether the order would be taken and writes nothing. A resend
+of the same `external_order_id` with the same action is a retry and does not
+restart the CPE twice; with a different action it is `409
+ErrIdempotencyKeyReused`, as for every order since 2.0.0.
+
+Three fixtures were recorded for 2.1.0 (`order-refresh-status`,
+`order-reboot`, `order-factory-reset`), through real CWMP sessions with a
+simulated CPE that registered itself, so its parameter names were discovered
+as with a real one. The other fixtures are the 2.0.0 recording and remain
+valid: `ACS_RECORD_ONLY` kept them untouched.
 
 ## 2.0.0: what changed for an integration
 
@@ -87,6 +113,6 @@ integration).
 **Versioned.** The contract is tagged `bss-contract-v<major>.<minor>.<patch>`
 (`bss-contract-v1.0.0`, `v1.0.1`, `v1.1.0`, `v1.1.1`, `v1.2.0`, `v1.2.1`, `v2.0.0`). A tag never moves. Within a major version, changes only add
 (fields, endpoints, and codes that only a new endpoint or parameter can return); a removal or a changed
-meaning bumps the major version. 1.1.0 added sealed secret handles (`POST /bss/v1/secrets`). 1.2.0 added the optional `subscriber_name` and `vip`, `PUT /bss/v1/accounts/{id}/subscriber` and the `ENDED` sale state (a consumer that validates the state against a fixed list must accept it). 1.2.1 made a plan change update the account mapping's `service_plan` too (it only changed the sale's), corrected the spec text on ending a sale in service (a TMF641 delete ends the mapping and leaves the sale `IN_SERVICE`), and named `ENDED` in the cancel 409 message. 2.0.0 made IDs unique per customer, refused a resent order that differs, and set the webhook secret rules (table above). Pin integration tests to a tag. Re-record
+meaning bumps the major version. 1.1.0 added sealed secret handles (`POST /bss/v1/secrets`). 1.2.0 added the optional `subscriber_name` and `vip`, `PUT /bss/v1/accounts/{id}/subscriber` and the `ENDED` sale state (a consumer that validates the state against a fixed list must accept it). 1.2.1 made a plan change update the account mapping's `service_plan` too (it only changed the sale's), corrected the spec text on ending a sale in service (a TMF641 delete ends the mapping and leaves the sale `IN_SERVICE`), and named `ENDED` in the cancel 409 message. 2.0.0 made IDs unique per customer, refused a resent order that differs, and set the webhook secret rules (table above). 2.1.0 (not tagged yet) added the device operations `REBOOT`, `REFRESH_STATUS` and `FACTORY_RESET` and the status read. Pin integration tests to a tag. Re-record
 with [`scripts/contract/record_fixtures.py`](../scripts/contract/record_fixtures.py)
 against a throwaway stack (its docstring lists the environment it needs).

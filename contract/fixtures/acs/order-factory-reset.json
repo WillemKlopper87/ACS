@@ -1,0 +1,86 @@
+{
+  "name": "acs/order-factory-reset",
+  "description": "2.1. FACTORY_RESET: refused where the operator has not switched it on (400 ErrUnsupportedAction, the default), refused without the confirmation (400 ErrInvalidRequest), then the order with parameters.confirm (202) and its job after the CPE session in which the ACS sent one FactoryReset.",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 8a13714, 2026-11-18. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "POST",
+      "path": "/bss/v1/orders",
+      "status": 400,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrUnsupportedAction",
+        "title": "Unsupported action",
+        "status": 400,
+        "detail": "unsupported or not-yet-implemented BSS action: FACTORY_RESET is not enabled on this ACS (ACS_BSS_ALLOW_FACTORY_RESET)",
+        "code": "ErrUnsupportedAction",
+        "error": "ErrUnsupportedAction",
+        "message": "unsupported or not-yet-implemented BSS action: FACTORY_RESET is not enabled on this ACS (ACS_BSS_ALLOW_FACTORY_RESET)"
+      },
+      "request": {
+        "external_order_id": "ORD-CONTRACT-RESET-OFF",
+        "account_id": "contract.0041",
+        "action": "FACTORY_RESET",
+        "parameters": {
+          "confirm": "FACTORY_RESET"
+        }
+      },
+      "note": "An adapter without ACS_BSS_ALLOW_FACTORY_RESET=true, which is the default."
+    },
+    {
+      "method": "POST",
+      "path": "/bss/v1/orders",
+      "status": 400,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrInvalidRequest",
+        "title": "Invalid request",
+        "status": 400,
+        "detail": "order parameters do not satisfy the requested action: FACTORY_RESET needs exactly one parameter, confirm=FACTORY_RESET",
+        "code": "ErrInvalidRequest",
+        "error": "ErrInvalidRequest",
+        "message": "order parameters do not satisfy the requested action: FACTORY_RESET needs exactly one parameter, confirm=FACTORY_RESET"
+      },
+      "request": {
+        "external_order_id": "ORD-CONTRACT-RESET-BARE",
+        "account_id": "contract.0041",
+        "action": "FACTORY_RESET"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/bss/v1/orders",
+      "status": 202,
+      "mutating": true,
+      "body": {
+        "order_tracking_id": "ORD-CONTRACT-RESET",
+        "command_key": "reset_20261118_9dd8f7e7",
+        "status": "QUEUED",
+        "timestamp": "2026-11-18T07:59:25.590686093Z"
+      },
+      "request": {
+        "external_order_id": "ORD-CONTRACT-RESET",
+        "account_id": "contract.0041",
+        "action": "FACTORY_RESET",
+        "parameters": {
+          "confirm": "FACTORY_RESET"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/jobs/reset_20261118_9dd8f7e7",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "command_key": "reset_20261118_9dd8f7e7",
+        "device_id": "6ac6af5c-708b-4cbf-b028-eda658a88d2e",
+        "type": "FACTORY_RESET",
+        "status": "SUCCESS",
+        "created_at": "2026-11-18T07:59:25Z",
+        "updated_at": "2026-11-18T07:59:25Z",
+        "completed_at": "2026-11-18T07:59:25Z"
+      }
+    }
+  ]
+}

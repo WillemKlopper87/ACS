@@ -3104,6 +3104,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/parameters/refresh-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue ONE GET_PARAMETER over the router's status parameters, uptime, LAN host count and, on a cellular router, its signal (diagnostics.run permission). An Idempotency-Key answers a retry with the job already queued */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Queued */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["QueueResponse"] & {
+                            parameters?: string[];
+                        };
+                    };
+                };
+                /** @description The device has no discovered status parameter (run parameter discovery), or the Idempotency-Key was used for a different request */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/parameter-attributes": {
         parameters: {
             query?: never;

@@ -27,6 +27,9 @@ Environment:
   ACS_RECORD_ONLY   optional: comma-separated fixture names; only those are
                     written, so a new minor version can add fixtures without
                     churning the recorded ids and times of the others
+  ACS_BSS_NO_RESET_URL   optional: one more adapter on the same database,
+                    without ACS_BSS_ALLOW_FACTORY_RESET (order-factory-reset); the
+                    main adapter needs ACS_BSS_ALLOW_FACTORY_RESET=true
   ACS_BSS_PLAIN_URL, ACS_BSS_KEYLESS_URL   optional: two more adapters on the
                     same database, one without ACS_BSS_SECRETS_BEHIND_TLS_PROXY
                     and one without ACS_BSS_SECRET_KEY (secret-handle-errors)
@@ -400,6 +403,7 @@ def main():
     if os.environ.get("ACS_CWMP_URL"):
         record_webhook_bodies(token)
         record_secret_handles(token)
+        record_v21(token)
 
     only = {n.strip() for n in os.environ.get("ACS_RECORD_ONLY", "").split(",") if n.strip()}
     if only:
@@ -474,6 +478,109 @@ def record_v2(token):
            "refused (400 ErrInvalidRequest). In the production profile a plain-http target_url is refused the same way. "
            "Subscriptions that already exist are not affected.",
            [exchange("POST", "/bss/v1/webhooks", status, resp, False, dict(short, secret="too-short-secret"))])
+
+
+def settle_job(token, command_key, serial, inform_params, values):
+    """CWMP sessions until the job is final; returns (status, job, RPC names seen)."""
+    seen, deadline = [], time.time() + 30
+    while True:
+        seen += cwmp_session(serial, inform_params, False, values)
+        status, job = call(BSS, "GET", f"/bss/v1/jobs/{command_key}", token=token)
+        if job.get("status") in ("SUCCESS", "FAILED") or time.time() > deadline:
+            return status, job, seen
+
+
+def record_v21(token):
+    """What 2.1 adds: REBOOT, REFRESH_STATUS and FACTORY_RESET as order
+    actions, and the status read. Through real CWMP sessions, so the jobs
+    end as they do with a CPE."""
+    account, serial = "contract.0041", "CONTRACT41"
+    informed = {"Device.DeviceInfo.SoftwareVersion": "1.2601.00.0101"}
+    values = dict(informed, **{"Device.DeviceInfo.UpTime": "86400", "Device.Hosts.HostNumberOfEntries": "7",
+                               "Device.Cellular.Interface.1.RSRP": "-98", "Device.Cellular.Interface.1.RSRQ": "-11",
+                               "Device.Cellular.Interface.1.SINR": "12", "Device.Cellular.Interface.1.RSSI": "-67",
+                               "Device.WiFi.SSID.1.SSID": "Contract-V21"})
+    # This CPE registers itself: its first Inform creates the device and the
+    # ACS discovers its parameter names, as with a real CPE. A refresh asks
+    # only for status parameters the device is known to have.
+    seen = cwmp_session(serial, informed, False, values, event="0 BOOTSTRAP")
+    assert "GetParameterNames" in seen, seen
+    status, mapped = call(BSS, "POST", "/bss/v1/mappings", {"account_id": account, "oui_serial": f"A4FC77+3TG02241+{serial}",
+                                                           "service_plan": "HOME-5G"}, token)
+    assert status == 200, (status, mapped)
+    status_path = f"/bss/v1/mappings/{account}/status"
+
+    # The status read before the CPE was ever asked: the device is there,
+    # the values it has not reported are null.
+    status, before = call(BSS, "GET", status_path, token=token)
+    assert status == 200, (status, before)
+    exchanges = [exchange("GET", status_path, status, before, False)]
+    exchanges[-1]["note"] = "Before any refresh: what the CPE has not reported is null, never 0."
+
+    order = {"external_order_id": "ORD-CONTRACT-REFRESH", "account_id": account, "action": "REFRESH_STATUS"}
+    pre = {"account_id": account, "action": "REFRESH_STATUS"}
+    status, resp = call(BSS, "POST", "/bss/v1/actions/preflight", pre, token)
+    exchanges.append(exchange("POST", "/bss/v1/actions/preflight", status, resp, False, pre))
+    status, placed = call(BSS, "POST", "/bss/v1/orders", order, token)
+    assert status == 202, (status, placed)
+    exchanges.append(exchange("POST", "/bss/v1/orders", status, placed, True, order))
+    status, job, seen = settle_job(token, placed["command_key"], serial, informed, values)
+    assert job.get("status") == "SUCCESS" and "GetParameterValues" in seen, (job, seen)
+    exchanges.append(exchange("GET", f"/bss/v1/jobs/{placed['command_key']}", status, job, False))
+    status, after = call(BSS, "GET", status_path, token=token)
+    assert status == 200 and after.get("uptime_seconds") == 86400 and after.get("lan_hosts") == 7, (status, after)
+    exchanges.append(exchange("GET", status_path, status, after, False))
+    status, missing = call(BSS, "GET", "/bss/v1/mappings/contract.no-such-account/status", token=token)
+    assert status == 404, (status, missing)
+    exchanges.append(exchange("GET", "/bss/v1/mappings/contract.no-such-account/status", status, missing, False,
+                              headers=dict(LAST_HEADERS)))
+    record("order-refresh-status", "2.1. REFRESH_STATUS and the status read: the status of a device that has reported "
+           "nothing yet (nulls), a preflight, the order (202), its job after the CPE session in which the ACS asked for the "
+           "status parameters, the status read with the values the CPE gave (uptime, LAN hosts, cellular signal; read_at "
+           "is when the oldest of them was read), and an account that does not exist (404).", exchanges)
+
+    order = {"external_order_id": "ORD-CONTRACT-REBOOT", "account_id": account, "action": "REBOOT"}
+    status, placed = call(BSS, "POST", "/bss/v1/orders", order, token)
+    assert status == 202, (status, placed)
+    exchanges = [exchange("POST", "/bss/v1/orders", status, placed, True, order)]
+    status, replay = call(BSS, "POST", "/bss/v1/orders", order, token)
+    assert status == 202 and replay.get("command_key") == placed.get("command_key"), (status, replay)
+    exchanges.append(exchange("POST", "/bss/v1/orders", status, replay, False, order))
+    changed = dict(order, action="REFRESH_STATUS")
+    status, refused = call(BSS, "POST", "/bss/v1/orders", changed, token)
+    assert status == 409, (status, refused)
+    exchanges.append(exchange("POST", "/bss/v1/orders", status, refused, False, changed))
+    status, job, seen = settle_job(token, placed["command_key"], serial, informed, values)
+    assert job.get("status") == "SUCCESS" and seen.count("Reboot") == 1, (job, seen)
+    exchanges.append(exchange("GET", f"/bss/v1/jobs/{placed['command_key']}", status, job, False))
+    record("order-reboot", "2.1. REBOOT: the order (202), the same order sent again (202, the same command_key: the CPE "
+           "is not restarted twice), the same external_order_id with another action (409 ErrIdempotencyKeyReused), and "
+           "the job after the CPE session in which the ACS sent one Reboot.", exchanges)
+
+    exchanges = []
+    off = os.environ.get("ACS_BSS_NO_RESET_URL", "").rstrip("/")
+    order = {"external_order_id": "ORD-CONTRACT-RESET", "account_id": account, "action": "FACTORY_RESET",
+             "parameters": {"confirm": "FACTORY_RESET"}}
+    if off:
+        status, resp = call(off, "POST", "/bss/v1/orders", dict(order, external_order_id="ORD-CONTRACT-RESET-OFF"), token)
+        assert status == 400, (status, resp)
+        exchanges.append(exchange("POST", "/bss/v1/orders", status, resp, False,
+                                  dict(order, external_order_id="ORD-CONTRACT-RESET-OFF")))
+        exchanges[-1]["note"] = "An adapter without ACS_BSS_ALLOW_FACTORY_RESET=true, which is the default."
+    bare = {"external_order_id": "ORD-CONTRACT-RESET-BARE", "account_id": account, "action": "FACTORY_RESET"}
+    status, resp = call(BSS, "POST", "/bss/v1/orders", bare, token)
+    assert status == 400, (status, resp)
+    exchanges.append(exchange("POST", "/bss/v1/orders", status, resp, False, bare))
+    status, placed = call(BSS, "POST", "/bss/v1/orders", order, token)
+    assert status == 202, (status, placed)
+    exchanges.append(exchange("POST", "/bss/v1/orders", status, placed, True, order))
+    status, job, seen = settle_job(token, placed["command_key"], serial, informed, values)
+    assert job.get("status") == "SUCCESS" and seen.count("FactoryReset") == 1, (job, seen)
+    exchanges.append(exchange("GET", f"/bss/v1/jobs/{placed['command_key']}", status, job, False))
+    record("order-factory-reset", "2.1. FACTORY_RESET: refused where the operator has not switched it on (400 "
+           "ErrUnsupportedAction, the default), refused without the confirmation (400 ErrInvalidRequest), then the order "
+           "with parameters.confirm (202) and its job after the CPE session in which the ACS sent one FactoryReset.",
+           exchanges)
 
 
 def map_device(token, n, root="DEVICE2"):

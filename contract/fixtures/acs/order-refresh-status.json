@@ -1,0 +1,109 @@
+{
+  "name": "acs/order-refresh-status",
+  "description": "2.1. REFRESH_STATUS and the status read: the status of a device that has reported nothing yet (nulls), a preflight, the order (202), its job after the CPE session in which the ACS asked for the status parameters, the status read with the values the CPE gave (uptime, LAN hosts, cellular signal; read_at is when the oldest of them was read), and an account that does not exist (404).",
+  "captured_from": "RECORDED from a running ACS (cmd/api + cmd/bssadapter + Postgres) at commit 8a13714, 2026-11-18. Secrets and tokens redacted.",
+  "exchanges": [
+    {
+      "method": "GET",
+      "path": "/bss/v1/mappings/contract.0041/status",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "account_id": "contract.0041",
+        "device_id": "6ac6af5c-708b-4cbf-b028-eda658a88d2e",
+        "role": "gateway",
+        "uptime_seconds": null,
+        "lan_hosts": null,
+        "signal": null,
+        "read_at": null
+      },
+      "note": "Before any refresh: what the CPE has not reported is null, never 0."
+    },
+    {
+      "method": "POST",
+      "path": "/bss/v1/actions/preflight",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "account_id": "contract.0041",
+        "device_id": "6ac6af5c-708b-4cbf-b028-eda658a88d2e",
+        "action": "REFRESH_STATUS",
+        "parameters": []
+      },
+      "request": {
+        "account_id": "contract.0041",
+        "action": "REFRESH_STATUS"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/bss/v1/orders",
+      "status": 202,
+      "mutating": true,
+      "body": {
+        "order_tracking_id": "ORD-CONTRACT-REFRESH",
+        "command_key": "getparam_20261118_894f0420",
+        "status": "QUEUED",
+        "timestamp": "2026-11-18T07:59:23.425001431Z"
+      },
+      "request": {
+        "external_order_id": "ORD-CONTRACT-REFRESH",
+        "account_id": "contract.0041",
+        "action": "REFRESH_STATUS"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/jobs/getparam_20261118_894f0420",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "command_key": "getparam_20261118_894f0420",
+        "device_id": "6ac6af5c-708b-4cbf-b028-eda658a88d2e",
+        "type": "GET_PARAMETER",
+        "status": "SUCCESS",
+        "created_at": "2026-11-18T07:59:23Z",
+        "updated_at": "2026-11-18T07:59:23Z",
+        "completed_at": "2026-11-18T07:59:23Z"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/mappings/contract.0041/status",
+      "status": 200,
+      "mutating": false,
+      "body": {
+        "account_id": "contract.0041",
+        "device_id": "6ac6af5c-708b-4cbf-b028-eda658a88d2e",
+        "role": "gateway",
+        "uptime_seconds": 86400,
+        "lan_hosts": 7,
+        "signal": {
+          "rsrp": -98,
+          "rsrq": -11,
+          "sinr": 12,
+          "rssi": -67
+        },
+        "read_at": "2026-11-18T07:59:23Z"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/bss/v1/mappings/contract.no-such-account/status",
+      "status": 404,
+      "mutating": false,
+      "body": {
+        "type": "urn:acs:problem:v1:ErrNotFound",
+        "title": "Not found",
+        "status": 404,
+        "detail": "resource not found",
+        "code": "ErrNotFound",
+        "error": "ErrNotFound",
+        "message": "resource not found"
+      },
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    }
+  ]
+}

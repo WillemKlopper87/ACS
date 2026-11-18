@@ -244,6 +244,7 @@ func main() {
 		secretTTL:             secretTTLFromEnv(logger),
 		secretsBehindTLSProxy: os.Getenv("ACS_BSS_SECRETS_BEHIND_TLS_PROXY") == "true",
 		requireSecretHandles:  os.Getenv("ACS_BSS_REQUIRE_SECRET_HANDLES") == "true",
+		allowFactoryReset:     os.Getenv("ACS_BSS_ALLOW_FACTORY_RESET") == "true",
 		metrics:               metrics,
 		walledGarden:          walledGarden,
 		webhooks:              webhooks,
@@ -261,6 +262,7 @@ func main() {
 	mux.HandleFunc("POST /bss/v1/mappings", metrics.InstrumentHTTP("POST /bss/v1/mappings", h.createMapping))
 	mux.HandleFunc("GET /bss/v1/mappings/{account_id}", metrics.InstrumentHTTP("GET /bss/v1/mappings/{account_id}", h.listMappings))
 	mux.HandleFunc("GET /bss/v1/mappings/{account_id}/capabilities", metrics.InstrumentHTTP("GET /bss/v1/mappings/{account_id}/capabilities", h.getMappedDeviceCapabilities))
+	mux.HandleFunc("GET /bss/v1/mappings/{account_id}/status", metrics.InstrumentHTTP("GET /bss/v1/mappings/{account_id}/status", h.getMappedDeviceStatus))
 	mux.HandleFunc("POST /bss/v1/actions/preflight", metrics.InstrumentHTTP("POST /bss/v1/actions/preflight", h.preflightAction))
 	mux.HandleFunc("POST /bss/v1/orders", metrics.InstrumentHTTP("POST /bss/v1/orders", h.createOrder))
 	mux.HandleFunc("GET /bss/v1/jobs/{command_key}", metrics.InstrumentHTTP("GET /bss/v1/jobs/{command_key}", h.getJob))
@@ -630,16 +632,20 @@ type handler struct {
 	secretTTL             time.Duration
 	secretsBehindTLSProxy bool
 	requireSecretHandles  bool
-	acs                   *bss.ACSClient
-	auditor               *observability.Auditor
-	token                 string
-	oauthClients          *bss.OAuthRepository
-	oauthSigningSecret    []byte
-	metrics               *observability.Metrics
-	walledGarden          bss.WalledGardenConfig
-	webhooks              *bss.WebhookRepository
-	alertPolicies         *alerting.Repository
-	alertIncidents        *alerting.IncidentRepository
+	// allowFactoryReset lets an integration order FACTORY_RESET
+	// (ACS_BSS_ALLOW_FACTORY_RESET). Off by default: it wipes a customer's
+	// router, so the operator decides whether an integration may ask.
+	allowFactoryReset  bool
+	acs                *bss.ACSClient
+	auditor            *observability.Auditor
+	token              string
+	oauthClients       *bss.OAuthRepository
+	oauthSigningSecret []byte
+	metrics            *observability.Metrics
+	walledGarden       bss.WalledGardenConfig
+	webhooks           *bss.WebhookRepository
+	alertPolicies      *alerting.Repository
+	alertIncidents     *alerting.IncidentRepository
 	// netPolicy bounds where a webhook target_url (BSS-operator-
 	// controlled) may point (audit H-7) -- checked at subscription
 	// creation and again at delivery time.
@@ -1083,6 +1089,16 @@ func (h *handler) preflightAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ErrInternal", "internal error")
 		return
 	}
+	if bss.IsDeviceOperation(req.Action) {
+		// Nothing to resolve: the answer says whether the order would be
+		// accepted (FACTORY_RESET enabled and confirmed) and writes nothing.
+		if err := bss.ValidateDeviceOperation(req.Action, req.Parameters, h.allowFactoryReset); err != nil {
+			writeError(w, http.StatusBadRequest, deviceOperationErrorCode(err), err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, actionPreflightResponse{AccountID: req.AccountID, DeviceID: mapping.DeviceID, Action: req.Action, Parameters: []bss.ParameterWrite{}})
+		return
+	}
 	params, err := h.translateActionForDevice(r.Context(), req.Action, req.Parameters, mapping.DeviceID)
 	if errors.Is(err, bss.ErrACSUnreachable) {
 		writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")
@@ -1136,7 +1152,7 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 		return "", err
 	}
 
-	commandKey, err = h.acs.SetParametersWithIdempotency(ctx, deviceID, params, "bss:"+externalOrderID+":set-parameters")
+	commandKey, err = h.sendOrder(ctx, action, deviceID, params, externalOrderID)
 	if err != nil {
 		if markErr := h.mappings.MarkDispatchFailed(ctx, orderID, err.Error()); markErr != nil {
 			h.logger.Error("failed to record dispatch failure", "err", markErr, "external_order_id", externalOrderID)
@@ -1174,6 +1190,19 @@ func (h *handler) dispatchOrder(ctx context.Context, externalOrderID, accountID,
 	return commandKey, nil
 }
 
+// sendOrder is the one place an order reaches the ACS, for the first
+// dispatch (dispatchOrder) and for the outbox's retry (order_reconciler.go)
+// alike: a device operation (REBOOT, FACTORY_RESET, REFRESH_STATUS) queues
+// its job, anything else is a parameter write. The idempotency key is
+// derived from the order, so a retry whose first answer was lost gets the
+// job already queued and the CPE is not restarted twice.
+func (h *handler) sendOrder(ctx context.Context, action, deviceID string, params []bss.ParameterWrite, externalOrderID string) (string, error) {
+	if bss.IsDeviceOperation(action) {
+		return h.acs.DeviceOperation(ctx, deviceID, action, "bss:"+externalOrderID+":operation")
+	}
+	return h.acs.SetParametersWithIdempotency(ctx, deviceID, params, "bss:"+externalOrderID+":set-parameters")
+}
+
 // translateActionForDevice turns a northbound business action into a device
 // write using both the device's discovered data-model root and, when present,
 // its persisted writable-parameter evidence. This keeps all BSS/TMF callers
@@ -1200,6 +1229,17 @@ func (h *handler) translateActionForDevice(ctx context.Context, action string, i
 		return nil, err
 	}
 	return bss.TranslateWithCapabilities(action, input, h.walledGarden, dev.DataModelRoot, discovered)
+}
+
+// deviceOperationErrorCode names a refused device operation as the rest of
+// this adapter does: an action this ACS will not take (unknown, or
+// FACTORY_RESET not enabled) is ErrUnsupportedAction, a wrong body is
+// ErrInvalidRequest.
+func deviceOperationErrorCode(err error) string {
+	if errors.Is(err, bss.ErrUnsupportedAction) {
+		return "ErrUnsupportedAction"
+	}
+	return "ErrInvalidRequest"
 }
 
 // createOrder implements Workflow B, idempotently: a retried
@@ -1255,7 +1295,17 @@ func (h *handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params, err := h.translateActionForDevice(r.Context(), req.Action, req.Parameters, mapping.DeviceID)
+	var params []bss.ParameterWrite
+	if bss.IsDeviceOperation(req.Action) {
+		// A device operation writes no parameter: nothing to translate, no
+		// secret to claim. It is checked, then travels the same outbox.
+		if err := bss.ValidateDeviceOperation(req.Action, req.Parameters, h.allowFactoryReset); err != nil {
+			writeError(w, http.StatusBadRequest, deviceOperationErrorCode(err), err.Error())
+			return
+		}
+	} else {
+		params, err = h.translateActionForDevice(r.Context(), req.Action, req.Parameters, mapping.DeviceID)
+	}
 	if err != nil {
 		if errors.Is(err, bss.ErrACSUnreachable) {
 			writeError(w, http.StatusBadGateway, "ErrACSUnreachable", "the underlying ACS engine is unreachable")

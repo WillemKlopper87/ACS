@@ -312,6 +312,16 @@ func isServiceRoute(r *http.Request) bool {
 		return true
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/api/v1/jobs/"):
 		return true
+	case r.Method == http.MethodPost && strings.HasPrefix(p, "/api/v1/devices/") && strings.Count(p, "/") == 5 &&
+		(strings.HasSuffix(p, "/reboot") || strings.HasSuffix(p, "/factory-reset")):
+		// The device operations an integration may order (bss-contract
+		// 2.1.0, acsclient.DeviceOperation): one device, one operation.
+		// Whether an integration may order a factory reset at all is the
+		// adapter's switch (ACS_BSS_ALLOW_FACTORY_RESET).
+		return true
+	case r.Method == http.MethodPost && strings.HasPrefix(p, "/api/v1/devices/") && strings.HasSuffix(p, "/parameters/refresh-status") && strings.Count(p, "/") == 6:
+		// REFRESH_STATUS: a read of the device's own status parameters.
+		return true
 	}
 	return false
 }

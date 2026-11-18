@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -85,8 +86,15 @@ func (h *handler) createReboot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, err := h.jobs.Create(r.Context(), id, jobs.TypeReboot, jobs.RebootPayload{}, operatorFromRequest(r))
+	// An Idempotency-Key makes a retried request answer with the job it
+	// already queued (the BSS adapter's order outbox retries a dispatch
+	// whose answer was lost): a router must not restart twice for one order.
+	job, err := h.jobs.CreateWithIdempotency(r.Context(), id, jobs.TypeReboot, jobs.RebootPayload{}, operatorFromRequest(r), r.Header.Get("Idempotency-Key"))
 	if err != nil {
+		if errors.Is(err, jobs.ErrIdempotencyConflict) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		h.logger.Error("failed to queue reboot", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -107,8 +115,12 @@ func (h *handler) createFactoryReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, err := h.jobs.Create(r.Context(), id, jobs.TypeFactoryReset, jobs.FactoryResetPayload{}, operatorFromRequest(r))
+	job, err := h.jobs.CreateWithIdempotency(r.Context(), id, jobs.TypeFactoryReset, jobs.FactoryResetPayload{}, operatorFromRequest(r), r.Header.Get("Idempotency-Key"))
 	if err != nil {
+		if errors.Is(err, jobs.ErrIdempotencyConflict) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		h.logger.Error("failed to queue factory reset", "err", err, "device_id", id)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
