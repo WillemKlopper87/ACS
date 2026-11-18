@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -58,6 +59,13 @@ func (h *handler) createBSSOAuthClient(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.CustomerID != nil && strings.TrimSpace(*req.CustomerID) != "" && !h.customerExists(r, strings.TrimSpace(*req.CustomerID)) {
 		http.Error(w, "customer_id does not exist", http.StatusBadRequest)
+		return
+	}
+	// Where the adapter accepts customer-bound clients only (required in
+	// production), a client without a customer could never be used: say
+	// so here instead of creating it.
+	if os.Getenv("ACS_BSS_REQUIRE_CUSTOMER_BOUND_CLIENTS") == "true" && (req.CustomerID == nil || strings.TrimSpace(*req.CustomerID) == "") {
+		http.Error(w, "this deployment accepts customer-bound clients only: customer_id is required", http.StatusBadRequest)
 		return
 	}
 	policy := bss.OAuthPolicy{Scopes: req.Scopes, AccountIDs: req.AccountIDs, GlobalAccess: req.GlobalAccess, CustomerID: req.CustomerID}

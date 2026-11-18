@@ -274,6 +274,40 @@ func TestTokenCarriesTheCustomer(t *testing.T) {
 	}
 }
 
+// In strict mode a client with no customer is refused on every route, so
+// it gets no token either: nothing that looks usable is issued.
+func TestStrictModeIssuesNoTokenToAClientWithoutACustomer(t *testing.T) {
+	e := newBindingEnv(t)
+	e.h.oauthClients = bss.NewOAuthRepository(e.db)
+	token := func(clientID, secret string) *httptest.ResponseRecorder {
+		form := url.Values{"grant_type": {"client_credentials"}, "client_id": {clientID}, "client_secret": {secret}}
+		req := httptest.NewRequest(http.MethodPost, "/bss/v1/oauth/token", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		e.h.issueOAuthToken(rec, req)
+		return rec
+	}
+	global, globalSecret, err := e.h.oauthClients.CreateClientWithPolicy(e.ctx, "fleet", bss.OAuthPolicy{Scopes: []string{bss.ScopeTMFRead}, GlobalAccess: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, boundSecret, err := e.h.oauthClients.CreateClientWithPolicy(e.ctx, "isp-a", bss.OAuthPolicy{Scopes: []string{bss.ScopeTMFRead}, CustomerID: &e.custA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.h.requireCustomerBound = true
+	if rec := token(global.ClientID, globalSecret); rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), "access_token") {
+		t.Errorf("fleet-wide client in strict mode: %d %s", rec.Code, rec.Body)
+	}
+	if rec := token(bound.ClientID, boundSecret); rec.Code != http.StatusOK {
+		t.Errorf("bound client in strict mode: %d %s", rec.Code, rec.Body)
+	}
+	e.h.requireCustomerBound = false
+	if rec := token(global.ClientID, globalSecret); rec.Code != http.StatusOK {
+		t.Errorf("fleet-wide client outside strict mode: %d %s", rec.Code, rec.Body)
+	}
+}
+
 func scopedToken(t *testing.T, customerID string, scopes ...string) string {
 	t.Helper()
 	now := time.Now()
