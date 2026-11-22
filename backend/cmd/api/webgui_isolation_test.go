@@ -13,7 +13,8 @@ import (
 func TestWebGUIProxyDoesNotForwardOperatorCredentials(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://device.example/status.html?token=ticket-abc&page=2", nil)
 	req.Header.Set("Authorization", "Bearer operator-session")
-	req.Header.Set("Cookie", "device_session=1")
+	req.Header.Set("Cookie", sessionCookieName+"=operator-session; other=1")
+	req.Header.Set(csrfHeader, "1")
 	stripOperatorCredentials(req)
 
 	if got := req.URL.Query().Get("token"); got != "" {
@@ -25,8 +26,14 @@ func TestWebGUIProxyDoesNotForwardOperatorCredentials(t *testing.T) {
 	if got := req.Header.Get("Authorization"); got != "" {
 		t.Errorf("Authorization forwarded to the device: %q", got)
 	}
-	if got := req.Header.Get("Cookie"); got == "" {
-		t.Error("the device's own cookie was dropped")
+	// The console's session cookie reaches this path (it is scoped to /api/).
+	// It must not go on, and neither may any other cookie: a device cannot
+	// have set one, since its Set-Cookie is removed from its responses.
+	if got := req.Header.Get("Cookie"); got != "" {
+		t.Errorf("cookies forwarded to the device: %q", got)
+	}
+	if got := req.Header.Get(csrfHeader); got != "" {
+		t.Errorf("console CSRF header forwarded to the device: %q", got)
 	}
 }
 
