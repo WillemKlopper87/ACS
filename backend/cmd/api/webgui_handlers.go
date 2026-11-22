@@ -217,9 +217,17 @@ func isolateDeviceContent(h http.Header, sameOrigin bool) {
 }
 
 // stripOperatorCredentials removes what authenticated the operator to this
-// API from a request about to be sent to a device.
+// API from a request about to be sent to a device: the Authorization header,
+// the ticket in the query string, and every cookie. The console's session
+// cookie is scoped to /api/, which includes this proxy's path, so a browser
+// that sends cookies here would hand the device the operator's session. All
+// cookies go, not just that one: a device's Set-Cookie is removed from its
+// responses (isolateDeviceContent), so no cookie the browser holds for this
+// origin can be the device's own.
 func stripOperatorCredentials(req *http.Request) {
 	req.Header.Del("Authorization")
+	req.Header.Del("Cookie")
+	req.Header.Del(csrfHeader)
 	q := req.URL.Query()
 	q.Del("token")
 	req.URL.RawQuery = q.Encode()
