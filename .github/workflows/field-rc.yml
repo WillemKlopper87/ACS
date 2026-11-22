@@ -205,7 +205,7 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/v1.51.1/install.sh | sh -s -- -b /usr/local/bin v1.51.1
           mkdir -p sbom
           syft acs-uspc:ci -o spdx-json > sbom/acs-uspc.spdx.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: uspc-sbom
           path: sbom/acs-uspc.spdx.json
