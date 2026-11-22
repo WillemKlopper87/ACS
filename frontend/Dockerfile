@@ -63,6 +63,10 @@ RUN set -eu; \
     sed -i '/^user /d' /etc/nginx/nginx.conf; \
     sed -i 's#^pid .*#pid /tmp/nginx.pid;#' /etc/nginx/nginx.conf; \
     chown -R nginx:nginx /var/cache/nginx /etc/nginx/conf.d; \
-    nginx -t
+    nginx -t; \
+    # nginx -t runs as root here and leaves its pid file in /tmp; the
+    # unprivileged user could not replace it, so nginx died at start with
+    # "open() /tmp/nginx.pid failed (13: Permission denied)".
+    rm -f /tmp/nginx.pid
 USER nginx
 EXPOSE 8080
