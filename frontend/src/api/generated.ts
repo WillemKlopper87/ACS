@@ -2634,6 +2634,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/connectivity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * When the device stopped reporting to the ACS, and whether it came back with a restart
+         * @description Derived from the Informs the ACS recorded (CWMP sessions), so it reaches back as far as ACS_RETENTION_SESSIONS_DAYS (30 by default). A gap longer than five minutes and 2.5 times the device's usual interval is an outage. The ACS sees only the silence: `restart` means the first Inform back carried 1 BOOT or 0 BOOTSTRAP (power or a reboot); `connectivity` means it did not, so the CPE stayed up and its path to the ACS was down; `ongoing` means it is silent now. A USP device opens no CWMP sessions and has no record here.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    hours?: number;
+                };
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DeviceConnectivity"];
+                    };
+                };
+                /** @description hours out of range */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description No such device in the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/satellites": {
         parameters: {
             query?: never;
@@ -9037,6 +9095,36 @@ export interface components {
             source?: string;
             /** Format: date-time */
             recorded_at?: string;
+        };
+        DeviceConnectivity: {
+            /** Format: date-time */
+            from?: string;
+            /** Format: date-time */
+            to?: string;
+            /** @description Informs recorded in the window */
+            checkins?: number;
+            /** @description Typical time between Informs (the median gap) */
+            interval_seconds?: number;
+            /** @description Silence longer than this is an outage */
+            threshold_seconds?: number;
+            /** @description Share of the observed span (first Inform in the window to `to`) not in an outage; null when there is nothing to measure */
+            availability_percent?: number | null;
+            outages?: {
+                /**
+                 * Format: date-time
+                 * @description The Inform before the silence
+                 */
+                last_seen?: string;
+                /**
+                 * Format: date-time
+                 * @description The first Inform after it; null while ongoing
+                 */
+                back_at?: string | null;
+                /** @description Upper bound of the outage: back_at - last_seen */
+                seconds?: number;
+                /** @enum {string} */
+                kind?: "restart" | "connectivity" | "ongoing";
+            }[];
         };
         QueueResponse: {
             command_key?: string;

@@ -40,6 +40,8 @@ vi.mock("../api/client", () => {
     getDeviceParametersByName: () =>
       Promise.resolve({ parameters: { "Device.DeviceInfo.SoftwareVersion": { value: "2.3.1", updated_at: "2026-11-14T00:00:00Z", source: "inform" } } }),
     getParameterNames: () => Promise.resolve({ names: { "Device.WiFi.SSID.1.SSID": true, "Device.DeviceInfo.SerialNumber": false } }),
+    getDeviceConnectivity: () =>
+      Promise.resolve({ from: "2026-11-16T08:00:00Z", to: "2026-11-23T08:00:00Z", checkins: 0, interval_seconds: 0, threshold_seconds: 300, availability_percent: null, outages: [] }),
     listDeviceJobs: () => Promise.resolve({ items: [{ command_key: "reboot_1", type: "REBOOT", status: "SUCCESS" }] }),
   };
   const api = new Proxy(known, {
@@ -123,6 +125,7 @@ describe("device workspace", () => {
     view = open("connectivity");
     expect(await screen.findByText("xmpp panel")).toBeTruthy();
     expect(screen.getByText("Device authentication credentials")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Availability/ })).toBeTruthy();
     view.unmount();
 
     open("ownership");

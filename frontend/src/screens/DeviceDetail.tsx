@@ -16,6 +16,7 @@ import { fmtBytes, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canManage, canWrite } from "../auth/roles";
 import { useLive } from "../lib/useLive";
+import { ConnectivityTimeline } from "../components/ConnectivityTimeline";
 import { ParameterBrowser } from "../components/ParameterBrowser";
 import { toast } from "../lib/toast";
 import { MeshTopology } from "../components/MeshTopology";
@@ -719,6 +720,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
 
         {section === "connectivity" && (
           <>
+            <ConnectivityTimeline deviceId={id} />
             <div className="panel">
               <h3>Connection Request</h3>
               <dl className="kv">

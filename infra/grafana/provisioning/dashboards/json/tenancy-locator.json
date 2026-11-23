@@ -100,7 +100,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT count(*) FILTER (WHERE d.latitude IS NOT NULL AND d.longitude IS NOT NULL) AS \"On the map\",\n         count(*) FILTER (WHERE d.latitude IS NULL OR d.longitude IS NULL)     AS \"No coordinates\"\n  FROM devices d\n  JOIN customers c ON c.id = d.customer_id\n  JOIN regions   r ON r.id = c.region_id\n WHERE (cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))",
+          "rawSql": "SELECT count(*) FILTER (WHERE d.latitude IS NOT NULL AND d.longitude IS NOT NULL) AS \"On the map\",\n         count(*) FILTER (WHERE d.latitude IS NULL OR d.longitude IS NULL)     AS \"No coordinates\"\n  FROM devices d\n  LEFT JOIN customers c ON c.id = d.customer_id\n  LEFT JOIN regions   r ON r.id = c.region_id\n WHERE (d.customer_id IS NULL\n        OR cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (d.customer_id IS NULL\n        OR cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))",
           "refId": "A"
         }
       ],
@@ -125,7 +125,7 @@
         "defaults": {},
         "overrides": []
       },
-      "description": "A device with no coordinates cannot be plotted. Set them in the console: Device Detail, next to Location."
+      "description": "A device with no coordinates cannot be plotted. Set them in the console: Device Detail, next to Location. Includes devices that belong to no customer, so the count matches the map."
     },
     {
       "id": 3,
@@ -192,7 +192,7 @@
         },
         "overrides": []
       },
-      "description": "Deliberately ignores the Region/Customer filter: these devices belong to no tenant, so no filter would ever show them. They are invisible to every other panel here."
+      "description": "Deliberately ignores the Region/Customer filter: these devices belong to no tenant, so no filter would ever show them. They are invisible to every other panel here except the map and its mapped/unmapped count, which show where every device is, assigned or not."
     },
     {
       "id": 4,
@@ -288,7 +288,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT d.latitude, d.longitude,\n         d.serial_number AS \"Serial\",\n         d.location      AS \"Site\",\n         c.name          AS \"Customer\",\n         r.name          AS \"Region\",\n         d.online_status AS \"Status\",\n         d.id::text      AS device_id,\n         CASE d.online_status WHEN 'ONLINE' THEN 0 WHEN 'OFFLINE' THEN 1 ELSE 2 END AS status_rank\n  FROM devices d\n  JOIN customers c ON c.id = d.customer_id\n  JOIN regions   r ON r.id = c.region_id\n WHERE (cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))\n   AND d.latitude IS NOT NULL AND d.longitude IS NOT NULL",
+          "rawSql": "SELECT d.latitude, d.longitude,\n         d.serial_number AS \"Serial\",\n         d.location      AS \"Site\",\n         COALESCE(c.name, 'Unassigned') AS \"Customer\",\n         COALESCE(r.name, '—') AS \"Region\",\n         d.online_status AS \"Status\",\n         d.id::text      AS device_id,\n         CASE d.online_status WHEN 'ONLINE' THEN 0 WHEN 'OFFLINE' THEN 1 ELSE 2 END AS status_rank\n  FROM devices d\n  LEFT JOIN customers c ON c.id = d.customer_id\n  LEFT JOIN regions   r ON r.id = c.region_id\n WHERE (d.customer_id IS NULL\n        OR cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (d.customer_id IS NULL\n        OR cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))\n   AND d.latitude IS NOT NULL AND d.longitude IS NOT NULL",
           "refId": "A"
         }
       ],
@@ -586,7 +586,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT d.serial_number AS \"Serial\",\n         d.manufacturer || ' ' || d.product_class AS \"Model\",\n         r.name AS \"Region\",\n         c.name AS \"Customer\",\n         COALESCE(d.location, '\u2014') AS \"Site\",\n         d.online_status AS \"Status\",\n         EXTRACT(EPOCH FROM now() - d.last_inform_at) AS \"Down for\",\n         d.last_inform_at AS \"Last Inform\",\n         CASE WHEN d.latitude IS NULL THEN 'no fix'\n              ELSE round(d.latitude::numeric, 5) || ', ' || round(d.longitude::numeric, 5) END AS \"Coordinates\",\n         d.id::text AS device_id\n  FROM devices d\n  JOIN customers c ON c.id = d.customer_id\n  JOIN regions   r ON r.id = c.region_id\n WHERE (cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))\n   AND d.online_status <> 'ONLINE'\n ORDER BY d.last_inform_at ASC NULLS FIRST\n LIMIT 500",
+          "rawSql": "SELECT d.serial_number AS \"Serial\",\n         d.manufacturer || ' ' || d.product_class AS \"Model\",\n         r.name AS \"Region\",\n         c.name AS \"Customer\",\n         COALESCE(d.location, '—') AS \"Site\",\n         d.online_status AS \"Status\",\n         EXTRACT(EPOCH FROM now() - d.last_inform_at) AS \"Down for\",\n         d.last_inform_at AS \"Last Inform\",\n         CASE WHEN d.latitude IS NULL THEN 'no fix'\n              ELSE round(d.latitude::numeric, 5) || ', ' || round(d.longitude::numeric, 5) END AS \"Coordinates\",\n         d.id::text AS device_id\n  FROM devices d\n  JOIN customers c ON c.id = d.customer_id\n  JOIN regions   r ON r.id = c.region_id\n WHERE (cardinality(ARRAY[${region:sqlstring}]::text[]) = 0\n        OR r.name = ANY (ARRAY[${region:sqlstring}]::text[]))\n   AND (cardinality(ARRAY[${customer:sqlstring}]::text[]) = 0\n        OR c.name = ANY (ARRAY[${customer:sqlstring}]::text[]))\n   AND d.online_status <> 'ONLINE'\n ORDER BY d.last_inform_at ASC NULLS FIRST\n LIMIT 500",
           "refId": "A"
         }
       ],

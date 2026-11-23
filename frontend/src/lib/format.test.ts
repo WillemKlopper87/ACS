@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { timeAgo, fmtTime, durationSeconds, fmtBytes } from "./format";
+import { timeAgo, fmtTime, durationSeconds, fmtBytes, fmtDuration } from "./format";
+
+describe("fmtDuration", () => {
+  it("scales from seconds to days", () => {
+    expect(fmtDuration(45)).toBe("45s");
+    expect(fmtDuration(720)).toBe("12m");
+    expect(fmtDuration(11100)).toBe("3h 05m");
+    expect(fmtDuration(2 * 86400 + 4 * 3600)).toBe("2d 4h");
+    expect(fmtDuration(-1)).toBe("—");
+  });
+});
 
 describe("timeAgo", () => {
   it("returns an em dash for an undefined timestamp", () => {
