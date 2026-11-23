@@ -8,6 +8,18 @@ export function timeAgo(iso?: string): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
+/** 45s, 12m, 3h 05m, 2d 4h. */
+export function fmtDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  const s = Math.round(seconds);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${String(m % 60).padStart(2, "0")}m`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
 export function fmtTime(iso?: string): string {
   if (!iso) return "—";
   return iso.replace("T", " ").replace("Z", "").slice(0, 19);

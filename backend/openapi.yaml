@@ -1267,6 +1267,31 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
         "404": { description: Not found }
 
+  /api/v1/devices/{id}/connectivity:
+    get:
+      tags: [Devices]
+      summary: When the device stopped reporting to the ACS, and whether it came back with a restart
+      description: >-
+        Derived from the Informs the ACS recorded (CWMP sessions), so it reaches
+        back as far as ACS_RETENTION_SESSIONS_DAYS (30 by default). A gap longer
+        than five minutes and 2.5 times the device's usual interval is an
+        outage. The ACS sees only the silence: `restart` means the first Inform
+        back carried 1 BOOT or 0 BOOTSTRAP (power or a reboot); `connectivity`
+        means it did not, so the CPE stayed up and its path to the ACS was down;
+        `ongoing` means it is silent now. A USP device opens no CWMP sessions
+        and has no record here.
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - { name: hours, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 720, default: 168 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceConnectivity" }
+        "400": { description: hours out of range }
+        "404": { description: No such device in the caller's scope }
+
   /api/v1/devices/{id}/satellites:
     get:
       tags: [Devices]
@@ -3652,6 +3677,25 @@ components:
         type: { type: string }
         source: { type: string }
         recorded_at: { type: string, format: date-time }
+
+    DeviceConnectivity:
+      type: object
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        checkins: { type: integer, description: Informs recorded in the window }
+        interval_seconds: { type: integer, description: Typical time between Informs (the median gap) }
+        threshold_seconds: { type: integer, description: Silence longer than this is an outage }
+        availability_percent: { type: number, nullable: true, description: Share of the observed span (first Inform in the window to `to`) not in an outage; null when there is nothing to measure }
+        outages:
+          type: array
+          items:
+            type: object
+            properties:
+              last_seen: { type: string, format: date-time, description: The Inform before the silence }
+              back_at: { type: string, format: date-time, nullable: true, description: The first Inform after it; null while ongoing }
+              seconds: { type: integer, description: "Upper bound of the outage: back_at - last_seen" }
+              kind: { type: string, enum: [restart, connectivity, ongoing] }
 
     QueueResponse:
       type: object

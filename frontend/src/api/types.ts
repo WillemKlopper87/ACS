@@ -473,6 +473,27 @@ export interface ParameterHistoryEntry {
   recorded_at: string;
 }
 
+/** One stretch in which a device stopped reporting to the ACS. */
+export interface ConnectivityOutage {
+  last_seen: string;
+  /** Null while the outage is ongoing. */
+  back_at: string | null;
+  /** Upper bound: back_at - last_seen. */
+  seconds: number;
+  /** restart: back with 1 BOOT; connectivity: the CPE stayed up; ongoing: silent now. */
+  kind: "restart" | "connectivity" | "ongoing";
+}
+
+export interface DeviceConnectivity {
+  from: string;
+  to: string;
+  checkins: number;
+  interval_seconds: number;
+  threshold_seconds: number;
+  availability_percent: number | null;
+  outages: ConnectivityOutage[];
+}
+
 // --- BSS integration admin panel (admin-platform backlog) ---
 export interface BSSMapping {
   id: string;

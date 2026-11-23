@@ -44,6 +44,7 @@ import type {
   DashboardData,
   DashboardWidget,
   ParameterCache,
+  DeviceConnectivity,
   ParameterHistoryEntry,
   Policy,
   QueueResponse,
@@ -435,6 +436,9 @@ export const api = {
   // same rules the create endpoints enforce with a 409.
   getDiagnosticsCapabilities: (id: string) =>
     request<DiagnosticsCapabilities>(`/api/v1/devices/${id}/diagnostics-capabilities`),
+
+  getDeviceConnectivity: (id: string, hours: number) =>
+    request<DeviceConnectivity>(`/api/v1/devices/${id}/connectivity?hours=${hours}`),
 
   getParameterHistory: (id: string, name: string) =>
     request<{ name: string; items: ParameterHistoryEntry[] }>(`/api/v1/devices/${id}/parameters/history?name=${encodeURIComponent(name)}`),
