@@ -406,6 +406,25 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
     }
   }
 
+  // The panel under an opened parameter row. Every ParameterBrowser on this
+  // page uses it: a row says "history", so clicking it has to open one.
+  const renderHistory = () => (
+    <div style={{ padding: "0.4rem 0 0.6rem 0.75rem", borderBottom: "1px solid var(--border)" }}>
+      {historyLoading ? (
+        <span className="dim" style={{ fontSize: "0.76rem" }}>Loading history…</span>
+      ) : historyEntries.length === 0 ? (
+        <span className="dim" style={{ fontSize: "0.76rem" }}>No recorded changes yet — history only records when a value actually changes.</span>
+      ) : (
+        historyEntries.map((entry, i) => (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.76rem", fontFamily: "var(--font-mono)", padding: "0.15rem 0" }}>
+            <span>{entry.value}</span>
+            <span className="dim">{entry.source} · {timeAgo(entry.recorded_at)}</span>
+          </div>
+        ))
+      )}
+    </div>
+  );
+
   const handleReboot = async () => {
     // A mesh satellite comes back only once its backhaul rejoins (8–11 min
     // for a Beacon 3.1 in the field test, once needing manual recovery).
@@ -692,7 +711,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
                   No cellular values read yet. Refresh cellular diagnostics to read signal, cell and SIM state.
                 </p>
               ) : (
-                <ParameterBrowser params={cellularParams} writable={paramNames} selectedPath={null} onSelect={() => {}} renderDetail={() => null} />
+                <ParameterBrowser params={cellularParams} writable={paramNames} selectedPath={historyPath} onSelect={toggleHistory} renderDetail={renderHistory} />
               )}
             </div>
           </>
@@ -1059,22 +1078,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
                   writable={paramNames}
                   selectedPath={historyPath}
                   onSelect={toggleHistory}
-                  renderDetail={() => (
-                    <div style={{ padding: "0.4rem 0 0.6rem 0.75rem", borderBottom: "1px solid var(--border)" }}>
-                      {historyLoading ? (
-                        <span className="dim" style={{ fontSize: "0.76rem" }}>Loading history…</span>
-                      ) : historyEntries.length === 0 ? (
-                        <span className="dim" style={{ fontSize: "0.76rem" }}>No recorded changes yet — history only records when a value actually changes.</span>
-                      ) : (
-                        historyEntries.map((entry, i) => (
-                          <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.76rem", fontFamily: "var(--font-mono)", padding: "0.15rem 0" }}>
-                            <span>{entry.value}</span>
-                            <span className="dim">{entry.source} · {timeAgo(entry.recorded_at)}</span>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  )}
+                  renderDetail={renderHistory}
                 />
               )}
             </div>
