@@ -1,1 +1,12 @@
 /bin/
+
+# A bare `go build ./cmd/<name>` run in this directory writes a binary named
+# <name> here. One of these (backend/api, 63 MB) was committed by mistake.
+/acs
+/api
+/bssadapter
+/hashpw
+/migrate
+/oidprobe
+/probe
+/uspc
