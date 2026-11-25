@@ -76,6 +76,8 @@ var Extra = map[string]map[string][]string{
 		"wifi_samples": {"SELECT", "DELETE"}, "wifi_clients": {"SELECT", "DELETE"}, "account_profile_archive": {"SELECT", "DELETE"},
 		// internal/wifiinsights: "DELETE FROM "+table for mesh nodes.
 		"wifi_client_samples": {"SELECT", "DELETE"},
+		// internal/retention prunes the cellular signal history.
+		"device_cpe_samples": {"SELECT", "DELETE"},
 	},
 	"acs": {
 		"wifi_client_samples": {"SELECT", "DELETE"}, "wifi_clients": {"SELECT", "DELETE"},

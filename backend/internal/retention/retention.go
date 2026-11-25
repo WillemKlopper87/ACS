@@ -30,6 +30,8 @@ type Policy struct {
 	ResetTokensDays       int
 	CaptureSessionsDays   int
 	WiFiInsightsDays      int
+	// CPESamplesDays bounds the cellular signal history (device_cpe_samples).
+	CPESamplesDays int
 	// TMFEventsDays bounds the integration event stream (tmf_events,
 	// replayed by GET /bss/v1/events); see pruneEvents.
 	TMFEventsDays int
@@ -52,6 +54,7 @@ var DefaultPolicy = Policy{
 	ResetTokensDays:       1,
 	CaptureSessionsDays:   1,
 	WiFiInsightsDays:      30,
+	CPESamplesDays:        30,
 	TMFEventsDays:         90,
 	SubscriberArchiveDays: 3 * 365,
 }
@@ -78,6 +81,7 @@ func PolicyFromEnv() Policy {
 		ResetTokensDays:       envDays("ACS_RETENTION_RESET_TOKENS_DAYS", d.ResetTokensDays),
 		CaptureSessionsDays:   envDays("ACS_RETENTION_CAPTURE_SESSIONS_DAYS", d.CaptureSessionsDays),
 		WiFiInsightsDays:      envDays("ACS_RETENTION_WIFI_INSIGHTS_DAYS", d.WiFiInsightsDays),
+		CPESamplesDays:        envDays("ACS_RETENTION_CPE_SAMPLES_DAYS", d.CPESamplesDays),
 		TMFEventsDays:         envDays("ACS_RETENTION_TMF_EVENTS_DAYS", d.TMFEventsDays),
 		SubscriberArchiveDays: envDays("ACS_RETENTION_SUBSCRIBER_ARCHIVE_DAYS", d.SubscriberArchiveDays),
 	}
@@ -132,6 +136,9 @@ var rules = []rule{
 		"sampled_at < $1", "id"},
 	{"wifi_clients", func(p Policy) int { return p.WiFiInsightsDays },
 		"last_seen_at < $1", "id"},
+	// Cellular signal history: radio measurements only, no subscriber data.
+	{"device_cpe_samples", func(p Policy) int { return p.CPESamplesDays },
+		"sampled_at < $1", "id"},
 	{"account_profile_archive", func(p Policy) int { return p.SubscriberArchiveDays },
 		"archived_at < $1", "id"},
 }

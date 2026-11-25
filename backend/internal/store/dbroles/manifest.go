@@ -77,6 +77,7 @@ var Manifest = map[string]map[string][]string{
 		"cwmp_sessions":               {"SELECT", "DELETE"},
 		"dashboard_layouts":           {"SELECT", "INSERT", "UPDATE"},
 		"device_cli_credentials":      {"SELECT", "INSERT", "DELETE"},
+		"device_cpe_samples":          {"SELECT", "DELETE"},
 		"device_credentials":          {"SELECT", "INSERT", "UPDATE"},
 		"device_discovery_snapshots":  {"SELECT", "INSERT", "DELETE"},
 		"device_events":               {"SELECT", "INSERT"},

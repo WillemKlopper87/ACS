@@ -132,3 +132,42 @@ func TestPruneSubscriberArchive(t *testing.T) {
 		t.Fatalf("pruned %d, left %q", res["account_profile_archive"], left)
 	}
 }
+
+func TestCPESamplesRetentionPolicy(t *testing.T) {
+	t.Setenv("ACS_RETENTION_CPE_SAMPLES_DAYS", "")
+	if got := PolicyFromEnv().CPESamplesDays; got != 30 {
+		t.Fatalf("default = %d, want 30", got)
+	}
+	t.Setenv("ACS_RETENTION_CPE_SAMPLES_DAYS", "7")
+	if got := PolicyFromEnv().CPESamplesDays; got != 7 {
+		t.Fatalf("override = %d, want 7", got)
+	}
+}
+
+// TestPruneCPESamples: samples older than the window go, newer stay, and 0
+// prunes nothing.
+func TestPruneCPESamples(t *testing.T) {
+	ctx, db := newMigratedDB(t)
+	var dev string
+	if err := db.QueryRowContext(ctx, `INSERT INTO devices (id, oui_serial) VALUES (gen_random_uuid(), '001349-RET01') RETURNING id`).Scan(&dev); err != nil {
+		t.Fatal(err)
+	}
+	for _, age := range []string{"40 days", "2 days"} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO device_cpe_samples (device_id, sampled_at, rsrp) VALUES ($1, now() - $2::interval, -90)`, dev, age); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := Run(ctx, db, Policy{CPESamplesDays: 0})
+	if err != nil || res["device_cpe_samples"] != 0 {
+		t.Fatalf("0 days: pruned %d, %v; want nothing", res["device_cpe_samples"], err)
+	}
+	res, err = Run(ctx, db, Policy{CPESamplesDays: 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM device_cpe_samples`).Scan(&left)
+	if res["device_cpe_samples"] != 1 || left != 1 {
+		t.Fatalf("pruned %d, left %d; want 1 and 1", res["device_cpe_samples"], left)
+	}
+}
