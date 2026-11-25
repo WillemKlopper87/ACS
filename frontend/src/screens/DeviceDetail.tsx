@@ -35,6 +35,7 @@ import { deviceCapabilities, devicePath, visibleSections, type DeviceSectionId }
 import { confirmDialog } from "../lib/confirm";
 import { HEALTH_PATHS, deviceHealth } from "../lib/deviceHealth";
 import { DeviceHealthRow } from "../components/DeviceHealthRow";
+import { ReadParametersPanel } from "../components/ReadParametersPanel";
 import { plainLabel } from "../lib/labels";
 
 // What each sub-page reads on open and on every poll, so a page loads only
@@ -1068,6 +1069,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
 
         {section === "parameters" && (
           <>
+            <ReadParametersPanel deviceId={id} names={paramNames} writable={writable} />
             <div className="panel">
               <h3>Parameter cache{paramEntries.length === 0 ? " — empty" : ""}</h3>
               {paramEntries.length === 0 ? (

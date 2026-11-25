@@ -119,6 +119,7 @@ describe("device workspace", () => {
     calls.length = 0;
     view = open("parameters");
     expect(await screen.findByText("Object management")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Read parameters now/ })).toBeTruthy();
     expect(calls).toContain("getDeviceParameters");
     view.unmount();
 
