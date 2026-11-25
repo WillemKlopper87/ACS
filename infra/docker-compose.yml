@@ -12,7 +12,7 @@
 # the digest when a tag is updated.
 services:
   postgres:
-    image: postgres:18-alpine@sha256:1018733457011bf88d81db98cf43aac6d5150afc18787dbe204771fedf80ff95
+    image: postgres:18-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71
     environment:
       POSTGRES_USER: acs
       POSTGRES_PASSWORD: ${ACS_POSTGRES_PASSWORD:?set ACS_POSTGRES_PASSWORD}
@@ -261,7 +261,7 @@ services:
   # the owner, as before. Use hex passwords (openssl rand -hex 24): they
   # go into a connection URL unescaped.
   db-roles:
-    image: postgres:18-alpine@sha256:1018733457011bf88d81db98cf43aac6d5150afc18787dbe204771fedf80ff95
+    image: postgres:18-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71
     profiles: ["containerized"]
     restart: "no"
     entrypoint: ["/bin/sh", "/service-roles.sh"]
