@@ -101,3 +101,39 @@ func TestParseKeepsTextFields(t *testing.T) {
 		t.Errorf("got %+v ok=%v, want Band n78 RAT NR5G-SA", s, ok)
 	}
 }
+
+func TestParseRejectsNonFiniteNumbers(t *testing.T) {
+	reads := PlanReads("DEVICE2", fastMileNames())
+	for _, bad := range []string{"NaN", "Inf", "-Inf", "+Inf", "infinity"} {
+		for _, r := range reads {
+			switch r.Field {
+			case adapters.CellularBand, adapters.CellularRAT:
+				continue
+			}
+			s, ok := Parse([]Read{r}, []cwmp.ParameterValueStruct{pv(r.Path, bad)})
+			if ok {
+				t.Errorf("%s=%q: ok = true, want false", r.Field, bad)
+			}
+			if s.RSRP != nil || s.RSRQ != nil || s.SNR != nil || s.RSSI != nil {
+				t.Errorf("%s=%q: stored a non-finite metric: %+v", r.Field, bad, s)
+			}
+		}
+	}
+}
+
+func TestParseKeepsNumericTextFieldsAndDropsSentinels(t *testing.T) {
+	reads := PlanReads("DEVICE2", fastMileNames())
+	s, ok := Parse(reads, []cwmp.ParameterValueStruct{
+		pv(fm+"X_ALU-COM_Attached5GCellStat.Band", "78"),
+		pv(fm+"CurrentAccessTechnology", " 5 "),
+	})
+	if !ok || s.Band != "78" || s.RAT != "5" {
+		t.Errorf("got %+v ok=%v, want Band 78 RAT 5", s, ok)
+	}
+	s, ok = Parse(reads, []cwmp.ParameterValueStruct{
+		pv(fm+"X_ALU-COM_Attached5GCellStat.Band", "4294967295"),
+	})
+	if ok || s.Band != "" {
+		t.Errorf("sentinel band: got %+v ok=%v, want empty and not ok", s, ok)
+	}
+}

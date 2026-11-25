@@ -1,6 +1,7 @@
 package cpemetrics
 
 import (
+	"math"
 	"strings"
 
 	"acs/internal/cwmp"
@@ -68,25 +69,30 @@ func Parse(reads []Read, values []cwmp.ParameterValueStruct) (Sample, bool) {
 		case adapters.CellularRSSI:
 			s.RSSI = number(val)
 		case adapters.CellularBand:
-			s.Band = text(val)
+			s.Band = text(raw)
 		case adapters.CellularRAT:
-			s.RAT = text(val)
+			s.RAT = text(raw)
 		}
 	}
 	ok = s.RSRP != nil || s.RSRQ != nil || s.SNR != nil || s.RSSI != nil || s.Band != "" || s.RAT != ""
 	return s, ok
 }
 
+// number accepts only finite floats: NaN and Inf parse as numbers but cannot
+// be encoded to JSON. No range check is applied, as vendors use other units.
 func number(v any) *float64 {
-	if f, isNum := v.(float64); isNum {
+	if f, isNum := v.(float64); isNum && !math.IsNaN(f) && !math.IsInf(f, 0) {
 		return &f
 	}
 	return nil
 }
 
-func text(v any) string {
-	if s, isStr := v.(string); isStr {
-		return s
+// text takes the trimmed raw string so a bare numeric Band or RAT ("78") is
+// kept; "no value" sentinels yield "".
+func text(raw string) string {
+	s := strings.TrimSpace(raw)
+	if adapters.IsCellularSentinel(s) {
+		return ""
 	}
-	return ""
+	return s
 }
