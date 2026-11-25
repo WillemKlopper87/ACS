@@ -1,8 +1,7 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { AuditEntry } from "../api/types";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { fmtTime, timeAgo } from "../lib/format";
 
 export function AuditLog() {
@@ -40,7 +39,7 @@ export function AuditLog() {
     );
   }, [entries, search, actionFilter]);
 
-  const columns = useMemo<ColumnDef<AuditEntry, any>[]>(
+  const columns = useMemo<DataColumn<AuditEntry>[]>(
     () => [
       {
         accessorKey: "occurred_at",

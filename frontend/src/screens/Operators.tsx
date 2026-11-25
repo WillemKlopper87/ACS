@@ -1,8 +1,7 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { Customer, Operator, OperatorScope, Permission, Region, Role, RolePermissionsMatrix } from "../api/types";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canAdmin } from "../auth/roles";
@@ -217,7 +216,7 @@ export function Operators() {
     }
   }
 
-  const columns = useMemo<ColumnDef<Operator, any>[]>(
+  const columns = useMemo<DataColumn<Operator>[]>(
     () => [
       {
         accessorKey: "username",

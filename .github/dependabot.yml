@@ -10,6 +10,12 @@ updates:
     schedule: { interval: weekly }
     groups:
       npm-deps: { patterns: ["*"] }
+    ignore:
+      # TypeScript 7 (the native compiler) has no JavaScript API, which
+      # openapi-typescript needs to generate src/api/generated.ts; there is no
+      # release of it for TypeScript 7 yet. Drop this when there is.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   # No github-actions entry: Actions is not used on this repository (no minutes),
   # so a version bump of a workflow action cannot be tested. Checks run with
   # scripts/ci-local.sh (docs/LOCAL-CI.md). Add it back if Actions returns.

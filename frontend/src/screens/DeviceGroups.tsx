@@ -1,8 +1,7 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { DeviceGroup } from "../api/types";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
@@ -181,7 +180,7 @@ export function DeviceGroups() {
     }
   }
 
-  const columns = useMemo<ColumnDef<DeviceGroup, any>[]>(
+  const columns = useMemo<DataColumn<DeviceGroup>[]>(
     () => [
       { accessorKey: "name", header: "Name" },
       { accessorKey: "description", header: "Description", cell: ({ getValue }) => <span className="dim">{(getValue() as string) || "—"}</span> },

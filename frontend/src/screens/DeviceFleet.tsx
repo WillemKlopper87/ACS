@@ -1,9 +1,8 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { Device } from "../api/types";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { SubscriberLookup, VipBadge } from "../components/SubscriberLookup";
 import { serialTail } from "../lib/subscriber";
 import { StatusBadge } from "../components/StatusBadge";
@@ -84,7 +83,7 @@ export function DeviceFleet() {
     return { total: Math.max(total, devices.length), online, confirmed, vendors: vendors.length };
   }, [devices, vendors, total]);
 
-  const columns = useMemo<ColumnDef<Device, any>[]>(
+  const columns = useMemo<DataColumn<Device>[]>(
     () => [
       {
         id: "device",

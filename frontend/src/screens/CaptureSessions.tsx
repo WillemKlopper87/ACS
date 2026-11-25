@@ -1,4 +1,3 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
@@ -6,7 +5,7 @@ import type { CaptureMatchType, CaptureProtocol, CaptureSession } from "../api/t
 import { canWrite } from "../auth/roles";
 import { useAuth } from "../auth/useAuth";
 import { CaptureDetail } from "../components/CaptureDetail";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { StatusBadge } from "../components/StatusBadge";
 import { timeAgo } from "../lib/format";
 import { useLive } from "../lib/useLive";
@@ -93,7 +92,7 @@ export function CaptureSessions() {
     }
   };
 
-  const columns = useMemo<ColumnDef<CaptureSession, any>[]>(() => [
+  const columns = useMemo<DataColumn<CaptureSession>[]>(() => [
     { accessorKey: "match_value", header: "Target", cell: ({ row }) => <span title={row.original.id}>{row.original.match_value}</span> },
     { accessorKey: "match_type", header: "Mode", cell: ({ getValue }) => <span className="dim">{getValue() as string}</span> },
     { accessorKey: "protocol", header: "Protocol" },

@@ -1,8 +1,7 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { ScheduledJob } from "../api/types";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
@@ -103,7 +102,7 @@ export function ScheduledJobs() {
     }
   }
 
-  const columns = useMemo<ColumnDef<ScheduledJob, any>[]>(
+  const columns = useMemo<DataColumn<ScheduledJob>[]>(
     () => [
       { accessorKey: "name", header: "Name" },
       { accessorKey: "customer_id", header: "Customer", cell: ({ getValue }) => <span className="dim">{customerName(customers, getValue() as string | null)}</span> },

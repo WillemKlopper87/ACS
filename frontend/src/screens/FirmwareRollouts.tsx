@@ -1,8 +1,7 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { FirmwareImage, Rollout, RolloutDetail } from "../api/types";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { StatusBadge } from "../components/StatusBadge";
 import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
@@ -157,7 +156,7 @@ export function FirmwareRollouts() {
     }
   }
 
-  const columns = useMemo<ColumnDef<Rollout, any>[]>(
+  const columns = useMemo<DataColumn<Rollout>[]>(
     () => [
       { accessorKey: "name", header: "Name" },
       { accessorKey: "customer_id", header: "Customer", cell: ({ getValue }) => <span className="dim">{customerName(customers, getValue() as string | null)}</span> },
@@ -178,7 +177,7 @@ export function FirmwareRollouts() {
 
   // The images a rollout can send. They were only ever visible as options
   // in the rollout form; listing them shows what is actually on the server.
-  const imageColumns = useMemo<ColumnDef<FirmwareImage, any>[]>(
+  const imageColumns = useMemo<DataColumn<FirmwareImage>[]>(
     () => [
       { id: "target", header: "Vendor / Model", accessorFn: (img) => `${img.vendor} ${img.model}` },
       { accessorKey: "version", header: "Version" },
