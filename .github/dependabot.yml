@@ -10,9 +10,9 @@ updates:
     schedule: { interval: weekly }
     groups:
       npm-deps: { patterns: ["*"] }
-  - package-ecosystem: github-actions
-    directory: /
-    schedule: { interval: weekly }
+  # No github-actions entry: Actions is not used on this repository (no minutes),
+  # so a version bump of a workflow action cannot be tested. Checks run with
+  # scripts/ci-local.sh (docs/LOCAL-CI.md). Add it back if Actions returns.
   - package-ecosystem: docker
     directory: /backend
     schedule: { interval: weekly }
