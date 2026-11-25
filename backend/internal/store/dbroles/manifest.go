@@ -20,6 +20,7 @@ var Manifest = map[string]map[string][]string{
 		"customers":                  {"SELECT"},
 		"cwmp_digest_nonces":         {"SELECT", "INSERT", "UPDATE", "DELETE"},
 		"cwmp_sessions":              {"SELECT", "INSERT", "UPDATE"},
+		"device_cpe_samples":         {"SELECT", "INSERT"},
 		"device_credentials":         {"SELECT", "INSERT", "UPDATE"},
 		"device_discovery_snapshots": {"SELECT", "INSERT", "DELETE"},
 		"device_events":              {"SELECT", "INSERT"},

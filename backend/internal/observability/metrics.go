@@ -31,6 +31,7 @@ type Metrics struct {
 
 	JobsCreatedTotal   *prometheus.CounterVec
 	JobsCompletedTotal *prometheus.CounterVec
+	CPESamplesTotal    *prometheus.CounterVec // CPE signal samples: recorded, failed, empty
 	JobsRecoveredTotal *prometheus.CounterVec // audit P1.1: stale-lease reaper outcomes
 	JobsStaleLeases    prometheus.Gauge
 
@@ -93,6 +94,11 @@ func NewMetrics(service string) *Metrics {
 			Help:        "Jobs created, by type.",
 			ConstLabels: constLabels,
 		}, []string{"type"}),
+		CPESamplesTotal: factory.NewCounterVec(prometheus.CounterOpts{
+			Name:        "acs_cpe_samples_total",
+			Help:        "CPE signal samples by result: recorded, failed (storage error), empty (no usable reading).",
+			ConstLabels: constLabels,
+		}, []string{"result"}),
 		JobsCompletedTotal: factory.NewCounterVec(prometheus.CounterOpts{
 			Name:        "acs_jobs_completed_total",
 			Help:        "Jobs completed, by type and terminal status.",

@@ -25,6 +25,8 @@ import (
 	"acs/internal/bss"
 	"acs/internal/captures"
 	"acs/internal/config"
+	"acs/internal/cpemetrics"
+	"acs/internal/cpemetrics/recorder"
 	"acs/internal/credentials"
 	"acs/internal/devices"
 	"acs/internal/devices/adapters"
@@ -258,6 +260,12 @@ func main() {
 		credentials:        credRepo,
 		secrets:            secretStore,
 		// Wi-Fi insights sampling cadence; 0 disables it.
+		// CPE signal sampling cadence; 0 disables it.
+		cpeMetrics: &cpeMetricsSampler{
+			repo:     cpemetrics.NewRepository(db),
+			rec:      recorder.New(db),
+			interval: envOrDuration("ACS_CPE_SAMPLE_INTERVAL", 15*time.Minute),
+		},
 		wifiInsights: &wifiInsightsSampler{
 			repo:     wifiinsights.NewRepository(db, wifiinsights.DefaultOUIRegistry()),
 			interval: envOrDuration("ACS_WIFI_INSIGHTS_INTERVAL", 5*time.Minute),
@@ -513,6 +521,7 @@ type handler struct {
 	deviceLimiter      *ratelimit.Limiter
 	onboardingListener *onboardingListener
 	wifiInsights       *wifiInsightsSampler
+	cpeMetrics         *cpeMetricsSampler
 	// onboarding and credentials drive sold CPEs to IN_SERVICE; nil
 	// onboarding turns the reconciler off.
 	onboarding  *onboarding.Repository

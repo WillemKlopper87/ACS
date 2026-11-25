@@ -3,6 +3,7 @@
 package main
 
 import (
+	"acs/internal/cpemetrics"
 	"acs/internal/cwmp"
 	"acs/internal/devices"
 	"acs/internal/devices/adapters"
@@ -400,6 +401,10 @@ func (h *handler) completeJob(ctx context.Context, deviceID, jobID string, body 
 		h.markJobSuccess(ctx, deviceID, job)
 		if job.CreatedBy == wifiinsights.CreatedBy {
 			h.recordWiFiInsights(ctx, deviceID, body.GetParameterValuesResponse.ParameterList)
+			return
+		}
+		if job.CreatedBy == cpemetrics.CreatedBy {
+			h.recordCPEMetrics(ctx, deviceID, body.GetParameterValuesResponse.ParameterList)
 			return
 		}
 		h.cacheParameterValues(ctx, deviceID, body.GetParameterValuesResponse.ParameterList, parameters.SourceGetValues)
