@@ -599,3 +599,31 @@ export interface VPNConcentrator {
   overlay_subnet: string;
   configured: boolean;
 }
+
+/** One recorded signal reading of a cellular CPE; a metric is null when the device did not report it. */
+export interface SignalPoint {
+  /** The reading time, or the bucket start when averaged. */
+  at: string;
+  /** dBm */
+  rsrp: number | null;
+  /** dB */
+  rsrq: number | null;
+  /** dB */
+  snr: number | null;
+  /** dBm */
+  rssi: number | null;
+  /** Empty when not reported. */
+  band: string;
+  /** Radio access technology; empty when not reported. */
+  rat: string;
+}
+
+export interface SignalHistory {
+  from: string;
+  to: string;
+  /** 0 when the points are raw samples. */
+  bucket_seconds: number;
+  /** Typical gap between raw samples; 0 when unknown. */
+  interval_seconds: number;
+  samples: SignalPoint[];
+}

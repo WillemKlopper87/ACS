@@ -83,3 +83,17 @@ describe("parameter history on the device page", () => {
     });
   }
 });
+
+// The API fake answers unknown calls with an object that has no `samples`; the
+// Signal panel on the Cellular page must shrug that off, not blank the page.
+describe("the Signal panel on the cellular page", () => {
+  it("renders its heading even when the reply is malformed", async () => {
+    render(
+      <MemoryRouter>
+        <DeviceDetail id="cpe-1" section="cellular" onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("heading", { name: /Signal/ })).toBeTruthy();
+    expect(await screen.findByText(/No signal samples yet/)).toBeTruthy();
+  });
+});

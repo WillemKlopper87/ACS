@@ -45,6 +45,7 @@ import type {
   DashboardWidget,
   ParameterCache,
   DeviceConnectivity,
+  SignalHistory,
   ParameterHistoryEntry,
   Policy,
   QueueResponse,
@@ -439,6 +440,9 @@ export const api = {
 
   getDeviceConnectivity: (id: string, hours: number) =>
     request<DeviceConnectivity>(`/api/v1/devices/${id}/connectivity?hours=${hours}`),
+
+  getSignalHistory: (id: string, hours: number) =>
+    request<SignalHistory>(`/api/v1/devices/${id}/signal-history?hours=${hours}`),
 
   getParameterHistory: (id: string, name: string) =>
     request<{ name: string; items: ParameterHistoryEntry[] }>(`/api/v1/devices/${id}/parameters/history?name=${encodeURIComponent(name)}`),
