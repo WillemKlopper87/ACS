@@ -1,8 +1,7 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { ConfigTemplate, DeviceGroup, TemplateParameter } from "../api/types";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
@@ -168,7 +167,7 @@ export function ConfigTemplates() {
     }
   }
 
-  const columns = useMemo<ColumnDef<ConfigTemplate, any>[]>(
+  const columns = useMemo<DataColumn<ConfigTemplate>[]>(
     () => [
       { accessorKey: "name", header: "Name" },
       { accessorKey: "description", header: "Description", cell: ({ getValue }) => <span className="dim">{(getValue() as string) || "—"}</span> },

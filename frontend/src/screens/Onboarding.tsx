@@ -1,13 +1,12 @@
 // /onboarding/<tab>: sales on their way to service, CPEs nobody sold, and
 // the sites and service plans a sale refers to (docs/ONBOARDING.md).
-import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api, ApiError, type Onboarding as OnboardingRecord, type ServicePlan, type Site, type UnclaimedDevice } from "../api/client";
 import type { ConfigTemplate } from "../api/types";
 import { canManage } from "../auth/roles";
 import { useAuth } from "../auth/useAuth";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { OnboardingTimeline } from "../components/OnboardingTimeline";
 import { SaleLifecycleDialog, type SaleLifecycleMode } from "../components/SaleLifecycleDialog";
 import { OnboardingWizard, PlanSummary, type ClaimTarget } from "../components/OnboardingWizard";
@@ -98,7 +97,7 @@ export function Onboarding() {
   const rows = useMemo(() => (tabStates ? onboardings.filter((o) => tabStates.includes(o.state)) : []), [onboardings, tabStates]);
   const current = rows.find((o) => o.id === selected) ?? null;
 
-  const columns = useMemo<ColumnDef<OnboardingRecord, any>[]>(
+  const columns = useMemo<DataColumn<OnboardingRecord>[]>(
     () => [
       { accessorKey: "expected_serial", header: "Serial" },
       {
@@ -267,7 +266,7 @@ export function Onboarding() {
 }
 
 function UnclaimedTable({ devices, manage, onClaim }: { devices: UnclaimedDevice[]; manage: boolean; onClaim: (d: UnclaimedDevice) => void }) {
-  const columns = useMemo<ColumnDef<UnclaimedDevice, any>[]>(
+  const columns = useMemo<DataColumn<UnclaimedDevice>[]>(
     () => [
       {
         accessorKey: "serial_number",
@@ -329,7 +328,7 @@ function SitesTab({ sites, customers, manage, onCreated }: {
     }
   }
 
-  const columns = useMemo<ColumnDef<Site, any>[]>(
+  const columns = useMemo<DataColumn<Site>[]>(
     () => [
       { accessorKey: "name", header: "Name" },
       { accessorKey: "customer_id", header: "Customer", cell: ({ getValue }) => customerName(customers, getValue() as string | null) },
@@ -435,7 +434,7 @@ function PlansTab({ plans, templates, customers, manage, templateName, onCreated
     }
   }
 
-  const columns = useMemo<ColumnDef<ServicePlan, any>[]>(
+  const columns = useMemo<DataColumn<ServicePlan>[]>(
     () => [
       { accessorKey: "code", header: "Code" },
       { accessorKey: "name", header: "Name" },

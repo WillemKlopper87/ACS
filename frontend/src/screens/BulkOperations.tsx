@@ -1,9 +1,8 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { BulkOperation, BulkOperationDetail, BulkOperationItem } from "../api/types";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { StatusBadge } from "../components/StatusBadge";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
@@ -81,7 +80,7 @@ export function BulkOperations() {
     }
   };
 
-  const columns = useMemo<ColumnDef<BulkOperation, any>[]>(
+  const columns = useMemo<DataColumn<BulkOperation>[]>(
     () => [
       { accessorKey: "label", header: "Operation" },
       { accessorKey: "state", header: "State", cell: ({ getValue }) => <StatusBadge value={getValue() as string} /> },
@@ -106,7 +105,7 @@ export function BulkOperations() {
     [],
   );
 
-  const itemColumns = useMemo<ColumnDef<BulkOperationItem, any>[]>(
+  const itemColumns = useMemo<DataColumn<BulkOperationItem>[]>(
     () => [
       {
         id: "device",

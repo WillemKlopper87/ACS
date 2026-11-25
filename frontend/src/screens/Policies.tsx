@@ -1,8 +1,7 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { Policy } from "../api/types";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { fmtTime, timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
 import { canWrite } from "../auth/roles";
@@ -93,7 +92,7 @@ export function Policies() {
     }
   }
 
-  const columns = useMemo<ColumnDef<Policy, any>[]>(
+  const columns = useMemo<DataColumn<Policy>[]>(
     () => [
       { accessorKey: "name", header: "Name" },
       { accessorKey: "customer_id", header: "Customer", cell: ({ getValue }) => <span className="dim">{customerName(customers, getValue() as string | null)}</span> },

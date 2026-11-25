@@ -1,13 +1,37 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   type ColumnDef,
+  columnFilteringFeature,
+  createFilteredRowModel,
+  createSortedRowModel,
+  filterFns,
   flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getSortedRowModel,
-  useReactTable,
+  globalFilteringFeature,
+  type RowData,
+  rowSortingFeature,
+  sortFns,
+  tableFeatures,
+  useTable,
 } from "@tanstack/react-table";
 import { useRef, useState } from "react";
+
+// TanStack Table v9 only includes the features a table asks for, and takes the
+// row models and the built-in sort and filter functions here rather than as
+// options. This app sorts and filters (the global filter runs through the
+// filtered row model, which also needs column filtering); the rest of the stock
+// feature set is left out.
+const features = tableFeatures({
+  columnFilteringFeature,
+  globalFilteringFeature,
+  rowSortingFeature,
+  sortedRowModel: createSortedRowModel(),
+  filteredRowModel: createFilteredRowModel(),
+  sortFns,
+  filterFns,
+});
+
+/** A column definition for DataTable: what every screen's `columns` is made of. */
+export type DataColumn<T extends RowData> = ColumnDef<typeof features, T, any>;
 
 // Single shared table for every screen (build plan §3.4: "DataTable: single
 // shared component wrapping TanStack Table ... every screen above is an
@@ -27,9 +51,9 @@ interface SelectionProps {
   onToggleAll: (checked: boolean) => void;
 }
 
-interface DataTableProps<T> {
+interface DataTableProps<T extends RowData> {
   data: T[];
-  columns: ColumnDef<T, any>[];
+  columns: DataColumn<T>[];
   globalFilter?: string;
   onRowClick?: (row: T) => void;
   selectedRowId?: string;
@@ -41,7 +65,7 @@ interface DataTableProps<T> {
   selection?: SelectionProps;
 }
 
-export function DataTable<T>({
+export function DataTable<T extends RowData>({
   data,
   columns,
   globalFilter,
@@ -57,7 +81,7 @@ export function DataTable<T>({
   const [sorting, setSorting] = useState<{ id: string; desc: boolean }[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const allColumns: ColumnDef<T, any>[] = selection
+  const allColumns: DataColumn<T>[] = selection
     ? [
         {
           id: "__select",
@@ -93,14 +117,12 @@ export function DataTable<T>({
       ]
     : columns;
 
-  const table = useReactTable({
+  const table = useTable<typeof features, T>({
+    features,
     data,
     columns: allColumns,
     state: { sorting, globalFilter },
     onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
   });
 
   const rows = table.getRowModel().rows;
@@ -199,7 +221,7 @@ export function DataTable<T>({
                 }
                 style={onRowClick ? { cursor: "pointer" } : undefined}
               >
-                {row.getVisibleCells().map((cell) => (
+                {row.getAllCells().map((cell) => (
                   <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
                 ))}
               </tr>

@@ -1,9 +1,8 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { AlertIncident, AlertPolicy, Customer, DeviceGroup } from "../api/types";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { Drawer } from "../components/Drawer";
 import { useAuth } from "../auth/useAuth";
 import { canManage } from "../auth/roles";
@@ -119,7 +118,7 @@ export function Alerting() {
     }
   };
 
-  const incidentColumns = useMemo<ColumnDef<AlertIncident, any>[]>(
+  const incidentColumns = useMemo<DataColumn<AlertIncident>[]>(
     () => [
       {
         accessorKey: "priority",
@@ -158,7 +157,7 @@ export function Alerting() {
   );
 
   const groupName = useCallback((id?: string) => groups.find((g) => g.id === id)?.name ?? id ?? "—", [groups]);
-  const policyColumns = useMemo<ColumnDef<AlertPolicy, any>[]>(
+  const policyColumns = useMemo<DataColumn<AlertPolicy>[]>(
     () => [
       { accessorKey: "name", header: "Name" },
       {

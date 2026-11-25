@@ -1,9 +1,8 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { Job } from "../api/types";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { StatusBadge } from "../components/StatusBadge";
 import { durationSeconds, fmtTime, timeAgo } from "../lib/format";
 import { useLive } from "../lib/useLive";
@@ -88,7 +87,7 @@ export function Jobs() {
     return { total: jobs.length, success, failed, queued };
   }, [jobs]);
 
-  const columns = useMemo<ColumnDef<Job, any>[]>(
+  const columns = useMemo<DataColumn<Job>[]>(
     () => [
       { accessorKey: "command_key", header: "Job" },
       {

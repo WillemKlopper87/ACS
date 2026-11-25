@@ -1,9 +1,8 @@
 import { Link } from "react-router-dom";
-import type { ColumnDef } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { BulkActionResponse, BulkActionResult, ConfigTemplate, Device, DeviceGroupCount } from "../api/types";
-import { DataTable } from "../components/DataTable";
+import { DataTable, type DataColumn } from "../components/DataTable";
 import { StatusBadge } from "../components/StatusBadge";
 import { timeAgo } from "../lib/format";
 import { useAuth } from "../auth/useAuth";
@@ -212,7 +211,7 @@ export function FleetControl() {
     }
   }
 
-  const columns = useMemo<ColumnDef<Device, any>[]>(
+  const columns = useMemo<DataColumn<Device>[]>(
     () => [
       {
         id: "device",
