@@ -19,21 +19,25 @@ design is in `docs/superpowers/specs/2026-11-25-cpe-telemetry-design.md`
    most.
 2. Open the device's Parameters page (left menu, under ADVANCED). Above the
    "Parameter cache" panel is the "Read parameters now" panel.
-3. Click "Use FastMile telemetry preset". The "Paths to read, one per line"
+3. Tick "Include the location coordinates (read once, to learn their format)"
+   first. It only takes effect when the preset is built, so it must be ticked
+   before the next step.
+4. Click "Use FastMile telemetry preset". The "Paths to read, one per line"
    box fills with the signal leaves (RSRP, RSRQ, SNR, RSSI, band, cell ID and
    ARFCN under `X_ALU-COM_Attached5GCellStat` and
    `X_ALU-COM_AttachedLteCellStat`), the `LastChange` timers (Cellular,
    IP, Ethernet interface and Ethernet link), `Device.DeviceInfo.UpTime`,
    Cellular `NetworkInUse` and `RoamingStatus`, and `Device.DeviceInfo.Location.1`
-   `Source`, `AcquiredTime` and `X_ALU-COM_TimeStamp`. The preset lists only
-   paths the device has already discovered.
-4. Tick "Include the location coordinates (read once, to learn their format)"
-   for the first read only. This adds the `X_ALU-COM_Latitude`, `Longitude` and
-   `Altitude` leaves. The box clears itself after the read is sent.
+   `Source`, `AcquiredTime` and `X_ALU-COM_TimeStamp`, plus the
+   `X_ALU-COM_Latitude`, `Longitude` and `Altitude` leaves because the box is
+   ticked. The preset lists only paths the device has already discovered.
 5. Click "Read now". The read runs when the CPE next checks in: the CPE is
-   behind NAT, so the ACS cannot reach it on demand.
+   behind NAT, so the ACS cannot reach it on demand. "Read now" unticks the
+   coordinates box again, but the paths stay in the text box.
 6. After the check-in, find each path in the "Parameter cache" panel on the
    same page, using its search box.
+7. Before any later read, clear the text box or click the preset again with
+   the coordinates box unticked, so the coordinates are not read a second time.
 
 ## The link-drop test
 
@@ -42,10 +46,14 @@ for several minutes. Never run it on a customer's device.
 
 1. Note the time.
 2. Read `Device.Cellular.Interface.1.LastChange` and `Device.DeviceInfo.UpTime`
-   (the preset includes both) and record the values.
-3. Pull the SIM (or the antenna) for about five minutes, then reconnect it.
-4. Wait for the CPE to come back and check in twice.
-5. Read the same two paths again.
+   (type just these two paths, or use the preset with the coordinates box
+   unticked), then click "Read now".
+3. Wait for the check-in and confirm both values appear in the "Parameter
+   cache" panel. Record them. Without this baseline the test says nothing.
+4. Pull the SIM (or the antenna) for about five minutes, then reconnect it.
+5. Wait for the CPE to come back and check in twice. Click "Read now" again
+   (the two paths are still in the text box), then wait for that check-in and
+   confirm the cache shows fresh values.
 6. Record whether `LastChange` reset and by how much, and in what unit.
    `UpTime` should not have reset; if it did, the device rebooted, and the
    result says nothing about the link.
