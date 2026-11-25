@@ -57,6 +57,8 @@ lowers the resolution; it cannot make a device check in more often.
 
 Only devices that open check-in sessions (TR-069) are sampled. USP devices
 open none, so they have no samples; their Signal panel stays empty.
+Devices on the TR-098 data model (an InternetGatewayDevice root) are not
+sampled either, because there is no portable cellular object to read there.
 
 ## Checking it on the lab CPE
 
@@ -65,8 +67,15 @@ open none, so they have no samples; their Signal panel stays empty.
 2. A second point appears at the next check-in once the sample interval has
    passed. With the defaults and a check-in interval shorter than 15 minutes,
    that is the first check-in after 15 minutes; with a longer check-in
-   interval, the next check-in.
+   interval, the next check-in. This timing follows from how the sampler
+   works; it has not been observed on a device. A point can be delayed while
+   parameter discovery is running for the device, or if its parameter names
+   have not been discovered yet, and a sample read that is already open holds
+   the next one back until it is answered.
 3. If the panel stays empty:
+   - In the "Identity" panel on the device page, check "Data model root".
+     `IGD1` is the TR-098 data model (`InternetGatewayDevice`), which is not
+     sampled; `DEVICE2` is TR-181 (`Device`), which is.
    - On the device's Parameters page, check that the device has discovered its
      cellular parameters. Without them nothing is read.
    - Check that `ACS_CPE_SAMPLE_INTERVAL` is not `0`.
