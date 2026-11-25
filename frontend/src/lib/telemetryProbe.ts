@@ -14,6 +14,11 @@ const ALWAYS: RegExp[] = [
 
 const COORDINATES = /^Device\.DeviceInfo\.Location\.1\.X_[A-Za-z0-9-]+_(Latitude|Longitude|Altitude)$/;
 
+/** True for the location coordinate leaves (latitude, longitude, altitude). */
+export function isCoordinatePath(path: string): boolean {
+  return COORDINATES.test(path);
+}
+
 /** The preset, limited to parameters the device actually has. Location
  * coordinates are included only when asked for. */
 export function probePaths(names: Record<string, boolean> | null, opts: { includeCoordinates: boolean }): string[] {
@@ -39,7 +44,7 @@ export function checkPaths(
   names: Record<string, boolean> | null,
 ): { unknown: string[]; objectPaths: string[]; tooMany: boolean } {
   return {
-    unknown: names ? paths.filter((p) => !(p in names)) : [],
+    unknown: names ? paths.filter((p) => !Object.hasOwn(names, p)) : [],
     objectPaths: paths.filter((p) => p.endsWith(".")),
     tooMany: paths.length > MAX_PROBE_PATHS,
   };

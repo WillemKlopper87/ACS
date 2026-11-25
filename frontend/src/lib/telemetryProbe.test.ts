@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_PROBE_PATHS, checkPaths, parsePaths, probePaths } from "./telemetryProbe";
+import { MAX_PROBE_PATHS, checkPaths, isCoordinatePath, parsePaths, probePaths } from "./telemetryProbe";
 
 const fastmile: Record<string, boolean> = Object.fromEntries(
   [
@@ -98,6 +98,10 @@ describe("checkPaths", () => {
     });
   });
 
+  it("does not accept inherited object keys as known paths", () => {
+    expect(checkPaths(["constructor", "toString", "__proto__"], fastmile).unknown).toEqual(["constructor", "toString", "__proto__"]);
+  });
+
   it("cannot call anything unknown without names", () => {
     expect(checkPaths(["Device.X"], null).unknown).toEqual([]);
   });
@@ -107,5 +111,16 @@ describe("checkPaths", () => {
     expect(MAX_PROBE_PATHS).toBe(60);
     expect(checkPaths(n(61), null).tooMany).toBe(true);
     expect(checkPaths(n(60), null).tooMany).toBe(false);
+  });
+});
+
+describe("isCoordinatePath", () => {
+  it("is true only for the latitude, longitude and altitude leaves", () => {
+    for (const leaf of ["Latitude", "Longitude", "Altitude"]) {
+      expect(isCoordinatePath(`Device.DeviceInfo.Location.1.X_ALU-COM_${leaf}`)).toBe(true);
+    }
+    expect(isCoordinatePath("Device.DeviceInfo.Location.1.Source")).toBe(false);
+    expect(isCoordinatePath("Device.DeviceInfo.Location.1.X_ALU-COM_TimeStamp")).toBe(false);
+    expect(isCoordinatePath("Device.DeviceInfo.UpTime")).toBe(false);
   });
 });

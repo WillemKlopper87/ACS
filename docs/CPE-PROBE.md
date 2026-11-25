@@ -15,13 +15,16 @@ design is in `docs/superpowers/specs/2026-11-25-cpe-telemetry-design.md`
 
 1. Open the lab CPE's device page and note its check-in interval: on the
    Connectivity page, in the Availability panel, the value shown as "Reports
-   every". Write it in the Findings section below. The read waits this long at
-   most.
+   every". Write it in the Findings section below. A read runs at the CPE's
+   next check-in, which is up to that long from now and may be later if a
+   check-in is missed or the session is busy.
 2. Open the device's Parameters page (left menu, under ADVANCED). Above the
    "Parameter cache" panel is the "Read parameters now" panel.
 3. Tick "Include the location coordinates (read once, to learn their format)"
-   first. It only takes effect when the preset is built, so it must be ticked
-   before the next step.
+   first. The checkbox sits below the "Use FastMile telemetry preset" button.
+   The preset only adds the coordinate paths when the box is already ticked,
+   and "Read now" stays disabled while a coordinate path is in the text box
+   and the box is unticked.
 4. Click "Use FastMile telemetry preset". The "Paths to read, one per line"
    box fills with the signal leaves (RSRP, RSRQ, SNR, RSSI, band, cell ID and
    ARFCN under `X_ALU-COM_Attached5GCellStat` and
@@ -32,12 +35,14 @@ design is in `docs/superpowers/specs/2026-11-25-cpe-telemetry-design.md`
    `X_ALU-COM_Latitude`, `Longitude` and `Altitude` leaves because the box is
    ticked. The preset lists only paths the device has already discovered.
 5. Click "Read now". The read runs when the CPE next checks in: the CPE is
-   behind NAT, so the ACS cannot reach it on demand. "Read now" unticks the
-   coordinates box again, but the paths stay in the text box.
+   behind carrier NAT (CGNAT), so the ACS cannot reach it on demand. After a
+   successful send "Read now" unticks the coordinates box and removes the
+   coordinate paths from the text box; the other paths stay.
 6. After the check-in, find each path in the "Parameter cache" panel on the
    same page, using its search box.
-7. Before any later read, clear the text box or click the preset again with
-   the coordinates box unticked, so the coordinates are not read a second time.
+7. The coordinates are read once. To read them again, tick the coordinates box
+   again and click "Read now"; the paths are added when the preset is used or
+   typed with the box ticked.
 
 ## The link-drop test
 

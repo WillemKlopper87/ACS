@@ -68,6 +68,56 @@ describe("ReadParametersPanel", () => {
     expect(coords().checked).toBe(false);
   });
 
+  it("removes the coordinate paths from the text after a send, keeping the other lines", async () => {
+    getParametersLive.mockResolvedValue({ command_key: "getparam_8", status: "QUEUED" });
+    render(<ReadParametersPanel deviceId="gw-1" names={names} writable />);
+    fireEvent.click(coords());
+    type(["Device.DeviceInfo.UpTime", LAT, LON, "Device.Cellular.RoamingStatus", ALT].join("\n"));
+    fireEvent.click(readBtn());
+    await waitFor(() => expect(coords().checked).toBe(false));
+    expect(box().value).toBe("Device.DeviceInfo.UpTime\nDevice.Cellular.RoamingStatus");
+    for (const p of [LAT, LON, ALT]) expect(box().value).not.toContain(p);
+    expect(readBtn().disabled).toBe(false);
+  });
+
+  it("blocks typed coordinate paths while the box is unticked, naming them, until it is ticked", () => {
+    render(<ReadParametersPanel deviceId="gw-1" names={names} writable />);
+    type(["Device.DeviceInfo.UpTime", LAT, ALT].join("\n"));
+    expect(readBtn().disabled).toBe(true);
+    expect(document.body.textContent).toContain(`Tick "Include the location coordinates" to read: ${LAT}, ${ALT}.`);
+    fireEvent.click(coords());
+    expect(readBtn().disabled).toBe(false);
+    expect(document.body.textContent).not.toContain("Tick \"Include");
+  });
+
+  it("keeps the preset button on but tells the user when no preset path matches", () => {
+    render(<ReadParametersPanel deviceId="gw-1" names={{ "InternetGatewayDevice.DeviceInfo.UpTime": false }} writable />);
+    type("keep me");
+    fireEvent.click(presetBtn());
+    expect(box().value).toBe("keep me");
+    expect(document.body.textContent).toContain("None of the preset parameters were found on this device.");
+  });
+
+  it("disables the preset and still allows typed paths when names is empty", async () => {
+    getParametersLive.mockResolvedValue({ command_key: "getparam_2", status: "QUEUED" });
+    render(<ReadParametersPanel deviceId="gw-1" names={{}} writable />);
+    expect(presetBtn().disabled).toBe(true);
+    expect(document.body.textContent).toContain("Discovered names are not available");
+    type("Device.Typed.Path");
+    expect(readBtn().disabled).toBe(false);
+    fireEvent.click(readBtn());
+    await waitFor(() => expect(getParametersLive).toHaveBeenCalledWith("gw-1", ["Device.Typed.Path"]));
+  });
+
+  it("leaves the preset button enabled for a read-only role but disables Read now", () => {
+    render(<ReadParametersPanel deviceId="gw-1" names={names} writable={false} />);
+    expect(presetBtn().disabled).toBe(false);
+    fireEvent.click(presetBtn());
+    expect(box().value).toContain("Device.DeviceInfo.UpTime");
+    expect(readBtn().disabled).toBe(true);
+    expect(document.body.textContent).toMatch(/your role cannot/i);
+  });
+
   it("blocks a path the device does not have and names it", () => {
     render(<ReadParametersPanel deviceId="gw-1" names={names} writable />);
     type("Device.Nope.X");
@@ -105,15 +155,23 @@ describe("ReadParametersPanel", () => {
     expect(getParametersLive).not.toHaveBeenCalled();
   });
 
-  it("says the model has not been discovered when names is null", async () => {
+  it("says discovered names are not available when names is null", async () => {
     getParametersLive.mockResolvedValue({ command_key: "getparam_1", status: "QUEUED" });
     render(<ReadParametersPanel deviceId="gw-1" names={null} writable />);
     expect(presetBtn().disabled).toBe(true);
-    expect(document.body.textContent).toMatch(/not been discovered/i);
+    expect(document.body.textContent).toContain("Discovered names are not available");
     type("Device.Anything.Typed");
     expect(readBtn().disabled).toBe(false);
     fireEvent.click(readBtn());
     await waitFor(() => expect(getParametersLive).toHaveBeenCalledWith("gw-1", ["Device.Anything.Typed"]));
+  });
+
+  it("shows a plain Error's message when the read cannot be queued", async () => {
+    getParametersLive.mockRejectedValue(new Error("network down"));
+    render(<ReadParametersPanel deviceId="gw-1" names={names} writable />);
+    type("Device.DeviceInfo.UpTime");
+    fireEvent.click(readBtn());
+    await waitFor(() => expect(toast).toHaveBeenCalledWith("network down", "error"));
   });
 
   it("shows the API's message when the read cannot be queued", async () => {
