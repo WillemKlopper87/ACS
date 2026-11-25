@@ -214,27 +214,85 @@ func TestRecordCPEMetricsStoresAndIgnoresEmpty(t *testing.T) {
 	}
 }
 
+// TestCPEMetricsReplyBypassesTheParameterCache drives completeJob, the real
+// dispatch path: a reply to the sampler's job must land only in
+// device_cpe_samples, while the identical reply to any other creator's job
+// does reach the parameter cache and parameter_history (the control case
+// that proves the assertions can fail).
 func TestCPEMetricsReplyBypassesTheParameterCache(t *testing.T) {
-	h, dev, ctx := newCPEMetricsHandler(t, 15*time.Minute, true)
-	db, err := store.Open(ctx, os.Getenv("ACS_TEST_POSTGRES_DSN"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
 	r := cpmPrefix + "X_ALU-COM_Attached5GCellStat."
-	h.recordCPEMetrics(ctx, dev.ID, []cwmp.ParameterValueStruct{{Name: r + "RSRPCurrent", Value: "-95"}})
-	cache, err := h.params.Get(ctx, dev.ID)
-	if err != nil {
-		t.Fatal(err)
+	paths := []string{r + "RSRPCurrent", r + "RSRQCurrent", r + "SNRCurrent"}
+	reply := cwmp.InboundBody{GetParameterValuesResponse: &cwmp.GetParameterValuesResponse{ParameterList: []cwmp.ParameterValueStruct{
+		{Name: paths[0], Value: "-95"}, {Name: paths[1], Value: "-11"}, {Name: paths[2], Value: "7"},
+	}}}
+
+	complete := func(t *testing.T, h *handler, ctx context.Context, deviceID, createdBy string) {
+		t.Helper()
+		if _, err := h.jobs.Create(ctx, deviceID, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, createdBy); err != nil {
+			t.Fatal(err)
+		}
+		job, err := h.jobs.Lease(ctx, deviceID)
+		if err != nil || job == nil {
+			t.Fatalf("lease: %v %v", job, err)
+		}
+		h.completeJob(ctx, deviceID, job.ID, reply)
 	}
-	if _, ok := cache[r+"RSRPCurrent"]; ok {
-		t.Fatalf("parameter cache changed: %v", cache)
+	historyRows := func(t *testing.T, h *handler, ctx context.Context, deviceID string) int {
+		t.Helper()
+		db, err := store.Open(ctx, os.Getenv("ACS_TEST_POSTGRES_DSN"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var n int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM parameter_history WHERE device_id=$1 AND name LIKE $2`, deviceID, cpmPrefix+"%").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
 	}
-	var n int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM parameter_history WHERE device_id=$1`, dev.ID).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Fatalf("parameter_history rows = %d", n)
-	}
+
+	t.Run("sampler job is recorded, not cached", func(t *testing.T) {
+		h, dev, ctx := newCPEMetricsHandler(t, 15*time.Minute, true)
+		complete(t, h, ctx, dev.ID, cpemetrics.CreatedBy)
+		hist, err := h.cpeMetrics.repo.History(ctx, dev.ID, time.Now().Add(-time.Hour), time.Now().Add(time.Minute), 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(hist.Samples) != 1 || hist.Samples[0].RSRP == nil || *hist.Samples[0].RSRP != -95 {
+			t.Fatalf("history = %+v", hist.Samples)
+		}
+		cache, err := h.params.Get(ctx, dev.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range paths {
+			if _, ok := cache[p]; ok {
+				t.Fatalf("%s reached the parameter cache", p)
+			}
+		}
+		if n := historyRows(t, h, ctx, dev.ID); n != 0 {
+			t.Fatalf("parameter_history rows = %d", n)
+		}
+	})
+
+	t.Run("control: another creator's job is cached", func(t *testing.T) {
+		h, dev, ctx := newCPEMetricsHandler(t, 15*time.Minute, true)
+		complete(t, h, ctx, dev.ID, "operator")
+		cache, err := h.params.Get(ctx, dev.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range paths {
+			if _, ok := cache[p]; !ok {
+				t.Fatalf("%s missing from the parameter cache", p)
+			}
+		}
+		if n := historyRows(t, h, ctx, dev.ID); n == 0 {
+			t.Fatal("control wrote no parameter_history rows")
+		}
+		hist, _ := h.cpeMetrics.repo.History(ctx, dev.ID, time.Now().Add(-time.Hour), time.Now().Add(time.Minute), 100)
+		if len(hist.Samples) != 0 {
+			t.Fatalf("non-sampler job recorded a sample: %d", len(hist.Samples))
+		}
+	})
 }
