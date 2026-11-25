@@ -131,6 +131,7 @@ func (h *handler) registerRoutes(metrics *observability.Metrics, db *sql.DB) *ht
 	route("GET", "/api/v1/devices/{id}", ro, h.getDevice)
 	route("GET", "/api/v1/devices/{id}/satellites", ro, h.listDeviceSatellites)
 	route("GET", "/api/v1/devices/{id}/connectivity", ro, h.getDeviceConnectivity)
+	route("GET", "/api/v1/devices/{id}/signal-history", ro, h.getDeviceSignalHistory)
 	// TMF639 Resource Inventory projects the tenant-scoped device inventory.
 	route("GET", "/tmf-api/resourceInventoryManagement/v5/resource", ro, h.listTMF639Resources)
 	route("GET", "/tmf-api/resourceInventoryManagement/v5/resource/{id}", ro, h.getTMF639Resource)

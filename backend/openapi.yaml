@@ -1292,6 +1292,31 @@ paths:
         "400": { description: hours out of range }
         "404": { description: No such device in the caller's scope }
 
+  /api/v1/devices/{id}/signal-history:
+    get:
+      tags: [Devices]
+      summary: A cellular CPE's recorded signal readings over a window
+      description: >-
+        Samples come from the device's own check-ins and are averaged to about
+        500 points. The resolution is the larger of the sample interval
+        (`ACS_CPE_SAMPLE_INTERVAL`, 15 minutes by default) and the CPE's
+        check-in interval. `bucket_seconds` is 0 when the rows were not
+        bucketed (there were at most 500 of them); otherwise a point's `at` is
+        the start of its bucket. Metrics are dBm or dB readings, or null when
+        the device does not report them. `samples` is an empty array when
+        nothing was recorded.
+      parameters:
+        - { $ref: "#/components/parameters/DeviceId" }
+        - { name: hours, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 720, default: 168 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignalHistory" }
+        "400": { description: hours out of range }
+        "404": { description: No such device in the caller's scope }
+
   /api/v1/devices/{id}/satellites:
     get:
       tags: [Devices]
@@ -3696,6 +3721,30 @@ components:
               back_at: { type: string, format: date-time, nullable: true, description: The first Inform after it; null while ongoing }
               seconds: { type: integer, description: "Upper bound of the outage: back_at - last_seen" }
               kind: { type: string, enum: [restart, connectivity, ongoing] }
+
+    SignalHistory:
+      type: object
+      required: [from, to, bucket_seconds, interval_seconds, samples]
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        bucket_seconds: { type: integer, description: Width of the averaging buckets; 0 when the rows were not bucketed }
+        interval_seconds: { type: integer, description: Typical time between recorded samples (the median gap); 0 with fewer than two }
+        samples:
+          type: array
+          items: { $ref: "#/components/schemas/SignalPoint" }
+
+    SignalPoint:
+      type: object
+      required: [at, rsrp, rsrq, snr, rssi, band, rat]
+      properties:
+        at: { type: string, format: date-time, description: "The reading time, or the bucket start when averaged" }
+        rsrp: { type: number, nullable: true, description: dBm }
+        rsrq: { type: number, nullable: true, description: dB }
+        snr: { type: number, nullable: true, description: dB }
+        rssi: { type: number, nullable: true, description: dBm }
+        band: { type: string, description: Serving band; empty when not reported }
+        rat: { type: string, description: Radio access technology; empty when not reported }
 
     QueueResponse:
       type: object

@@ -24,6 +24,7 @@ import (
 	"acs/internal/bss"
 	"acs/internal/captures"
 	"acs/internal/cliaccess"
+	"acs/internal/cpemetrics"
 	"acs/internal/credentials"
 	"acs/internal/dashboard"
 	"acs/internal/devices"
@@ -118,6 +119,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		uploadMaxBytes:   1 << 20,
 		firmwareMaxBytes: 1 << 20,
 		metrics:          metrics,
+		cpeMetrics:       cpemetrics.NewRepository(db),
 		groups:           devices.NewGroupRepository(db),
 		credentials:      credRepo,
 		schedules:        scheduler.NewRepository(db),

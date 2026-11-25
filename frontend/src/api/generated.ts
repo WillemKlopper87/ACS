@@ -2692,6 +2692,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/signal-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A cellular CPE's recorded signal readings over a window
+         * @description Samples come from the device's own check-ins and are averaged to about 500 points. The resolution is the larger of the sample interval (`ACS_CPE_SAMPLE_INTERVAL`, 15 minutes by default) and the CPE's check-in interval. `bucket_seconds` is 0 when the rows were not bucketed (there were at most 500 of them); otherwise a point's `at` is the start of its bucket. Metrics are dBm or dB readings, or null when the device does not report them. `samples` is an empty array when nothing was recorded.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    hours?: number;
+                };
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SignalHistory"];
+                    };
+                };
+                /** @description hours out of range */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description No such device in the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/satellites": {
         parameters: {
             query?: never;
@@ -9125,6 +9183,36 @@ export interface components {
                 /** @enum {string} */
                 kind?: "restart" | "connectivity" | "ongoing";
             }[];
+        };
+        SignalHistory: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            /** @description Width of the averaging buckets; 0 when the rows were not bucketed */
+            bucket_seconds: number;
+            /** @description Typical time between recorded samples (the median gap); 0 with fewer than two */
+            interval_seconds: number;
+            samples: components["schemas"]["SignalPoint"][];
+        };
+        SignalPoint: {
+            /**
+             * Format: date-time
+             * @description The reading time, or the bucket start when averaged
+             */
+            at: string;
+            /** @description dBm */
+            rsrp: number | null;
+            /** @description dB */
+            rsrq: number | null;
+            /** @description dB */
+            snr: number | null;
+            /** @description dBm */
+            rssi: number | null;
+            /** @description Serving band; empty when not reported */
+            band: string;
+            /** @description Radio access technology; empty when not reported */
+            rat: string;
         };
         QueueResponse: {
             command_key?: string;
