@@ -191,3 +191,34 @@ func TestCellularDiagnosticParamsFromNamesStaysInCellularSubtree(t *testing.T) {
 		t.Fatalf("cellular refresh paths = %v, want only the cellular RSRP leaf", got)
 	}
 }
+
+func TestResolveCellularReadPathFindsVendorSNR(t *testing.T) {
+	const nr = "Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.SNRCurrent"
+	const lte = "Device.Cellular.Interface.1.X_ALU-COM_AttachedLteCellStat.SNRCurrent"
+	const avg = "Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.AvgSNRMonth"
+
+	got, ok := ResolveCellularReadPath(devices.DataModelRootDevice2, CellularSNR, "1", map[string]bool{nr: false, lte: false, avg: false})
+	if !ok || got.Path != nr || !got.Discovered {
+		t.Fatalf("5G preferred: got %#v ok=%v", got, ok)
+	}
+	got, ok = ResolveCellularReadPath(devices.DataModelRootDevice2, CellularSNR, "1", map[string]bool{lte: false, avg: false})
+	if !ok || got.Path != lte || !got.Discovered {
+		t.Fatalf("LTE only: got %#v ok=%v", got, ok)
+	}
+	if got, ok := ResolveCellularReadPath(devices.DataModelRootDevice2, CellularSNR, "1", map[string]bool{avg: false}); ok {
+		t.Fatalf("aggregate must not match: got %#v", got)
+	}
+	if got := CellularPathCandidates(devices.DataModelRootDevice2, CellularSNR, "1"); got != nil {
+		t.Fatalf("TR-181 has no SNR leaf, got %v", got)
+	}
+	for _, leaf := range []string{"SNR", "SINR", "SNRCurrent", "SINRCurrent"} {
+		if !cellularLeafMatches(CellularSNR, leaf) {
+			t.Errorf("leaf %q should match", leaf)
+		}
+	}
+	for _, leaf := range []string{"AvgSNRMonth", "MinSNRMonth", "MaxSNRMonth"} {
+		if cellularLeafMatches(CellularSNR, leaf) {
+			t.Errorf("leaf %q should not match", leaf)
+		}
+	}
+}

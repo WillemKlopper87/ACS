@@ -38,6 +38,7 @@ const (
 	CellularRSSI          CellularField = "rssi"
 	CellularRSRP          CellularField = "rsrp"
 	CellularRSRQ          CellularField = "rsrq"
+	CellularSNR           CellularField = "snr"
 	CellularBytesSent     CellularField = "bytes_sent"
 	CellularBytesReceived CellularField = "bytes_received"
 )
@@ -71,6 +72,7 @@ func CellularPathCandidates(root string, field CellularField, instance string) [
 		CellularRSSI:          {prefix + "RSSI"},
 		CellularRSRP:          {prefix + "RSRP"},
 		CellularRSRQ:          {prefix + "RSRQ"},
+		CellularSNR:           nil, // TR-181 defines no SNR leaf; needs a discovered vendor path.
 		CellularBytesSent:     {prefix + "Stats.BytesSent"},
 		CellularBytesReceived: {prefix + "Stats.BytesReceived"},
 	}
@@ -203,6 +205,7 @@ func cellularLeafMatches(field CellularField, leaf string) bool {
 		// aggregates deliberately do not match.
 		CellularRSSI: {"RSSI", "SIGNALSTRENGTH", "RSSICURRENT"},
 		CellularRSRP: {"RSRP", "RSRPCURRENT"}, CellularRSRQ: {"RSRQ", "RSRQCURRENT"},
+		CellularSNR:       {"SNR", "SINR", "SNRCURRENT", "SINRCURRENT"},
 		CellularBytesSent: {"BYTESSENT"}, CellularBytesReceived: {"BYTESRECEIVED"},
 	}
 	for _, alias := range aliases[field] {
