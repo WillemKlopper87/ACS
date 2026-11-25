@@ -26,7 +26,7 @@ ARG VITE_ENV_LABEL=
 ENV VITE_ENV_LABEL=$VITE_ENV_LABEL
 RUN npm run build
 
-FROM nginx:1.31.8-alpine3.24@sha256:fed7e14be83cbd2661a75cdc5b872d936cf155d46c327084d30b8df19ae88d72
+FROM nginx:1.31.9-alpine3.24@sha256:fb4658584bd9a916ffb6f6e365f97c25cfdb2923801f551ea08356e695f14ff7
 # Take Alpine's security fixes as soon as they are published, without
 # waiting for the next nginx tag (Trivy fails CI on fixable HIGH/CRITICAL).
 RUN apk upgrade --no-cache
