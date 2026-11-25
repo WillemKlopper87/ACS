@@ -93,4 +93,33 @@ describe("SignalPanel", () => {
     render(<SignalPanel deviceId="cpe-1" />);
     expect(await screen.findByText(/larger of the sample interval and the CPE's check-in interval/)).toBeTruthy();
   });
+
+  describe("averaged (bucketed) points", () => {
+    const hourly = ["T10", "T11", "T12", "T13"].map((h) => ({
+      at: `2026-11-24${h}:00:00Z`,
+      rsrp: -100 + Number(h.slice(1)) - 10,
+      rsrq: null,
+      snr: null,
+      rssi: null,
+      band: "B3",
+      rat: "LTE",
+    }));
+
+    it("joins points one bucket apart into one line", async () => {
+      getSignalHistory.mockResolvedValue({ ...reply, bucket_seconds: 3600, interval_seconds: 900, samples: hourly });
+      const { container } = render(<SignalPanel deviceId="cpe-1" />);
+      await screen.findByRole("img", { name: /RSRP/ });
+      const lines = container.querySelectorAll("svg polyline");
+      expect(lines).toHaveLength(1);
+      expect(lines[0].getAttribute("points")!.trim().split(" ")).toHaveLength(hourly.length);
+    });
+
+    it("still breaks the line for raw samples an hour apart", async () => {
+      getSignalHistory.mockResolvedValue({ ...reply, bucket_seconds: 0, interval_seconds: 900, samples: hourly });
+      const { container } = render(<SignalPanel deviceId="cpe-1" />);
+      await screen.findByRole("img", { name: /RSRP/ });
+      expect(container.querySelectorAll("svg polyline")).toHaveLength(0);
+      expect(container.querySelectorAll("svg circle")).toHaveLength(hourly.length);
+    });
+  });
 });

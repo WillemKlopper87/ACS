@@ -52,7 +52,7 @@ export function SignalPanel({ deviceId }: { deviceId: string }) {
   const from = data ? new Date(data.from).getTime() : 0;
   const to = data ? new Date(data.to).getTime() : 0;
   const m = METRICS.find((x) => x.key === metric) ?? METRICS[0];
-  const series = buildSeries(samples, metric, from, to, data?.interval_seconds ?? 0);
+  const series = buildSeries(samples, metric, from, to, Math.max(data?.interval_seconds ?? 0, data?.bucket_seconds ?? 0));
   const window = Number.isFinite(from) && Number.isFinite(to) && to > from;
 
   return (
