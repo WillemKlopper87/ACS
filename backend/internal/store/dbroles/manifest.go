@@ -90,6 +90,7 @@ var Manifest = map[string]map[string][]string{
 		"device_parameter_cache":      {"SELECT", "INSERT", "UPDATE"},
 		"device_parameter_names":      {"SELECT", "INSERT", "UPDATE"},
 		"device_projects":             {"SELECT", "INSERT", "DELETE"},
+		"device_sim_watch":            {"SELECT", "UPDATE"},
 		"device_ssh_host_keys":        {"SELECT", "INSERT"},
 		"device_vpn_peers":            {"SELECT", "INSERT", "UPDATE"},
 		"device_webgui_config":        {"SELECT", "INSERT", "UPDATE", "DELETE"},
