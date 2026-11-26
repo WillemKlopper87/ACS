@@ -118,6 +118,15 @@ func TestReadPaths(t *testing.T) {
 	}
 }
 
+// The discovered-names map holds true for writable leaves only; a read-only
+// identity leaf is present with the value false and must still be read.
+func TestReadPathsCountsReadOnlyLeaves(t *testing.T) {
+	got := ReadPaths(map[string]bool{"Device.Cellular.Interface.1.USIM.IMSI": false})
+	if len(got) != 1 || got[0] != "Device.Cellular.Interface.1.USIM.IMSI" {
+		t.Fatalf("got %v", got)
+	}
+}
+
 func TestHintsAreMasked(t *testing.T) {
 	iccid, imsi := Hints(Identity{iccidA, imsiA})
 	if iccid == "" || imsi == "" {
@@ -125,6 +134,20 @@ func TestHintsAreMasked(t *testing.T) {
 	}
 	if strings.Contains(iccid, iccidA) || strings.Contains(imsi, imsiA) {
 		t.Fatalf("hint carries the full identifier: %q %q", iccid, imsi)
+	}
+}
+
+func TestIsIdentityPath(t *testing.T) {
+	for p, want := range map[string]bool{
+		"Device.Cellular.Interface.1.USIM.ICCID":                true,
+		"Device.Cellular.Interface.1.USIM.IMSI":                 true,
+		"Device.Cellular.Interface.1.X_ALU-COM_CurrentUsedIMSI": true,
+		"Device.Cellular.Interface.2.USIM.IMSI":                 false,
+		"Device.Cellular.Interface.1.USIM.Status":               false,
+	} {
+		if IsIdentityPath(p) != want {
+			t.Fatalf("IsIdentityPath(%q) = %v, want %v", p, !want, want)
+		}
 	}
 }
 

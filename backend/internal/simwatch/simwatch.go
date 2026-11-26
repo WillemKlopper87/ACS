@@ -45,13 +45,19 @@ func ExtractIdentity(values map[string]string) Identity {
 	return id
 }
 
+// IsIdentityPath reports whether a parameter path is one of the SIM identity
+// leaves of interface 1.
+func IsIdentityPath(path string) bool {
+	return path == pathICCID || path == pathIMSI || path == pathVendorIMSI
+}
+
 // ReadPaths lists the identity paths present in the discovered names; nil
 // when nothing is discovered or none is present, so a caller never falls
 // back to paths the device may not have (a missing path fails the read).
 func ReadPaths(names map[string]bool) []string {
 	var out []string
 	for _, p := range []string{pathICCID, pathIMSI, pathVendorIMSI} {
-		if names[p] {
+		if _, ok := names[p]; ok {
 			out = append(out, p)
 		}
 	}

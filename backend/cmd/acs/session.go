@@ -10,6 +10,7 @@ import (
 	"acs/internal/devices/adapters"
 	"acs/internal/jobs"
 	"acs/internal/parameters"
+	"acs/internal/simwatch"
 	"acs/internal/tmf/telemetry"
 	"bytes"
 	"compress/flate"
@@ -435,6 +436,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	h.releaseAwaitingDiagnostics(ctx, device.ID, inform.HasEventCode(cwmp.EventDiagnosticsComplete))
 	h.maybeQueueWiFiInsights(ctx, device.ID)
 	h.maybeQueueCPEMetrics(ctx, device)
+	h.maybeQueueSIMWatch(ctx, device)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "acs_session",
@@ -823,7 +825,12 @@ func (h *handler) cacheParameterValues(ctx context.Context, deviceID string, lis
 	}
 	values := make(map[string]parameters.CachedValue, len(list))
 	now := time.Now().UTC()
+	// The SIM is judged against the cache before the cache is overwritten.
+	sim, skipIdentity := h.judgeSIM(ctx, deviceID, list)
 	for _, p := range list {
+		if skipIdentity && simwatch.IsIdentityPath(p.Name) {
+			continue
+		}
 		values[p.Name] = parameters.CachedValue{Value: p.Value, UpdatedAt: now, Source: source}
 	}
 	changes := h.detectCellularStateChanges(ctx, deviceID, list)
@@ -832,6 +839,9 @@ func (h *handler) cacheParameterValues(ctx context.Context, deviceID string, lis
 		return
 	}
 	h.publishCellularStateChanges(ctx, deviceID, changes, now)
+	if sim != nil && (sim.Verdict.Kind == simwatch.KindNotice || sim.Verdict.Kind == simwatch.KindAlert) {
+		h.publishSIMChange(ctx, deviceID, sim, now)
+	}
 	if hasGatewayInfo(list) {
 		h.refreshGatewayLink(ctx, deviceID)
 	}
