@@ -1,7 +1,9 @@
 package cpemetrics
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"acs/internal/cwmp"
 	"acs/internal/devices/adapters"
@@ -135,5 +137,21 @@ func TestParseKeepsNumericTextFieldsAndDropsSentinels(t *testing.T) {
 	})
 	if ok || s.Band != "" {
 		t.Errorf("sentinel band: got %+v ok=%v, want empty and not ok", s, ok)
+	}
+}
+
+func TestTextIsBoundedAndCleaned(t *testing.T) {
+	if got := text(strings.Repeat("A", 1<<20)); utf8.RuneCountInString(got) > 32 || got == "" {
+		t.Errorf("1 MB band: %d runes, want 1..32", utf8.RuneCountInString(got))
+	}
+	if got := text(" n7\n8\t\x00\x1b[0m\r "); got != "n78[0m" {
+		t.Errorf("control characters: got %q, want %q", got, "n78[0m")
+	}
+	got := text(strings.Repeat("é", 100) + "x")
+	if !utf8.ValidString(got) || utf8.RuneCountInString(got) != 32 {
+		t.Errorf("multi-byte cut: valid=%v runes=%d, want valid and 32", utf8.ValidString(got), utf8.RuneCountInString(got))
+	}
+	if got := text("-32768"); got != "" {
+		t.Errorf("sentinel: got %q, want empty", got)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,5 +171,22 @@ func TestHistoryExcludesOtherDevicesAndOutOfRange(t *testing.T) {
 	}
 	if len(h.Samples) != 1 || !h.Samples[0].At.Equal(now.Add(-1*time.Hour)) {
 		t.Fatalf("samples = %+v, want only the in-range one of this device", h.Samples)
+	}
+}
+
+func TestSchemaBoundsBandAndRAT(t *testing.T) {
+	ctx, db, seed := setup(t)
+	dev := seed("CPE-HIST-CHECK")
+	for _, col := range []string{"band", "rat"} {
+		q := fmt.Sprintf(`INSERT INTO device_cpe_samples (device_id, sampled_at, %s) VALUES ($1, now(), $2)`, col)
+		if _, err := db.ExecContext(ctx, q, dev, strings.Repeat("x", 65)); err == nil {
+			t.Errorf("%s of 65 characters was accepted", col)
+		}
+		if _, err := db.ExecContext(ctx, q, dev, strings.Repeat("x", 64)); err != nil {
+			t.Errorf("%s of 64 characters rejected: %v", col, err)
+		}
+		if _, err := db.ExecContext(ctx, `DELETE FROM device_cpe_samples`); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

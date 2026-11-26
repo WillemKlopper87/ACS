@@ -11,8 +11,8 @@ CREATE TABLE IF NOT EXISTS device_cpe_samples (
     rsrq DOUBLE PRECISION NULL,
     snr DOUBLE PRECISION NULL,
     rssi DOUBLE PRECISION NULL,
-    band TEXT NOT NULL DEFAULT '',
-    rat TEXT NOT NULL DEFAULT '',
+    band TEXT NOT NULL DEFAULT '' CHECK (char_length(band) <= 64),
+    rat TEXT NOT NULL DEFAULT '' CHECK (char_length(rat) <= 64),
     UNIQUE (device_id, sampled_at)
 );
 CREATE INDEX IF NOT EXISTS device_cpe_samples_sampled_at_idx ON device_cpe_samples (sampled_at);

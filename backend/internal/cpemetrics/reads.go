@@ -3,6 +3,8 @@ package cpemetrics
 import (
 	"math"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"acs/internal/cwmp"
 	"acs/internal/devices"
@@ -87,12 +89,26 @@ func number(v any) *float64 {
 	return nil
 }
 
+// maxTextRunes bounds Band and RAT: a CPE controls these strings and each is
+// stored at every sample and returned to the console.
+const maxTextRunes = 32
+
 // text takes the trimmed raw string so a bare numeric Band or RAT ("78") is
-// kept; "no value" sentinels yield "".
+// kept; "no value" sentinels yield "". Control characters are removed and the
+// result is cut to maxTextRunes on a rune boundary.
 func text(raw string) string {
 	s := strings.TrimSpace(raw)
 	if adapters.IsCellularSentinel(s) {
 		return ""
+	}
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	if utf8.RuneCountInString(s) > maxTextRunes {
+		s = string([]rune(s)[:maxTextRunes])
 	}
 	return s
 }
