@@ -1,0 +1,339 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"testing"
+	"time"
+
+	"acs/internal/cpemetrics"
+	"acs/internal/cpemetrics/recorder"
+	"acs/internal/cwmp"
+	"acs/internal/devices"
+	"acs/internal/jobs"
+	"acs/internal/parameters"
+	"acs/internal/store"
+)
+
+const cpmPrefix = "Device.Cellular.Interface.1."
+
+func cpmNames() []parameters.SupportedCapability {
+	var caps []parameters.SupportedCapability
+	for _, leaf := range []string{
+		"RSSI",
+		"X_ALU-COM_Attached5GCellStat.RSRPCurrent",
+		"X_ALU-COM_Attached5GCellStat.RSRQCurrent",
+		"X_ALU-COM_Attached5GCellStat.SNRCurrent",
+	} {
+		caps = append(caps, parameters.SupportedCapability{Path: cpmPrefix + leaf})
+	}
+	return caps
+}
+
+// newCPEMetricsHandler builds the standard DB-backed test handler with the
+// sampler wired and one DEVICE2 device whose names include signal paths.
+func newCPEMetricsHandler(t *testing.T, interval time.Duration, withNames bool) (*handler, *devices.Device, context.Context) {
+	t.Helper()
+	h, _, ctx := newTestGateway(t)
+	db, err := store.Open(ctx, os.Getenv("ACS_TEST_POSTGRES_DSN"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	h.cpeMetrics = &cpeMetricsSampler{repo: cpemetrics.NewRepository(db), rec: recorder.New(db), interval: interval}
+	dev, err := h.devices.UpsertFromInform(ctx, cwmp.DeviceID{Manufacturer: "Nokia", OUI: "A4FC77", ProductClass: "3TG02241", SerialNumber: "CPEMETRICS1"}, []string{"0 BOOTSTRAP"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.devices.UpdateDataModelRoot(ctx, dev.ID, devices.DataModelRootDevice2); err != nil {
+		t.Fatal(err)
+	}
+	dev.DataModelRoot = devices.DataModelRootDevice2
+	if withNames {
+		if err := h.params.SaveCapabilities(ctx, dev.ID, cpmNames()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return h, dev, ctx
+}
+
+func cpmJobs(t *testing.T, h *handler, ctx context.Context, id string) []jobs.Job {
+	t.Helper()
+	list, err := h.jobs.List(ctx, id, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []jobs.Job
+	for _, j := range list {
+		if j.CreatedBy == cpemetrics.CreatedBy {
+			out = append(out, j)
+		}
+	}
+	return out
+}
+
+// cpmCount reads acs_cpe_samples_total{result} through the registry, so no
+// test-only dependency is needed.
+func cpmCount(t *testing.T, h *handler, result string) float64 {
+	t.Helper()
+	fams, err := h.metrics.Registry().Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fams {
+		if f.GetName() != "acs_cpe_samples_total" {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "result" && l.GetValue() == result {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func cpmFloat(f float64) *float64 { return &f }
+
+func TestMaybeQueueCPEMetricsQueuesOneReadWhenDue(t *testing.T) {
+	h, dev, ctx := newCPEMetricsHandler(t, 15*time.Minute, true)
+	h.maybeQueueCPEMetrics(ctx, dev)
+	got := cpmJobs(t, h, ctx, dev.ID)
+	if len(got) != 1 {
+		t.Fatalf("jobs = %d, want 1", len(got))
+	}
+	if got[0].Type != jobs.TypeGetParameter {
+		t.Fatalf("type = %s", got[0].Type)
+	}
+	var p jobs.GetParameterPayload
+	if err := json.Unmarshal(got[0].Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	want := cpemetrics.PlanReads(devices.DataModelRootDevice2, map[string]bool{
+		cpmPrefix + "RSSI": false,
+		cpmPrefix + "X_ALU-COM_Attached5GCellStat.RSRPCurrent": false,
+		cpmPrefix + "X_ALU-COM_Attached5GCellStat.RSRQCurrent": false,
+		cpmPrefix + "X_ALU-COM_Attached5GCellStat.SNRCurrent":  false,
+	})
+	if len(want) == 0 || len(p.Paths) != len(want) {
+		t.Fatalf("paths = %v, want %d planned", p.Paths, len(want))
+	}
+	for i, r := range want {
+		if p.Paths[i] != r.Path {
+			t.Fatalf("path %d = %s, want %s", i, p.Paths[i], r.Path)
+		}
+	}
+	// Throttled: an immediate second check-in queues nothing more.
+	h.maybeQueueCPEMetrics(ctx, dev)
+	if n := len(cpmJobs(t, h, ctx, dev.ID)); n != 1 {
+		t.Fatalf("jobs after repeat = %d, want 1", n)
+	}
+}
+
+// A sample is stored a few seconds after its read was queued, so the next
+// check-in one interval later sees a sample slightly younger than the
+// interval; the slack makes that check-in take the next sample.
+func TestMaybeQueueCPEMetricsSlackAndThrottle(t *testing.T) {
+	record := func(t *testing.T, h *handler, ctx context.Context, dev *devices.Device, age time.Duration) {
+		t.Helper()
+		if err := h.cpeMetrics.rec.Record(ctx, dev.ID, time.Now().UTC().Add(-age), cpemetrics.Sample{RSRP: cpmFloat(-90)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("sample just under one interval old is due", func(t *testing.T) {
+		h, dev, ctx := newCPEMetricsHandler(t, 15*time.Minute, true)
+		record(t, h, ctx, dev, 15*time.Minute-2*time.Second)
+		h.maybeQueueCPEMetrics(ctx, dev)
+		if n := len(cpmJobs(t, h, ctx, dev.ID)); n != 1 {
+			t.Fatalf("jobs = %d, want 1", n)
+		}
+		h.maybeQueueCPEMetrics(ctx, dev)
+		if n := len(cpmJobs(t, h, ctx, dev.ID)); n != 1 {
+			t.Fatalf("jobs after repeat = %d, want 1", n)
+		}
+	})
+	t.Run("sample half an interval old is not due", func(t *testing.T) {
+		h, dev, ctx := newCPEMetricsHandler(t, 15*time.Minute, true)
+		record(t, h, ctx, dev, 15*time.Minute/2)
+		h.maybeQueueCPEMetrics(ctx, dev)
+		if n := len(cpmJobs(t, h, ctx, dev.ID)); n != 0 {
+			t.Fatalf("jobs = %d, want 0", n)
+		}
+		// The throttle holds the last sample time, not "now": once the slack
+		// window opens the very next check-in is not blocked for a full interval.
+		v, ok := h.cpeMetrics.lastTried.Load(dev.ID)
+		if !ok {
+			t.Fatal("throttle not set")
+		}
+		if age := time.Since(v.(time.Time)); age < 7*time.Minute {
+			t.Fatalf("lastTried is %v old, want the sample time (~7.5m)", age)
+		}
+	})
+}
+
+func TestMaybeQueueCPEMetricsSkips(t *testing.T) {
+	cases := []struct {
+		name     string
+		interval time.Duration
+		names    bool
+		setup    func(t *testing.T, h *handler, ctx context.Context, dev *devices.Device)
+	}{
+		{name: "interval zero", interval: 0, names: true},
+		{name: "last sample newer than interval", interval: 15 * time.Minute, names: true,
+			setup: func(t *testing.T, h *handler, ctx context.Context, dev *devices.Device) {
+				if err := h.cpeMetrics.rec.Record(ctx, dev.ID, time.Now().UTC().Add(-time.Minute), cpemetrics.Sample{RSRP: cpmFloat(-90)}); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "open job by this creator", interval: 15 * time.Minute, names: true,
+			setup: func(t *testing.T, h *handler, ctx context.Context, dev *devices.Device) {
+				if _, err := h.jobs.Create(ctx, dev.ID, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: []string{"Device.X"}}, cpemetrics.CreatedBy); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "discovery active", interval: 15 * time.Minute, names: true,
+			setup: func(t *testing.T, h *handler, ctx context.Context, dev *devices.Device) {
+				if _, err := h.jobs.Create(ctx, dev.ID, jobs.TypeParameterDiscovery, jobs.ParameterDiscoveryPayload{}, "test"); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "names not discovered", interval: 15 * time.Minute, names: false},
+		{name: "non-cellular device", interval: 15 * time.Minute, names: true,
+			setup: func(t *testing.T, h *handler, ctx context.Context, dev *devices.Device) {
+				if err := h.params.SaveCapabilities(ctx, dev.ID, []parameters.SupportedCapability{{Path: "Device.WiFi.SSID.1.SSID"}}); err != nil {
+					t.Fatal(err)
+				}
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, dev, ctx := newCPEMetricsHandler(t, tc.interval, tc.names)
+			if tc.setup != nil {
+				tc.setup(t, h, ctx, dev)
+			}
+			before := len(cpmJobs(t, h, ctx, dev.ID))
+			h.maybeQueueCPEMetrics(ctx, dev)
+			if after := len(cpmJobs(t, h, ctx, dev.ID)); after != before {
+				t.Fatalf("job created: %d -> %d", before, after)
+			}
+		})
+	}
+}
+
+func TestRecordCPEMetricsStoresAndIgnoresEmpty(t *testing.T) {
+	h, dev, ctx := newCPEMetricsHandler(t, 15*time.Minute, true)
+	r := cpmPrefix + "X_ALU-COM_Attached5GCellStat."
+	h.recordCPEMetrics(ctx, dev.ID, []cwmp.ParameterValueStruct{
+		{Name: r + "RSRPCurrent", Value: "-95"},
+		{Name: r + "RSRQCurrent", Value: "-11"},
+		{Name: r + "SNRCurrent", Value: "7"},
+	})
+	hist, err := h.cpeMetrics.repo.History(ctx, dev.ID, time.Now().Add(-time.Hour), time.Now().Add(time.Minute), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist.Samples) != 1 || hist.Samples[0].RSRP == nil || *hist.Samples[0].RSRP != -95 {
+		t.Fatalf("history = %+v", hist.Samples)
+	}
+	if v := cpmCount(t, h, "recorded"); v != 1 {
+		t.Fatalf("recorded = %v", v)
+	}
+
+	h.recordCPEMetrics(ctx, dev.ID, []cwmp.ParameterValueStruct{
+		{Name: r + "RSRPCurrent", Value: "-32768"},
+		{Name: r + "RSRQCurrent", Value: "-32768"},
+	})
+	hist, _ = h.cpeMetrics.repo.History(ctx, dev.ID, time.Now().Add(-time.Hour), time.Now().Add(time.Minute), 100)
+	if len(hist.Samples) != 1 {
+		t.Fatalf("sentinel reply wrote a row: %d", len(hist.Samples))
+	}
+	if v := cpmCount(t, h, "empty"); v != 1 {
+		t.Fatalf("empty = %v", v)
+	}
+}
+
+// TestCPEMetricsReplyBypassesTheParameterCache drives completeJob, the real
+// dispatch path: a reply to the sampler's job must land only in
+// device_cpe_samples, while the identical reply to any other creator's job
+// does reach the parameter cache and parameter_history (the control case
+// that proves the assertions can fail).
+func TestCPEMetricsReplyBypassesTheParameterCache(t *testing.T) {
+	r := cpmPrefix + "X_ALU-COM_Attached5GCellStat."
+	paths := []string{r + "RSRPCurrent", r + "RSRQCurrent", r + "SNRCurrent"}
+	reply := cwmp.InboundBody{GetParameterValuesResponse: &cwmp.GetParameterValuesResponse{ParameterList: []cwmp.ParameterValueStruct{
+		{Name: paths[0], Value: "-95"}, {Name: paths[1], Value: "-11"}, {Name: paths[2], Value: "7"},
+	}}}
+
+	complete := func(t *testing.T, h *handler, ctx context.Context, deviceID, createdBy string) {
+		t.Helper()
+		if _, err := h.jobs.Create(ctx, deviceID, jobs.TypeGetParameter, jobs.GetParameterPayload{Paths: paths}, createdBy); err != nil {
+			t.Fatal(err)
+		}
+		job, err := h.jobs.Lease(ctx, deviceID)
+		if err != nil || job == nil {
+			t.Fatalf("lease: %v %v", job, err)
+		}
+		h.completeJob(ctx, deviceID, job.ID, reply)
+	}
+	historyRows := func(t *testing.T, h *handler, ctx context.Context, deviceID string) int {
+		t.Helper()
+		db, err := store.Open(ctx, os.Getenv("ACS_TEST_POSTGRES_DSN"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var n int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM parameter_history WHERE device_id=$1 AND name LIKE $2`, deviceID, cpmPrefix+"%").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	t.Run("sampler job is recorded, not cached", func(t *testing.T) {
+		h, dev, ctx := newCPEMetricsHandler(t, 15*time.Minute, true)
+		complete(t, h, ctx, dev.ID, cpemetrics.CreatedBy)
+		hist, err := h.cpeMetrics.repo.History(ctx, dev.ID, time.Now().Add(-time.Hour), time.Now().Add(time.Minute), 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(hist.Samples) != 1 || hist.Samples[0].RSRP == nil || *hist.Samples[0].RSRP != -95 {
+			t.Fatalf("history = %+v", hist.Samples)
+		}
+		cache, err := h.params.Get(ctx, dev.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range paths {
+			if _, ok := cache[p]; ok {
+				t.Fatalf("%s reached the parameter cache", p)
+			}
+		}
+		if n := historyRows(t, h, ctx, dev.ID); n != 0 {
+			t.Fatalf("parameter_history rows = %d", n)
+		}
+	})
+
+	t.Run("control: another creator's job is cached", func(t *testing.T) {
+		h, dev, ctx := newCPEMetricsHandler(t, 15*time.Minute, true)
+		complete(t, h, ctx, dev.ID, "operator")
+		cache, err := h.params.Get(ctx, dev.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range paths {
+			if _, ok := cache[p]; !ok {
+				t.Fatalf("%s missing from the parameter cache", p)
+			}
+		}
+		if n := historyRows(t, h, ctx, dev.ID); n == 0 {
+			t.Fatal("control wrote no parameter_history rows")
+		}
+		hist, _ := h.cpeMetrics.repo.History(ctx, dev.ID, time.Now().Add(-time.Hour), time.Now().Add(time.Minute), 100)
+		if len(hist.Samples) != 0 {
+			t.Fatalf("non-sampler job recorded a sample: %d", len(hist.Samples))
+		}
+	})
+}

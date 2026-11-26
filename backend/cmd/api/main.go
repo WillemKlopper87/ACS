@@ -34,6 +34,7 @@ import (
 	"acs/internal/cliaccess"
 	"acs/internal/config"
 	"acs/internal/connectivity"
+	"acs/internal/cpemetrics"
 	"acs/internal/credentials"
 	"acs/internal/dashboard"
 	"acs/internal/devices"
@@ -295,6 +296,7 @@ func main() {
 		jobs:                jobs.NewRepository(db),
 		params:              parameters.NewRepository(db),
 		connectivity:        connectivity.NewRepository(db),
+		cpeMetrics:          cpemetrics.NewRepository(db),
 		wifiInsights:        wifiinsights.NewRepository(db, nil),
 		vendors:             adapters.NewRegistry(),
 		auditor:             observability.NewAuditor(db),
@@ -558,6 +560,8 @@ type handler struct {
 	params            *parameters.Repository
 	// connectivity serves a device's outage history (derived from its Informs).
 	connectivity *connectivity.Repository
+	// cpeMetrics serves a cellular CPE's recorded signal readings (written by cmd/acs).
+	cpeMetrics *cpemetrics.Repository
 	// wifiInsights serves the controller-style Wi-Fi overview (sampled by cmd/acs).
 	wifiInsights *wifiinsights.Repository
 	vendors      *adapters.Registry

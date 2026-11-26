@@ -434,6 +434,7 @@ func (h *handler) handleInform(ctx context.Context, w http.ResponseWriter, r *ht
 	h.recoverDroppedSessionJobs(ctx, device.ID, inform.Event)
 	h.releaseAwaitingDiagnostics(ctx, device.ID, inform.HasEventCode(cwmp.EventDiagnosticsComplete))
 	h.maybeQueueWiFiInsights(ctx, device.ID)
+	h.maybeQueueCPEMetrics(ctx, device)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     "acs_session",

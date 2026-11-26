@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"acs/internal/devices"
+	"strings"
 	"testing"
 )
 
@@ -189,5 +190,115 @@ func TestCellularDiagnosticParamsFromNamesStaysInCellularSubtree(t *testing.T) {
 	got := CellularDiagnosticParamsFromNames(names)
 	if len(got) != 1 || got[0] != "Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.RSRPCurrent" {
 		t.Fatalf("cellular refresh paths = %v, want only the cellular RSRP leaf", got)
+	}
+}
+
+func TestResolveCellularReadPathFindsVendorSNR(t *testing.T) {
+	const nr = "Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.SNRCurrent"
+	const lte = "Device.Cellular.Interface.1.X_ALU-COM_AttachedLteCellStat.SNRCurrent"
+	const avg = "Device.Cellular.Interface.1.X_ALU-COM_Attached5GCellStat.AvgSNRMonth"
+
+	got, ok := ResolveCellularReadPath(devices.DataModelRootDevice2, CellularSNR, "1", map[string]bool{nr: false, lte: false, avg: false})
+	if !ok || got.Path != nr || !got.Discovered {
+		t.Fatalf("5G preferred: got %#v ok=%v", got, ok)
+	}
+	got, ok = ResolveCellularReadPath(devices.DataModelRootDevice2, CellularSNR, "1", map[string]bool{lte: false, avg: false})
+	if !ok || got.Path != lte || !got.Discovered {
+		t.Fatalf("LTE only: got %#v ok=%v", got, ok)
+	}
+	if got, ok := ResolveCellularReadPath(devices.DataModelRootDevice2, CellularSNR, "1", map[string]bool{avg: false}); ok {
+		t.Fatalf("aggregate must not match: got %#v", got)
+	}
+	if got := CellularPathCandidates(devices.DataModelRootDevice2, CellularSNR, "1"); got != nil {
+		t.Fatalf("TR-181 has no SNR leaf, got %v", got)
+	}
+	for _, leaf := range []string{"SNR", "SINR", "SNRCurrent", "SINRCurrent"} {
+		if !cellularLeafMatches(CellularSNR, leaf) {
+			t.Errorf("leaf %q should match", leaf)
+		}
+	}
+	for _, leaf := range []string{"AvgSNRMonth", "MinSNRMonth", "MaxSNRMonth"} {
+		if cellularLeafMatches(CellularSNR, leaf) {
+			t.Errorf("leaf %q should not match", leaf)
+		}
+	}
+}
+
+func TestResolveCellularReadPathsReturnsEveryMatchInPreferenceOrder(t *testing.T) {
+	const p = "Device.Cellular.Interface.1."
+	both := map[string]bool{
+		p + "RSSI": false,
+		p + "X_ALU-COM_AttachedLteCellStat.RSRPCurrent":  false,
+		p + "X_ALU-COM_Attached5GCellStat.RSRPCurrent":   false,
+		p + "X_ALU-COM_Attached5GCellStat.AvgRSRPMonth":  false,
+		p + "X_ALU-COM_AttachedLteCellStat.MaxRSRPMonth": false,
+		p + "X_ALU-COM_Attached5GCellStat.MinRSRPMonth":  false,
+	}
+	got := ResolveCellularReadPaths("DEVICE2", CellularRSRP, "1", both)
+	want := []string{p + "X_ALU-COM_Attached5GCellStat.RSRPCurrent", p + "X_ALU-COM_AttachedLteCellStat.RSRPCurrent"}
+	if len(got) != len(want) {
+		t.Fatalf("both objects: %+v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i].Path != want[i] || !got[i].Discovered {
+			t.Errorf("both objects [%d] = %+v, want discovered %s", i, got[i], want[i])
+		}
+	}
+	if first, ok := ResolveCellularReadPath("DEVICE2", CellularRSRP, "1", both); !ok || first != got[0] {
+		t.Errorf("ResolveCellularReadPath = %+v (ok=%v), want the first of the list %+v", first, ok, got[0])
+	}
+
+	lte := map[string]bool{p + "X_ALU-COM_AttachedLteCellStat.RSRPCurrent": false}
+	if got := ResolveCellularReadPaths("DEVICE2", CellularRSRP, "1", lte); len(got) != 1 || got[0].Path != p+"X_ALU-COM_AttachedLteCellStat.RSRPCurrent" {
+		t.Errorf("LTE only: %+v", got)
+	}
+
+	std := map[string]bool{p + "RSRP": false, p + "X_ALU-COM_Attached5GCellStat.RSRPCurrent": false}
+	got = ResolveCellularReadPaths("DEVICE2", CellularRSRP, "1", std)
+	if len(got) != 2 || !got[0].Standard || got[0].Path != p+"RSRP" || got[1].Path != p+"X_ALU-COM_Attached5GCellStat.RSRPCurrent" {
+		t.Errorf("standard first: %+v", got)
+	}
+	if got := ResolveCellularReadPaths("DEVICE2", CellularRSRP, "1", map[string]bool{p + "Status": false}); len(got) != 0 {
+		t.Errorf("no evidence: %+v", got)
+	}
+	if got := ResolveCellularReadPaths("DEVICE2", CellularRSRP, "1", nil); len(got) != 1 || got[0].Path != p+"RSRP" {
+		t.Errorf("nil discovered: %+v", got)
+	}
+}
+
+func TestResolveCellularReadPathsKeepsToTheRequestedInstance(t *testing.T) {
+	const i1 = "Device.Cellular.Interface.1."
+	const i2 = "Device.Cellular.Interface.2."
+	names := map[string]bool{
+		i1 + "RSRP": false, i2 + "RSRP": false,
+		i1 + "X_ALU-COM_Attached5GCellStat.RSRPCurrent":  false,
+		i2 + "X_ALU-COM_Attached5GCellStat.RSRPCurrent":  false,
+		i2 + "X_ALU-COM_AttachedLteCellStat.RSRPCurrent": false,
+		"Device.XVendor.Cellular.RSRP":                   false, // names no instance: kept
+	}
+	paths := func(instance string) []string {
+		var out []string
+		for _, r := range ResolveCellularReadPaths("DEVICE2", CellularRSRP, instance, names) {
+			out = append(out, r.Path)
+		}
+		return out
+	}
+	want1 := []string{i1 + "RSRP", i1 + "X_ALU-COM_Attached5GCellStat.RSRPCurrent", "Device.XVendor.Cellular.RSRP"}
+	got1 := paths("1")
+	if len(got1) != len(want1) {
+		t.Fatalf("instance 1 = %v, want %v", got1, want1)
+	}
+	for i := range want1 {
+		if got1[i] != want1[i] {
+			t.Errorf("instance 1 [%d] = %s, want %s", i, got1[i], want1[i])
+		}
+	}
+	for _, p := range paths("2") {
+		if strings.Contains(p, "Interface.1.") {
+			t.Errorf("instance 2 resolved %s", p)
+		}
+	}
+	if got := paths("2"); len(got) != 4 || got[0] != i2+"RSRP" {
+		t.Errorf("instance 2 = %v", got)
 	}
 }

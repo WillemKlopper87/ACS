@@ -38,6 +38,7 @@ const (
 	CellularRSSI          CellularField = "rssi"
 	CellularRSRP          CellularField = "rsrp"
 	CellularRSRQ          CellularField = "rsrq"
+	CellularSNR           CellularField = "snr"
 	CellularBytesSent     CellularField = "bytes_sent"
 	CellularBytesReceived CellularField = "bytes_received"
 )
@@ -71,6 +72,7 @@ func CellularPathCandidates(root string, field CellularField, instance string) [
 		CellularRSSI:          {prefix + "RSSI"},
 		CellularRSRP:          {prefix + "RSRP"},
 		CellularRSRQ:          {prefix + "RSRQ"},
+		CellularSNR:           nil, // TR-181 defines no SNR leaf; needs a discovered vendor path.
 		CellularBytesSent:     {prefix + "Stats.BytesSent"},
 		CellularBytesReceived: {prefix + "Stats.BytesReceived"},
 	}
@@ -82,26 +84,51 @@ func CellularPathCandidates(root string, field CellularField, instance string) [
 // parameter names. Discovered names are accepted only when their leaf matches
 // a conservative field-specific vocabulary; arbitrary paths are never
 // guessed. The returned bool is false when the device has no evidence for the
-// requested field.
+// requested field. It is the most preferred of ResolveCellularReadPaths.
 func ResolveCellularReadPath(root string, field CellularField, instance string, discovered map[string]bool) (CellularReadResolution, bool) {
-	for _, path := range CellularPathCandidates(root, field, instance) {
+	all := ResolveCellularReadPaths(root, field, instance, discovered)
+	if len(all) == 0 {
+		return CellularReadResolution{}, false
+	}
+	return all[0], true
+}
+
+// ResolveCellularReadPaths returns every path that matches the field, in
+// preference order: standard candidates first, then discovered vendor leaves
+// with the 5G NR object before LTE and then alphabetically, without
+// duplicates. A device attached to only one radio technology reports the
+// other object's leaves as "no value", so a caller that wants a reading reads
+// them all and takes the first real one. Like ResolveCellularReadPath it is
+// read-only evidence and never authorises a write.
+func ResolveCellularReadPaths(root string, field CellularField, instance string, discovered map[string]bool) []CellularReadResolution {
+	var out []CellularReadResolution
+	seen := make(map[string]struct{})
+	add := func(r CellularReadResolution) {
+		if _, dup := seen[r.Path]; dup {
+			return
+		}
+		seen[r.Path] = struct{}{}
+		out = append(out, r)
+	}
+	candidates := CellularPathCandidates(root, field, instance)
+	for _, path := range candidates {
 		// Discovery's bool is writability, not presence. Read-only telemetry
 		// is valid evidence for a read and must not be skipped.
 		if discovered == nil {
-			return CellularReadResolution{Path: path, Standard: true}, true
+			add(CellularReadResolution{Path: path, Standard: true})
+			continue
 		}
 		if _, present := discovered[path]; present {
-			return CellularReadResolution{Path: path, Standard: true}, true
-		}
-		if _, present := discovered[datamodel.NormalizePath(path)]; present {
-			return CellularReadResolution{Path: path, Standard: true, Discovered: true}, true
+			add(CellularReadResolution{Path: path, Standard: true})
+		} else if _, present := discovered[datamodel.NormalizePath(path)]; present {
+			add(CellularReadResolution{Path: path, Standard: true, Discovered: true})
 		}
 	}
 	if discovered == nil {
-		return CellularReadResolution{}, false
+		return out
 	}
 	standard := make(map[string]struct{})
-	for _, path := range CellularPathCandidates(root, field, instance) {
+	for _, path := range candidates {
 		standard[path] = struct{}{}
 	}
 	paths := make([]string, 0, len(discovered))
@@ -124,14 +151,19 @@ func ResolveCellularReadPath(root string, field CellularField, instance string, 
 		if !strings.Contains(strings.ToLower(path), "cellular") && !strings.Contains(strings.ToLower(path), "mobile") && !strings.Contains(strings.ToLower(path), "5g") {
 			continue
 		}
+		// A vendor path that names another interface or access-point instance
+		// belongs to that instance, not to the one asked for.
+		if m := cellularInstancePattern.FindStringSubmatch(path); m != nil && m[1] != instance {
+			continue
+		}
 		if cellularLeafMatches(field, lastPathSegment(path)) {
 			if strings.Contains(path, "{i}") {
 				path = strings.ReplaceAll(path, "{i}", instance)
 			}
-			return CellularReadResolution{Path: path, Discovered: true}, true
+			add(CellularReadResolution{Path: path, Discovered: true})
 		}
 	}
-	return CellularReadResolution{}, false
+	return out
 }
 
 // CellularStateFields is the subset of cellular fields that represent a
@@ -203,6 +235,7 @@ func cellularLeafMatches(field CellularField, leaf string) bool {
 		// aggregates deliberately do not match.
 		CellularRSSI: {"RSSI", "SIGNALSTRENGTH", "RSSICURRENT"},
 		CellularRSRP: {"RSRP", "RSRPCURRENT"}, CellularRSRQ: {"RSRQ", "RSRQCURRENT"},
+		CellularSNR:       {"SNR", "SINR", "SNRCURRENT", "SINRCURRENT"},
 		CellularBytesSent: {"BYTESSENT"}, CellularBytesReceived: {"BYTESRECEIVED"},
 	}
 	for _, alias := range aliases[field] {

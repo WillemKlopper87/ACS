@@ -21,6 +21,7 @@ import { ParameterBrowser } from "../components/ParameterBrowser";
 import { toast } from "../lib/toast";
 import { MeshTopology } from "../components/MeshTopology";
 import { WiFiNetworksPanel } from "../components/WiFiNetworksPanel";
+import { SignalPanel } from "../components/SignalPanel";
 import { SimPanel } from "../components/SimPanel";
 import { WiFiInsights } from "../components/WiFiInsights";
 import { XmppPanel } from "../components/XmppPanel";
@@ -701,6 +702,7 @@ export function DeviceDetail({ id, section, onClose }: { id: string; section: De
         {section === "cellular" && (
           <>
             <SimPanel deviceId={id} role={role} writable={writable} />
+            <SignalPanel deviceId={id} />
             <div className="panel">
               <h3>
                 Cellular parameters

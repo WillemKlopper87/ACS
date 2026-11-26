@@ -25,6 +25,8 @@ import (
 	"acs/internal/bss"
 	"acs/internal/captures"
 	"acs/internal/config"
+	"acs/internal/cpemetrics"
+	"acs/internal/cpemetrics/recorder"
 	"acs/internal/credentials"
 	"acs/internal/devices"
 	"acs/internal/devices/adapters"
@@ -257,6 +259,12 @@ func main() {
 		onboarding:         onboarding.NewRepository(db),
 		credentials:        credRepo,
 		secrets:            secretStore,
+		// CPE signal sampling cadence; 0 disables it.
+		cpeMetrics: &cpeMetricsSampler{
+			repo:     cpemetrics.NewRepository(db),
+			rec:      recorder.New(db),
+			interval: cpeSampleIntervalFromEnv(logger),
+		},
 		// Wi-Fi insights sampling cadence; 0 disables it.
 		wifiInsights: &wifiInsightsSampler{
 			repo:     wifiinsights.NewRepository(db, wifiinsights.DefaultOUIRegistry()),
@@ -485,6 +493,21 @@ func envOrDuration(key string, fallback time.Duration) time.Duration {
 	return d
 }
 
+// cpeSampleIntervalFromEnv reads ACS_CPE_SAMPLE_INTERVAL (default 15 minutes,
+// 0 disables). envOrDuration silently falls back on a bad value; for this
+// setting an unparsable or negative value is logged, so an operator who typed
+// "15" (no unit) learns the default is in force.
+func cpeSampleIntervalFromEnv(logger *slog.Logger) time.Duration {
+	const key = "ACS_CPE_SAMPLE_INTERVAL"
+	def := 15 * time.Minute
+	if raw := strings.TrimSpace(os.Getenv(key)); raw != "" && raw != "0" {
+		if d, err := time.ParseDuration(raw); err != nil || d < 0 {
+			logger.Warn("invalid duration, using the default", "variable", key, "value", raw, "default", def.String())
+		}
+	}
+	return envOrDuration(key, def)
+}
+
 func levelFromEnv() slog.Level {
 	if os.Getenv("ACS_DEBUG") != "" {
 		return slog.LevelDebug
@@ -513,6 +536,7 @@ type handler struct {
 	deviceLimiter      *ratelimit.Limiter
 	onboardingListener *onboardingListener
 	wifiInsights       *wifiInsightsSampler
+	cpeMetrics         *cpeMetricsSampler
 	// onboarding and credentials drive sold CPEs to IN_SERVICE; nil
 	// onboarding turns the reconciler off.
 	onboarding  *onboarding.Repository
