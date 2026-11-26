@@ -222,3 +222,45 @@ func TestResolveCellularReadPathFindsVendorSNR(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveCellularReadPathsReturnsEveryMatchInPreferenceOrder(t *testing.T) {
+	const p = "Device.Cellular.Interface.1."
+	both := map[string]bool{
+		p + "RSSI": false,
+		p + "X_ALU-COM_AttachedLteCellStat.RSRPCurrent":  false,
+		p + "X_ALU-COM_Attached5GCellStat.RSRPCurrent":   false,
+		p + "X_ALU-COM_Attached5GCellStat.AvgRSRPMonth":  false,
+		p + "X_ALU-COM_AttachedLteCellStat.MaxRSRPMonth": false,
+		p + "X_ALU-COM_Attached5GCellStat.MinRSRPMonth":  false,
+	}
+	got := ResolveCellularReadPaths("DEVICE2", CellularRSRP, "1", both)
+	want := []string{p + "X_ALU-COM_Attached5GCellStat.RSRPCurrent", p + "X_ALU-COM_AttachedLteCellStat.RSRPCurrent"}
+	if len(got) != len(want) {
+		t.Fatalf("both objects: %+v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i].Path != want[i] || !got[i].Discovered {
+			t.Errorf("both objects [%d] = %+v, want discovered %s", i, got[i], want[i])
+		}
+	}
+	if first, ok := ResolveCellularReadPath("DEVICE2", CellularRSRP, "1", both); !ok || first != got[0] {
+		t.Errorf("ResolveCellularReadPath = %+v (ok=%v), want the first of the list %+v", first, ok, got[0])
+	}
+
+	lte := map[string]bool{p + "X_ALU-COM_AttachedLteCellStat.RSRPCurrent": false}
+	if got := ResolveCellularReadPaths("DEVICE2", CellularRSRP, "1", lte); len(got) != 1 || got[0].Path != p+"X_ALU-COM_AttachedLteCellStat.RSRPCurrent" {
+		t.Errorf("LTE only: %+v", got)
+	}
+
+	std := map[string]bool{p + "RSRP": false, p + "X_ALU-COM_Attached5GCellStat.RSRPCurrent": false}
+	got = ResolveCellularReadPaths("DEVICE2", CellularRSRP, "1", std)
+	if len(got) != 2 || !got[0].Standard || got[0].Path != p+"RSRP" || got[1].Path != p+"X_ALU-COM_Attached5GCellStat.RSRPCurrent" {
+		t.Errorf("standard first: %+v", got)
+	}
+	if got := ResolveCellularReadPaths("DEVICE2", CellularRSRP, "1", map[string]bool{p + "Status": false}); len(got) != 0 {
+		t.Errorf("no evidence: %+v", got)
+	}
+	if got := ResolveCellularReadPaths("DEVICE2", CellularRSRP, "1", nil); len(got) != 1 || got[0].Path != p+"RSRP" {
+		t.Errorf("nil discovered: %+v", got)
+	}
+}

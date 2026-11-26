@@ -27,15 +27,24 @@ func fastMileNames() map[string]bool {
 	}
 }
 
-func TestPlanReadsPrefers5GAndSkipsUnresolved(t *testing.T) {
+const (
+	g5  = fm + "X_ALU-COM_Attached5GCellStat."
+	lte = fm + "X_ALU-COM_AttachedLteCellStat."
+)
+
+func TestPlanReadsPlansEveryObjectWith5GFirstAndSkipsUnresolved(t *testing.T) {
 	plan := PlanReads("DEVICE2", fastMileNames())
 	want := []Read{
-		{adapters.CellularRSRP, fm + "X_ALU-COM_Attached5GCellStat.RSRPCurrent"},
-		{adapters.CellularRSRQ, fm + "X_ALU-COM_Attached5GCellStat.RSRQCurrent"},
-		{adapters.CellularSNR, fm + "X_ALU-COM_Attached5GCellStat.SNRCurrent"},
-		{adapters.CellularRSSI, fm + "RSSI"},
-		{adapters.CellularBand, fm + "X_ALU-COM_Attached5GCellStat.Band"},
-		{adapters.CellularRAT, fm + "CurrentAccessTechnology"},
+		{adapters.CellularRSRP, g5 + "RSRPCurrent", 0},
+		{adapters.CellularRSRP, lte + "RSRPCurrent", 1},
+		{adapters.CellularRSRQ, g5 + "RSRQCurrent", 0},
+		{adapters.CellularRSRQ, lte + "RSRQCurrent", 1},
+		{adapters.CellularSNR, g5 + "SNRCurrent", 0},
+		{adapters.CellularSNR, lte + "SNRCurrent", 1},
+		{adapters.CellularRSSI, fm + "RSSI", 0},
+		{adapters.CellularBand, g5 + "Band", 0},
+		{adapters.CellularBand, lte + "Band", 1},
+		{adapters.CellularRAT, fm + "CurrentAccessTechnology", 0},
 	}
 	if len(plan) != len(want) {
 		t.Fatalf("plan = %v, want %v", plan, want)
@@ -59,6 +68,27 @@ func TestPlanReadsPrefers5GAndSkipsUnresolved(t *testing.T) {
 	}
 }
 
+func TestPlanReadsLTEOnlyDevicePlansOnlyLTEPaths(t *testing.T) {
+	names := map[string]bool{}
+	for k := range fastMileNames() {
+		if !strings.Contains(k, "Attached5GCellStat") {
+			names[k] = false
+		}
+	}
+	plan := PlanReads("DEVICE2", names)
+	if len(plan) == 0 {
+		t.Fatal("empty plan")
+	}
+	for _, r := range plan {
+		if strings.Contains(r.Path, "5G") {
+			t.Errorf("planned a 5G path %s", r.Path)
+		}
+		if r.Rank != 0 {
+			t.Errorf("%s rank = %d, want 0 (only one path per field)", r.Path, r.Rank)
+		}
+	}
+}
+
 func pv(name, value string) cwmp.ParameterValueStruct {
 	return cwmp.ParameterValueStruct{Name: name, Value: value}
 }
@@ -66,8 +96,8 @@ func pv(name, value string) cwmp.ParameterValueStruct {
 func TestParseStoresSentinelAsNil(t *testing.T) {
 	reads := PlanReads("DEVICE2", fastMileNames())
 	s, ok := Parse(reads, []cwmp.ParameterValueStruct{
-		pv(reads[0].Path, "-32768"),
-		pv(reads[2].Path, "10"),
+		pv(g5+"RSRPCurrent", "-32768"),
+		pv(g5+"SNRCurrent", "10"),
 	})
 	if !ok {
 		t.Fatal("ok = false, want true")
@@ -86,7 +116,7 @@ func TestParseReturnsNotOKWhenNothingUsable(t *testing.T) {
 		t.Error("empty reply: ok = true")
 	}
 	_, ok := Parse(reads, []cwmp.ParameterValueStruct{
-		pv(reads[0].Path, "-32768"), pv(reads[1].Path, "-32768"), pv(reads[3].Path, "2147483647"),
+		pv(g5+"RSRPCurrent", "-32768"), pv(lte+"RSRPCurrent", "-32768"), pv(g5+"RSRQCurrent", "-32768"), pv(fm+"RSSI", "2147483647"),
 	})
 	if ok {
 		t.Error("all sentinels: ok = true")
@@ -153,5 +183,53 @@ func TestTextIsBoundedAndCleaned(t *testing.T) {
 	}
 	if got := text("-32768"); got != "" {
 		t.Errorf("sentinel: got %q, want empty", got)
+	}
+}
+
+func TestParseFallsBackToLTEWhen5GIsASentinel(t *testing.T) {
+	reads := PlanReads("DEVICE2", fastMileNames())
+	s, ok := Parse(reads, []cwmp.ParameterValueStruct{
+		pv(g5+"RSRPCurrent", "-32768"), pv(lte+"RSRPCurrent", "-101"),
+		pv(g5+"RSRQCurrent", "-32768"), pv(lte+"RSRQCurrent", "-12"),
+		pv(g5+"SNRCurrent", "-32768"), pv(lte+"SNRCurrent", "4"),
+		pv(g5+"Band", "4294967295"), pv(lte+"Band", "B3"),
+	})
+	if !ok || s.RSRP == nil || *s.RSRP != -101 || s.RSRQ == nil || *s.RSRQ != -12 || s.SNR == nil || *s.SNR != 4 || s.Band != "B3" {
+		t.Errorf("got %+v ok=%v, want the LTE values", s, ok)
+	}
+}
+
+func TestParseTakes5GValueWhenBothAreValid(t *testing.T) {
+	reads := PlanReads("DEVICE2", fastMileNames())
+	// The reply order must not matter, only the plan's rank.
+	s, _ := Parse(reads, []cwmp.ParameterValueStruct{
+		pv(lte+"RSRPCurrent", "-101"), pv(g5+"RSRPCurrent", "-90"),
+		pv(lte+"Band", "B3"), pv(g5+"Band", "n78"),
+	})
+	if s.RSRP == nil || *s.RSRP != -90 || s.Band != "n78" {
+		t.Errorf("got %+v, want RSRP -90 and Band n78", s)
+	}
+}
+
+func TestParseTakesBandFromTheObjectThatSuppliedRSRP(t *testing.T) {
+	reads := PlanReads("DEVICE2", fastMileNames())
+	s, _ := Parse(reads, []cwmp.ParameterValueStruct{
+		pv(g5+"RSRPCurrent", "-32768"), pv(g5+"Band", "n78"),
+		pv(lte+"RSRPCurrent", "-101"), pv(lte+"Band", "B3"),
+	})
+	if s.RSRP == nil || *s.RSRP != -101 || s.Band != "B3" {
+		t.Errorf("got %+v, want RSRP -101 with the LTE band B3", s)
+	}
+	// RSRP from 5G but its object has no band: fall back to the first band.
+	s, _ = Parse(reads, []cwmp.ParameterValueStruct{
+		pv(g5+"RSRPCurrent", "-90"), pv(g5+"Band", "4294967295"), pv(lte+"Band", "B3"),
+	})
+	if s.Band != "B3" {
+		t.Errorf("band fallback = %q, want B3", s.Band)
+	}
+	// No RSRP at all: first non-empty band by rank.
+	s, ok := Parse(reads, []cwmp.ParameterValueStruct{pv(g5+"Band", "n78"), pv(lte+"Band", "B3")})
+	if !ok || s.Band != "n78" {
+		t.Errorf("no RSRP: got %+v ok=%v, want n78", s, ok)
 	}
 }
