@@ -142,6 +142,43 @@ func (r *Repository) OfflineDevices(ctx context.Context, limit int) ([]OfflineDe
 	return out, rows.Err()
 }
 
+// SIMWatchDevice is a device whose SIM was replaced and not yet approved. The
+// hints are masked; no full identifier is ever read here.
+type SIMWatchDevice struct {
+	TenantID, AccountKey, DeviceID, CustomerTier                             string
+	State, Network, ICCIDHint, IMSIHint, PreviousICCIDHint, PreviousIMSIHint string
+	DetectedAt                                                               time.Time
+	GroupIDs                                                                 []string
+}
+
+// SIMWatchDevices lists devices with an open SIM verdict that belong to an
+// account (the account is the incident's tenant). A device with no customer
+// mapping is not listed: it gets the banner and the event but no incident.
+func (r *Repository) SIMWatchDevices(ctx context.Context, limit int) ([]SIMWatchDevice, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT m.account_id, COALESCE(m.account_key::text,''), d.id::text, COALESCE(m.service_plan,''), w.state, w.network, w.iccid_hint, w.imsi_hint, w.previous_iccid_hint, w.previous_imsi_hint, COALESCE(w.detected_at, w.last_checked_at) FROM device_sim_watch w JOIN devices d ON d.id=w.device_id JOIN account_device_mappings m ON m.device_id=d.id AND m.unassigned_at IS NULL WHERE w.state IN ('notice','alert') ORDER BY w.detected_at NULLS FIRST LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list SIM watch devices: %w", err)
+	}
+	defer rows.Close()
+	var out []SIMWatchDevice
+	for rows.Next() {
+		var d SIMWatchDevice
+		if err := rows.Scan(&d.TenantID, &d.AccountKey, &d.DeviceID, &d.CustomerTier, &d.State, &d.Network, &d.ICCIDHint, &d.IMSIHint, &d.PreviousICCIDHint, &d.PreviousIMSIHint, &d.DetectedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if out[i].GroupIDs, err = r.GroupIDsForDevice(ctx, out[i].DeviceID); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 // Mapping returns the service plan and the account's registry key for a
 // device mapped to an account ID. The device settles which account the ID
 // means when two customers use the same one.

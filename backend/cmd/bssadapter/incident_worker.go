@@ -4,6 +4,7 @@ import (
 	"acs/internal/accounts"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ func (h *handler) runOfflineIncidentLoop(ctx context.Context) {
 		case <-ticker.C:
 			h.ingestOfflineDevices(ctx)
 			h.ingestBulkDataHealth(ctx)
+			h.ingestSIMWatch(ctx)
 		}
 	}
 }
@@ -66,6 +68,62 @@ func (h *handler) ingestBulkDataHealth(ctx context.Context) {
 		if err != nil {
 			h.logger.Error("bulk data incident creation failed", "err", err)
 		} else if created {
+			h.notifyIncident(ctx, "ALERT_OPENED", incident)
+		}
+	}
+}
+
+// ingestSIMWatch turns SIM change verdicts (written by the ACS gateway) into
+// incidents: a notice (a different SIM on an allowed network) or an alert (a
+// network the plan does not allow). The incident recovers when an operator
+// approves the SIM. A device with no customer mapping gets no incident, and
+// neither does one with no matching alert policy. Only masked hints and the
+// network ever reach an incident.
+func (h *handler) ingestSIMWatch(ctx context.Context) {
+	recovered, err := h.alertIncidents.RecoverSIMWatch(ctx)
+	if err != nil {
+		h.logger.Error("failed to recover SIM change incidents", "err", err)
+	}
+	for i := range recovered {
+		h.notifyIncident(ctx, "ALERT_RECOVERED", &recovered[i])
+	}
+	devices, err := h.alertPolicies.SIMWatchDevices(ctx, webhookBatchSize)
+	if err != nil {
+		h.logger.Error("failed to list SIM change devices for alerting", "err", err)
+		return
+	}
+	if len(devices) == 0 {
+		return
+	}
+	policies, err := h.alertPolicies.List(ctx)
+	if err != nil {
+		return
+	}
+	for _, d := range devices {
+		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: d.TenantID, AccountKey: d.AccountKey, CustomerTier: d.CustomerTier, GroupIDs: d.GroupIDs, DeviceID: d.DeviceID})
+		if !ok {
+			continue
+		}
+		summary := "SIM replaced on this CPE (network " + d.Network + "); approval needed"
+		if d.State == "alert" {
+			summary = "SIM replaced with a network the plan does not allow (" + d.Network + ")"
+		}
+		previous, err := h.alertIncidents.ByKey(ctx, d.TenantID, d.DeviceID, alerting.SIMChangeConditionKey)
+		if err != nil && !errors.Is(err, alerting.ErrIncidentNotFound) {
+			h.logger.Error("failed to look up SIM change incident", "err", err, "device_id", d.DeviceID)
+			continue
+		}
+		next := time.Now().UTC().Add(firstEscalationDelay(p))
+		incident, created, err := h.alertIncidents.OpenWithCreated(ctx, d.TenantID, d.DeviceID, alerting.SIMChangeConditionKey, alerting.Classify(p, "sim_change_"+d.State, false), summary, &next, map[string]any{
+			"state": d.State, "network": d.Network, "iccid_hint": d.ICCIDHint, "imsi_hint": d.IMSIHint,
+			"previous_iccid_hint": d.PreviousICCIDHint, "previous_imsi_hint": d.PreviousIMSIHint, "detected_at": d.DetectedAt,
+		})
+		if err != nil {
+			h.logger.Error("failed to open SIM change incident", "err", err, "device_id", d.DeviceID)
+			continue
+		}
+		reopened := previous != nil && (previous.State == alerting.IncidentRecovered || previous.State == alerting.IncidentClosed)
+		if created || reopened {
 			h.notifyIncident(ctx, "ALERT_OPENED", incident)
 		}
 	}

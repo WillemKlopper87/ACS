@@ -75,6 +75,12 @@ func Classify(p Policy, faultCode string, offline bool) Priority {
 			return v
 		}
 	}
+	switch faultCode {
+	case "sim_change_alert":
+		return P2 // a SIM on a network the plan does not allow
+	case "sim_change_notice":
+		return P4 // a different SIM on an allowed network, awaiting approval
+	}
 	return P3
 }
 

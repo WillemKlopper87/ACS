@@ -54,7 +54,15 @@ func simDevice(t *testing.T, ctx context.Context, db *sql.DB, serial, account st
 		t.Fatal(err)
 	}
 	if account != "" {
-		if _, err := db.ExecContext(ctx, `INSERT INTO account_device_mappings (id, account_id, device_id, oui_serial) VALUES (gen_random_uuid(), $1, $2, $3)`, account, id, "AABBCC-"+serial); err != nil {
+		var key string
+		err := db.QueryRowContext(ctx, `SELECT id::text FROM bss_accounts WHERE account_id = $1`, account).Scan(&key)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = db.QueryRowContext(ctx, `INSERT INTO bss_accounts (account_id, claimed_by) VALUES ($1, 'test') RETURNING id::text`, account).Scan(&key)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO account_device_mappings (id, account_id, account_key, device_id, oui_serial) VALUES (gen_random_uuid(), $1, $2::uuid, $3, $4)`, account, key, id, "AABBCC-"+serial); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -73,9 +81,9 @@ func simRow(t *testing.T, ctx context.Context, db *sql.DB, deviceID, state strin
 func TestSIMWatchDevicesListsOnlyOpenMappedDevices(t *testing.T) {
 	ctx, db := simWatchDB(t)
 	mapped := simDevice(t, ctx, db, "S1", "acct-1")
-	okDev := simDevice(t, ctx, db, "S2", "acct-1")
+	okDev := simDevice(t, ctx, db, "S2", "acct-2")
 	unmapped := simDevice(t, ctx, db, "S3", "")
-	unassigned := simDevice(t, ctx, db, "S4", "acct-1")
+	unassigned := simDevice(t, ctx, db, "S4", "acct-4")
 	if _, err := db.ExecContext(ctx, `UPDATE account_device_mappings SET unassigned_at = now() WHERE device_id = $1`, unassigned); err != nil {
 		t.Fatal(err)
 	}

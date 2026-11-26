@@ -155,6 +155,7 @@ var Manifest = map[string]map[string][]string{
 		"device_parameter_cache":     {"SELECT", "INSERT", "UPDATE"},
 		"device_parameter_names":     {"SELECT", "INSERT", "UPDATE"},
 		"device_projects":            {"SELECT"},
+		"device_sim_watch":           {"SELECT"},
 		"devices":                    {"SELECT", "INSERT", "UPDATE"},
 		"jobs":                       {"SELECT", "INSERT"},
 		"onboardings":                {"SELECT", "INSERT", "UPDATE"},
