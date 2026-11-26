@@ -36,11 +36,11 @@ func newSIMWatchView(s *reads.State) *simWatchView {
 	v := &simWatchView{State: s.State, Network: s.Network, ICCIDHint: s.ICCIDHint, IMSIHint: s.IMSIHint,
 		PreviousICCIDHint: s.PreviousICCIDHint, PreviousIMSIHint: s.PreviousIMSIHint, ApprovedBy: s.ApprovedBy}
 	if s.DetectedAt != nil {
-		t := s.DetectedAt.UTC().Format(time.RFC3339)
+		t := s.DetectedAt.UTC().Format(time.RFC3339Nano)
 		v.DetectedAt = &t
 	}
 	if s.ApprovedAt != nil {
-		t := s.ApprovedAt.UTC().Format(time.RFC3339)
+		t := s.ApprovedAt.UTC().Format(time.RFC3339Nano)
 		v.ApprovedAt = &t
 	}
 	return v
@@ -55,6 +55,9 @@ func (h *handler) approveSIMWatch(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Reason string `json:"reason"`
+		// DetectedAt is the detection time of the verdict the operator was
+		// shown; an approval only applies to that verdict.
+		DetectedAt string `json:"detected_at"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -63,6 +66,11 @@ func (h *handler) approveSIMWatch(w http.ResponseWriter, r *http.Request) {
 	reason := strings.TrimSpace(req.Reason)
 	if len(reason) < minSIMApproveReason {
 		http.Error(w, "reason is required (at least 10 characters), e.g. why the new SIM is expected", http.StatusBadRequest)
+		return
+	}
+	seen, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(req.DetectedAt))
+	if err != nil {
+		http.Error(w, "detected_at is required: the detection time of the SIM change being approved", http.StatusBadRequest)
 		return
 	}
 	state, err := h.simWatch.Get(r.Context(), device.ID)
@@ -75,6 +83,10 @@ func (h *handler) approveSIMWatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no SIM change is awaiting approval", http.StatusConflict)
 		return
 	}
+	if state.DetectedAt == nil || !state.DetectedAt.Equal(seen) {
+		http.Error(w, "the SIM changed again since this was shown; review the new change first", http.StatusConflict)
+		return
+	}
 	actor := operatorFromRequest(r)
 	if err := h.auditor.Record(r.Context(), actor, device.ID, "SimChangeApproved", map[string]any{
 		"reason": reason, "network": state.Network, "verdict": state.State,
@@ -83,7 +95,7 @@ func (h *handler) approveSIMWatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "audit unavailable; approval refused", http.StatusServiceUnavailable)
 		return
 	}
-	if err := h.simWatch.Approve(r.Context(), device.ID, actor, reason, time.Now().UTC()); err != nil {
+	if err := h.simWatch.Approve(r.Context(), device.ID, actor, reason, seen, time.Now().UTC()); err != nil {
 		if errors.Is(err, reads.ErrNothingToApprove) {
 			http.Error(w, "no SIM change is awaiting approval", http.StatusConflict)
 			return

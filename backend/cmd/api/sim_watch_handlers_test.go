@@ -27,10 +27,12 @@ func TestIntegration_SIMWatch(t *testing.T) {
 	approve := func(as, id string, body any) resp {
 		return e.call(as, "POST", "/api/v1/devices/"+id+"/sim-watch/approve", body)
 	}
-	reason := map[string]string{"reason": "Customer swapped the SIM on site"}
+	var seen string // the detection time the operator was shown
+	reason := func(r string) map[string]string { return map[string]string{"reason": r, "detected_at": seen} }
 
 	t.Run("nothing to approve is 409", func(t *testing.T) {
-		if got := approve("alice", dev, reason); got.code != 409 {
+		seen = time.Now().UTC().Format(time.RFC3339Nano)
+		if got := approve("alice", dev, reason("Customer swapped the SIM on site")); got.code != 409 {
 			t.Fatalf("code = %d %s, want 409", got.code, got.body)
 		}
 	})
@@ -46,9 +48,10 @@ func TestIntegration_SIMWatch(t *testing.T) {
 		}
 		var v struct {
 			SimWatch *struct {
-				State     string `json:"state"`
-				Network   string `json:"network"`
-				ICCIDHint string `json:"iccid_hint"`
+				State      string `json:"state"`
+				Network    string `json:"network"`
+				ICCIDHint  string `json:"iccid_hint"`
+				DetectedAt string `json:"detected_at"`
 			} `json:"sim_watch"`
 		}
 		if err := json.Unmarshal([]byte(got.body), &v); err != nil {
@@ -57,6 +60,7 @@ func TestIntegration_SIMWatch(t *testing.T) {
 		if v.SimWatch == nil || v.SimWatch.State != "notice" || v.SimWatch.Network != "65501" || v.SimWatch.ICCIDHint == "" {
 			t.Fatalf("sim_watch = %+v (%s)", v.SimWatch, got.body)
 		}
+		seen = v.SimWatch.DetectedAt
 		for _, full := range []string{swOld.ICCID, swNew.ICCID, swOld.IMSI, swNew.IMSI} {
 			if strings.Contains(got.body, full) {
 				t.Fatalf("body carries a full identifier: %s", got.body)
@@ -72,18 +76,18 @@ func TestIntegration_SIMWatch(t *testing.T) {
 	})
 	t.Run("reasons that are too short or blank are 400", func(t *testing.T) {
 		for _, r := range []string{"", "   ", "short", "         x         "} {
-			if got := approve("alice", dev, map[string]string{"reason": r}); got.code != 400 {
+			if got := approve("alice", dev, reason(r)); got.code != 400 {
 				t.Errorf("reason %q = %d, want 400", r, got.code)
 			}
 		}
 	})
 	t.Run("a read-only operator is refused", func(t *testing.T) {
-		if got := approve("ro", dev, reason); got.code != 403 {
+		if got := approve("ro", dev, reason("Customer swapped the SIM on site")); got.code != 403 {
 			t.Fatalf("code = %d, want 403", got.code)
 		}
 	})
 	t.Run("another tenant's device is 404", func(t *testing.T) {
-		if got := approve("alice", other, reason); got.code != 404 {
+		if got := approve("alice", other, reason("Customer swapped the SIM on site")); got.code != 404 {
 			t.Fatalf("code = %d, want 404", got.code)
 		}
 	})
@@ -91,7 +95,7 @@ func TestIntegration_SIMWatch(t *testing.T) {
 		if _, err := e.db.ExecContext(e.ctx, `ALTER TABLE audit_log RENAME TO audit_log_off`); err != nil {
 			t.Fatal(err)
 		}
-		got := approve("alice", dev, reason)
+		got := approve("alice", dev, reason("Customer swapped the SIM on site"))
 		if _, err := e.db.ExecContext(e.ctx, `ALTER TABLE audit_log_off RENAME TO audit_log`); err != nil {
 			t.Fatal(err)
 		}
@@ -103,8 +107,25 @@ func TestIntegration_SIMWatch(t *testing.T) {
 			t.Fatalf("state = %q, %v; want notice", state, err)
 		}
 	})
+	t.Run("a missing or unparsable detected_at is 400", func(t *testing.T) {
+		for _, d := range []string{"", "yesterday"} {
+			if got := approve("alice", dev, map[string]string{"reason": "Customer swapped the SIM on site", "detected_at": d}); got.code != 400 {
+				t.Errorf("detected_at %q = %d, want 400", d, got.code)
+			}
+		}
+	})
+	t.Run("a SIM that changed again since it was shown is not approved", func(t *testing.T) {
+		stale := map[string]string{"reason": "Customer swapped the SIM on site", "detected_at": time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)}
+		if got := approve("alice", dev, stale); got.code != 409 {
+			t.Fatalf("code = %d %s, want 409", got.code, got.body)
+		}
+		var state string
+		if err := e.db.QueryRowContext(e.ctx, `SELECT state FROM device_sim_watch WHERE device_id=$1`, dev).Scan(&state); err != nil || state != "notice" {
+			t.Fatalf("state = %q, %v; want notice", state, err)
+		}
+	})
 	t.Run("approval returns the state to ok and is audited without identifiers", func(t *testing.T) {
-		got := approve("alice", dev, map[string]string{"reason": "  Customer swapped the SIM on site  "})
+		got := approve("alice", dev, reason("  Customer swapped the SIM on site  "))
 		if got.code != 200 || !strings.Contains(got.body, `"state":"ok"`) || !strings.Contains(got.body, `"approved_by":"alice"`) {
 			t.Fatalf("code = %d body = %s", got.code, got.body)
 		}
@@ -115,7 +136,7 @@ func TestIntegration_SIMWatch(t *testing.T) {
 		if !strings.Contains(details, "Customer swapped the SIM on site") || strings.Contains(details, "0022") || strings.Contains(details, "0011") {
 			t.Fatalf("audit details = %s", details)
 		}
-		if again := approve("alice", dev, reason); again.code != 409 {
+		if again := approve("alice", dev, reason("Customer swapped the SIM on site")); again.code != 409 {
 			t.Fatalf("second approval = %d, want 409", again.code)
 		}
 	})

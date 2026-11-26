@@ -57,10 +57,13 @@ func (r *Repository) Get(ctx context.Context, deviceID string) (*State, error) {
 	return &s, nil
 }
 
-// Approve accepts the SIM now in the device. It never touches the CPE.
-func (r *Repository) Approve(ctx context.Context, deviceID, actor, reason string, at time.Time) error {
+// Approve accepts the SIM now in the device. It never touches the CPE. seen
+// is the detection time of the verdict the operator was shown: if the SIM
+// changed again since (a new verdict has a new detection time) nothing is
+// approved and ErrNothingToApprove is returned.
+func (r *Repository) Approve(ctx context.Context, deviceID, actor, reason string, seen, at time.Time) error {
 	res, err := r.db.ExecContext(ctx, `UPDATE device_sim_watch SET state = 'ok', approved_at = $2, approved_by = $3, approval_reason = $4
-		WHERE device_id = $1 AND state IN ('notice', 'alert')`, deviceID, at, actor, reason)
+		WHERE device_id = $1 AND state IN ('notice', 'alert') AND detected_at = $5`, deviceID, at, actor, reason, seen)
 	if err != nil {
 		return fmt.Errorf("approve sim change: %w", err)
 	}

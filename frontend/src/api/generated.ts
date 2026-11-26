@@ -3554,6 +3554,11 @@ export interface paths {
                     "application/json": {
                         /** @description Why the new SIM is expected, e.g. the customer swapped it on site */
                         reason: string;
+                        /**
+                         * Format: date-time
+                         * @description The detected_at of the sim_watch the operator was shown (RFC 3339 with fractional seconds, exactly as returned). An approval only applies to that verdict.
+                         */
+                        detected_at: string;
                     };
                 };
             };

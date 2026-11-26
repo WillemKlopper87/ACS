@@ -66,7 +66,7 @@ func TestApproveReturnsNoticeAndAlertToOK(t *testing.T) {
 				t.Fatalf("Get = %+v, %v", s, err)
 			}
 			at := time.Now().UTC().Truncate(time.Second)
-			if err := r.Approve(ctx, id, "alice", "Customer swapped the SIM on site", at); err != nil {
+			if err := r.Approve(ctx, id, "alice", "Customer swapped the SIM on site", *s.DetectedAt, at); err != nil {
 				t.Fatal(err)
 			}
 			s, _ = r.Get(ctx, id)
@@ -79,13 +79,13 @@ func TestApproveReturnsNoticeAndAlertToOK(t *testing.T) {
 
 func TestApproveWithNothingOpen(t *testing.T) {
 	ctx, _, r, rec, id := setup(t)
-	if err := r.Approve(ctx, id, "alice", "no row at all here", time.Now()); !errors.Is(err, reads.ErrNothingToApprove) {
+	if err := r.Approve(ctx, id, "alice", "no row at all here", time.Now(), time.Now()); !errors.Is(err, reads.ErrNothingToApprove) {
 		t.Fatalf("no row: %v", err)
 	}
 	if err := rec.Record(ctx, id, simwatch.Verdict{Kind: simwatch.KindBaseline, Network: "65501"}, idA, simwatch.Identity{}, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Approve(ctx, id, "alice", "already ok on this one", time.Now()); !errors.Is(err, reads.ErrNothingToApprove) {
+	if err := r.Approve(ctx, id, "alice", "already ok on this one", time.Now(), time.Now()); !errors.Is(err, reads.ErrNothingToApprove) {
 		t.Fatalf("ok row: %v", err)
 	}
 }
@@ -95,7 +95,8 @@ func TestTheApprovedSIMSeenAgainStaysOK(t *testing.T) {
 	if err := rec.Record(ctx, id, simwatch.Verdict{Kind: simwatch.KindNotice, Network: "65501"}, idB, idA, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Approve(ctx, id, "alice", "Customer swapped the SIM on site", time.Now()); err != nil {
+	seen, _ := r.Get(ctx, id)
+	if err := r.Approve(ctx, id, "alice", "Customer swapped the SIM on site", *seen.DetectedAt, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	// The judge sees the same SIM as the cache again: None, which only
@@ -105,5 +106,25 @@ func TestTheApprovedSIMSeenAgainStaysOK(t *testing.T) {
 	}
 	if s, _ := r.Get(ctx, id); s.State != "ok" || s.ApprovedBy != "alice" {
 		t.Fatalf("approval lost: %+v", s)
+	}
+}
+
+// The operator approves the verdict they saw. If the SIM changed again in the
+// meantime (a new verdict, a new detection time) the approval is refused.
+func TestApproveIsBoundToTheVerdictThatWasSeen(t *testing.T) {
+	ctx, _, r, rec, id := setup(t)
+	if err := rec.Record(ctx, id, simwatch.Verdict{Kind: simwatch.KindNotice, Network: "65501"}, idB, idA, time.Now().UTC().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	seen, _ := r.Get(ctx, id)
+	idC := simwatch.Identity{ICCID: "8927000000000000033", IMSI: "999990000000033"}
+	if err := rec.Record(ctx, id, simwatch.Verdict{Kind: simwatch.KindAlert, Network: "99999"}, idC, idB, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Approve(ctx, id, "alice", "Customer swapped the SIM on site", *seen.DetectedAt, time.Now()); !errors.Is(err, reads.ErrNothingToApprove) {
+		t.Fatalf("approving a verdict that was replaced: %v, want ErrNothingToApprove", err)
+	}
+	if s, _ := r.Get(ctx, id); s.State != "alert" {
+		t.Fatalf("state = %q, the newer alert must stay open", s.State)
 	}
 }

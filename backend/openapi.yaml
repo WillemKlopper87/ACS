@@ -1629,19 +1629,20 @@ paths:
           application/json:
             schema:
               type: object
-              required: [reason]
+              required: [reason, detected_at]
               properties:
                 reason: { type: string, minLength: 10, description: "Why the new SIM is expected, e.g. the customer swapped it on site" }
+                detected_at: { type: string, format: date-time, description: "The detected_at of the sim_watch the operator was shown (RFC 3339 with fractional seconds, exactly as returned). An approval only applies to that verdict." }
       responses:
         "200":
           description: The state after approval
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SIMWatch" }
-        "400": { description: Missing or too-short reason }
+        "400": { description: Missing or too-short reason, or a missing or unparsable detected_at }
         "403": { description: The caller lacks the devices.write permission }
         "404": { description: Device not found or outside the caller's scope }
-        "409": { description: No SIM change is awaiting approval }
+        "409": { description: No SIM change is awaiting approval, or the SIM changed again since the one the caller saw (detected_at differs) }
         "503": { description: "The audit record could not be written, so nothing was approved" }
   /api/v1/devices/{id}/sim/reveal:
     post:
