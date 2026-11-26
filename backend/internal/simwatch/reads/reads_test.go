@@ -128,3 +128,28 @@ func TestApproveIsBoundToTheVerdictThatWasSeen(t *testing.T) {
 		t.Fatalf("state = %q, the newer alert must stay open", s.State)
 	}
 }
+
+// Approving clears what the event claim remembers: a new swap soon after an
+// approval is a new verdict and must be announced, not coalesced into the old
+// one.
+func TestApprovalResetsTheEventClaim(t *testing.T) {
+	ctx, _, r, rec, id := setup(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := rec.Record(ctx, id, simwatch.Verdict{Kind: simwatch.KindNotice, Network: "65501"}, idB, idA, now); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := rec.ClaimEvent(ctx, id, now, 10*time.Minute); err != nil || !ok {
+		t.Fatalf("first claim: %v %v", ok, err)
+	}
+	seen, _ := r.Get(ctx, id)
+	if err := r.Approve(ctx, id, "alice", "Customer swapped the SIM on site", *seen.DetectedAt, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	idC := simwatch.Identity{ICCID: "8927000000000000033", IMSI: "655010000000033"}
+	if err := rec.Record(ctx, id, simwatch.Verdict{Kind: simwatch.KindNotice, Network: "65501"}, idC, idB, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := rec.ClaimEvent(ctx, id, now.Add(2*time.Minute), 10*time.Minute); err != nil || !ok {
+		t.Fatalf("a new swap after an approval must be announced: %v %v", ok, err)
+	}
+}

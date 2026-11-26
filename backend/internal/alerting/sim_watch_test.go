@@ -193,3 +193,25 @@ func TestSIMWatchDevicesPagesThroughEveryOpenVerdict(t *testing.T) {
 		}
 	}
 }
+
+// A device taken off its account no longer belongs to the tenant that was
+// told about the SIM change; its incident must not stay open and escalate.
+func TestRecoverSIMWatchWhenTheDeviceWasUnassigned(t *testing.T) {
+	ctx, db := simWatchDB(t)
+	dev := simDevice(t, ctx, db, "U1", "acct-u")
+	inc := NewIncidentRepository(db)
+	simRow(t, ctx, db, dev, "notice")
+	if _, _, err := inc.OpenWithCreated(ctx, "acct-u", dev, SIMChangeConditionKey, P4, "SIM replaced", nil, map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := inc.RecoverSIMWatch(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("a mapped device with an open verdict must stay open: %+v, %v", got, err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE account_device_mappings SET unassigned_at = now() WHERE device_id = $1`, dev); err != nil {
+		t.Fatal(err)
+	}
+	got, err := inc.RecoverSIMWatch(ctx)
+	if err != nil || len(got) != 1 || got[0].State != IncidentRecovered {
+		t.Fatalf("an unassigned device's incident must recover: %+v, %v", got, err)
+	}
+}

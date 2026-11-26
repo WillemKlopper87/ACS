@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,9 @@ import (
 	"acs/internal/simwatch/recorder"
 	"acs/internal/store"
 )
+
+func idA() simwatch.Identity { return simwatch.Identity{ICCID: iccidA, IMSI: imsiA} }
+func idB() simwatch.Identity { return simwatch.Identity{ICCID: iccidB, IMSI: imsiB} }
 
 const (
 	iccidA = "8927000000000000011"
@@ -168,5 +172,83 @@ func TestStoredTextNeverHoldsAFullIdentifier(t *testing.T) {
 		if strings.Contains(all, full) {
 			t.Fatalf("row holds a full identifier %q: %s", full, all)
 		}
+	}
+}
+
+const gap = 10 * time.Minute
+
+func TestClaimEventAllowsOneEventPerGap(t *testing.T) {
+	ctx, _, rec, id := setup(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	claim := func(at time.Time) bool {
+		t.Helper()
+		ok, err := rec.ClaimEvent(ctx, id, at, gap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if claim(now) {
+		t.Fatal("a device with no verdict has nothing to announce")
+	}
+	if err := rec.Record(ctx, id, notice("65501"), idB(), idA(), now); err != nil {
+		t.Fatal(err)
+	}
+	if !claim(now) {
+		t.Fatal("the first event of an open verdict must be allowed")
+	}
+	if claim(now.Add(time.Minute)) {
+		t.Fatal("a second event inside the gap must be refused")
+	}
+	if !claim(now.Add(gap + time.Second)) {
+		t.Fatal("an event after the gap must be allowed")
+	}
+}
+
+func TestClaimEventLetsAnUpgradeToAlertThrough(t *testing.T) {
+	ctx, _, rec, id := setup(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := rec.Record(ctx, id, notice("65501"), idB(), idA(), now); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := rec.ClaimEvent(ctx, id, now, gap); !ok {
+		t.Fatal("first claim refused")
+	}
+	if err := rec.Record(ctx, id, simwatch.Verdict{Kind: simwatch.KindAlert, Network: "99999"}, idB(), idA(), now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := rec.ClaimEvent(ctx, id, now.Add(time.Minute), gap); !ok {
+		t.Fatal("a notice that became an alert must be announced at once")
+	}
+	if ok, _ := rec.ClaimEvent(ctx, id, now.Add(2*time.Minute), gap); ok {
+		t.Fatal("the alert was already announced")
+	}
+}
+
+// Two writes for one device that overlap both see the same verdict; only one
+// of them may publish it.
+func TestClaimEventIsAtomicUnderConcurrency(t *testing.T) {
+	ctx, _, rec, id := setup(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := rec.Record(ctx, id, notice("65501"), idB(), idA(), now); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	won := 0
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if ok, err := rec.ClaimEvent(ctx, id, now, gap); err == nil && ok {
+				mu.Lock()
+				won++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if won != 1 {
+		t.Fatalf("%d claims won, want exactly 1", won)
 	}
 }

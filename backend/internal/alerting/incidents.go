@@ -93,9 +93,10 @@ func (r *IncidentRepository) RescheduleEscalation(ctx context.Context, id string
 }
 
 // RecoverSIMWatch recovers SIM change incidents whose device no longer has an
-// open verdict (approved by an operator, or the row is gone).
+// open verdict (approved by an operator, or the row is gone) or that left the
+// account the incident was raised for (the mapping was unassigned).
 func (r *IncidentRepository) RecoverSIMWatch(ctx context.Context) ([]Incident, error) {
-	rows, err := r.db.QueryContext(ctx, `UPDATE alert_incidents i SET state='recovered',recovered_at=COALESCE(recovered_at,now()),next_escalation_at=NULL WHERE i.condition_key=$1 AND i.state IN ('open','acknowledged','suppressed') AND NOT EXISTS (SELECT 1 FROM device_sim_watch w WHERE w.device_id=i.device_id AND w.state IN ('notice','alert')) RETURNING i.id,i.tenant_id,i.device_id::text,i.condition_key,i.priority,i.summary,i.state,i.escalation_stage,i.first_seen_at,i.last_seen_at,i.next_escalation_at,i.acknowledged_at,COALESCE(i.acknowledged_by,''),i.recovered_at,i.details`, SIMChangeConditionKey)
+	rows, err := r.db.QueryContext(ctx, `UPDATE alert_incidents i SET state='recovered',recovered_at=COALESCE(recovered_at,now()),next_escalation_at=NULL WHERE i.condition_key=$1 AND i.state IN ('open','acknowledged','suppressed') AND (NOT EXISTS (SELECT 1 FROM device_sim_watch w WHERE w.device_id=i.device_id AND w.state IN ('notice','alert')) OR NOT EXISTS (SELECT 1 FROM account_device_mappings m WHERE m.device_id=i.device_id AND m.account_id=i.tenant_id AND m.unassigned_at IS NULL)) RETURNING i.id,i.tenant_id,i.device_id::text,i.condition_key,i.priority,i.summary,i.state,i.escalation_stage,i.first_seen_at,i.last_seen_at,i.next_escalation_at,i.acknowledged_at,COALESCE(i.acknowledged_by,''),i.recovered_at,i.details`, SIMChangeConditionKey)
 	if err != nil {
 		return nil, fmt.Errorf("recover SIM change incidents: %w", err)
 	}

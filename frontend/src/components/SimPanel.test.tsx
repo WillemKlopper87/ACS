@@ -236,8 +236,9 @@ describe("SimPanel SIM change banner", () => {
     expect(submit.disabled).toBe(false);
   });
 
-  it("sends the trimmed reason with the detection time it showed, reloads, and drops the banner", async () => {
-    getSIM.mockResolvedValueOnce({ ...masked, sim_watch: watch("notice") }).mockResolvedValue({ ...masked, sim_watch: watch("ok", { approved_by: "alice" }) });
+  it("sends the trimmed reason with the detection time it showed and drops the banner using the reply", async () => {
+    // A refetch would fail here: the approval reply alone must clear the banner.
+    getSIM.mockResolvedValueOnce({ ...masked, sim_watch: watch("notice") }).mockRejectedValue(new Error("network down"));
     approveSimWatch.mockResolvedValue(watch("ok", { approved_by: "alice" }));
     render(<SimPanel deviceId="gw-1" role="manager" writable />);
     fireEvent.click(await screen.findByRole("button", { name: "Approve this SIM" }));
@@ -246,7 +247,8 @@ describe("SimPanel SIM change banner", () => {
     await waitFor(() => expect(approveSimWatch).toHaveBeenCalledTimes(1));
     expect(approveSimWatch).toHaveBeenCalledWith("gw-1", reason, "2026-11-26T08:15:30.123456Z");
     await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
-    expect(getSIM).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(getSIM).toHaveBeenCalledTimes(1);
   });
 
   it("shows the server's error and keeps the dialog open when the approval is refused", async () => {

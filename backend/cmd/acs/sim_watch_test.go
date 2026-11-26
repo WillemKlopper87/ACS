@@ -406,3 +406,24 @@ func TestAPartialReplyDoesNotFireTheSameSwapTwice(t *testing.T) {
 		t.Fatalf("SimChanged events = %d, want 1", n)
 	}
 }
+
+// A CPE that flips its identity values reply after reply must not send a
+// SimChanged webhook for every flip: one per gap, though an upgrade to an
+// alert still goes out at once.
+func TestSimChangedIsCoalescedPerDevice(t *testing.T) {
+	h, dev, ctx, db := newSIMWatchHandler(t, time.Hour, true)
+	sink := &simEventSink{}
+	h.tmfEvents = sink
+	putPlan(t, h, ctx, db, dev.ID)
+	h.cacheParameterValues(ctx, dev.ID, swReply(swICCIDA, swIMSIA), "GET_PARAMETER_VALUES")
+	h.cacheParameterValues(ctx, dev.ID, swReply(swICCIDB, swIMSIB), "GET_PARAMETER_VALUES") // notice
+	h.cacheParameterValues(ctx, dev.ID, swReply(swICCIDA, swIMSIA), "GET_PARAMETER_VALUES") // flips back: notice again
+	h.cacheParameterValues(ctx, dev.ID, swReply(swICCIDB, swIMSIB), "GET_PARAMETER_VALUES") // and again
+	if n, _ := simEvents(sink); n != 1 {
+		t.Fatalf("SimChanged events after three flips = %d, want 1", n)
+	}
+	h.cacheParameterValues(ctx, dev.ID, swReply(swICCIDB, swIMSIX), "GET_PARAMETER_VALUES") // alert
+	if n, _ := simEvents(sink); n != 2 {
+		t.Fatalf("an upgrade to an alert must be announced at once, events = %d, want 2", n)
+	}
+}
