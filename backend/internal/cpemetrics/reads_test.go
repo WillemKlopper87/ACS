@@ -233,3 +233,44 @@ func TestParseTakesBandFromTheObjectThatSuppliedRSRP(t *testing.T) {
 		t.Errorf("no RSRP: got %+v ok=%v, want n78", s, ok)
 	}
 }
+
+const fm2 = "Device.Cellular.Interface.2."
+
+func twoInterfaceNames() map[string]bool {
+	names := fastMileNames()
+	names[fm2+"RSRP"] = false
+	names[fm2+"RSSI"] = false
+	names[fm2+"X_ALU-COM_Attached5GCellStat.RSRPCurrent"] = false
+	return names
+}
+
+func TestPlanReadsPlansOnlyInterface1(t *testing.T) {
+	for _, r := range PlanReads("DEVICE2", twoInterfaceNames()) {
+		if strings.Contains(r.Path, "Interface.2.") {
+			t.Errorf("planned %s", r.Path)
+		}
+	}
+}
+
+func TestParseDoesNotTakeAnotherInterfacesValue(t *testing.T) {
+	reads := PlanReads("DEVICE2", twoInterfaceNames())
+	s, ok := Parse(reads, []cwmp.ParameterValueStruct{
+		pv(g5+"RSRPCurrent", "-32768"), pv(lte+"RSRPCurrent", "-32768"),
+		pv(fm2+"RSRP", "-80"), pv(fm2+"X_ALU-COM_Attached5GCellStat.RSRPCurrent", "-81"),
+	})
+	if ok || s.RSRP != nil {
+		t.Errorf("got %+v ok=%v, want nil RSRP and not ok", s, ok)
+	}
+}
+
+func TestTextStripsControlCharactersBeforeTrimAndSentinel(t *testing.T) {
+	if got := text("\x00 n78"); got != "n78" {
+		t.Errorf("leading control then space: %q", got)
+	}
+	if got := text("\x00 \x01 "); got != "" {
+		t.Errorf("only spaces and controls: %q, want empty", got)
+	}
+	if got := text("-3276\x008"); got != "" {
+		t.Errorf("sentinel split by a control character: %q, want empty", got)
+	}
+}

@@ -148,20 +148,20 @@ func number(v any) *float64 {
 // stored at every sample and returned to the console.
 const maxTextRunes = 32
 
-// text takes the trimmed raw string so a bare numeric Band or RAT ("78") is
-// kept; "no value" sentinels yield "". Control characters are removed and the
-// result is cut to maxTextRunes on a rune boundary.
+// text takes the raw string with control characters removed, then trimmed, so
+// a bare numeric Band or RAT ("78") is kept; "no value" sentinels yield "".
+// The result is cut to maxTextRunes on a rune boundary.
 func text(raw string) string {
-	s := strings.TrimSpace(raw)
-	if adapters.IsCellularSentinel(s) {
-		return ""
-	}
-	s = strings.Map(func(r rune) rune {
+	s := strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return -1
 		}
 		return r
-	}, s)
+	}, raw)
+	s = strings.TrimSpace(s)
+	if adapters.IsCellularSentinel(s) {
+		return ""
+	}
 	if utf8.RuneCountInString(s) > maxTextRunes {
 		s = string([]rune(s)[:maxTextRunes])
 	}

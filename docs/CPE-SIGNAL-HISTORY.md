@@ -10,10 +10,11 @@ discovered (the same leaves the Parameters page lists).
 A reading is taken at the device's check-ins. When a check-in session opens
 and a sample is due, the ACS queues an ordinary parameter read in that
 session; the device answers it as part of the same session, and the reply is
-stored as one sample. A sample is due once the sample interval, less a small
-slack of one tenth of it (at most a minute), has passed since the last sample,
-so a device that checks in every interval or faster is sampled at every
-interval. Nothing is written to the CPE. The ACS cannot reach the CPE between
+stored as one sample. A sample is taken at the first check-in once the sample
+interval, less a small allowance (a tenth of the interval, up to a minute), has
+passed since the last sample. So the time between samples is the interval
+rounded up to the next check-in, and can be up to that allowance shorter than
+the interval. Nothing is written to the CPE. The ACS cannot reach the CPE between
 check-ins, so there is no reading between them.
 
 When the CPE is attached only to LTE (or only to 5G), the readings come from
@@ -22,6 +23,9 @@ takes, per metric, the first real value, with the 5G object preferred when both
 report. The band is taken from the object that supplied the RSRP. Band and
 technology text from the CPE is stripped of control characters and cut to 32
 characters.
+
+A device that reports more than one cellular interface is sampled on interface
+1 only.
 
 Which metrics a sample holds depends on the CPE. A model that does not report
 SNR, for example, has no SNR values, and the console shows that metric as
@@ -40,8 +44,8 @@ default).
 
 The chart's resolution is the larger of the sample interval and the CPE's
 check-in interval, because a sample can only be taken when the device checks
-in: a sample is due once the interval (less the slack above) has passed since
-the last one, and the next check-in after that takes it. The check-in interval is shown on the device's Connectivity page, in the
+in: the next check-in after the interval (less the allowance above) has passed
+takes the sample. The check-in interval is shown on the device's Connectivity page, in the
 Availability panel, as "Reports every".
 
 When a range holds more than about 500 samples, they are averaged into at most
@@ -52,7 +56,7 @@ says how many minutes each step covers. Short ranges are shown as recorded.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ACS_CPE_SAMPLE_INTERVAL` | 15 minutes | The least time between samples of one device. `0` turns sampling off. |
+| `ACS_CPE_SAMPLE_INTERVAL` | 15 minutes | The target time between samples of one device; the real gap is the interval rounded up to the next check-in, and up to the allowance (a tenth of it, at most a minute) shorter. `0` turns sampling off. |
 | `ACS_RETENTION_CPE_SAMPLES_DAYS` | 30 | How long samples are kept before they are pruned. `0` prunes nothing. |
 
 The interval is a Go duration such as `15m` or `1h`. A value that does not
@@ -78,7 +82,7 @@ sampled either, because there is no portable cellular object to read there.
    After the first check-in that follows, a first point appears in the Signal
    panel.
 2. A second point appears at the first check-in once the sample interval, less
-   the slack (one tenth, at most a minute), has passed since the first. With
+   the allowance (one tenth, at most a minute), has passed since the first. With
    the defaults and a check-in interval of 15 minutes or less, that is the
    first check-in after about 14 to 15 minutes; with a longer check-in
    interval, the next check-in. This timing follows from how the sampler
