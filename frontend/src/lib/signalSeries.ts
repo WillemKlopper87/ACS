@@ -9,6 +9,9 @@ export interface SeriesPoint {
   x: number;
   /** 0..100, 0 at the top for the largest value. */
   y: number;
+  /** The reading's time, ms since the epoch, and its value, for a hover readout. */
+  t: number;
+  v: number;
 }
 
 export interface Series {
@@ -63,7 +66,7 @@ export function buildSeries(points: SignalPoint[], metric: SignalMetric, from: n
     }
     const x = span > 0 ? Math.min(W, Math.max(0, ((u.t - from) / span) * W)) : 0;
     const y = range > 0 ? ((max - u.v) / range) * H : H / 2;
-    current.push({ x, y });
+    current.push({ x, y, t: u.t, v: u.v });
   });
   segments.push(current);
   return { segments, min, max, count: usable.length };

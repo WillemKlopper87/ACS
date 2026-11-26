@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { SignalHistory } from "../api/types";
 import { fmtTime } from "../lib/format";
-import { buildSeries, type SignalMetric } from "../lib/signalSeries";
+import { buildSeries, type SeriesPoint, type SignalMetric } from "../lib/signalSeries";
 
 const RANGES = [
   { label: "24 hours", hours: 24 },
@@ -21,6 +21,17 @@ const METRICS: { key: SignalMetric; label: string; unit: string }[] = [
   { key: "rssi", label: "RSSI", unit: "dBm" },
 ];
 
+// The chart's user units: x runs -12..1012 and y -8..108 (see the viewBox), so
+// the plotted 0..1000 by 0..100 leaves room for the line's stroke and dots.
+const VB_X0 = -12;
+const VB_W = 1024;
+const VB_Y0 = -8;
+const VB_H = 116;
+const PLOT_HEIGHT = "160px";
+const GUTTER = "3.4rem";
+const pctX = (x: number) => `${((x - VB_X0) / VB_W) * 100}%`;
+const pctY = (y: number) => `${((y - VB_Y0) / VB_H) * 100}%`;
+
 const NOTE_STYLE = { fontSize: "0.82rem", margin: 0 } as const;
 
 function fmtValue(v: number | null): string {
@@ -31,6 +42,9 @@ export function SignalPanel({ deviceId }: { deviceId: string }) {
   const [hours, setHours] = useState(24 * 7);
   const [metric, setMetric] = useState<SignalMetric>("rsrp");
   const [table, setTable] = useState(false);
+  // The point under the pointer. It belongs to the metric and range it was
+  // read in, so it vanishes when either changes.
+  const [hover, setHover] = useState<{ point: SeriesPoint; metric: SignalMetric; hours: number } | null>(null);
   const [data, setData] = useState<SignalHistory | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,6 +69,33 @@ export function SignalPanel({ deviceId }: { deviceId: string }) {
   const rangeLabel = RANGES.find((r) => r.hours === hours)?.label ?? `${hours} hours`;
   const series = buildSeries(samples, metric, from, to, Math.max(data?.interval_seconds ?? 0, data?.bucket_seconds ?? 0));
   const hasWindow = Number.isFinite(from) && Number.isFinite(to) && to > from;
+  const hovered = hover && hover.metric === metric && hover.hours === hours ? hover.point : null;
+  // Levels on the y axis: the highest, the middle and the lowest reading (one
+  // level, in the middle, when every reading is the same).
+  const yTicks =
+    series.count === 0
+      ? []
+      : series.max === series.min
+        ? [{ y: 50, value: series.max }]
+        : [
+            { y: 0, value: series.max },
+            { y: 50, value: (series.max + series.min) / 2 },
+            { y: 100, value: series.min },
+          ];
+
+  // The reading nearest the pointer, by horizontal distance.
+  const onPlotMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    if (!(box.width > 0)) return;
+    const ux = ((e.clientX - box.left) / box.width) * VB_W + VB_X0;
+    let best: SeriesPoint | null = null;
+    for (const seg of series.segments) {
+      for (const p of seg) {
+        if (best === null || Math.abs(p.x - ux) < Math.abs(best.x - ux)) best = p;
+      }
+    }
+    if (best) setHover({ point: best, metric, hours });
+  };
 
   return (
     <div className="panel">
@@ -100,49 +141,97 @@ export function SignalPanel({ deviceId }: { deviceId: string }) {
                   <span>Highest {fmtValue(series.max)} {m.unit}</span>
                   <span>Lowest {fmtValue(series.min)} {m.unit}</span>
                 </div>
-                <svg
-                  viewBox="-12 -8 1024 116"
-                  overflow="visible"
-                  role="img"
-                  aria-label={`${m.label} over the last ${rangeLabel}: ${series.count} ${series.count === 1 ? "reading" : "readings"}, from ${fmtValue(series.min)} to ${fmtValue(series.max)} ${m.unit}`}
-                  style={{ width: "100%", height: "160px", display: "block", margin: "0.4rem 0 0.2rem", background: "var(--panel-2, transparent)" }}
-                  preserveAspectRatio="none"
-                >
-                  <line x1={0} y1={0} x2={1000} y2={0} stroke="var(--ink-dim)" strokeWidth={1} opacity={0.35} vectorEffect="non-scaling-stroke" />
-                  <line x1={0} y1={100} x2={1000} y2={100} stroke="var(--ink-dim)" strokeWidth={1} opacity={0.35} vectorEffect="non-scaling-stroke" />
-                  {series.segments.map((seg, i) =>
-                    seg.length === 1 ? (
-                      // A zero-length polyline with a round cap and a non-scaling stroke
-                      // is a dot of fixed on-screen size however the SVG is stretched.
-                      <polyline
-                        key={i}
-                        data-dot="true"
-                        points={`${seg[0].x.toFixed(1)},${seg[0].y.toFixed(1)} ${seg[0].x.toFixed(1)},${seg[0].y.toFixed(1)}`}
-                        fill="none"
-                        stroke="var(--accent)"
-                        strokeWidth={7}
-                        strokeLinecap="round"
-                        vectorEffect="non-scaling-stroke"
-                      />
-                    ) : (
-                      <polyline
-                        key={i}
-                        points={seg.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")}
-                        fill="none"
-                        stroke="var(--accent)"
-                        strokeWidth={1.5}
-                        strokeLinejoin="round"
-                        vectorEffect="non-scaling-stroke"
-                      />
-                    ),
+                <div style={{ minHeight: "1.2rem", fontSize: "0.82rem", margin: "0.3rem 0 0.1rem", paddingLeft: GUTTER }}>
+                  {hovered && (
+                    <strong data-testid="signal-readout">
+                      {fmtValue(hovered.v)} {m.unit} · {fmtTime(new Date(hovered.t).toISOString())} UTC
+                    </strong>
                   )}
-                </svg>
-                {hasWindow && (
-                  <div className="dim" style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem" }}>
-                    <span>{fmtTime(data.from)} UTC</span>
-                    <span>{fmtTime(data.to)} UTC</span>
+                </div>
+                <div style={{ display: "flex", gap: "0.35rem" }}>
+                  <div style={{ width: GUTTER, flex: "none" }} aria-hidden="true">
+                    <div className="dim" data-axis-unit="y" style={{ fontSize: "0.68rem", textAlign: "right", height: "0.9rem" }}>
+                      {m.unit}
+                    </div>
+                    <div style={{ position: "relative", height: PLOT_HEIGHT }}>
+                      {yTicks.map((t) => (
+                        <span
+                          key={t.y}
+                          className="dim"
+                          data-tick="y"
+                          style={{ position: "absolute", right: 0, top: pctY(t.y), transform: "translateY(-50%)", fontSize: "0.7rem", lineHeight: 1 }}
+                        >
+                          {fmtValue(t.value)}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ height: "0.9rem" }} />
+                    <div
+                      data-testid="signal-plot"
+                      style={{ position: "relative", height: PLOT_HEIGHT, cursor: "crosshair" }}
+                      onMouseMove={onPlotMove}
+                      onMouseLeave={() => setHover(null)}
+                    >
+                      <svg
+                        viewBox={`${VB_X0} ${VB_Y0} ${VB_W} ${VB_H}`}
+                        overflow="visible"
+                        role="img"
+                        aria-label={`${m.label} over the last ${rangeLabel}: ${series.count} ${series.count === 1 ? "reading" : "readings"}, from ${fmtValue(series.min)} to ${fmtValue(series.max)} ${m.unit}`}
+                        style={{ width: "100%", height: "100%", display: "block", background: "var(--panel-2, transparent)" }}
+                        preserveAspectRatio="none"
+                      >
+                        {yTicks.map((t) => (
+                          <line key={t.y} x1={0} y1={t.y} x2={1000} y2={t.y} stroke="var(--ink-dim)" strokeWidth={1} opacity={t.y === 50 ? 0.18 : 0.35} vectorEffect="non-scaling-stroke" />
+                        ))}
+                        {series.segments.map((seg, i) =>
+                          seg.length === 1 ? (
+                            // A zero-length polyline with a round cap and a non-scaling stroke
+                            // is a dot of fixed on-screen size however the SVG is stretched.
+                            <polyline
+                              key={i}
+                              data-dot="true"
+                              points={`${seg[0].x.toFixed(1)},${seg[0].y.toFixed(1)} ${seg[0].x.toFixed(1)},${seg[0].y.toFixed(1)}`}
+                              fill="none"
+                              stroke="var(--accent)"
+                              strokeWidth={7}
+                              strokeLinecap="round"
+                              vectorEffect="non-scaling-stroke"
+                            />
+                          ) : (
+                            <polyline
+                              key={i}
+                              points={seg.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")}
+                              fill="none"
+                              stroke="var(--accent)"
+                              strokeWidth={1.5}
+                              strokeLinejoin="round"
+                              vectorEffect="non-scaling-stroke"
+                            />
+                          ),
+                        )}
+                      </svg>
+                      {hovered && (
+                        <>
+                          <div aria-hidden="true" style={{ position: "absolute", top: 0, bottom: 0, left: pctX(hovered.x), width: 1, background: "var(--ink-dim)", opacity: 0.5, pointerEvents: "none" }} />
+                          <div
+                            data-testid="signal-marker"
+                            aria-hidden="true"
+                            style={{ position: "absolute", left: pctX(hovered.x), top: pctY(hovered.y), width: 10, height: 10, borderRadius: "50%", background: "var(--accent)", border: "2px solid var(--panel, #fff)", transform: "translate(-50%, -50%)", pointerEvents: "none" }}
+                          />
+                        </>
+                      )}
+                    </div>
+                    {hasWindow && (
+                      <div className="dim" style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", marginTop: "0.2rem" }}>
+                        <span data-tick="x">{fmtTime(data.from)} UTC</span>
+                        <span data-tick="x">{fmtTime(new Date((from + to) / 2).toISOString())} UTC</span>
+                        <span data-tick="x">{fmtTime(data.to)} UTC</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </>
             )
           )}
