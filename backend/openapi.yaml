@@ -1639,10 +1639,10 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SIMWatch" }
-        "400": { description: Missing or too-short reason, or a missing or unparsable detected_at }
+        "400": { description: "Missing or too-short reason, or a missing or unparsable detected_at" }
         "403": { description: The caller lacks the devices.write permission }
         "404": { description: Device not found or outside the caller's scope }
-        "409": { description: No SIM change is awaiting approval, or the SIM changed again since the one the caller saw (detected_at differs) }
+        "409": { description: "No SIM change is awaiting approval, or the SIM changed again since the one the caller saw (detected_at differs)" }
         "503": { description: "The audit record could not be written, so nothing was approved" }
   /api/v1/devices/{id}/sim/reveal:
     post:

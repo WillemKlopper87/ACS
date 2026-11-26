@@ -156,3 +156,32 @@ func TestNetwork(t *testing.T) {
 		t.Fatalf("Network wrong: %q %q", Network(imsiA), Network("1234"))
 	}
 }
+
+// After a swap seen through a partial reply, the field the reply did not
+// carry no longer describes the SIM in the device: it is cleared, so the
+// next full read is not judged against it a second time.
+func TestClearedPaths(t *testing.T) {
+	cases := []struct {
+		name             string
+		cached, incoming Identity
+		want             []string
+	}{
+		{"only the IMSI arrived", Identity{iccidA, imsiA}, Identity{"", imsiB}, []string{pathICCID}},
+		{"only the ICCID arrived", Identity{iccidA, imsiA}, Identity{iccidB, ""}, []string{pathIMSI, pathVendorIMSI}},
+		{"both arrived", Identity{iccidA, imsiA}, Identity{iccidB, imsiB}, nil},
+		{"the missing field was not cached either", Identity{iccidA, ""}, Identity{"", imsiB}, []string{pathICCID}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ClearedPaths(c.cached, c.incoming)
+			if len(got) != len(c.want) {
+				t.Fatalf("got %v want %v", got, c.want)
+			}
+			for i := range c.want {
+				if got[i] != c.want[i] {
+					t.Fatalf("got %v want %v", got, c.want)
+				}
+			}
+		})
+	}
+}

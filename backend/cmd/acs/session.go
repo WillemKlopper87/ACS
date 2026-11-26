@@ -836,6 +836,11 @@ func (h *handler) cacheParameterValues(ctx context.Context, deviceID string, lis
 		}
 		values[p.Name] = parameters.CachedValue{Value: p.Value, UpdatedAt: now, Source: source}
 	}
+	if sim != nil {
+		for _, path := range sim.Clear {
+			values[path] = parameters.CachedValue{Value: "", UpdatedAt: now, Source: source}
+		}
+	}
 	changes := h.detectCellularStateChanges(ctx, deviceID, list)
 	if err := h.params.Upsert(ctx, deviceID, values); err != nil {
 		h.logger.Error("failed to upsert parameter cache", "err", err, "device_id", deviceID, "source", source)

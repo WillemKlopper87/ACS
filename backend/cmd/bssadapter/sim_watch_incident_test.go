@@ -97,13 +97,35 @@ func TestIngestSIMWatchOpensUpgradesRecoversAndReopens(t *testing.T) {
 		t.Fatalf("details lack the masked hint: %s", details)
 	}
 
+	// The SIM is swapped again, onto a network the plan does not allow: the
+	// priority rises, the escalation restarts and subscribers are told.
+	if _, err := e.db.ExecContext(e.ctx, `UPDATE alert_incidents SET escalation_stage = 2, next_escalation_at = now() + interval '30 days' WHERE device_id = $1`, e.devA); err != nil {
+		t.Fatal(err)
+	}
 	e.setRow(t, e.devA, "alert")
 	e.h.ingestSIMWatch(e.ctx)
 	if state, prio, _, _, _ = e.incident(t, e.devA); state != "open" || prio != "P2" {
 		t.Fatalf("alert: state=%s priority=%s, want open P2", state, prio)
 	}
-	if e.deliveries(t, "ALERT_OPENED") != 1 {
-		t.Fatalf("a priority change must not notify again, deliveries = %d", e.deliveries(t, "ALERT_OPENED"))
+	if e.deliveries(t, "ALERT_OPENED") != 2 {
+		t.Fatalf("a rise in priority must notify, deliveries = %d, want 2", e.deliveries(t, "ALERT_OPENED"))
+	}
+	var stage int
+	var overdue bool
+	if err := e.db.QueryRowContext(e.ctx, `SELECT escalation_stage, next_escalation_at < now() + interval '1 day' FROM alert_incidents WHERE device_id = $1`, e.devA).Scan(&stage, &overdue); err != nil || stage != 0 || !overdue {
+		t.Fatalf("escalation not restarted: stage=%d soon=%v err=%v", stage, overdue, err)
+	}
+	e.h.ingestSIMWatch(e.ctx) // the same verdict again changes nothing
+	if e.deliveries(t, "ALERT_OPENED") != 2 {
+		t.Fatalf("an unchanged verdict notified again: %d", e.deliveries(t, "ALERT_OPENED"))
+	}
+	// A different SIM again while the incident is open is a new verdict.
+	if _, err := e.db.ExecContext(e.ctx, `UPDATE device_sim_watch SET detected_at = now() + interval '1 minute', imsi_hint = '65501…0033' WHERE device_id = $1`, e.devA); err != nil {
+		t.Fatal(err)
+	}
+	e.h.ingestSIMWatch(e.ctx)
+	if e.deliveries(t, "ALERT_OPENED") != 3 {
+		t.Fatalf("a new verdict on an open incident must notify, deliveries = %d, want 3", e.deliveries(t, "ALERT_OPENED"))
 	}
 
 	e.setRow(t, e.devA, "ok")
@@ -120,8 +142,8 @@ func TestIngestSIMWatchOpensUpgradesRecoversAndReopens(t *testing.T) {
 	if state, _, _, _, n = e.incident(t, e.devA); n != 1 || state != "open" {
 		t.Fatalf("a later change: count=%d state=%s, want the incident reopened", n, state)
 	}
-	if e.deliveries(t, "ALERT_OPENED") != 2 {
-		t.Fatalf("a reopened incident must notify, ALERT_OPENED deliveries = %d, want 2", e.deliveries(t, "ALERT_OPENED"))
+	if e.deliveries(t, "ALERT_OPENED") != 4 {
+		t.Fatalf("a reopened incident must notify, ALERT_OPENED deliveries = %d, want 4", e.deliveries(t, "ALERT_OPENED"))
 	}
 }
 

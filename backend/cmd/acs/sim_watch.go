@@ -92,6 +92,10 @@ type simChange struct {
 	Verdict simwatch.Verdict
 	Cur     simwatch.Identity
 	Prev    simwatch.Identity
+	// Clear lists cached identity paths the reply did not carry; they are
+	// blanked with this write so the next full read is not judged against
+	// the old SIM again.
+	Clear []string
 }
 
 // judgeSIM runs before the cache is overwritten, because afterwards the old
@@ -142,7 +146,15 @@ func (h *handler) judgeSIM(ctx context.Context, deviceID string, list []cwmp.Par
 		h.logger.Error("SIM watch could not save the verdict", "err", err, "device_id", deviceID, "verdict", string(verdict.Kind))
 		return nil, true
 	}
-	return &simChange{Verdict: verdict, Cur: cur, Prev: cached}, false
+	change = &simChange{Verdict: verdict, Cur: cur, Prev: cached}
+	if verdict.Kind == simwatch.KindNotice || verdict.Kind == simwatch.KindAlert {
+		for _, path := range simwatch.ClearedPaths(cached, incoming) {
+			if _, ok := cache[path]; ok {
+				change.Clear = append(change.Clear, path)
+			}
+		}
+	}
+	return change, false
 }
 
 // publishSIMChange tells subscribers about a notice or alert verdict. Only

@@ -137,6 +137,21 @@ func Judge(cached, incoming Identity, allowed func(imsi string) bool) Verdict {
 	return v
 }
 
+// ClearedPaths lists the cached identity paths a partial reply leaves stale
+// after a change: a field that was cached but not carried by the reply no
+// longer describes the SIM in the device. The caller blanks them, so the next
+// full read is not judged against the old SIM a second time.
+func ClearedPaths(cached, incoming Identity) []string {
+	var out []string
+	if cached.ICCID != "" && incoming.ICCID == "" {
+		out = append(out, pathICCID)
+	}
+	if cached.IMSI != "" && incoming.IMSI == "" {
+		out = append(out, pathIMSI, pathVendorIMSI)
+	}
+	return out
+}
+
 // Hints masks the identity for storage and display.
 func Hints(i Identity) (iccidHint, imsiHint string) {
 	if i.ICCID != "" {

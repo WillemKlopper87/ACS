@@ -382,3 +382,27 @@ func TestBlankIdentityReadDoesNotResetTheBaseline(t *testing.T) {
 		t.Fatalf("a new SIM after a blank reading must be a notice, got %+v", r)
 	}
 }
+
+// A reply that carries only the new IMSI must not leave the old ICCID in the
+// cache: the next full read would be judged against it and fire the same swap
+// a second time, wiping an approval made in between.
+func TestAPartialReplyDoesNotFireTheSameSwapTwice(t *testing.T) {
+	h, dev, ctx, db := newSIMWatchHandler(t, time.Hour, true)
+	sink := &simEventSink{}
+	h.tmfEvents = sink
+	h.cacheParameterValues(ctx, dev.ID, swReply(swICCIDA, swIMSIA), "GET_PARAMETER_VALUES")
+	h.cacheParameterValues(ctx, dev.ID, swReply("", swIMSIB), "GET_PARAMETER_VALUES") // IMSI only
+	if r, _ := swState(t, ctx, db, dev.ID); r.state != "notice" {
+		t.Fatalf("after the partial reply: %+v", r)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE device_sim_watch SET state='ok', approved_at=now(), approved_by='alice', approval_reason='Customer swapped the SIM on site' WHERE device_id=$1`, dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.cacheParameterValues(ctx, dev.ID, swReply(swICCIDB, swIMSIB), "GET_PARAMETER_VALUES") // the full read
+	if r, _ := swState(t, ctx, db, dev.ID); r.state != "ok" {
+		t.Fatalf("the approved swap fired again: %+v", r)
+	}
+	if n, _ := simEvents(sink); n != 1 {
+		t.Fatalf("SimChanged events = %d, want 1", n)
+	}
+}

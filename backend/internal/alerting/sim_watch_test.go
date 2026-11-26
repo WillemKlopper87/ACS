@@ -92,7 +92,7 @@ func TestSIMWatchDevicesListsOnlyOpenMappedDevices(t *testing.T) {
 	simRow(t, ctx, db, unmapped, "notice")
 	simRow(t, ctx, db, unassigned, "notice")
 
-	got, err := NewRepository(db).SIMWatchDevices(ctx, 100)
+	got, err := NewRepository(db).SIMWatchDevices(ctx, 100, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,5 +148,48 @@ func TestRecoverSIMWatchWhenTheRowIsGone(t *testing.T) {
 	got, err := inc.RecoverSIMWatch(ctx)
 	if err != nil || len(got) != 1 {
 		t.Fatalf("an incident whose device has no open verdict must recover: %+v, %v", got, err)
+	}
+}
+
+// More open verdicts than one batch must all be reachable, alerts first, so
+// a pile of old unapproved notices cannot starve a newer swap.
+func TestSIMWatchDevicesPagesThroughEveryOpenVerdict(t *testing.T) {
+	ctx, db := simWatchDB(t)
+	var notices []string
+	for i, serial := range []string{"P1", "P2", "P3"} {
+		d := simDevice(t, ctx, db, serial, "acct-p"+string(rune('1'+i)))
+		simRow(t, ctx, db, d, "notice")
+		notices = append(notices, d)
+	}
+	alertDev := simDevice(t, ctx, db, "P4", "acct-p4")
+	simRow(t, ctx, db, alertDev, "alert")
+	if _, err := db.ExecContext(ctx, `UPDATE device_sim_watch SET detected_at = now() WHERE device_id = $1`, alertDev); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRepository(db)
+	var seen []string
+	for offset := 0; ; offset += 2 {
+		page, err := r.SIMWatchDevices(ctx, 2, offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range page {
+			seen = append(seen, d.DeviceID)
+		}
+		if len(page) < 2 {
+			break
+		}
+	}
+	if len(seen) != 4 || seen[0] != alertDev {
+		t.Fatalf("seen = %v, want 4 devices with the alert first (%s)", seen, alertDev)
+	}
+	for _, n := range notices {
+		found := false
+		for _, id := range seen {
+			found = found || id == n
+		}
+		if !found {
+			t.Fatalf("notice %s never listed: %v", n, seen)
+		}
 	}
 }

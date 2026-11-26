@@ -152,10 +152,12 @@ type SIMWatchDevice struct {
 }
 
 // SIMWatchDevices lists devices with an open SIM verdict that belong to an
-// account (the account is the incident's tenant). A device with no customer
-// mapping is not listed: it gets the banner and the event but no incident.
-func (r *Repository) SIMWatchDevices(ctx context.Context, limit int) ([]SIMWatchDevice, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT m.account_id, COALESCE(m.account_key::text,''), d.id::text, COALESCE(m.service_plan,''), w.state, w.network, w.iccid_hint, w.imsi_hint, w.previous_iccid_hint, w.previous_imsi_hint, COALESCE(w.detected_at, w.last_checked_at) FROM device_sim_watch w JOIN devices d ON d.id=w.device_id JOIN account_device_mappings m ON m.device_id=d.id AND m.unassigned_at IS NULL WHERE w.state IN ('notice','alert') ORDER BY w.detected_at NULLS FIRST LIMIT $1`, limit)
+// account (the account is the incident's tenant), alerts first, then oldest
+// first, one page at a time so no verdict is starved by a long backlog. A
+// device with no customer mapping is not listed: it gets the banner and the
+// event but no incident.
+func (r *Repository) SIMWatchDevices(ctx context.Context, limit, offset int) ([]SIMWatchDevice, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT m.account_id, COALESCE(m.account_key::text,''), d.id::text, COALESCE(m.service_plan,''), w.state, w.network, w.iccid_hint, w.imsi_hint, w.previous_iccid_hint, w.previous_imsi_hint, COALESCE(w.detected_at, w.last_checked_at) FROM device_sim_watch w JOIN devices d ON d.id=w.device_id JOIN account_device_mappings m ON m.device_id=d.id AND m.unassigned_at IS NULL WHERE w.state IN ('notice','alert') ORDER BY (w.state = 'alert') DESC, w.detected_at NULLS FIRST, d.id, m.account_id LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list SIM watch devices: %w", err)
 	}

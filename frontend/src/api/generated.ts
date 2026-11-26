@@ -3572,7 +3572,7 @@ export interface paths {
                         "application/json": components["schemas"]["SIMWatch"];
                     };
                 };
-                /** @description Missing or too-short reason */
+                /** @description Missing or too-short reason, or a missing or unparsable detected_at */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -3593,7 +3593,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description No SIM change is awaiting approval */
+                /** @description No SIM change is awaiting approval, or the SIM changed again since the one the caller saw (detected_at differs) */
                 409: {
                     headers: {
                         [name: string]: unknown;

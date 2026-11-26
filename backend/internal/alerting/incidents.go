@@ -81,6 +81,17 @@ func (r *IncidentRepository) ByKey(ctx context.Context, tenantID, deviceID, cond
 	return &i, nil
 }
 
+// RescheduleEscalation restarts the escalation of an open incident, for a
+// condition that got worse while it was open (OpenWithCreated keeps the old
+// timer of an open incident).
+func (r *IncidentRepository) RescheduleEscalation(ctx context.Context, id string, next *time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE alert_incidents SET escalation_stage=0,next_escalation_at=$2 WHERE id=$1 AND state='open'`, id, next)
+	if err != nil {
+		return fmt.Errorf("reschedule alert incident: %w", err)
+	}
+	return nil
+}
+
 // RecoverSIMWatch recovers SIM change incidents whose device no longer has an
 // open verdict (approved by an operator, or the row is gone).
 func (r *IncidentRepository) RecoverSIMWatch(ctx context.Context) ([]Incident, error) {
