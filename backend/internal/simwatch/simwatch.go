@@ -111,7 +111,13 @@ func Judge(cached, incoming Identity, allowed func(imsi string) bool) Verdict {
 	}
 	changed := (cached.ICCID != "" && incoming.ICCID != "" && cached.ICCID != incoming.ICCID) ||
 		(cached.IMSI != "" && incoming.IMSI != "" && cached.IMSI != incoming.IMSI)
+	// An IMSI learned for the first time is checked against the allowed
+	// networks like a first SIM: the network was never judged before.
+	learned := cached.IMSI == "" && incoming.IMSI != ""
 	if !changed {
+		if learned && notAllowed {
+			v.Kind = KindAlert
+		}
 		return v
 	}
 	v.Kind = KindNotice

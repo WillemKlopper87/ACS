@@ -32,6 +32,8 @@ func TestJudge(t *testing.T) {
 		{"only the new IMSI arrives", Identity{iccidA, imsiA}, Identity{"", imsiB}, KindNotice, "65501"},
 		{"incoming empty", Identity{iccidA, imsiA}, Identity{}, KindNone, "65501"},
 		{"nothing at all", Identity{}, Identity{}, KindNone, ""},
+		{"IMSI first learned on a network not allowed", Identity{iccidA, ""}, Identity{"", imsiX}, KindAlert, "99999"},
+		{"IMSI first learned on an allowed network", Identity{iccidA, ""}, Identity{"", imsiA}, KindNone, "65501"},
 		{"ICCID changed, no IMSI known", Identity{iccidA, ""}, Identity{iccidB, ""}, KindNotice, ""},
 	}
 	for _, c := range cases {
