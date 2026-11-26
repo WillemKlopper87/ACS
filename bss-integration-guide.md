@@ -409,6 +409,7 @@ Content-Type: application/json
 | `DeviceFault` | A CWMP/USP session reports a fault, or a job fails | "TMF events" |
 | `DeviceRecovered` | A previously faulted device reports a qualifying recovery signal | "TMF events" |
 | `CellularStateChanged` | A device's registration status, SIM status, operator, cell, RAT, or APN changes | "TMF events" |
+| `SimChanged` | The SIM in an in-service CPE was replaced (addition pending the next contract release; see below) | "TMF events" |
 
 Response (`201 Created`):
 
@@ -454,7 +455,7 @@ Authorization: Bearer <token>
 
 (`fault_code`/`fault_string` are also present, `null` unless `status` is `FAILED`.)
 
-**TMF events.** `DeviceFault`, `DeviceRecovered`, and `CellularStateChanged` share one envelope — `event` is the type-specific payload:
+**TMF events.** `DeviceFault`, `DeviceRecovered`, `CellularStateChanged`, and `SimChanged` share one envelope — `event` is the type-specific payload:
 
 ```json
 {
@@ -474,7 +475,7 @@ Authorization: Bearer <token>
 }
 ```
 
-`event` for `DeviceFault` is `{"protocol", "jobId", "faultCode", "message"}`; for `DeviceRecovered` it's `{"protocol", "faultCode", "conditionKey", "recoveredAt"}`. `changes` keys are the raw parameter path the device reported (not a fixed vocabulary — CWMP paths and USP paths differ per device); each value is the field's old/new string. `CellularStateChanged` intentionally excludes continuous telemetry (RSSI/RSRP/byte counters) — poll `GET /api/v1/devices/{id}/cellular-capabilities` for those.
+`event` for `SimChanged` is `{"protocol", "verdict", "network", "iccidHint", "imsiHint", "previousIccidHint", "previousImsiHint"}`: `verdict` is `notice` (a different SIM on a network the plan allows; an operator approves it) or `alert` (a network the plan does not allow); `network` is the five-digit PLMN; the hints are masked (never the full IMSI or ICCID). `SimChanged` is an addition to the contract and is not in the released versions until the next one is cut. `event` for `DeviceFault` is `{"protocol", "jobId", "faultCode", "message"}`; for `DeviceRecovered` it's `{"protocol", "faultCode", "conditionKey", "recoveredAt"}`. `changes` keys are the raw parameter path the device reported (not a fixed vocabulary — CWMP paths and USP paths differ per device); each value is the field's old/new string. `CellularStateChanged` intentionally excludes continuous telemetry (RSSI/RSRP/byte counters) — poll `GET /api/v1/devices/{id}/cellular-capabilities` for those.
 
 Each delivery carries `Content-Type: application/json` plus:
 

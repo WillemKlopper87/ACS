@@ -4,6 +4,7 @@ import (
 	"acs/internal/bss"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -121,5 +122,54 @@ func TestPublishFaultDeduplicationKeyIsStableAcrossRetries(t *testing.T) {
 	b := SourceKey("USP", "dev", "job|7|bad")
 	if a != b {
 		t.Fatal("deduplication key changed across retry")
+	}
+}
+
+// captureSink keeps what an event carried, which fakeSink drops.
+type captureSink struct {
+	fakeSink
+	eventType string
+	payload   string
+	device    string
+}
+
+func (c *captureSink) CreateEvent(ctx context.Context, key, account, device, _, eventType string, payload json.RawMessage, at time.Time) (*bss.EventRecord, error) {
+	c.eventType, c.payload, c.device = eventType, string(payload), device
+	return c.fakeSink.CreateEvent(ctx, key, account, device, "", eventType, payload, at)
+}
+
+func TestPublishSimChangedCarriesOnlyMaskedHints(t *testing.T) {
+	c := &captureSink{}
+	change := SimChange{Verdict: "notice", Network: "65501", ICCIDHint: "…0022", IMSIHint: "65501…0022", PreviousICCIDHint: "…0011", PreviousIMSIHint: "65501…0011"}
+	if err := PublishSimChanged(context.Background(), c, "acct-1", "dev-1", "CWMP", change, time.Unix(5, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if c.eventType != "SimChanged" || c.device != "dev-1" || c.events != 1 {
+		t.Fatalf("event = %q device=%q count=%d", c.eventType, c.device, c.events)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(c.payload), &got); err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]string{"protocol": "CWMP", "verdict": "notice", "network": "65501", "iccidHint": "…0022", "imsiHint": "65501…0022", "previousIccidHint": "…0011", "previousImsiHint": "65501…0011"} {
+		if got[k] != want {
+			t.Fatalf("payload[%s] = %v, want %q (%s)", k, got[k], want, c.payload)
+		}
+	}
+	if strings.Contains(c.payload, "89270000") {
+		t.Fatal("payload must not carry an identifier")
+	}
+}
+
+func TestPublishSimChangedRequiresADeviceAndAVerdict(t *testing.T) {
+	c := &captureSink{}
+	if err := PublishSimChanged(context.Background(), c, "a", "", "CWMP", SimChange{Verdict: "notice"}, time.Unix(1, 0)); err == nil {
+		t.Fatal("expected an error without a device")
+	}
+	if err := PublishSimChanged(context.Background(), c, "a", "dev-1", "CWMP", SimChange{}, time.Unix(1, 0)); err == nil {
+		t.Fatal("expected an error without a verdict")
+	}
+	if c.events != 0 {
+		t.Fatalf("events = %d, want 0", c.events)
 	}
 }

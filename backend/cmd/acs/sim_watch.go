@@ -13,6 +13,7 @@ import (
 	"acs/internal/jobs"
 	"acs/internal/simwatch"
 	"acs/internal/simwatch/recorder"
+	"acs/internal/tmf/telemetry"
 )
 
 // simWatchSampler makes sure a cellular CPE's SIM identity is read at check-ins
@@ -144,6 +145,21 @@ func (h *handler) judgeSIM(ctx context.Context, deviceID string, list []cwmp.Par
 	return &simChange{Verdict: verdict, Cur: cur, Prev: cached}, false
 }
 
-// publishSIMChange tells subscribers about a notice or alert verdict.
+// publishSIMChange tells subscribers about a notice or alert verdict. Only
+// masked hints and the network are sent. A failure is logged and does not
+// undo the stored verdict: the incident worker reads that, not the event.
 func (h *handler) publishSIMChange(ctx context.Context, deviceID string, c *simChange, at time.Time) {
+	if h.tmfEvents == nil || c == nil {
+		return
+	}
+	iccid, imsi := simwatch.Hints(c.Cur)
+	prevICCID, prevIMSI := simwatch.Hints(c.Prev)
+	account := telemetry.DeviceAccount(ctx, h.tmfEvents, deviceID)
+	err := telemetry.PublishSimChanged(ctx, h.tmfEvents, account, deviceID, "CWMP", telemetry.SimChange{
+		Verdict: string(c.Verdict.Kind), Network: c.Verdict.Network,
+		ICCIDHint: iccid, IMSIHint: imsi, PreviousICCIDHint: prevICCID, PreviousIMSIHint: prevIMSI,
+	}, at)
+	if err != nil {
+		h.logger.Warn("failed to publish SIM change event", "error", err, "device_id", deviceID)
+	}
 }

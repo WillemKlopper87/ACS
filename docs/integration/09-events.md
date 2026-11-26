@@ -50,6 +50,7 @@ in your own records.
 | `DeviceFault` | The CPE answered a job with a fault (an alarm is raised for the condition) | `protocol`, `jobId`, `faultCode`, `message` |
 | `DeviceRecovered` | A later job of the same type on that CPE succeeded, clearing the alarm; once per alarm | `protocol`, `faultCode`, `conditionKey`, `recoveredAt` |
 | `CellularStateChanged` | Registration, operator, cell, RAT, SIM status or APN changed | `protocol`, `changes` |
+| `SimChanged` | The SIM in an in-service CPE was replaced; `verdict` is `notice` (network allowed, awaits approval) or `alert` (network not allowed). Addition pending the next contract release | `protocol`, `verdict`, `network`, `iccidHint`, `imsiHint`, `previousIccidHint`, `previousImsiHint` (masked; never full identifiers) |
 
 **`reasonCode`** values: `DEVICE_OTHER_CUSTOMER`, `SIM_MISMATCH`,
 `PLMN_NOT_ALLOWED`, `SIM_UNREADABLE`, `CONFIG_FAILED` (holds and failures, which

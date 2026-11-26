@@ -35,6 +35,10 @@ func clean(v string) string {
 	return v
 }
 
+// IsBlank reports whether a reported identity value is no reading at all
+// (empty, whitespace or a sentinel).
+func IsBlank(v string) bool { return clean(v) == "" }
+
 // ExtractIdentity reads interface 1 only. The IMSI falls back to the Nokia
 // vendor leaf when the standard one is absent.
 func ExtractIdentity(values map[string]string) Identity {

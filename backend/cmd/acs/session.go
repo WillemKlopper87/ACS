@@ -828,7 +828,10 @@ func (h *handler) cacheParameterValues(ctx context.Context, deviceID string, lis
 	// The SIM is judged against the cache before the cache is overwritten.
 	sim, skipIdentity := h.judgeSIM(ctx, deviceID, list)
 	for _, p := range list {
-		if skipIdentity && simwatch.IsIdentityPath(p.Name) {
+		// A blank identity (SIM pulled, sentinel) never replaces the known
+		// one: the next SIM would otherwise look like the first and a swap
+		// through a blank reading would go unnoticed.
+		if simwatch.IsIdentityPath(p.Name) && (skipIdentity || (h.simWatch != nil && simwatch.IsBlank(p.Value))) {
 			continue
 		}
 		values[p.Name] = parameters.CachedValue{Value: p.Value, UpdatedAt: now, Source: source}

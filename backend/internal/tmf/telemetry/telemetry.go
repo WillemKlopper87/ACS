@@ -147,6 +147,38 @@ func PublishCellularStateChanged(ctx context.Context, sink Sink, accountID, devi
 	return err
 }
 
+// SimChange is the event payload for a replaced SIM. It carries masked
+// hints and the network only: the full IMSI/ICCID never leaves the ACS.
+type SimChange struct {
+	Verdict           string `json:"verdict"`
+	Network           string `json:"network"`
+	ICCIDHint         string `json:"iccidHint"`
+	IMSIHint          string `json:"imsiHint"`
+	PreviousICCIDHint string `json:"previousIccidHint"`
+	PreviousIMSIHint  string `json:"previousImsiHint"`
+}
+
+// PublishSimChanged records that a device's SIM was replaced (verdict
+// "notice": allowed network, "alert": network the plan does not allow) so
+// BSS/OSS integrations can subscribe to it. Like CellularStateChanged it
+// never raises or clears an alarm; the incident is opened by the BSS adapter.
+func PublishSimChanged(ctx context.Context, sink Sink, accountID, deviceID, protocol string, c SimChange, at time.Time) error {
+	if sink == nil || strings.TrimSpace(deviceID) == "" || strings.TrimSpace(c.Verdict) == "" {
+		return fmt.Errorf("invalid SIM change or nil TMF sink")
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	key := SourceKey(protocol, deviceID, "sim|"+c.Verdict+"|"+c.IMSIHint+"|"+c.ICCIDHint+"|"+at.Format(time.RFC3339Nano))
+	payload, _ := json.Marshal(map[string]any{
+		"protocol": protocol, "verdict": c.Verdict, "network": c.Network,
+		"iccidHint": c.ICCIDHint, "imsiHint": c.IMSIHint,
+		"previousIccidHint": c.PreviousICCIDHint, "previousImsiHint": c.PreviousIMSIHint,
+	})
+	_, err := sink.CreateEvent(ctx, key, accountID, deviceID, "", "SimChanged", payload, at)
+	return err
+}
+
 func severity(code string) string {
 	if strings.Contains(strings.ToLower(code), "timeout") {
 		return "major"

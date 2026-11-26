@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"acs/internal/bss"
 	"acs/internal/cwmp"
 	"acs/internal/devices"
 	"acs/internal/jobs"
@@ -312,5 +313,72 @@ func TestJudgeSIMKeepsTheOldSIMInTheCacheWhenItCannotBePersisted(t *testing.T) {
 	}
 	if cache[other].Value != "Available" {
 		t.Fatal("other values must still be cached")
+	}
+}
+
+// simEventSink records the events the ACS publishes.
+type simEventSink struct {
+	types    []string
+	payloads []string
+}
+
+func (s *simEventSink) CreateEvent(_ context.Context, _, _, _, _, eventType string, payload json.RawMessage, _ time.Time) (*bss.EventRecord, error) {
+	s.types = append(s.types, eventType)
+	s.payloads = append(s.payloads, string(payload))
+	return nil, nil
+}
+func (s *simEventSink) CreateAlarm(context.Context, string, string, string, string, string, string, string, string, json.RawMessage) (*bss.AlarmRecord, error) {
+	return nil, nil
+}
+func (s *simEventSink) ClearAlarm(context.Context, string, string, string) error { return nil }
+
+func simEvents(s *simEventSink) (n int, payload string) {
+	for i, ty := range s.types {
+		if ty == "SimChanged" {
+			n++
+			payload = s.payloads[i]
+		}
+	}
+	return n, payload
+}
+
+func TestSimChangedIsPublishedOnlyForNoticeAndAlert(t *testing.T) {
+	h, dev, ctx, db := newSIMWatchHandler(t, time.Hour, true)
+	sink := &simEventSink{}
+	h.tmfEvents = sink
+	putPlan(t, h, ctx, db, dev.ID)
+	h.cacheParameterValues(ctx, dev.ID, swReply(swICCIDA, swIMSIA), "GET_PARAMETER_VALUES") // baseline
+	h.cacheParameterValues(ctx, dev.ID, swReply(swICCIDA, swIMSIA), "GET_PARAMETER_VALUES") // unchanged
+	if n, _ := simEvents(sink); n != 0 {
+		t.Fatalf("baseline and unchanged published %d SimChanged events", n)
+	}
+	h.cacheParameterValues(ctx, dev.ID, swReply(swICCIDB, swIMSIX), "GET_PARAMETER_VALUES")
+	n, payload := simEvents(sink)
+	if n != 1 || !strings.Contains(payload, `"verdict":"alert"`) || !strings.Contains(payload, `"network":"99999"`) {
+		t.Fatalf("events = %d, payload = %s", n, payload)
+	}
+	for _, full := range []string{swICCIDA, swICCIDB, swIMSIA, swIMSIX} {
+		if strings.Contains(payload, full) {
+			t.Fatalf("event payload carries a full identifier: %s", payload)
+		}
+	}
+}
+
+// A SIM pulled out reads as empty or a sentinel. That blank must not replace
+// the known SIM in the cache, or the next SIM would look like a first one.
+func TestBlankIdentityReadDoesNotResetTheBaseline(t *testing.T) {
+	h, dev, ctx, db := newSIMWatchHandler(t, time.Hour, true)
+	h.cacheParameterValues(ctx, dev.ID, swReply(swICCIDA, swIMSIA), "GET_PARAMETER_VALUES")
+	h.cacheParameterValues(ctx, dev.ID, []cwmp.ParameterValueStruct{{Name: swICCID, Value: ""}, {Name: swIMSI, Value: "-32768"}}, "GET_PARAMETER_VALUES")
+	cache, err := h.params.Get(ctx, dev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cache[swICCID].Value != swICCIDA || cache[swIMSI].Value != swIMSIA {
+		t.Fatalf("a blank reading replaced the known SIM: %q %q", cache[swICCID].Value, cache[swIMSI].Value)
+	}
+	h.cacheParameterValues(ctx, dev.ID, swReply(swICCIDB, swIMSIB), "GET_PARAMETER_VALUES")
+	if r, _ := swState(t, ctx, db, dev.ID); r.state != "notice" {
+		t.Fatalf("a new SIM after a blank reading must be a notice, got %+v", r)
 	}
 }
