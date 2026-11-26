@@ -62,7 +62,8 @@ func (r *Repository) Get(ctx context.Context, deviceID string) (*State, error) {
 // changed again since (a new verdict has a new detection time) nothing is
 // approved and ErrNothingToApprove is returned.
 func (r *Repository) Approve(ctx context.Context, deviceID, actor, reason string, seen, at time.Time) error {
-	res, err := r.db.ExecContext(ctx, `UPDATE device_sim_watch SET state = 'ok', approved_at = $2, approved_by = $3, approval_reason = $4
+	res, err := r.db.ExecContext(ctx, `UPDATE device_sim_watch SET state = 'ok', approved_at = $2, approved_by = $3, approval_reason = $4,
+			last_event_at = NULL, last_event_state = NULL
 		WHERE device_id = $1 AND state IN ('notice', 'alert') AND detected_at = $5`, deviceID, at, actor, reason, seen)
 	if err != nil {
 		return fmt.Errorf("approve sim change: %w", err)
