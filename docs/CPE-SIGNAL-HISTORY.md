@@ -8,11 +8,20 @@ read from the device's own cellular parameters, the ones it has already
 discovered (the same leaves the Parameters page lists).
 
 A reading is taken at the device's check-ins. When a check-in session opens
-and the device's last sample is older than the sample interval, the ACS queues
-an ordinary parameter read in that session; the device answers it as part of
-the same session, and the reply is stored as one sample. Nothing is written to
-the CPE. The ACS cannot reach the CPE between check-ins (it sits behind
-carrier NAT), so there is no reading between them.
+and a sample is due, the ACS queues an ordinary parameter read in that
+session; the device answers it as part of the same session, and the reply is
+stored as one sample. A sample is due once the sample interval, less a small
+slack of one tenth of it (at most a minute), has passed since the last sample,
+so a device that checks in every interval or faster is sampled at every
+interval. Nothing is written to the CPE. The ACS cannot reach the CPE between
+check-ins, so there is no reading between them.
+
+When the CPE is attached only to LTE (or only to 5G), the readings come from
+the object that reports them: the ACS reads both the 5G and the LTE leaves and
+takes, per metric, the first real value, with the 5G object preferred when both
+report. The band is taken from the object that supplied the RSRP. Band and
+technology text from the CPE is stripped of control characters and cut to 32
+characters.
 
 Which metrics a sample holds depends on the CPE. A model that does not report
 SNR, for example, has no SNR values, and the console shows that metric as
@@ -31,7 +40,8 @@ default).
 
 The chart's resolution is the larger of the sample interval and the CPE's
 check-in interval, because a sample can only be taken when the device checks
-in. The check-in interval is shown on the device's Connectivity page, in the
+in: a sample is due once the interval (less the slack above) has passed since
+the last one, and the next check-in after that takes it. The check-in interval is shown on the device's Connectivity page, in the
 Availability panel, as "Reports every".
 
 When a range holds more than about 500 samples, they are averaged into at most
@@ -45,7 +55,9 @@ says how many minutes each step covers. Short ranges are shown as recorded.
 | `ACS_CPE_SAMPLE_INTERVAL` | 15 minutes | The least time between samples of one device. `0` turns sampling off. |
 | `ACS_RETENTION_CPE_SAMPLES_DAYS` | 30 | How long samples are kept before they are pruned. `0` prunes nothing. |
 
-The interval is a Go duration such as `15m` or `1h`. Raising the interval
+The interval is a Go duration such as `15m` or `1h`. A value that does not
+parse (such as `15`, with no unit) or is negative logs a warning naming the
+variable and the ACS uses 15 minutes. Raising the interval
 lowers the resolution; it cannot make a device check in more often.
 
 ## What it does not store
@@ -62,11 +74,13 @@ sampled either, because there is no portable cellular object to read there.
 
 ## Checking it on the lab CPE
 
-1. Update the ACS. After the first check-in that follows, a first point
-   appears in the Signal panel.
-2. A second point appears at the next check-in once the sample interval has
-   passed. With the defaults and a check-in interval shorter than 15 minutes,
-   that is the first check-in after 15 minutes; with a longer check-in
+1. Deploy the new build (a restart also resets the per-process throttle).
+   After the first check-in that follows, a first point appears in the Signal
+   panel.
+2. A second point appears at the first check-in once the sample interval, less
+   the slack (one tenth, at most a minute), has passed since the first. With
+   the defaults and a check-in interval of 15 minutes or less, that is the
+   first check-in after about 14 to 15 minutes; with a longer check-in
    interval, the next check-in. This timing follows from how the sampler
    works; it has not been observed on a device. A point can be delayed while
    parameter discovery is running for the device, or if its parameter names
@@ -79,6 +93,10 @@ sampled either, because there is no portable cellular object to read there.
    - On the device's Parameters page, check that the device has discovered its
      cellular parameters. Without them nothing is read.
    - Check that `ACS_CPE_SAMPLE_INTERVAL` is not `0`.
-   - Look at the metric `acs_cpe_samples_total`, labelled by result:
-     `recorded` is a stored sample, `empty` means the reply held no usable
-     reading, and `failed` means storing it failed (see the ACS log).
+   - Look at the metric `acs_cpe_samples_total`, labelled by result, on the
+     ACS gateway's `/metrics` endpoint (the device-facing listener; the
+     production profile requires the bearer token in `ACS_METRICS_TOKEN`). `recorded` rising is the
+     success signal. `empty` means the reply held no usable reading, and
+     `failed` means storing it failed (see the ACS log).
+   - Look for failed jobs created by `system:cpe-metrics` among the device's jobs. A stale or faulting parameter path makes the read fail at every
+     interval, and a failed read does not move `acs_cpe_samples_total`.
