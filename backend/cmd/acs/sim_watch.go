@@ -86,6 +86,9 @@ func (h *handler) maybeQueueSIMWatch(ctx context.Context, device *devices.Device
 	}
 }
 
+// simEventGap is the least time between two SimChanged events for one device.
+const simEventGap = 10 * time.Minute
+
 // simChange is a judged SIM reply, kept for the event published after the
 // cache write.
 type simChange struct {
@@ -163,6 +166,16 @@ func (h *handler) judgeSIM(ctx context.Context, deviceID string, list []cwmp.Par
 func (h *handler) publishSIMChange(ctx context.Context, deviceID string, c *simChange, at time.Time) {
 	if h.tmfEvents == nil || c == nil {
 		return
+	}
+	// One event per device per gap (an upgrade to an alert goes out at once),
+	// claimed atomically so overlapping writes publish a change only once. A
+	// failed claim publishes anyway: a duplicate is better than a lost alert.
+	if h.simWatch != nil && h.simWatch.rec != nil {
+		if ok, err := h.simWatch.rec.ClaimEvent(ctx, deviceID, at, simEventGap); err != nil {
+			h.logger.Warn("SIM change event claim failed", "err", err, "device_id", deviceID)
+		} else if !ok {
+			return
+		}
 	}
 	iccid, imsi := simwatch.Hints(c.Cur)
 	prevICCID, prevIMSI := simwatch.Hints(c.Prev)

@@ -31,6 +31,25 @@ func (r *Repository) LastChecked(ctx context.Context, deviceID string) (time.Tim
 	return at, nil
 }
 
+// ClaimEvent decides atomically whether a SimChanged event may be sent now
+// for the device's open verdict, and records that it was. It allows the first
+// event, then at most one per gap, and always one when the verdict rose from
+// notice to alert. A device with no open verdict has nothing to announce.
+func (r *Repository) ClaimEvent(ctx context.Context, deviceID string, at time.Time, gap time.Duration) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE device_sim_watch SET last_event_at = $2::timestamptz, last_event_state = state
+		WHERE device_id = $1 AND state IN ('notice', 'alert')
+		  AND (last_event_at IS NULL
+		       OR last_event_at <= $2::timestamptz - make_interval(secs => $3::float8)
+		       OR (state = 'alert' AND last_event_state IS DISTINCT FROM 'alert'))`,
+		deviceID, at, gap.Seconds())
+	if err != nil {
+		return false, fmt.Errorf("claim sim event: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // Record stores a verdict. cur is the SIM now, prev the one before; only
 // masked hints reach the table. It is an idempotent upsert: an identical
 // repeat of an open verdict keeps its detection time and approval state.

@@ -39,13 +39,17 @@ SIM being removed.
 - **Incident** in the alerting system, once the device belongs to a customer
   account and an alert policy applies. Default priorities: alert P2, notice P4
   (a policy's fault priorities `sim_change_alert` and `sim_change_notice`
-  override them). The incident recovers when the SIM is approved. A later
+  override them). The incident recovers when the SIM is approved, or when the device is taken
+  off the account it was raised for. A later
   change opens it again. While an incident is open, subscribers are told again
   (and the escalation restarts) when the SIM is swapped onto a network the plan
   does not allow, and told again when yet another SIM appears. A device with no account mapping, or no matching
   policy, gets the banner and the event but no incident.
 - **Event** `SimChanged` to NaaS/BSS subscribers (verdict, network, masked
-  hints). It is a contract addition pending the next contract release.
+  hints). At most one per device every 10 minutes, so a CPE that keeps
+  flipping its identity cannot flood subscribers; a notice that becomes an
+  alert is sent at once. It is a contract addition pending the next contract
+  release.
 
 ## What is stored and sent
 

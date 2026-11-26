@@ -312,9 +312,11 @@ export function SimPanel({ deviceId, role, writable }: { deviceId: string; role:
         <ApproveDialog
           onCancel={() => setApproving(false)}
           onApprove={async (reason) => {
-            await api.approveSimWatch(deviceId, reason, watch.detected_at ?? "");
+            // The reply carries the new state, so the banner clears even if
+            // a refetch would fail.
+            const next = await api.approveSimWatch(deviceId, reason, watch.detected_at ?? "");
             setApproving(false);
-            setView(await api.getSIM(deviceId));
+            setView((v) => (v ? { ...v, sim_watch: next } : v));
           }}
         />
       )}
