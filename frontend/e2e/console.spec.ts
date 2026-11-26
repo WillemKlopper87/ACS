@@ -392,6 +392,33 @@ test("ownership masks the subscriber until Show, and Back returns to the previou
   await expect(page).toHaveURL(/\/devices\/dev-1\/ownership$/);
 });
 
+test("a replaced SIM shows a banner on the Cellular tab until an operator approves it with a reason", async ({ page }) => {
+  const watch = { state: "notice", network: "65501", iccid_hint: "89••••••••••••••0022", imsi_hint: "65501••••••0022",
+    previous_iccid_hint: "89••••••••••••••0011", previous_imsi_hint: "65501••••••0011", detected_at: "2026-11-26T08:15:30.123456Z" };
+  const simView = { device_id: "dev-1", supported: true, revealed: false, identifiers: [], context: [{ kind: "context", path: "Device.Cellular.Interface.1.USIM.Status", value: "Valid", masked: false, updated_at: "2026-11-26T08:00:00Z", source: "GET_PARAMETER_VALUES" }], refresh_paths: [] };
+  let approved: { reason: string; detected_at: string } | null = null;
+  await page.route(`${API}/api/v1/devices/dev-1/sim`, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...simView, sim_watch: approved ? { ...watch, state: "ok", approved_by: "e2e-operator" } : watch }) }));
+  await page.route(`${API}/api/v1/devices/dev-1/sim-watch/approve`, (route) => {
+    approved = route.request().postDataJSON();
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...watch, state: "ok" }) });
+  });
+
+  await signIn(page);
+  await page.goto("/devices/dev-1/cellular");
+  const banner = page.getByRole("status").filter({ hasText: "SIM replaced" });
+  await expect(banner).toBeVisible();
+  await expect(banner.getByText("65501••••••0022")).toBeVisible();
+  await page.getByRole("button", { name: "Approve this SIM" }).click();
+  const dialog = page.getByRole("dialog", { name: "Approve this SIM" });
+  const submit = dialog.getByRole("button", { name: "Approve and record" });
+  await expect(submit).toBeDisabled();
+  await dialog.getByLabel(/Reason/).fill("Customer swapped the SIM on site");
+  await submit.click();
+  await expect(banner).toHaveCount(0);
+  expect(approved).toEqual({ reason: "Customer swapped the SIM on site", detected_at: watch.detected_at });
+});
+
 test("two-step sign-in asks for a code, survives a wrong one, and reaches the console", async ({ page }) => {
   // Registered after mockAPI, so these win for the login routes.
   await page.route(`${API}/api/v1/auth/login`, (route) =>

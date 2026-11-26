@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type { SIMView } from "../api/client";
 import { SimPanel } from "./SimPanel";
 
-const { getSIM, revealSIM, getParametersLive, ApiError } = vi.hoisted(() => {
+const { getSIM, revealSIM, getParametersLive, approveSimWatch, ApiError } = vi.hoisted(() => {
   class ApiError extends Error {
     status: number;
     constructor(status: number, message: string) {
@@ -11,9 +11,9 @@ const { getSIM, revealSIM, getParametersLive, ApiError } = vi.hoisted(() => {
       this.status = status;
     }
   }
-  return { getSIM: vi.fn(), revealSIM: vi.fn(), getParametersLive: vi.fn(), ApiError };
+  return { getSIM: vi.fn(), revealSIM: vi.fn(), getParametersLive: vi.fn(), approveSimWatch: vi.fn(), ApiError };
 });
-vi.mock("../api/client", () => ({ ApiError, api: { getSIM, revealSIM, getParametersLive } }));
+vi.mock("../api/client", () => ({ ApiError, api: { getSIM, revealSIM, getParametersLive, approveSimWatch } }));
 
 const field = (kind: SIMView["identifiers"][number]["kind"], path: string, value: string, masked: boolean) => ({
   kind, path, value, masked, updated_at: "2026-10-30T12:00:00Z", source: "GET_PARAMETER_VALUES",
@@ -176,5 +176,107 @@ describe("SimPanel labels", () => {
     for (const label of ["IMEI", "IMSI", "ICCID", "IMSI in use", "eSIM active profile ICCID", "eSIM profile in use (ICCID)", "EID (eSIM)", "eSIM profiles"]) {
       expect(screen.getAllByText(label)).toHaveLength(1);
     }
+  });
+});
+
+// SIM change banner: the ACS saw a different SIM. Only masked hints are shown.
+describe("SimPanel SIM change banner", () => {
+  const watch = (state: "ok" | "notice" | "alert", extra: Record<string, unknown> = {}) => ({
+    state,
+    network: "65501",
+    iccid_hint: "89••••••••••••••0022",
+    imsi_hint: "65501••••••0022",
+    previous_iccid_hint: "89••••••••••••••0011",
+    previous_imsi_hint: "65501••••••0011",
+    detected_at: "2026-11-26T08:15:30.123456Z",
+    ...extra,
+  });
+  const reason = "Customer swapped the SIM on site";
+
+  it("shows nothing for an ok or absent verdict", async () => {
+    getSIM.mockResolvedValue({ ...masked, sim_watch: watch("ok", { approved_by: "alice" }) });
+    render(<SimPanel deviceId="gw-1" role="manager" writable />);
+    await waitFor(() => expect(screen.getByText("65501••••••5678")).toBeTruthy());
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve this SIM" })).toBeNull();
+  });
+
+  it("shows a notice as a status and an alert as an alert, with masked values only", async () => {
+    getSIM.mockResolvedValue({ ...masked, sim_watch: watch("notice") });
+    const { unmount } = render(<SimPanel deviceId="gw-1" role="manager" writable />);
+    const notice = await screen.findByRole("status");
+    expect(notice.textContent).toContain("65501");
+    expect(notice.textContent).toContain("65501••••••0022");
+    expect(notice.textContent).toContain("65501••••••0011");
+    unmount();
+    getSIM.mockResolvedValue({ ...masked, sim_watch: watch("alert") });
+    render(<SimPanel deviceId="gw-1" role="manager" writable />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/does not allow/);
+  });
+
+  it("still shows the banner for a device whose SIM view has no identifiers", async () => {
+    getSIM.mockResolvedValue({ ...masked, supported: false, identifiers: [], context: [], sim_watch: watch("alert") });
+    render(<SimPanel deviceId="gw-1" role="manager" writable />);
+    expect(await screen.findByRole("alert")).toBeTruthy();
+  });
+
+  it("enables Approve only for a reason of at least 10 characters after trimming", async () => {
+    getSIM.mockResolvedValue({ ...masked, sim_watch: watch("notice") });
+    render(<SimPanel deviceId="gw-1" role="manager" writable />);
+    fireEvent.click(await screen.findByRole("button", { name: "Approve this SIM" }));
+    const submit = screen.getByRole("button", { name: "Approve and record" }) as HTMLButtonElement;
+    const box = screen.getByLabelText(/Reason/);
+    for (const text of ["", "         ", "123456789", "   123456789   "]) {
+      fireEvent.change(box, { target: { value: text } });
+      expect(submit.disabled).toBe(true);
+    }
+    fireEvent.change(box, { target: { value: "1234567890" } });
+    expect(submit.disabled).toBe(false);
+  });
+
+  it("sends the trimmed reason with the detection time it showed, reloads, and drops the banner", async () => {
+    getSIM.mockResolvedValueOnce({ ...masked, sim_watch: watch("notice") }).mockResolvedValue({ ...masked, sim_watch: watch("ok", { approved_by: "alice" }) });
+    approveSimWatch.mockResolvedValue(watch("ok", { approved_by: "alice" }));
+    render(<SimPanel deviceId="gw-1" role="manager" writable />);
+    fireEvent.click(await screen.findByRole("button", { name: "Approve this SIM" }));
+    fireEvent.change(screen.getByLabelText(/Reason/), { target: { value: `  ${reason}  ` } });
+    fireEvent.click(screen.getByRole("button", { name: "Approve and record" }));
+    await waitFor(() => expect(approveSimWatch).toHaveBeenCalledTimes(1));
+    expect(approveSimWatch).toHaveBeenCalledWith("gw-1", reason, "2026-11-26T08:15:30.123456Z");
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(getSIM).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows the server's error and keeps the dialog open when the approval is refused", async () => {
+    getSIM.mockResolvedValue({ ...masked, sim_watch: watch("notice") });
+    approveSimWatch.mockRejectedValue(new ApiError(409, "the SIM changed again since this was shown; review the new change first"));
+    render(<SimPanel deviceId="gw-1" role="manager" writable />);
+    fireEvent.click(await screen.findByRole("button", { name: "Approve this SIM" }));
+    fireEvent.change(screen.getByLabelText(/Reason/), { target: { value: reason } });
+    fireEvent.click(screen.getByRole("button", { name: "Approve and record" }));
+    expect(await screen.findByText(/changed again/)).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("sends one request however often Approve is pressed", async () => {
+    getSIM.mockResolvedValue({ ...masked, sim_watch: watch("notice") });
+    approveSimWatch.mockReturnValue(new Promise(() => {}));
+    render(<SimPanel deviceId="gw-1" role="manager" writable />);
+    fireEvent.click(await screen.findByRole("button", { name: "Approve this SIM" }));
+    fireEvent.change(screen.getByLabelText(/Reason/), { target: { value: reason } });
+    const submit = screen.getByRole("button", { name: "Approve and record" });
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    expect(approveSimWatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not offer Approve to someone who cannot write", async () => {
+    getSIM.mockResolvedValue({ ...masked, sim_watch: watch("notice") });
+    render(<SimPanel deviceId="gw-1" role="readonly" writable={false} />);
+    await screen.findByRole("status");
+    expect((screen.getByRole("button", { name: "Approve this SIM" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

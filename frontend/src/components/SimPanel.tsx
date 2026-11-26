@@ -49,6 +49,91 @@ function FieldRow({ label, field }: { label: string; field: Field }) {
   );
 }
 
+type SimWatch = NonNullable<SIMView["sim_watch"]>;
+
+// A different SIM was detected. Only masked hints are shown; approving
+// accepts the SIM now in the device and never writes to the CPE.
+function SimChangeBanner({ watch, writable, onApprove }: { watch: SimWatch; writable: boolean; onApprove: () => void }) {
+  const alert = watch.state === "alert";
+  return (
+    <div className={`banner ${alert ? "error" : "info"}`} role={alert ? "alert" : "status"}>
+      <strong>{alert ? "SIM replaced with a network the plan does not allow" : "SIM replaced"}</strong>
+      <div style={{ fontSize: "0.82rem", margin: "0.25rem 0" }}>
+        {alert ? "The new SIM belongs to network" : "A different SIM was detected on this CPE (network"} {watch.network}
+        {alert ? "." : ")."}
+        {watch.detected_at ? ` Detected ${timeAgo(watch.detected_at)}.` : ""}
+      </div>
+      <div style={{ fontSize: "0.8rem" }}>
+        Now: ICCID {watch.iccid_hint || "—"} · IMSI {watch.imsi_hint || "—"}
+      </div>
+      <div style={{ fontSize: "0.8rem" }}>
+        Before: ICCID {watch.previous_iccid_hint || "—"} · IMSI {watch.previous_imsi_hint || "—"}
+      </div>
+      <button className="btn sm" style={{ marginTop: "0.4rem" }} onClick={onApprove} disabled={!writable}>
+        Approve this SIM
+      </button>
+    </div>
+  );
+}
+
+function ApproveDialog({ onCancel, onApprove }: { onCancel: () => void; onApprove: (reason: string) => Promise<void> }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      if (!busy) onCancel();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [busy, onCancel]);
+
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onApprove(reason.trim());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={() => !busy && onCancel()}>
+      <div className="modal sim-reveal" role="dialog" aria-modal="true" aria-labelledby="sim-approve-title" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3 id="sim-approve-title">Approve this SIM</h3>
+          <button className="close-detail" onClick={onCancel} aria-label="Close" disabled={busy}>
+            ✕
+          </button>
+        </div>
+        <p className="dim" style={{ margin: 0, fontSize: "0.82rem" }}>
+          This accepts the SIM now in the device as the expected one. It is recorded in the audit log with your name and
+          your reason. Nothing is changed on the CPE.
+        </p>
+        {error && <div className="banner error">{error}</div>}
+        <div className="sim-field">
+          <label htmlFor="sim-approve-reason">Reason (required, at least {MIN_REASON} characters)</label>
+          <textarea id="sim-approve-reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} autoFocus placeholder="e.g. customer swapped the SIM on site, ticket 4471" />
+        </div>
+        <div className="modal-foot">
+          <button className="btn primary" onClick={submit} disabled={busy || reason.trim().length < MIN_REASON}>
+            Approve and record
+          </button>
+          <button className="btn" onClick={onCancel} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function RevealDialog({ onCancel, onReveal }: { onCancel: () => void; onReveal: (reason: string, reference: string) => Promise<void> }) {
   const [reason, setReason] = useState("");
   const [reference, setReference] = useState("");
@@ -119,6 +204,7 @@ export function SimPanel({ deviceId, role, writable }: { deviceId: string; role:
   const [revealed, setRevealed] = useState<SIMView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState(false);
+  const [approving, setApproving] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
 
@@ -148,7 +234,8 @@ export function SimPanel({ deviceId, role, writable }: { deviceId: string; role:
       </div>
     );
   }
-  if (!view || !view.supported) return null;
+  const watch = view?.sim_watch && view.sim_watch.state !== "ok" ? view.sim_watch : null;
+  if (!view || (!view.supported && !watch)) return null;
 
   // The backend refuses anyone but a human superadmin; lab mode without
   // auth (role null) is refused too, so the button is not offered there.
@@ -186,6 +273,8 @@ export function SimPanel({ deviceId, role, writable }: { deviceId: string; role:
           ))}
       </h3>
 
+      {watch && <SimChangeBanner watch={watch} writable={writable} onApprove={() => setApproving(true)} />}
+
       {revealed && (
         <div className="banner info sim-revealed">Full values shown and recorded in the audit log. They hide again within two minutes.</div>
       )}
@@ -217,6 +306,17 @@ export function SimPanel({ deviceId, role, writable }: { deviceId: string; role:
         <p className="dim" style={{ margin: "0.4rem 0 0", fontSize: "0.78rem" }}>
           {note}
         </p>
+      )}
+
+      {approving && watch && (
+        <ApproveDialog
+          onCancel={() => setApproving(false)}
+          onApprove={async (reason) => {
+            await api.approveSimWatch(deviceId, reason, watch.detected_at ?? "");
+            setApproving(false);
+            setView(await api.getSIM(deviceId));
+          }}
+        />
       )}
 
       {dialog && (
