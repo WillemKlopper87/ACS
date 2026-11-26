@@ -1,0 +1,187 @@
+package simwatch
+
+import (
+	"strings"
+	"testing"
+)
+
+const (
+	iccidA = "8927000000000000011"
+	iccidB = "8927000000000000022"
+	imsiA  = "655010000000011"
+	imsiB  = "655010000000022"
+	imsiX  = "999990000000033" // a network the plan does not allow
+)
+
+func allowSA(imsi string) bool { return strings.HasPrefix(imsi, "65501") }
+
+func TestJudge(t *testing.T) {
+	cases := []struct {
+		name     string
+		cached   Identity
+		incoming Identity
+		want     Kind
+		network  string
+	}{
+		{"same SIM", Identity{iccidA, imsiA}, Identity{iccidA, imsiA}, KindNone, "65501"},
+		{"first SIM allowed", Identity{}, Identity{iccidA, imsiA}, KindBaseline, "65501"},
+		{"first SIM not allowed", Identity{}, Identity{iccidA, imsiX}, KindAlert, "99999"},
+		{"ICCID changed allowed", Identity{iccidA, imsiA}, Identity{iccidB, imsiA}, KindNotice, "65501"},
+		{"IMSI changed not allowed", Identity{iccidA, imsiA}, Identity{iccidA, imsiX}, KindAlert, "99999"},
+		{"swap back to the previous SIM", Identity{iccidB, imsiB}, Identity{iccidA, imsiA}, KindNotice, "65501"},
+		{"only the new IMSI arrives", Identity{iccidA, imsiA}, Identity{"", imsiB}, KindNotice, "65501"},
+		{"incoming empty", Identity{iccidA, imsiA}, Identity{}, KindNone, "65501"},
+		{"nothing at all", Identity{}, Identity{}, KindNone, ""},
+		{"IMSI first learned on a network not allowed", Identity{iccidA, ""}, Identity{"", imsiX}, KindAlert, "99999"},
+		{"IMSI first learned on an allowed network", Identity{iccidA, ""}, Identity{"", imsiA}, KindNone, "65501"},
+		{"ICCID changed, no IMSI known", Identity{iccidA, ""}, Identity{iccidB, ""}, KindNotice, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Judge(c.cached, c.incoming, allowSA)
+			if got.Kind != c.want || got.Network != c.network {
+				t.Fatalf("Judge = %+v, want kind %q network %q", got, c.want, c.network)
+			}
+		})
+	}
+}
+
+func TestJudgeNilAllowedAllowsEverything(t *testing.T) {
+	got := Judge(Identity{iccidA, imsiA}, Identity{iccidA, imsiX}, nil)
+	if got.Kind != KindNotice {
+		t.Fatalf("with no allow rule a changed SIM is a notice, got %q", got.Kind)
+	}
+}
+
+func TestExtractIdentityIgnoresOtherInterfacesWhateverTheMapOrder(t *testing.T) {
+	values := map[string]string{
+		"Device.Cellular.Interface.1.USIM.ICCID": iccidA,
+		"Device.Cellular.Interface.1.USIM.IMSI":  imsiA,
+		"Device.Cellular.Interface.2.USIM.ICCID": iccidB,
+		"Device.Cellular.Interface.2.USIM.IMSI":  imsiB,
+	}
+	for i := range 50 {
+		if got := ExtractIdentity(values); got != (Identity{iccidA, imsiA}) {
+			t.Fatalf("run %d: got %+v", i, got)
+		}
+	}
+}
+
+func TestExtractIdentityVendorIMSIOnlyWhenStandardAbsent(t *testing.T) {
+	vendor := "Device.Cellular.Interface.1.X_ALU-COM_CurrentUsedIMSI"
+	got := ExtractIdentity(map[string]string{vendor: imsiB})
+	if got.IMSI != imsiB {
+		t.Fatalf("vendor IMSI not used: %+v", got)
+	}
+	got = ExtractIdentity(map[string]string{vendor: imsiB, "Device.Cellular.Interface.1.USIM.IMSI": imsiA})
+	if got.IMSI != imsiA {
+		t.Fatalf("standard IMSI must win: %+v", got)
+	}
+}
+
+func TestExtractIdentitySentinelsAndWhitespaceAreAbsent(t *testing.T) {
+	got := ExtractIdentity(map[string]string{
+		"Device.Cellular.Interface.1.USIM.ICCID": "-32768",
+		"Device.Cellular.Interface.1.USIM.IMSI":  "  " + imsiA + "\n",
+	})
+	if got != (Identity{"", imsiA}) {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestReadPaths(t *testing.T) {
+	if got := ReadPaths(nil); got != nil {
+		t.Fatalf("nil names must give nil, got %v", got)
+	}
+	if got := ReadPaths(map[string]bool{"Device.WiFi.Radio.1.Enable": true}); got != nil {
+		t.Fatalf("no SIM paths must give nil, got %v", got)
+	}
+	names := map[string]bool{
+		"Device.Cellular.Interface.1.USIM.IMSI":                 true,
+		"Device.Cellular.Interface.1.USIM.ICCID":                true,
+		"Device.Cellular.Interface.1.X_ALU-COM_CurrentUsedIMSI": true,
+		"Device.Cellular.Interface.2.USIM.IMSI":                 true,
+	}
+	got := ReadPaths(names)
+	want := []string{
+		"Device.Cellular.Interface.1.USIM.ICCID",
+		"Device.Cellular.Interface.1.USIM.IMSI",
+		"Device.Cellular.Interface.1.X_ALU-COM_CurrentUsedIMSI",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	}
+}
+
+// The discovered-names map holds true for writable leaves only; a read-only
+// identity leaf is present with the value false and must still be read.
+func TestReadPathsCountsReadOnlyLeaves(t *testing.T) {
+	got := ReadPaths(map[string]bool{"Device.Cellular.Interface.1.USIM.IMSI": false})
+	if len(got) != 1 || got[0] != "Device.Cellular.Interface.1.USIM.IMSI" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestHintsAreMasked(t *testing.T) {
+	iccid, imsi := Hints(Identity{iccidA, imsiA})
+	if iccid == "" || imsi == "" {
+		t.Fatalf("hints empty: %q %q", iccid, imsi)
+	}
+	if strings.Contains(iccid, iccidA) || strings.Contains(imsi, imsiA) {
+		t.Fatalf("hint carries the full identifier: %q %q", iccid, imsi)
+	}
+}
+
+func TestIsIdentityPath(t *testing.T) {
+	for p, want := range map[string]bool{
+		"Device.Cellular.Interface.1.USIM.ICCID":                true,
+		"Device.Cellular.Interface.1.USIM.IMSI":                 true,
+		"Device.Cellular.Interface.1.X_ALU-COM_CurrentUsedIMSI": true,
+		"Device.Cellular.Interface.2.USIM.IMSI":                 false,
+		"Device.Cellular.Interface.1.USIM.Status":               false,
+	} {
+		if IsIdentityPath(p) != want {
+			t.Fatalf("IsIdentityPath(%q) = %v, want %v", p, !want, want)
+		}
+	}
+}
+
+func TestNetwork(t *testing.T) {
+	if Network(imsiA) != "65501" || Network("1234") != "" {
+		t.Fatalf("Network wrong: %q %q", Network(imsiA), Network("1234"))
+	}
+}
+
+// After a swap seen through a partial reply, the field the reply did not
+// carry no longer describes the SIM in the device: it is cleared, so the
+// next full read is not judged against it a second time.
+func TestClearedPaths(t *testing.T) {
+	cases := []struct {
+		name             string
+		cached, incoming Identity
+		want             []string
+	}{
+		{"only the IMSI arrived", Identity{iccidA, imsiA}, Identity{"", imsiB}, []string{pathICCID}},
+		{"only the ICCID arrived", Identity{iccidA, imsiA}, Identity{iccidB, ""}, []string{pathIMSI, pathVendorIMSI}},
+		{"both arrived", Identity{iccidA, imsiA}, Identity{iccidB, imsiB}, nil},
+		{"the missing field was not cached either", Identity{iccidA, ""}, Identity{"", imsiB}, []string{pathICCID}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ClearedPaths(c.cached, c.incoming)
+			if len(got) != len(c.want) {
+				t.Fatalf("got %v want %v", got, c.want)
+			}
+			for i := range c.want {
+				if got[i] != c.want[i] {
+					t.Fatalf("got %v want %v", got, c.want)
+				}
+			}
+		})
+	}
+}

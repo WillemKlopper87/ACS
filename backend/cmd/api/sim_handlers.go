@@ -40,6 +40,9 @@ type simView struct {
 	Identifiers  []simField `json:"identifiers"`
 	Context      []simField `json:"context"`
 	RefreshPaths []string   `json:"refresh_paths"`
+	// SimWatch is the verdict on the SIM now in the device (masked hints only);
+	// absent until the ACS has judged one.
+	SimWatch *simWatchView `json:"sim_watch,omitempty"`
 }
 
 // simContextLeaf reports non-identifying SIM state shown unmasked: SIM
@@ -131,7 +134,17 @@ func (h *handler) loadSIMView(w http.ResponseWriter, r *http.Request, reveal boo
 	if discovered != nil {
 		names = discovered.Names
 	}
-	return buildSIMView(device.ID, names, cache, reveal), true
+	view := buildSIMView(device.ID, names, cache, reveal)
+	if h.simWatch != nil {
+		state, err := h.simWatch.Get(r.Context(), device.ID)
+		if err != nil {
+			h.logger.Error("failed to read SIM watch", "err", err, "device_id", device.ID)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return simView{}, false
+		}
+		view.SimWatch = newSIMWatchView(state)
+	}
+	return view, true
 }
 
 // getSIM returns the masked SIM view (any role with device access).

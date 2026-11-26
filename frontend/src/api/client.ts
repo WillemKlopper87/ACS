@@ -501,6 +501,13 @@ export const api = {
       cache: "no-store",
     }),
 
+  /** Accepts the SIM now in the device after a change was detected. detectedAt is the sim_watch.detected_at that was shown: an approval only applies to that verdict. Reason required, audited server-side; nothing is written to the CPE. */
+  approveSimWatch: (id: string, reason: string, detectedAt: string) =>
+    request<components["schemas"]["SIMWatch"]>(`/api/v1/devices/${id}/sim-watch/approve`, {
+      method: "POST",
+      body: JSON.stringify({ reason, detected_at: detectedAt }),
+    }),
+
   getParameterNames: (id: string) =>
     request<{ names: Record<string, boolean>; discovered_at: string | null }>(`/api/v1/devices/${id}/parameter-names`),
 

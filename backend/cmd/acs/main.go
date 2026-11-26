@@ -38,6 +38,7 @@ import (
 	"acs/internal/ratelimit"
 	"acs/internal/secretstore"
 	"acs/internal/sessions"
+	simrecorder "acs/internal/simwatch/recorder"
 	"acs/internal/store"
 	"acs/internal/stun"
 	"acs/internal/templates"
@@ -264,6 +265,11 @@ func main() {
 			repo:     cpemetrics.NewRepository(db),
 			rec:      recorder.New(db),
 			interval: cpeSampleIntervalFromEnv(logger),
+		},
+		// SIM identity read cadence for SIM change detection; 0 disables it.
+		simWatch: &simWatchSampler{
+			rec:      simrecorder.New(db),
+			interval: simWatchIntervalFromEnv(logger),
 		},
 		// Wi-Fi insights sampling cadence; 0 disables it.
 		wifiInsights: &wifiInsightsSampler{
@@ -537,6 +543,7 @@ type handler struct {
 	onboardingListener *onboardingListener
 	wifiInsights       *wifiInsightsSampler
 	cpeMetrics         *cpeMetricsSampler
+	simWatch           *simWatchSampler
 	// onboarding and credentials drive sold CPEs to IN_SERVICE; nil
 	// onboarding turns the reconciler off.
 	onboarding  *onboarding.Repository

@@ -1618,6 +1618,32 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SIMView" }
         "404": { description: Device not found or outside the caller's scope }
+  /api/v1/devices/{id}/sim-watch/approve:
+    post:
+      tags: [Diagnostics]
+      summary: Approve the SIM now in the device after a SIM change was detected (reason required; audited as SimChangeApproved; never writes to the CPE)
+      parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, detected_at]
+              properties:
+                reason: { type: string, minLength: 10, description: "Why the new SIM is expected, e.g. the customer swapped it on site" }
+                detected_at: { type: string, format: date-time, description: "The detected_at of the sim_watch the operator was shown (RFC 3339 with fractional seconds, exactly as returned). An approval only applies to that verdict." }
+      responses:
+        "200":
+          description: The state after approval
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SIMWatch" }
+        "400": { description: "Missing or too-short reason, or a missing or unparsable detected_at" }
+        "403": { description: The caller lacks the devices.write permission }
+        "404": { description: Device not found or outside the caller's scope }
+        "409": { description: "No SIM change is awaiting approval, or the SIM changed again since the one the caller saw (detected_at differs)" }
+        "503": { description: "The audit record could not be written, so nothing was approved" }
   /api/v1/devices/{id}/sim/reveal:
     post:
       tags: [Diagnostics]
@@ -3418,6 +3444,21 @@ components:
         identifiers: { type: array, items: { $ref: "#/components/schemas/SIMField" } }
         context: { type: array, items: { $ref: "#/components/schemas/SIMField" }, description: "Non-identifying SIM state: USIM status, MCC/MNC/PLMN/SPN, eSIM status" }
         refresh_paths: { type: array, items: { type: string }, description: "Discovered SIM paths without a cached value; read them with POST /parameters/get" }
+        sim_watch: { $ref: "#/components/schemas/SIMWatch" }
+    SIMWatch:
+      type: object
+      description: "The verdict on the SIM now in the device. Hints are masked; the full IMSI and ICCID are never part of it."
+      required: [state, network, iccid_hint, imsi_hint, previous_iccid_hint, previous_imsi_hint]
+      properties:
+        state: { type: string, enum: [ok, notice, alert], description: "ok: the known or approved SIM; notice: a different SIM on a network the plan allows, awaiting approval; alert: a network the plan does not allow" }
+        network: { type: string, description: "PLMN (MCC+MNC) of the SIM's IMSI" }
+        iccid_hint: { type: string }
+        imsi_hint: { type: string }
+        previous_iccid_hint: { type: string }
+        previous_imsi_hint: { type: string }
+        detected_at: { type: string, format: date-time }
+        approved_at: { type: string, format: date-time }
+        approved_by: { type: string }
     Role:
       type: string
       enum: [readonly, noc, manager, superadmin]

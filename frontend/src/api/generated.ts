@@ -3529,6 +3529,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/{id}/sim-watch/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve the SIM now in the device after a SIM change was detected (reason required; audited as SimChangeApproved; never writes to the CPE) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Device UUID (design doc v3's Decoupled Identity — the ACS's own primary key, not the BSS's account ID) */
+                    id: components["parameters"]["DeviceId"];
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Why the new SIM is expected, e.g. the customer swapped it on site */
+                        reason: string;
+                        /**
+                         * Format: date-time
+                         * @description The detected_at of the sim_watch the operator was shown (RFC 3339 with fractional seconds, exactly as returned). An approval only applies to that verdict.
+                         */
+                        detected_at: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description The state after approval */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SIMWatch"];
+                    };
+                };
+                /** @description Missing or too-short reason, or a missing or unparsable detected_at */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The caller lacks the devices.write permission */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Device not found or outside the caller's scope */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description No SIM change is awaiting approval, or the SIM changed again since the one the caller saw (detected_at differs) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description The audit record could not be written, so nothing was approved */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/{id}/sim/reveal": {
         parameters: {
             query?: never;
@@ -8888,6 +8974,26 @@ export interface components {
             context: components["schemas"]["SIMField"][];
             /** @description Discovered SIM paths without a cached value; read them with POST /parameters/get */
             refresh_paths: string[];
+            sim_watch?: components["schemas"]["SIMWatch"];
+        };
+        /** @description The verdict on the SIM now in the device. Hints are masked; the full IMSI and ICCID are never part of it. */
+        SIMWatch: {
+            /**
+             * @description ok: the known or approved SIM; notice: a different SIM on a network the plan allows, awaiting approval; alert: a network the plan does not allow
+             * @enum {string}
+             */
+            state: "ok" | "notice" | "alert";
+            /** @description PLMN (MCC+MNC) of the SIM's IMSI */
+            network: string;
+            iccid_hint: string;
+            imsi_hint: string;
+            previous_iccid_hint: string;
+            previous_imsi_hint: string;
+            /** Format: date-time */
+            detected_at?: string;
+            /** Format: date-time */
+            approved_at?: string;
+            approved_by?: string;
         };
         /**
          * @description Rank order readonly < noc < manager < superadmin (build plan §9's RBAC tier expansion)

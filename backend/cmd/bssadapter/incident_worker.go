@@ -4,6 +4,7 @@ import (
 	"acs/internal/accounts"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ func (h *handler) runOfflineIncidentLoop(ctx context.Context) {
 		case <-ticker.C:
 			h.ingestOfflineDevices(ctx)
 			h.ingestBulkDataHealth(ctx)
+			h.ingestSIMWatch(ctx)
 		}
 	}
 }
@@ -66,6 +68,90 @@ func (h *handler) ingestBulkDataHealth(ctx context.Context) {
 		if err != nil {
 			h.logger.Error("bulk data incident creation failed", "err", err)
 		} else if created {
+			h.notifyIncident(ctx, "ALERT_OPENED", incident)
+		}
+	}
+}
+
+// detectedAtJSON is how a detection time is stored in an incident's details.
+func detectedAtJSON(t time.Time) any {
+	raw, err := json.Marshal(t)
+	if err != nil {
+		return nil
+	}
+	var out any
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+// ingestSIMWatch turns SIM change verdicts (written by the ACS gateway) into
+// incidents: a notice (a different SIM on an allowed network) or an alert (a
+// network the plan does not allow). The incident recovers when an operator
+// approves the SIM. A device with no customer mapping gets no incident, and
+// neither does one with no matching alert policy. Only masked hints and the
+// network ever reach an incident.
+func (h *handler) ingestSIMWatch(ctx context.Context) {
+	recovered, err := h.alertIncidents.RecoverSIMWatch(ctx)
+	if err != nil {
+		h.logger.Error("failed to recover SIM change incidents", "err", err)
+	}
+	for i := range recovered {
+		h.notifyIncident(ctx, "ALERT_RECOVERED", &recovered[i])
+	}
+	policies, err := h.alertPolicies.List(ctx)
+	if err != nil {
+		return
+	}
+	for offset := 0; ; offset += webhookBatchSize {
+		devices, err := h.alertPolicies.SIMWatchDevices(ctx, webhookBatchSize, offset)
+		if err != nil {
+			h.logger.Error("failed to list SIM change devices for alerting", "err", err)
+			return
+		}
+		h.openSIMWatchIncidents(ctx, policies, devices)
+		if len(devices) < webhookBatchSize {
+			return
+		}
+	}
+}
+
+func (h *handler) openSIMWatchIncidents(ctx context.Context, policies []alerting.Policy, devices []alerting.SIMWatchDevice) {
+	for _, d := range devices {
+		p, ok := alerting.Resolve(policies, alerting.Target{TenantID: d.TenantID, AccountKey: d.AccountKey, CustomerTier: d.CustomerTier, GroupIDs: d.GroupIDs, DeviceID: d.DeviceID})
+		if !ok {
+			continue
+		}
+		summary := "SIM replaced on this CPE (network " + d.Network + "); approval needed"
+		if d.State == "alert" {
+			summary = "SIM replaced with a network the plan does not allow (" + d.Network + ")"
+		}
+		previous, err := h.alertIncidents.ByKey(ctx, d.TenantID, d.DeviceID, alerting.SIMChangeConditionKey)
+		if err != nil && !errors.Is(err, alerting.ErrIncidentNotFound) {
+			h.logger.Error("failed to look up SIM change incident", "err", err, "device_id", d.DeviceID)
+			continue
+		}
+		next := time.Now().UTC().Add(firstEscalationDelay(p))
+		incident, created, err := h.alertIncidents.OpenWithCreated(ctx, d.TenantID, d.DeviceID, alerting.SIMChangeConditionKey, alerting.Classify(p, "sim_change_"+d.State, false), summary, &next, map[string]any{
+			"state": d.State, "network": d.Network, "iccid_hint": d.ICCIDHint, "imsi_hint": d.IMSIHint,
+			"previous_iccid_hint": d.PreviousICCIDHint, "previous_imsi_hint": d.PreviousIMSIHint, "detected_at": d.DetectedAt,
+		})
+		if err != nil {
+			h.logger.Error("failed to open SIM change incident", "err", err, "device_id", d.DeviceID)
+			continue
+		}
+		reopened := previous != nil && (previous.State == alerting.IncidentRecovered || previous.State == alerting.IncidentClosed)
+		// An incident that is already open is told about again when the
+		// condition got worse (a higher priority) or is a different SIM
+		// (another detection time); otherwise a swap onto a network the plan
+		// does not allow would sit silently behind an unattended notice.
+		worse := previous != nil && !reopened && incident.Priority < previous.Priority
+		differs := previous != nil && !reopened && previous.Details["detected_at"] != detectedAtJSON(d.DetectedAt)
+		if worse {
+			if err := h.alertIncidents.RescheduleEscalation(ctx, incident.ID, &next); err != nil {
+				h.logger.Error("failed to restart SIM change escalation", "err", err, "device_id", d.DeviceID)
+			}
+		}
+		if created || reopened || worse || differs {
 			h.notifyIncident(ctx, "ALERT_OPENED", incident)
 		}
 	}

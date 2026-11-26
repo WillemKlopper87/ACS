@@ -40,6 +40,7 @@ import (
 	"acs/internal/policy"
 	"acs/internal/rollout"
 	"acs/internal/scheduler"
+	simwatchreads "acs/internal/simwatch/reads"
 	"acs/internal/store"
 	"acs/internal/subscribers"
 	"acs/internal/templates"
@@ -120,6 +121,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		firmwareMaxBytes: 1 << 20,
 		metrics:          metrics,
 		cpeMetrics:       cpemetrics.NewRepository(db),
+		simWatch:         simwatchreads.New(db),
 		groups:           devices.NewGroupRepository(db),
 		credentials:      credRepo,
 		schedules:        scheduler.NewRepository(db),

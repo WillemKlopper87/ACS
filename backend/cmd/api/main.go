@@ -53,6 +53,7 @@ import (
 	"acs/internal/ratelimit"
 	"acs/internal/rollout"
 	"acs/internal/scheduler"
+	simwatchreads "acs/internal/simwatch/reads"
 	"acs/internal/store"
 	"acs/internal/subscribers"
 	"acs/internal/templates"
@@ -297,6 +298,7 @@ func main() {
 		params:              parameters.NewRepository(db),
 		connectivity:        connectivity.NewRepository(db),
 		cpeMetrics:          cpemetrics.NewRepository(db),
+		simWatch:            simwatchreads.New(db),
 		wifiInsights:        wifiinsights.NewRepository(db, nil),
 		vendors:             adapters.NewRegistry(),
 		auditor:             observability.NewAuditor(db),
@@ -562,6 +564,8 @@ type handler struct {
 	connectivity *connectivity.Repository
 	// cpeMetrics serves a cellular CPE's recorded signal readings (written by cmd/acs).
 	cpeMetrics *cpemetrics.Repository
+	// simWatch serves the SIM change verdict and takes approvals (judged by cmd/acs).
+	simWatch *simwatchreads.Repository
 	// wifiInsights serves the controller-style Wi-Fi overview (sampled by cmd/acs).
 	wifiInsights *wifiinsights.Repository
 	vendors      *adapters.Registry

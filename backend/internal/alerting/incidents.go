@@ -64,6 +64,55 @@ func (r *IncidentRepository) OpenWithCreated(ctx context.Context, tenantID, devi
 	return &out, created, nil
 }
 
+// SIMChangeConditionKey is the condition key of a SIM change incident; the
+// device is part of the incident's unique key already.
+const SIMChangeConditionKey = "acs-sim-change"
+
+// ByKey returns the incident of one condition on one device, whatever its
+// state, or ErrIncidentNotFound.
+func (r *IncidentRepository) ByKey(ctx context.Context, tenantID, deviceID, conditionKey string) (*Incident, error) {
+	var i Incident
+	var raw []byte
+	err := r.db.QueryRowContext(ctx, `SELECT id,tenant_id,device_id::text,condition_key,priority,summary,state,escalation_stage,first_seen_at,last_seen_at,next_escalation_at,acknowledged_at,COALESCE(acknowledged_by,''),recovered_at,details FROM alert_incidents WHERE tenant_id=$1 AND device_id=$2 AND condition_key=$3`, tenantID, deviceID, conditionKey).Scan(&i.ID, &i.TenantID, &i.DeviceID, &i.ConditionKey, &i.Priority, &i.Summary, &i.State, &i.EscalationStage, &i.FirstSeenAt, &i.LastSeenAt, &i.NextEscalationAt, &i.AcknowledgedAt, &i.AcknowledgedBy, &i.RecoveredAt, &raw)
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(raw, &i.Details)
+	return &i, nil
+}
+
+// RescheduleEscalation restarts the escalation of an open incident, for a
+// condition that got worse while it was open (OpenWithCreated keeps the old
+// timer of an open incident).
+func (r *IncidentRepository) RescheduleEscalation(ctx context.Context, id string, next *time.Time) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE alert_incidents SET escalation_stage=0,next_escalation_at=$2 WHERE id=$1 AND state='open'`, id, next)
+	if err != nil {
+		return fmt.Errorf("reschedule alert incident: %w", err)
+	}
+	return nil
+}
+
+// RecoverSIMWatch recovers SIM change incidents whose device no longer has an
+// open verdict (approved by an operator, or the row is gone).
+func (r *IncidentRepository) RecoverSIMWatch(ctx context.Context) ([]Incident, error) {
+	rows, err := r.db.QueryContext(ctx, `UPDATE alert_incidents i SET state='recovered',recovered_at=COALESCE(recovered_at,now()),next_escalation_at=NULL WHERE i.condition_key=$1 AND i.state IN ('open','acknowledged','suppressed') AND NOT EXISTS (SELECT 1 FROM device_sim_watch w WHERE w.device_id=i.device_id AND w.state IN ('notice','alert')) RETURNING i.id,i.tenant_id,i.device_id::text,i.condition_key,i.priority,i.summary,i.state,i.escalation_stage,i.first_seen_at,i.last_seen_at,i.next_escalation_at,i.acknowledged_at,COALESCE(i.acknowledged_by,''),i.recovered_at,i.details`, SIMChangeConditionKey)
+	if err != nil {
+		return nil, fmt.Errorf("recover SIM change incidents: %w", err)
+	}
+	defer rows.Close()
+	var out []Incident
+	for rows.Next() {
+		var i Incident
+		var raw []byte
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.DeviceID, &i.ConditionKey, &i.Priority, &i.Summary, &i.State, &i.EscalationStage, &i.FirstSeenAt, &i.LastSeenAt, &i.NextEscalationAt, &i.AcknowledgedAt, &i.AcknowledgedBy, &i.RecoveredAt, &raw); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(raw, &i.Details)
+		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
 func (r *IncidentRepository) SetState(ctx context.Context, id, state, actor string) error {
 	var q string
 	switch IncidentState(state) {

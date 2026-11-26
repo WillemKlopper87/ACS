@@ -203,6 +203,19 @@ func (r *Repository) SiteByRef(ctx context.Context, customerID *string, ref stri
 		WHERE external_ref = $2 AND COALESCE(customer_id::text, '') = COALESCE($1::text, '')`, customerID, strings.TrimSpace(ref)))
 }
 
+// PlanForDevice is the plan of the latest IN_SERVICE onboarding bound to the
+// device. It returns (nil, nil) when there is no such onboarding or it has
+// no plan: OpenForDevice skips IN_SERVICE rows, so it cannot answer this.
+func (r *Repository) PlanForDevice(ctx context.Context, deviceID string) (*ServicePlan, error) {
+	p, err := scanPlan(r.db.QueryRowContext(ctx, `SELECT `+planColumns+` FROM service_plans WHERE id = (
+		SELECT service_plan_id FROM onboardings WHERE device_id = $1 AND state = 'IN_SERVICE'
+		ORDER BY in_service_at DESC NULLS LAST, updated_at DESC LIMIT 1)`, deviceID))
+	if errors.Is(err, ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return p, err
+}
+
 func (r *Repository) GetPlan(ctx context.Context, id string) (*ServicePlan, error) {
 	return scanPlan(r.db.QueryRowContext(ctx, `SELECT `+planColumns+` FROM service_plans WHERE id = $1`, id))
 }

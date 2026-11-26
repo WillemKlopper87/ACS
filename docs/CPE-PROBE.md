@@ -92,3 +92,8 @@ Each answer is filled in after the lab run.
 - Whether both the 5G and LTE signal leaves return values: to be filled in
   after the lab run.
 - Any path that faulted: to be filled in after the lab run.
+
+## Related
+
+SIM change detection reads the SIM identity at check-ins and uses the same
+leaves; see `docs/SIM-WATCH.md` for what the ICCID/IMSI read tells you about it.
