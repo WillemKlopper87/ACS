@@ -259,13 +259,13 @@ func main() {
 		onboarding:         onboarding.NewRepository(db),
 		credentials:        credRepo,
 		secrets:            secretStore,
-		// Wi-Fi insights sampling cadence; 0 disables it.
 		// CPE signal sampling cadence; 0 disables it.
 		cpeMetrics: &cpeMetricsSampler{
 			repo:     cpemetrics.NewRepository(db),
 			rec:      recorder.New(db),
-			interval: envOrDuration("ACS_CPE_SAMPLE_INTERVAL", 15*time.Minute),
+			interval: cpeSampleIntervalFromEnv(logger),
 		},
+		// Wi-Fi insights sampling cadence; 0 disables it.
 		wifiInsights: &wifiInsightsSampler{
 			repo:     wifiinsights.NewRepository(db, wifiinsights.DefaultOUIRegistry()),
 			interval: envOrDuration("ACS_WIFI_INSIGHTS_INTERVAL", 5*time.Minute),
@@ -491,6 +491,21 @@ func envOrDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// cpeSampleIntervalFromEnv reads ACS_CPE_SAMPLE_INTERVAL (default 15 minutes,
+// 0 disables). envOrDuration silently falls back on a bad value; for this
+// setting an unparsable or negative value is logged, so an operator who typed
+// "15" (no unit) learns the default is in force.
+func cpeSampleIntervalFromEnv(logger *slog.Logger) time.Duration {
+	const key = "ACS_CPE_SAMPLE_INTERVAL"
+	def := 15 * time.Minute
+	if raw := strings.TrimSpace(os.Getenv(key)); raw != "" && raw != "0" {
+		if d, err := time.ParseDuration(raw); err != nil || d < 0 {
+			logger.Warn("invalid duration, using the default", "variable", key, "value", raw, "default", def.String())
+		}
+	}
+	return envOrDuration(key, def)
 }
 
 func levelFromEnv() slog.Level {

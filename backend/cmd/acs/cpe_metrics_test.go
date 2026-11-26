@@ -133,6 +133,47 @@ func TestMaybeQueueCPEMetricsQueuesOneReadWhenDue(t *testing.T) {
 	}
 }
 
+// A sample is stored a few seconds after its read was queued, so the next
+// check-in one interval later sees a sample slightly younger than the
+// interval; the slack makes that check-in take the next sample.
+func TestMaybeQueueCPEMetricsSlackAndThrottle(t *testing.T) {
+	record := func(t *testing.T, h *handler, ctx context.Context, dev *devices.Device, age time.Duration) {
+		t.Helper()
+		if err := h.cpeMetrics.rec.Record(ctx, dev.ID, time.Now().UTC().Add(-age), cpemetrics.Sample{RSRP: cpmFloat(-90)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("sample just under one interval old is due", func(t *testing.T) {
+		h, dev, ctx := newCPEMetricsHandler(t, 15*time.Minute, true)
+		record(t, h, ctx, dev, 15*time.Minute-2*time.Second)
+		h.maybeQueueCPEMetrics(ctx, dev)
+		if n := len(cpmJobs(t, h, ctx, dev.ID)); n != 1 {
+			t.Fatalf("jobs = %d, want 1", n)
+		}
+		h.maybeQueueCPEMetrics(ctx, dev)
+		if n := len(cpmJobs(t, h, ctx, dev.ID)); n != 1 {
+			t.Fatalf("jobs after repeat = %d, want 1", n)
+		}
+	})
+	t.Run("sample half an interval old is not due", func(t *testing.T) {
+		h, dev, ctx := newCPEMetricsHandler(t, 15*time.Minute, true)
+		record(t, h, ctx, dev, 15*time.Minute/2)
+		h.maybeQueueCPEMetrics(ctx, dev)
+		if n := len(cpmJobs(t, h, ctx, dev.ID)); n != 0 {
+			t.Fatalf("jobs = %d, want 0", n)
+		}
+		// The throttle holds the last sample time, not "now": once the slack
+		// window opens the very next check-in is not blocked for a full interval.
+		v, ok := h.cpeMetrics.lastTried.Load(dev.ID)
+		if !ok {
+			t.Fatal("throttle not set")
+		}
+		if age := time.Since(v.(time.Time)); age < 7*time.Minute {
+			t.Fatalf("lastTried is %v old, want the sample time (~7.5m)", age)
+		}
+	})
+}
+
 func TestMaybeQueueCPEMetricsSkips(t *testing.T) {
 	cases := []struct {
 		name     string

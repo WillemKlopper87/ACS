@@ -34,11 +34,24 @@ func (h *handler) maybeQueueCPEMetrics(ctx context.Context, device *devices.Devi
 	}
 	deviceID := device.ID
 	now := time.Now()
-	if v, ok := s.lastTried.Load(deviceID); ok && now.Sub(v.(time.Time)) < s.interval {
+	// A sample is stored a few seconds after its read was queued, so the
+	// check-in one interval later sees it slightly younger than the interval.
+	// The slack keeps that check-in from skipping a whole extra interval.
+	due := s.interval - min(s.interval/10, time.Minute)
+	if v, ok := s.lastTried.Load(deviceID); ok && now.Sub(v.(time.Time)) < due {
 		return
 	}
 	s.lastTried.Store(deviceID, now)
-	if last, err := s.repo.LastSampleAt(ctx, deviceID); err != nil || now.Sub(last) < s.interval {
+	last, err := s.repo.LastSampleAt(ctx, deviceID)
+	if err != nil {
+		return
+	}
+	if now.Sub(last) < due {
+		// Not due yet: throttle from the last sample, so the first check-in
+		// after it becomes due is not held back by this check.
+		if !last.IsZero() {
+			s.lastTried.Store(deviceID, last)
+		}
 		return
 	}
 	if open, err := h.jobs.HasOpenJobByCreator(ctx, deviceID, cpemetrics.CreatedBy); err != nil || open {
