@@ -151,6 +151,11 @@ func ResolveCellularReadPaths(root string, field CellularField, instance string,
 		if !strings.Contains(strings.ToLower(path), "cellular") && !strings.Contains(strings.ToLower(path), "mobile") && !strings.Contains(strings.ToLower(path), "5g") {
 			continue
 		}
+		// A vendor path that names another interface or access-point instance
+		// belongs to that instance, not to the one asked for.
+		if m := cellularInstancePattern.FindStringSubmatch(path); m != nil && m[1] != instance {
+			continue
+		}
 		if cellularLeafMatches(field, lastPathSegment(path)) {
 			if strings.Contains(path, "{i}") {
 				path = strings.ReplaceAll(path, "{i}", instance)

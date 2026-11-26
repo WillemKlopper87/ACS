@@ -2,6 +2,7 @@ package adapters
 
 import (
 	"acs/internal/devices"
+	"strings"
 	"testing"
 )
 
@@ -262,5 +263,42 @@ func TestResolveCellularReadPathsReturnsEveryMatchInPreferenceOrder(t *testing.T
 	}
 	if got := ResolveCellularReadPaths("DEVICE2", CellularRSRP, "1", nil); len(got) != 1 || got[0].Path != p+"RSRP" {
 		t.Errorf("nil discovered: %+v", got)
+	}
+}
+
+func TestResolveCellularReadPathsKeepsToTheRequestedInstance(t *testing.T) {
+	const i1 = "Device.Cellular.Interface.1."
+	const i2 = "Device.Cellular.Interface.2."
+	names := map[string]bool{
+		i1 + "RSRP": false, i2 + "RSRP": false,
+		i1 + "X_ALU-COM_Attached5GCellStat.RSRPCurrent":  false,
+		i2 + "X_ALU-COM_Attached5GCellStat.RSRPCurrent":  false,
+		i2 + "X_ALU-COM_AttachedLteCellStat.RSRPCurrent": false,
+		"Device.XVendor.Cellular.RSRP":                   false, // names no instance: kept
+	}
+	paths := func(instance string) []string {
+		var out []string
+		for _, r := range ResolveCellularReadPaths("DEVICE2", CellularRSRP, instance, names) {
+			out = append(out, r.Path)
+		}
+		return out
+	}
+	want1 := []string{i1 + "RSRP", i1 + "X_ALU-COM_Attached5GCellStat.RSRPCurrent", "Device.XVendor.Cellular.RSRP"}
+	got1 := paths("1")
+	if len(got1) != len(want1) {
+		t.Fatalf("instance 1 = %v, want %v", got1, want1)
+	}
+	for i := range want1 {
+		if got1[i] != want1[i] {
+			t.Errorf("instance 1 [%d] = %s, want %s", i, got1[i], want1[i])
+		}
+	}
+	for _, p := range paths("2") {
+		if strings.Contains(p, "Interface.1.") {
+			t.Errorf("instance 2 resolved %s", p)
+		}
+	}
+	if got := paths("2"); len(got) != 4 || got[0] != i2+"RSRP" {
+		t.Errorf("instance 2 = %v", got)
 	}
 }
