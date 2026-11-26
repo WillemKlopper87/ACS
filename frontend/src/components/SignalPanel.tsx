@@ -52,8 +52,9 @@ export function SignalPanel({ deviceId }: { deviceId: string }) {
   const from = data ? new Date(data.from).getTime() : 0;
   const to = data ? new Date(data.to).getTime() : 0;
   const m = METRICS.find((x) => x.key === metric) ?? METRICS[0];
+  const rangeLabel = RANGES.find((r) => r.hours === hours)?.label ?? `${hours} hours`;
   const series = buildSeries(samples, metric, from, to, Math.max(data?.interval_seconds ?? 0, data?.bucket_seconds ?? 0));
-  const window = Number.isFinite(from) && Number.isFinite(to) && to > from;
+  const hasWindow = Number.isFinite(from) && Number.isFinite(to) && to > from;
 
   return (
     <div className="panel">
@@ -61,7 +62,7 @@ export function SignalPanel({ deviceId }: { deviceId: string }) {
         Signal
         <span style={{ display: "inline-flex", gap: "0.3rem", flexWrap: "wrap" }}>
           {RANGES.map((r) => (
-            <button key={r.hours} className="btn sm" aria-pressed={hours === r.hours} disabled={hours === r.hours} onClick={() => setHours(r.hours)}>
+            <button key={r.hours} className="btn sm" aria-pressed={hours === r.hours} onClick={() => setHours(r.hours)}>
               {r.label}
             </button>
           ))}
@@ -69,7 +70,7 @@ export function SignalPanel({ deviceId }: { deviceId: string }) {
       </h3>
       <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap", margin: "0.2rem 0 0.6rem" }}>
         {METRICS.map((x) => (
-          <button key={x.key} className="btn sm" aria-pressed={metric === x.key} disabled={metric === x.key} onClick={() => setMetric(x.key)}>
+          <button key={x.key} className="btn sm" aria-pressed={metric === x.key} onClick={() => setMetric(x.key)}>
             {x.label}
           </button>
         ))}
@@ -89,19 +90,21 @@ export function SignalPanel({ deviceId }: { deviceId: string }) {
       )}
       {data && samples.length > 0 && (
         <>
-          {series.count === 0 ? (
+          {!table && series.count === 0 && (
             <p className="dim" style={NOTE_STYLE}>No readings for this metric on this device.</p>
-          ) : (
-            !table && (
+          )}
+          {!table && series.count > 0 && (
+            (
               <>
                 <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap", fontSize: "0.78rem" }}>
                   <span>Highest {fmtValue(series.max)} {m.unit}</span>
                   <span>Lowest {fmtValue(series.min)} {m.unit}</span>
                 </div>
                 <svg
-                  viewBox="0 0 1000 100"
+                  viewBox="-12 -8 1024 116"
+                  overflow="visible"
                   role="img"
-                  aria-label={`${m.label} over the last ${hours} hours: ${series.count} ${series.count === 1 ? "reading" : "readings"}, from ${fmtValue(series.min)} to ${fmtValue(series.max)} ${m.unit}`}
+                  aria-label={`${m.label} over the last ${rangeLabel}: ${series.count} ${series.count === 1 ? "reading" : "readings"}, from ${fmtValue(series.min)} to ${fmtValue(series.max)} ${m.unit}`}
                   style={{ width: "100%", height: "160px", display: "block", margin: "0.4rem 0 0.2rem", background: "var(--panel-2, transparent)" }}
                   preserveAspectRatio="none"
                 >
@@ -109,7 +112,18 @@ export function SignalPanel({ deviceId }: { deviceId: string }) {
                   <line x1={0} y1={100} x2={1000} y2={100} stroke="var(--ink-dim)" strokeWidth={1} opacity={0.35} vectorEffect="non-scaling-stroke" />
                   {series.segments.map((seg, i) =>
                     seg.length === 1 ? (
-                      <circle key={i} cx={seg[0].x} cy={seg[0].y} r={3} fill="var(--accent)" vectorEffect="non-scaling-stroke" />
+                      // A zero-length polyline with a round cap and a non-scaling stroke
+                      // is a dot of fixed on-screen size however the SVG is stretched.
+                      <polyline
+                        key={i}
+                        data-dot="true"
+                        points={`${seg[0].x.toFixed(1)},${seg[0].y.toFixed(1)} ${seg[0].x.toFixed(1)},${seg[0].y.toFixed(1)}`}
+                        fill="none"
+                        stroke="var(--accent)"
+                        strokeWidth={7}
+                        strokeLinecap="round"
+                        vectorEffect="non-scaling-stroke"
+                      />
                     ) : (
                       <polyline
                         key={i}
@@ -123,7 +137,7 @@ export function SignalPanel({ deviceId }: { deviceId: string }) {
                     ),
                   )}
                 </svg>
-                {window && (
+                {hasWindow && (
                   <div className="dim" style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem" }}>
                     <span>{fmtTime(data.from)} UTC</span>
                     <span>{fmtTime(data.to)} UTC</span>
@@ -132,7 +146,7 @@ export function SignalPanel({ deviceId }: { deviceId: string }) {
               </>
             )
           )}
-          {table && series.count > 0 && (
+          {table && (
             <div style={{ maxHeight: "22rem", overflow: "auto" }}>
               <table className="table" style={{ width: "100%", fontSize: "0.8rem" }}>
                 <thead>

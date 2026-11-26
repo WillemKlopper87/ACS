@@ -82,6 +82,44 @@ describe("SignalPanel", () => {
     expect(await screen.findByText("No readings for this metric on this device.")).toBeTruthy();
   });
 
+  it("still shows the table when the selected metric has no readings, with the note only in chart view", async () => {
+    getSignalHistory.mockResolvedValue(reply);
+    render(<SignalPanel deviceId="cpe-1" />);
+    await screen.findByRole("img", { name: /RSRP/ });
+    fireEvent.click(screen.getByRole("button", { name: "SNR" }));
+    expect(await screen.findByText("No readings for this metric on this device.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Show as table" }));
+    expect(screen.getByText("2026-11-24 10:15:00")).toBeTruthy();
+    expect(screen.queryByText("No readings for this metric on this device.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show as chart" }));
+    expect(screen.getByText("No readings for this metric on this device.")).toBeTruthy();
+  });
+
+  it("keeps the active range and metric buttons focusable and does not refetch when one is clicked again", async () => {
+    getSignalHistory.mockResolvedValue(reply);
+    render(<SignalPanel deviceId="cpe-1" />);
+    await screen.findByRole("img", { name: /RSRP/ });
+    const sevenDays = screen.getByRole("button", { name: "7 days" }) as HTMLButtonElement;
+    const rsrp = screen.getByRole("button", { name: "RSRP" }) as HTMLButtonElement;
+    expect(sevenDays.getAttribute("aria-pressed")).toBe("true");
+    expect(rsrp.getAttribute("aria-pressed")).toBe("true");
+    expect(sevenDays.disabled).toBe(false);
+    expect(rsrp.disabled).toBe(false);
+    expect(getSignalHistory).toHaveBeenCalledTimes(1);
+    fireEvent.click(sevenDays);
+    fireEvent.click(rsrp);
+    await screen.findByRole("img", { name: /RSRP/ });
+    expect(getSignalHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the range the way its button does", async () => {
+    getSignalHistory.mockResolvedValue(reply);
+    render(<SignalPanel deviceId="cpe-1" />);
+    expect(await screen.findByRole("img", { name: /RSRP over the last 7 days/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "24 hours" }));
+    expect(await screen.findByRole("img", { name: /RSRP over the last 24 hours/ })).toBeTruthy();
+  });
+
   it("shows an error when the request fails", async () => {
     getSignalHistory.mockRejectedValue(new Error("boom"));
     render(<SignalPanel deviceId="cpe-1" />);
@@ -118,8 +156,31 @@ describe("SignalPanel", () => {
       getSignalHistory.mockResolvedValue({ ...reply, bucket_seconds: 0, interval_seconds: 900, samples: hourly });
       const { container } = render(<SignalPanel deviceId="cpe-1" />);
       await screen.findByRole("img", { name: /RSRP/ });
-      expect(container.querySelectorAll("svg polyline")).toHaveLength(0);
-      expect(container.querySelectorAll("svg circle")).toHaveLength(hourly.length);
+      // No polyline joins them; each is a zero-length round-capped dot.
+      expect(container.querySelectorAll("svg polyline:not([data-dot])")).toHaveLength(0);
+      const dots = container.querySelectorAll("svg polyline[data-dot]");
+      expect(dots).toHaveLength(hourly.length);
+      for (const d of dots) {
+        expect(d.getAttribute("stroke-linecap")).toBe("round");
+        expect(d.getAttribute("vector-effect")).toBe("non-scaling-stroke");
+        expect(Number(d.getAttribute("stroke-width"))).toBeGreaterThanOrEqual(5);
+        const [a, b] = d.getAttribute("points")!.trim().split(" ");
+        expect(a).toBe(b);
+      }
+      expect(container.querySelectorAll("svg circle")).toHaveLength(0);
+    });
+
+    it("leaves room around the chart so edge dots are not clipped", async () => {
+      getSignalHistory.mockResolvedValue({ ...reply, bucket_seconds: 0, interval_seconds: 900, samples: hourly });
+      const { container } = render(<SignalPanel deviceId="cpe-1" />);
+      await screen.findByRole("img", { name: /RSRP/ });
+      const svg = container.querySelector("svg")!;
+      expect(svg.getAttribute("overflow")).toBe("visible");
+      const [x, y, w, h] = svg.getAttribute("viewBox")!.split(" ").map(Number);
+      expect(x).toBeLessThan(0);
+      expect(y).toBeLessThan(0);
+      expect(x + w).toBeGreaterThan(1000);
+      expect(y + h).toBeGreaterThan(100);
     });
   });
 });
