@@ -50,7 +50,7 @@ func setup(t *testing.T) (context.Context, *sql.DB, *recorder.Repository, string
 
 type row struct {
 	state, network, iccidHint, imsiHint, prevICCID, prevIMSI string
-	detectedAt, checkedAt, approvedAt                         sql.NullTime
+	detectedAt, checkedAt, approvedAt                        sql.NullTime
 }
 
 func get(t *testing.T, ctx context.Context, db *sql.DB, id string) (row, bool) {

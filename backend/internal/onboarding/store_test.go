@@ -146,3 +146,41 @@ func TestUnclaimedLists_DevicesNobodyOnboarded(t *testing.T) {
 		t.Fatalf("unclaimed = %+v, %v", u, err)
 	}
 }
+
+func TestPlanForDeviceFollowsTheInServiceOnboarding(t *testing.T) {
+	ctx, r, db := newTestRepo(t)
+	plan, err := r.CreatePlan(ctx, ServicePlan{Code: "HOME-5G-100", Name: "Home 5G 100", AllowedPLMNs: []string{"65501"}, RequireDiscovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deviceID string
+	if err := db.QueryRowContext(ctx, `INSERT INTO devices (id, oui_serial, oui, serial_number) VALUES (gen_random_uuid(), 'A4FC77+X+SN-PFD', 'A4FC77', 'SN-PFD') RETURNING id`).Scan(&deviceID); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := r.PlanForDevice(ctx, deviceID); err != nil || p != nil {
+		t.Fatalf("no onboarding: plan = %+v, err = %v; want nil, nil", p, err)
+	}
+	o, err := r.Create(ctx, Onboarding{ExpectedSerial: "SN-PFD", ServicePlanID: &plan.ID, Source: "console"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE onboardings SET device_id=$2, state='PLANNED' WHERE id=$1`, o.ID, deviceID); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := r.PlanForDevice(ctx, deviceID); err != nil || p != nil {
+		t.Fatalf("a PLANNED onboarding must not count: plan = %+v, err = %v", p, err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE onboardings SET state='IN_SERVICE', in_service_at=now() WHERE id=$1`, o.ID); err != nil {
+		t.Fatal(err)
+	}
+	p, err := r.PlanForDevice(ctx, deviceID)
+	if err != nil || p == nil || p.ID != plan.ID || len(p.AllowedPLMNs) != 1 || p.AllowedPLMNs[0] != "65501" {
+		t.Fatalf("in service: plan = %+v, err = %v", p, err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE onboardings SET service_plan_id=NULL WHERE id=$1`, o.ID); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := r.PlanForDevice(ctx, deviceID); err != nil || p != nil {
+		t.Fatalf("no plan on the onboarding: plan = %+v, err = %v; want nil, nil", p, err)
+	}
+}
