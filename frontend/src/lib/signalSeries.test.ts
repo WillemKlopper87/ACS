@@ -74,3 +74,12 @@ describe("buildSeries", () => {
     expect(s.min).toBe(12);
   });
 });
+
+describe("buildSeries point values", () => {
+  it("keeps each point's reading and time so a chart can show them on hover", () => {
+    const s = buildSeries([pt("2026-11-20T06:00:00Z", -100), pt("2026-11-20T06:15:00Z", -90)], "rsrp", from, to, 900);
+    expect(s.segments[0][0].v).toBe(-100);
+    expect(s.segments[0][0].t).toBe(Date.parse("2026-11-20T06:00:00Z"));
+    expect(s.segments[0][1].v).toBe(-90);
+  });
+});

@@ -419,6 +419,41 @@ test("a replaced SIM shows a banner on the Cellular tab until an operator approv
   expect(approved).toEqual({ reason: "Customer swapped the SIM on site", detected_at: watch.detected_at });
 });
 
+test("the signal chart shows its levels and reads a point off on hover", async ({ page }) => {
+  const to = Date.now();
+  const from = to - 24 * 3600_000;
+  const samples = Array.from({ length: 40 }, (_, i) => ({
+    at: new Date(from + (i + 1) * 20 * 60_000).toISOString(),
+    rsrp: -100 - Math.round(5 * Math.sin(i / 3)),
+    rsrq: -11,
+    snr: null,
+    rssi: null,
+    band: "n78",
+    rat: "NR",
+  }));
+  await page.route(`${API}/api/v1/devices/dev-1/signal-history**`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), bucket_seconds: 0, interval_seconds: 900, samples }),
+    }),
+  );
+  await signIn(page);
+  await page.goto("/devices/dev-1/cellular");
+  const plot = page.getByTestId("signal-plot");
+  await expect(plot).toBeVisible();
+  // The y axis names the highest, middle and lowest level.
+  await expect(page.locator('[data-tick="y"]')).toHaveText(["-95", "-100", "-105"]);
+  await expect(page.getByTestId("signal-readout")).toHaveCount(0);
+  const box = (await plot.boundingBox())!;
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await expect(page.getByTestId("signal-readout")).toContainText(/-\d+ dBm · \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC/);
+  await expect(page.getByTestId("signal-marker")).toBeVisible();
+  await page.screenshot({ path: "test-results/signal-chart-hover.png" });
+  await page.mouse.move(box.x - 40, box.y - 40);
+  await expect(page.getByTestId("signal-readout")).toHaveCount(0);
+});
+
 test("two-step sign-in asks for a code, survives a wrong one, and reaches the console", async ({ page }) => {
   // Registered after mockAPI, so these win for the login routes.
   await page.route(`${API}/api/v1/auth/login`, (route) =>

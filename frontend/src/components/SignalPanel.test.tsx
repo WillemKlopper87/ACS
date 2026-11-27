@@ -184,3 +184,76 @@ describe("SignalPanel", () => {
     });
   });
 });
+
+// The chart shows its levels: the y axis carries the highest, middle and
+// lowest reading, and hovering reads one point off exactly.
+describe("SignalPanel levels", () => {
+  // The plot is 1024 user units wide (x from -12), so with a 1024 px box a
+  // pointer at clientX is at x = clientX - 12.
+  const plotAt = (clientX: number) => {
+    const plot = screen.getByTestId("signal-plot");
+    plot.getBoundingClientRect = () => ({ left: 0, top: 0, right: 1024, bottom: 160, width: 1024, height: 160, x: 0, y: 0, toJSON: () => ({}) });
+    fireEvent.mouseMove(plot, { clientX, clientY: 80 });
+    return plot;
+  };
+
+  it("labels the y axis with the highest, middle and lowest level and the unit", async () => {
+    getSignalHistory.mockResolvedValue(reply);
+    const { container } = render(<SignalPanel deviceId="cpe-1" />);
+    await screen.findByRole("img", { name: /RSRP/ });
+    const ticks = Array.from(container.querySelectorAll('[data-tick="y"]')).map((e) => e.textContent);
+    expect(ticks).toEqual(["-98", "-101.5", "-105"]);
+    expect(screen.getByText("dBm", { selector: '[data-axis-unit="y"]' })).toBeTruthy();
+  });
+
+  it("labels the start, middle and end of the window", async () => {
+    getSignalHistory.mockResolvedValue(reply);
+    const { container } = render(<SignalPanel deviceId="cpe-1" />);
+    await screen.findByRole("img", { name: /RSRP/ });
+    const ticks = Array.from(container.querySelectorAll('[data-tick="x"]')).map((e) => e.textContent);
+    expect(ticks).toEqual(["2026-11-18 08:00:00 UTC", "2026-11-21 20:00:00 UTC", "2026-11-25 08:00:00 UTC"]);
+  });
+
+  it("shows one level in the middle when every reading is the same", async () => {
+    getSignalHistory.mockResolvedValue({ ...reply, samples: reply.samples.map((s) => ({ ...s, rsrp: -100 })) });
+    const { container } = render(<SignalPanel deviceId="cpe-1" />);
+    await screen.findByRole("img", { name: /RSRP/ });
+    expect(Array.from(container.querySelectorAll('[data-tick="y"]')).map((e) => e.textContent)).toEqual(["-100"]);
+  });
+
+  it("reads the nearest point off exactly while the pointer is over the chart", async () => {
+    getSignalHistory.mockResolvedValue(reply);
+    render(<SignalPanel deviceId="cpe-1" />);
+    await screen.findByRole("img", { name: /RSRP/ });
+    expect(screen.queryByTestId("signal-readout")).toBeNull();
+    // The third reading (-101 dBm at 10:30) sits at x = 872.0 of 1000.
+    plotAt(884);
+    expect(screen.getByTestId("signal-readout").textContent).toBe("-101 dBm · 2026-11-24 10:30:00 UTC");
+    expect(screen.getByTestId("signal-marker")).toBeTruthy();
+    // The first reading (-105 dBm at 10:00) is the nearest to the left.
+    plotAt(880);
+    expect(screen.getByTestId("signal-readout").textContent).toBe("-105 dBm · 2026-11-24 10:00:00 UTC");
+  });
+
+  it("clears the readout when the pointer leaves", async () => {
+    getSignalHistory.mockResolvedValue(reply);
+    render(<SignalPanel deviceId="cpe-1" />);
+    await screen.findByRole("img", { name: /RSRP/ });
+    const plot = plotAt(884);
+    expect(screen.getByTestId("signal-readout")).toBeTruthy();
+    fireEvent.mouseLeave(plot);
+    expect(screen.queryByTestId("signal-readout")).toBeNull();
+    expect(screen.queryByTestId("signal-marker")).toBeNull();
+  });
+
+  it("ignores a pointer over a chart with no width, and a metric that changed under it", async () => {
+    getSignalHistory.mockResolvedValue(reply);
+    render(<SignalPanel deviceId="cpe-1" />);
+    await screen.findByRole("img", { name: /RSRP/ });
+    fireEvent.mouseMove(screen.getByTestId("signal-plot"), { clientX: 50, clientY: 10 }); // jsdom: width 0
+    expect(screen.queryByTestId("signal-readout")).toBeNull();
+    plotAt(884);
+    fireEvent.click(screen.getByRole("button", { name: "RSRQ" }));
+    expect(screen.queryByTestId("signal-readout")).toBeNull();
+  });
+});
